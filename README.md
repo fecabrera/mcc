@@ -364,11 +364,11 @@ no string variable type yet.
 `#include <header>` at the top of a file makes the corresponding libc
 functions callable (use `import` for `.mc` files):
 
-| Header     | Functions                                         |
-| ---------- | ------------------------------------------------- |
-| `stdio.h`  | `printf` (variadic), `puts`, `putchar`, `getchar` |
-| `stdlib.h` | `malloc`, `free`, `exit`, `abs`                   |
-| `string.h` | `memcpy`, `memset`, `strlen`                      |
+| Header     | Functions                                            |
+| ---------- | ---------------------------------------------------- |
+| `stdio.h`  | `printf` (variadic), `puts`, `putchar`, `getchar`    |
+| `stdlib.h` | `malloc`, `free`, `exit`, `abs`                      |
+| `string.h` | `memcpy`, `memset`, `strlen`                         |
 | `math.h`   | `sin`, `cos`, `sqrt`, `pow`, `floor`, `ceil`, `fabs` |
 
 Variadic arguments to `printf` follow C promotion rules (small integers are

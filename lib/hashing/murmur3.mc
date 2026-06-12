@@ -1,5 +1,10 @@
 /**
- * Rotates x left by r bits (r in 1..31).
+ * Rotates x left by r bits.
+ *
+ * @param x: value to rotate
+ * @param r: rotation distance in bits; must be in 1..31
+ *
+ * @return x rotated left by r
  */
 @static
 fn rotl32(x: uint32, r: uint32) -> uint32 {
@@ -8,6 +13,10 @@ fn rotl32(x: uint32, r: uint32) -> uint32 {
 
 /**
  * Loads four bytes as a little-endian uint32.
+ *
+ * @param p: buffer to read from; must hold at least 4 bytes
+ *
+ * @return p[0..3] assembled least-significant byte first
  */
 @static
 fn load_le(p: uint8*) -> uint32 {

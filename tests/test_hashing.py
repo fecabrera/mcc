@@ -2,11 +2,8 @@
 
 import hashlib
 import zlib
-from pathlib import Path
 
 from helpers import run_path
-
-LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 
 
 def murmur3_32(data: bytes, seed: int = 0) -> int:
@@ -42,7 +39,7 @@ def murmur3_32(data: bytes, seed: int = 0) -> int:
     return h
 
 
-def run_emit(tmp_path, body: str) -> str:
+def run_program(tmp_path, body: str) -> None:
     main = tmp_path / "main.mc"
     main.write_text(
         '#include <stdio.h>\n#include <string.h>\nimport "memory";\n' + body
@@ -51,7 +48,7 @@ def run_emit(tmp_path, body: str) -> str:
 
 
 def test_murmur3(tmp_path, capfd):
-    run_emit(
+    run_program(
         tmp_path,
         'import "hashing/murmur3";\n'
         "fn main() -> int32 {\n"
@@ -69,7 +66,7 @@ def test_murmur3(tmp_path, capfd):
 
 
 def test_crc32(tmp_path, capfd):
-    run_emit(
+    run_program(
         tmp_path,
         'import "hashing/crc32";\n'
         "fn main() -> int32 {\n"
@@ -87,7 +84,7 @@ def test_crc32(tmp_path, capfd):
 
 def test_md5(tmp_path, capfd):
     # Covers single-block, the 55/56-byte padding boundary, and multi-block.
-    run_emit(
+    run_program(
         tmp_path,
         'import "hashing/md5";\n'
         "fn show(data: uint8*, n: uint64) {\n"

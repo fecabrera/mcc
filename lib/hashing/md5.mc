@@ -1,10 +1,15 @@
-import "../memory";
+import "memory";
 
 #include <string.h>
 #include <math.h>
 
 /**
- * Rotates x left by s bits (s in 1..31).
+ * Rotates x left by s bits.
+ *
+ * @param x: value to rotate
+ * @param s: rotation distance in bits; must be in 1..31
+ *
+ * @return x rotated left by s
  */
 @static
 fn rotl32(x: uint32, s: uint32) -> uint32 {
@@ -13,6 +18,10 @@ fn rotl32(x: uint32, s: uint32) -> uint32 {
 
 /**
  * Loads four bytes as a little-endian uint32.
+ *
+ * @param p: buffer to read from; must hold at least 4 bytes
+ *
+ * @return p[0..3] assembled least-significant byte first
  */
 @static
 fn load_le(p: uint8*) -> uint32 {
@@ -24,6 +33,9 @@ fn load_le(p: uint8*) -> uint32 {
 
 /**
  * Stores w into four bytes, little-endian.
+ *
+ * @param p: buffer to write to; must hold at least 4 bytes
+ * @param w: value to store
  */
 @static
 fn store_le(p: uint8*, w: uint32) {
@@ -35,6 +47,10 @@ fn store_le(p: uint8*, w: uint32) {
 
 /**
  * Per-round rotate amount (RFC 1321's s table, computed by position).
+ *
+ * @param round: round index, 0..63
+ *
+ * @return how far that round's mix rotates left
  */
 @static
 fn md5_shift(round: uint32) -> uint32 {
@@ -66,6 +82,10 @@ fn md5_shift(round: uint32) -> uint32 {
 /**
  * Per-round additive constant: floor(2^32 * |sin(round + 1)|), computed
  * instead of tabulated (RFC 1321 defines the table exactly this way).
+ *
+ * @param round: round index, 0..63
+ *
+ * @return that round's additive constant
  */
 @static
 fn md5_k(round: uint32) -> uint32 {
