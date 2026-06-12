@@ -104,7 +104,7 @@ Generic functions with the same name form an *overload set*, dispatched by
 parameter pattern — a call picks the most specific viable variant (`T*`
 beats `T`, `box<T>*` beats both). This is how libraries specialize by type
 shape: [lib/hash.mc](lib/hash.mc) hashes integer keys by value (splitmix64)
-and pointer keys by content (FNV-1a), and [lib/dict.mc](lib/dict.mc) simply
+and pointer keys by content (FNV-1a), and [lib/set.mc](lib/set.mc) simply
 calls `hash(key)`:
 
 ```c
@@ -279,7 +279,7 @@ passed to and returned from functions, but not to variadic functions like
 printf — pass a pointer or a field instead. See
 [examples/structs.mc](examples/structs.mc) and the data structures built on
 them: the growable [lib/array.mc](lib/array.mc) and the open-addressing
-hash table [lib/dict.mc](lib/dict.mc).
+hash table [lib/set.mc](lib/set.mc).
 
 ### Imports
 

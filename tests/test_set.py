@@ -1,4 +1,4 @@
-"""lib/dict.mc: the open-addressing hash table, checked against Python."""
+"""lib/set.mc: the open-addressing hash table, checked against Python."""
 
 from pathlib import Path
 
@@ -26,36 +26,36 @@ def test_nested_generic_type_args_split_shift_token():
 def test_hash_matches_splitmix64(tmp_path, capfd):
     main = tmp_path / "main.mc"
     main.write_text(
-        'import "dict";\n#include <stdio.h>\n'
+        'import "set";\n#include <stdio.h>\n'
         'fn main() -> int32 { printf("%llu\\n", splitmix64(12345)); return 0; }'
     )
     assert run_path(main) == 0
     assert capfd.readouterr().out == f"{splitmix64(12345)}\n"
 
 
-def test_dict_behaves_like_a_python_dict(tmp_path, capfd):
+def test_set_behaves_like_a_dict(tmp_path, capfd):
     main = tmp_path / "main.mc"
     main.write_text(
         """
-        import "dict";
+        import "set";
         #include <stdio.h>
         fn main() -> int32 {
-            let s = alloc<struct dict<uint64, uint64>>(1);
-            dict_init(s, 4);
+            let s = alloc<struct set<uint64, uint64>>(1);
+            set_init(s, 4);
 
             let i: uint64 = 0;
             while (i < 200) {
-                dict_set(s, i * 7, i * 1000);   // insert (forces growth)
+                set_set(s, i * 7, i * 1000);   // insert (forces growth)
                 i = i + 1;
             }
             i = 0;
             while (i < 100) {
-                dict_set(s, i * 7, i * 2000);   // update
+                set_set(s, i * 7, i * 2000);   // update
                 i = i + 1;
             }
             i = 0;
             while (i < 200) {
-                dict_remove(s, i * 7);          // remove every third key
+                set_remove(s, i * 7);          // remove every third key
                 i = i + 3;
             }
 
@@ -63,7 +63,7 @@ def test_dict_behaves_like_a_python_dict(tmp_path, capfd):
             let value: uint64 = 0;
             i = 0;
             while (i < 200) {
-                let found = dict_get(s, i * 7, &value);
+                let found = set_get(s, i * 7, &value);
                 if (i % 3 == 0) {
                     if (found)
                         errors = errors + 1;
@@ -78,17 +78,17 @@ def test_dict_behaves_like_a_python_dict(tmp_path, capfd):
                 }
                 i = i + 1;
             }
-            if (dict_get(s, 999999, &value))
+            if (set_get(s, 999999, &value))
                 errors = errors + 1;           // absent key must not be found
 
             i = 0;
             while (i < 200) {
-                dict_set(s, i * 7, 42);         // re-insert into tombstones
+                set_set(s, i * 7, 42);         // re-insert into tombstones
                 i = i + 3;
             }
 
             printf("%llu %llu %llu\\n", errors, s->length, s->capacity);
-            dict_destroy(s);
+            set_destroy(s);
             dealloc(s);
             return 0;
         }
@@ -105,29 +105,29 @@ def test_generic_keys_and_values(tmp_path, capfd):
     main = tmp_path / "main.mc"
     main.write_text(
         """
-        import "dict";
+        import "set";
         #include <stdio.h>
         fn main() -> int32 {
             // int32 keys mapping to float64 values
-            let prices = alloc<struct dict<int32, float64>>(1);
-            dict_init(prices, 8);
-            dict_set(prices, -5, 1.25);
-            dict_set(prices, 7, 2.5);
+            let prices = alloc<struct set<int32, float64>>(1);
+            set_init(prices, 8);
+            set_set(prices, -5, 1.25);
+            set_set(prices, 7, 2.5);
             let price: float64 = 0.0;
-            if (dict_get(prices, -5, &price))
+            if (set_get(prices, -5, &price))
                 printf("%f\\n", price);
-            dict_destroy(prices);
+            set_destroy(prices);
             dealloc(prices);
 
             // pointer keys (hashed via ptrtoint)
-            let names = alloc<struct dict<uint8*, int32>>(1);
-            dict_init(names, 8);
+            let names = alloc<struct set<uint8*, int32>>(1);
+            set_init(names, 8);
             let hello = "hello";
-            dict_set(names, hello, 42);
+            set_set(names, hello, 42);
             let found: int32 = 0;
-            if (dict_get(names, hello, &found))
+            if (set_get(names, hello, &found))
                 printf("%d\\n", found);
-            dict_destroy(names);
+            set_destroy(names);
             dealloc(names);
             return 0;
         }
