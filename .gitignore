@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Test and coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+
+# macOS
+.DS_Store
+
+# Compiler output: intermediate objects and linked executables.
+*.o
+/app
+
+# mcc writes executables next to the source by default, so anything in
+# examples/ that is not a source file or the index is a build product.
+examples/*
+!examples/*.mc
+!examples/README.md

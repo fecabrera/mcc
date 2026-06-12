@@ -1,0 +1,175 @@
+"""AST node classes produced by the parser and consumed by codegen."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class TypeRef:
+    """A type as written in source: base name, generic arguments, pointer
+    depth. `struct array<T>**` is TypeRef("array", [TypeRef("T")], 2)."""
+    name: str
+    args: list["TypeRef"] = field(default_factory=list)
+    stars: int = 0
+
+    def __str__(self) -> str:
+        text = self.name
+        if self.args:
+            text += "<" + ", ".join(str(a) for a in self.args) + ">"
+        return text + "*" * self.stars
+
+
+@dataclass
+class Program:
+    imports: list[tuple[str, int]]  # (path, line); resolved and merged by the driver
+    includes: list[str]
+    structs: list["StructDecl"]
+    functions: list["Func"]
+
+@dataclass
+class StructDecl:
+    name: str
+    type_params: list[str]  # generic type parameters, e.g. struct array<T>
+    fields: list[tuple[str, TypeRef]]
+    line: int
+
+@dataclass
+class Func:
+    name: str
+    type_params: list[str]  # generic type parameters, e.g. fn sum<T>(...)
+    params: list[tuple[str, TypeRef]]
+    ret_type: TypeRef
+    body: list
+    line: int
+
+@dataclass
+class Let:
+    name: str
+    type_name: TypeRef | None
+    value: object
+    line: int
+
+@dataclass
+class Assign:
+    name: str
+    value: object
+    line: int
+
+@dataclass
+class Return:
+    value: object | None
+    line: int
+
+@dataclass
+class If:
+    cond: object
+    then: list
+    otherwise: list
+    line: int
+
+@dataclass
+class While:
+    cond: object
+    body: list
+    line: int
+    until: bool = False  # `until` loops run while the condition is false
+
+@dataclass
+class ExprStmt:
+    expr: object
+    line: int
+
+@dataclass
+class StoreDeref:  # *ptr = value;
+    ptr: object
+    value: object
+    line: int
+
+@dataclass
+class StoreIndex:  # base[index] = value;
+    base: object
+    index: object
+    value: object
+    line: int
+
+@dataclass
+class StoreMember:  # base.field = value;  or  base->field = value;
+    base: object
+    field: str
+    arrow: bool
+    value: object
+    line: int
+
+@dataclass
+class IntLit:
+    value: int
+    line: int
+
+@dataclass
+class FloatLit:
+    value: float
+    line: int
+
+@dataclass
+class BoolLit:
+    value: bool
+    line: int
+
+@dataclass
+class StrLit:
+    value: str
+    line: int
+
+@dataclass
+class NullLit:
+    line: int
+
+@dataclass
+class Var:
+    name: str
+    line: int
+
+@dataclass
+class Call:
+    name: str
+    type_args: list[TypeRef]  # explicit generic arguments, e.g. sum<int32>(...)
+    args: list
+    line: int
+
+@dataclass
+class Unary:
+    op: str
+    operand: object
+    line: int
+
+@dataclass
+class Cast:  # value as type
+    value: object
+    type_name: TypeRef
+    line: int
+
+@dataclass
+class SizeOf:  # sizeof(type)
+    type_name: TypeRef
+    line: int
+
+@dataclass
+class Index:  # base[index]
+    base: object
+    index: object
+    line: int
+
+@dataclass
+class Member:  # base.field  or  base->field
+    base: object
+    field: str
+    arrow: bool
+    line: int
+
+@dataclass
+class Binary:
+    op: str
+    lhs: object
+    rhs: object
+    line: int
