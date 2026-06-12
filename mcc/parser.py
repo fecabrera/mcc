@@ -72,7 +72,7 @@ class Parser:
             args.append(self.parse_type_ref())
             while self.accept(","):
                 args.append(self.parse_type_ref())
-            self.expect(">")
+            self.expect_close_angle()
         stars = 0
         while self.cur.kind == "*" and (
             greedy_stars or self.tokens[self.pos + 1].kind not in self.EXPR_START
@@ -80,6 +80,15 @@ class Parser:
             self.advance()
             stars += 1
         return TypeRef(name, args, stars)
+
+    def expect_close_angle(self):
+        """Close a type-argument list. A `>>` token here is two closings of
+        nested generics (e.g. array<array<int32>>): split it, consuming the
+        first `>` and leaving the second as the current token."""
+        if self.cur.kind == ">>":
+            self.tokens[self.pos] = Token(">", ">", self.cur.line)
+            return
+        self.expect(">")
 
     def parse_type_params(self) -> list[str]:
         type_params = []
@@ -187,7 +196,10 @@ class Parser:
     def parse_expr(self):
         return self.parse_binary(0)
 
-    PRECEDENCE = [["==", "!="], ["<", "<=", ">", ">="], ["+", "-"], ["*", "/", "%"]]
+    # Bitwise operators bind tighter than comparisons (unlike C), so
+    # `a & b == c` means `(a & b) == c`.
+    PRECEDENCE = [["==", "!="], ["<", "<=", ">", ">="], ["|"], ["^"], ["&"],
+                  ["<<", ">>"], ["+", "-"], ["*", "/", "%"]]
 
     def parse_binary(self, level: int):
         if level == len(self.PRECEDENCE):

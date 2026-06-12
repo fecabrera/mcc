@@ -1,8 +1,9 @@
-# lang
+# mcc
 
-A small, C-flavored compiled language built on [LLVM](https://llvm.org/) via
-[llvmlite](https://llvmlite.readthedocs.io/). The compiler lives in the
-[mcc/](mcc/) package, with one module per stage: lexer, parser, code
+A small, modern-C-style language with generics, structs, and pointers,
+compiled to native code (or JIT-executed) via [LLVM](https://llvm.org/)
+using [llvmlite](https://llvmlite.readthedocs.io/). The compiler lives in
+the [mcc/](mcc/) package, with one module per stage: lexer, parser, code
 generator, and driver.
 
 ```c
@@ -171,8 +172,12 @@ when promoted. Unary `-` is not allowed on unsigned values. See
 ### Operators
 
 By descending precedence: unary `-` `!` `*` `&`, `as` casts, then `*` `/`
-`%`, `+` `-`, `<` `<=` `>` `>=`, `==` `!=`. Comparisons yield `bool`;
-`%` is integer-only. Integer constant expressions fold at compile time.
+`%`, `+` `-`, shifts `<<` `>>`, bitwise `&`, `^`, `|`, comparisons
+`<` `<=` `>` `>=`, and `==` `!=`. Comparisons yield `bool`; `%` and the
+bitwise/shift operators are integer-only. `>>` is an arithmetic shift for
+signed types and logical for unsigned. Unlike C, bitwise operators bind
+tighter than comparisons, so `a & 4 == 4` means `(a & 4) == 4`. Integer
+constant expressions fold at compile time.
 
 ### Casts
 
@@ -257,8 +262,9 @@ fn main() -> int32 {
 `alloc<struct node<int32>>(n)` allocates correctly. Struct values can be
 passed to and returned from functions, but not to variadic functions like
 printf — pass a pointer or a field instead. See
-[examples/structs.mc](examples/structs.mc) and the growable
-[lib/array.mc](lib/array.mc) built on them.
+[examples/structs.mc](examples/structs.mc) and the data structures built on
+them: the growable [lib/array.mc](lib/array.mc) and the open-addressing
+hash table [lib/set.mc](lib/set.mc).
 
 ### Imports
 

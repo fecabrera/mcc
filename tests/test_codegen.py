@@ -41,6 +41,29 @@ def test_varargs_promotion_signedness():
     assert "zext" in main_ir('let a: uint8 = 1; printf("%u", a);')
 
 
+def test_bitwise_instructions():
+    ir_text = main_ir(
+        "let a: uint64 = 5; "
+        "let b = a ^ (a >> 3); let c = a & 7; let d = a | 8; let e = a << 2;"
+    )
+    for instruction in ("xor", "lshr", "and", "or", "shl"):
+        assert instruction in ir_text
+    assert "ashr" in main_ir("let a: int64 = -5; let b = a >> 1;")
+
+
+def test_bitwise_binds_tighter_than_comparison():
+    # a & b == c parses as (a & b) == c, so this compiles (bool == would not).
+    ir_text = main_ir("let a: int32 = 6; let ok = a & 4 == 4;")
+    assert "and" in ir_text
+
+
+def test_bitwise_constants_fold_and_stay_untyped():
+    ir_text = main_ir("let x: uint8 = 1 << 7;")  # 128 fits in uint8
+    assert "shl" not in ir_text  # folded away
+    with pytest.raises(LangError, match="out of range for uint8"):
+        main_ir("let x: uint8 = 1 << 8;")
+
+
 def test_missing_return_in_main_is_implicit_zero():
     ir_text = compile_ir("fn main() -> int32 {}")
     assert "ret i32 0" in ir_text

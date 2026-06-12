@@ -146,13 +146,23 @@ COMPARISON_OPS = ("==", "!=", "<", "<=", ">", ">=")
 
 def fold_int_arithmetic(op: str, a: int, b: int, lang_type: LangType) -> int | None:
     """Evaluate a op b at compile time (C semantics: division truncates
-    toward zero), wrapped to the type's range. None if it cannot fold."""
+    toward zero, >> is arithmetic for signed types), wrapped to the type's
+    range. None if it cannot fold."""
+    width = lang_type.ir.width
     if op in ("/", "%") and b == 0:
         return None  # leave division by zero to the runtime instruction
-    quotient = 0 if b == 0 else abs(a) // abs(b) * (1 if (a >= 0) == (b >= 0) else -1)
-    value = {"+": a + b, "-": a - b, "*": a * b,
-             "/": quotient, "%": a - b * quotient}[op]
-    width = lang_type.ir.width
+    if op in ("<<", ">>") and not 0 <= b < width:
+        return None  # out-of-range shifts are poison; leave to the runtime
+    if op in ("+", "-", "*"):
+        value = {"+": a + b, "-": a - b, "*": a * b}[op]
+    elif op in ("/", "%"):
+        quotient = abs(a) // abs(b) * (1 if (a >= 0) == (b >= 0) else -1)
+        value = quotient if op == "/" else a - b * quotient
+    else:
+        # Python's >> is arithmetic; stored constants are already in the
+        # type's range, so this matches ashr/lshr per signedness.
+        value = {"&": a & b, "|": a | b, "^": a ^ b,
+                 "<<": a << b, ">>": a >> b}[op]
     if lang_type.signed:
         half = 1 << (width - 1)
         return (value + half) % (1 << width) - half
@@ -764,6 +774,11 @@ class CodeGen:
                 "*": self.builder.mul,
                 "/": self.builder.sdiv if op_type.signed else self.builder.udiv,
                 "%": self.builder.srem if op_type.signed else self.builder.urem,
+                "&": self.builder.and_,
+                "|": self.builder.or_,
+                "^": self.builder.xor,
+                "<<": self.builder.shl,
+                ">>": self.builder.ashr if op_type.signed else self.builder.lshr,
             }
             return TypedValue(ops[expr.op](lhs.value, rhs.value), op_type)
         elif op_type is FLOAT64 and expr.op != "%":

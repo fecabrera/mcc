@@ -15,12 +15,12 @@ TOKEN_SPEC = [
     ("COMMENT", r"//[^\n]*|/\*(?s:.*?)\*/"),
     ("WS", r"[ \t\r\n]+"),
     ("ARROW", r"->"),
-    ("OP2", r"==|!=|<=|>="),
+    ("OP2", r"==|!=|<=|>=|<<|>>"),
     ("FLOAT", r"\d+\.\d+"),
     ("INT", r"\d+"),
     ("IDENT", r"[A-Za-z_]\w*"),
     ("STRING", r'"(\\.|[^"\\\n])*"'),
-    ("OP", r"[{}()<>;:,=+\-*/%!\[\]&.]"),
+    ("OP", r"[{}()<>;:,=+\-*/%!\[\]&.^|]"),
 ]
 
 MASTER_RE = re.compile("|".join(f"(?P<{name}>{pat})" for name, pat in TOKEN_SPEC))
