@@ -16,6 +16,7 @@ TOKEN_SPEC = [
     ("WS", r"[ \t\r\n]+"),
     ("ARROW", r"->"),
     ("OP2", r"==|!=|<=|>=|<<|>>"),
+    ("ANNOT", r"@[A-Za-z_]\w*"),
     ("FLOAT", r"\d+\.\d+"),
     ("INT", r"\d+"),
     ("IDENT", r"[A-Za-z_]\w*"),

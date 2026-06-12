@@ -37,6 +37,10 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
         return Program([], [], [], [])
     visited.add(resolved)
     program = Parser(tokenize(resolved.read_text())).parse_program()
+    for func in program.functions:
+        func.source = str(resolved)
+    for decl in program.structs:
+        decl.source = str(resolved)
     includes, structs, functions = [], [], []
     for import_path, line in program.imports:
         candidates = []

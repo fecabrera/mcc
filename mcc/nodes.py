@@ -33,6 +33,8 @@ class StructDecl:
     type_params: list[str]  # generic type parameters, e.g. struct array<T>
     fields: list[tuple[str, TypeRef]]
     line: int
+    private: bool = False  # @private: only usable within its source file
+    source: str | None = None  # defining file; stamped by the driver
 
 @dataclass
 class Func:
@@ -42,6 +44,8 @@ class Func:
     ret_type: TypeRef
     body: list
     line: int
+    private: bool = False  # @private: only callable within its source file
+    source: str | None = None  # defining file; stamped by the driver
 
 @dataclass
 class Let:

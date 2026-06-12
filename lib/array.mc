@@ -86,7 +86,7 @@ fn array_set<T>(self: struct array<T>*, index: uint64, value: T) -> bool {
  */
 fn array_append<T>(self: struct array<T>*, value: T) {
     if (self->length == self->capacity)
-        _array_grow<T>(self);
+        array_grow<T>(self);
 
     self->data[self->length] = value;
     self->length = self->length + 1;
@@ -98,7 +98,8 @@ fn array_append<T>(self: struct array<T>*, value: T) {
  *
  * @param self: array to grow
  */
-fn _array_grow<T>(self: struct array<T>*) {
+@private
+fn array_grow<T>(self: struct array<T>*) {
     let new_capacity: uint64 = self->capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;

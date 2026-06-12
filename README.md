@@ -288,6 +288,24 @@ fn main() -> int32 {
 }
 ```
 
+### Visibility
+
+Everything is public by default. Marking a function or struct `@private`
+restricts it to the file that defines it — referencing it from any other
+file (however it was imported) is a compile error naming the owning file:
+
+```c
+/**
+ * Doubles the array's capacity. Internal; called by array_append.
+ */
+@private
+fn array_grow<T>(self: struct array<T>*) { ... }
+```
+
+```
+error: line 5: function 'array_grow' is private to array.mc
+```
+
 ### Strings
 
 String literals (with `\n`, `\t`, `\r`, `\0`, `\"`, `\\` escapes) compile to

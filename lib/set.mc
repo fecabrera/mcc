@@ -61,7 +61,7 @@ fn set_destroy<K, V>(self: struct set<K, V>*) {
  */
 fn set_set<K, V>(self: struct set<K, V>*, key: K, value: V) {
     if (self->length * 10 >= self->capacity * 7)
-        _set_grow(self);
+        set_grow(self);
 
     let slot = splitmix64(key as uint64) % self->capacity;
     let tombstone_slot: uint64 = 0;
@@ -141,7 +141,8 @@ fn set_remove<K, V>(self: struct set<K, V>*, key: K) {
  *
  * @param self: set to grow
  */
-fn _set_grow<K, V>(self: struct set<K, V>*) {
+@private
+fn set_grow<K, V>(self: struct set<K, V>*) {
     let old_capacity = self->capacity;
     let old_entries = self->entries;
 

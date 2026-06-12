@@ -185,10 +185,18 @@ class CodeGen:
         self.struct_templates: dict[str, StructDecl] = {}
         self.struct_types: dict[str, LangType] = {}  # mangled name -> instance
         self.type_bindings: dict[str, LangType] = {}  # active type-parameter bindings
+        # name -> (private, source file); for @private access checks
+        self.func_privacy: dict[str, tuple[bool, str | None]] = {}
+        self.current_source: str | None = None  # file owning the code being generated
         self.builder: ir.IRBuilder | None = None
         self.locals: dict[str, tuple[ir.AllocaInstr, LangType]] = {}
         self.ret_type: LangType = VOID
         self.str_count = 0
+
+    def check_access(self, private: bool, source: str | None, what: str, line: int):
+        if private and source != self.current_source:
+            owner = source.rsplit("/", 1)[-1] if source else "its file"
+            raise LangError(f"{what} is private to {owner}", line)
 
     def lang_type(self, ref: TypeRef, line: int) -> LangType:
         if ref.name in self.type_bindings and not ref.args:
@@ -199,6 +207,7 @@ class CodeGen:
             base = TYPES[ref.name]
         elif ref.name in self.struct_templates:
             decl = self.struct_templates[ref.name]
+            self.check_access(decl.private, decl.source, f"struct {ref.name!r}", line)
             if len(ref.args) != len(decl.type_params):
                 raise LangError(
                     f"struct {ref.name!r} expects {len(decl.type_params)} "
@@ -230,13 +239,16 @@ class CodeGen:
         # (e.g. node<T> holding a node<T>*) can refer to themselves.
         self.struct_types[mangled] = struct_type
         outer = self.type_bindings
+        outer_source = self.current_source
         self.type_bindings = dict(zip(decl.type_params, args))
+        self.current_source = decl.source  # fields may name private structs
         try:
             fields = tuple(
                 (fname, self.lang_type(ftype, decl.line)) for fname, ftype in decl.fields
             )
         finally:
             self.type_bindings = outer
+            self.current_source = outer_source
         identified.set_body(*(ftype.ir for _, ftype in fields))
         object.__setattr__(struct_type, "fields", fields)  # frozen; fields excluded from eq
         return struct_type
@@ -267,6 +279,8 @@ class CodeGen:
         for func in self.program.functions:
             if func.name in self.funcs or func.name in self.templates:
                 raise LangError(f"function {func.name!r} already defined", func.line)
+            self.func_privacy[func.name] = (func.private, func.source)
+            self.current_source = func.source  # signatures may name private structs
             if func.type_params:
                 # Generic: no code yet -- instances are stamped out per call.
                 self.templates[func.name] = func
@@ -284,6 +298,7 @@ class CodeGen:
 
     def gen_function(self, func: Func, fn: ir.Function, ret: LangType, params: list[LangType]):
         self.ret_type = ret
+        self.current_source = func.source
         self.builder = ir.IRBuilder(fn.append_basic_block("entry"))
         self.locals = {}
         for (pname, _), ptype, arg in zip(func.params, params, fn.args):
@@ -600,6 +615,8 @@ class CodeGen:
         fn = self.funcs.get(expr.name)
         if fn is None:
             raise LangError(f"undefined function {expr.name!r} (missing #include?)", expr.line)
+        private, source = self.func_privacy.get(expr.name, (False, None))
+        self.check_access(private, source, f"function {expr.name!r}", expr.line)
         ret, params, variadic = self.signatures[expr.name]
         if len(expr.args) < len(params) or (len(expr.args) > len(params) and not variadic):
             raise LangError(
@@ -662,6 +679,7 @@ class CodeGen:
 
     def gen_generic_call(self, expr: Call) -> TypedValue:
         func = self.templates[expr.name]
+        self.check_access(func.private, func.source, f"function {expr.name!r}", expr.line)
         if len(expr.args) != len(func.params):
             raise LangError(
                 f"{expr.name!r} expects {len(func.params)} argument(s), got {len(expr.args)}",
@@ -719,7 +737,9 @@ class CodeGen:
             return self.funcs[mangled], ret, params
         mangled = f"{func.name}<{', '.join(str(bindings[t]) for t in func.type_params)}>"
         outer_bindings = self.type_bindings
+        outer_source = self.current_source
         self.type_bindings = bindings
+        self.current_source = func.source  # the signature may name private structs
         try:
             ret = self.lang_type(func.ret_type, func.line)
             params = [self.lang_type(t, func.line) for _, t in func.params]
@@ -734,6 +754,7 @@ class CodeGen:
             self.builder, self.locals, self.ret_type = saved
         finally:
             self.type_bindings = outer_bindings
+            self.current_source = outer_source
         return fn, ret, params
 
     def gen_binary(self, expr: Binary) -> TypedValue:
