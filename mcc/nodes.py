@@ -34,6 +34,7 @@ class StructDecl:
     fields: list[tuple[str, TypeRef]]
     line: int
     private: bool = False  # @private: only usable within its source file
+    static: bool = False  # @static: file-scoped name; other files may reuse it
     source: str | None = None  # defining file; stamped by the driver
 
 @dataclass
@@ -45,6 +46,7 @@ class Func:
     body: list
     line: int
     private: bool = False  # @private: only callable within its source file
+    static: bool = False  # @static: file-scoped name; other files may reuse it
     source: str | None = None  # defining file; stamped by the driver
 
 @dataclass

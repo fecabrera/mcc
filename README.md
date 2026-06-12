@@ -306,6 +306,13 @@ fn array_grow<T>(self: struct array<T>*) { ... }
 error: line 5: function 'array_grow' is private to array.mc
 ```
 
+`@static` goes further, like C's `static`: the name is file-scoped rather
+than merely access-restricted, so it leaves the global namespace entirely.
+Different files can each define their own `@static` function, struct, or
+generic with the same name, and a file's `@static` definition shadows a
+public one imported from elsewhere. From any other file the name is simply
+undefined.
+
 ### Strings
 
 String literals (with `\n`, `\t`, `\r`, `\0`, `\"`, `\\` escapes) compile to

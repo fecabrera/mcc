@@ -180,10 +180,16 @@ class CodeGen:
         # name -> (return type, param types, variadic)
         self.signatures: dict[str, tuple[LangType, list[LangType], bool]] = {}
         self.templates: dict[str, Func] = {}  # generic functions, by source name
-        # (template name, bound types) -> mangled instance name
-        self.instances: dict[tuple[str, tuple[str, ...]], str] = {}
+        # (source, template name, bound types) -> mangled instance name
+        self.instances: dict[tuple[str | None, str, tuple[str, ...]], str] = {}
         self.struct_templates: dict[str, StructDecl] = {}
         self.struct_types: dict[str, LangType] = {}  # mangled name -> instance
+        # @static declarations: file-scoped names, keyed by (source, name)
+        self.static_funcs: dict[tuple[str | None, str], str] = {}  # -> symbol
+        self.static_templates: dict[tuple[str | None, str], Func] = {}
+        self.static_structs: dict[tuple[str | None, str], StructDecl] = {}
+        self.symbol_bases: dict[tuple[str | None, str], str] = {}  # static name mangling
+        self.used_symbols: set[str] = set()
         self.type_bindings: dict[str, LangType] = {}  # active type-parameter bindings
         # name -> (private, source file); for @private access checks
         self.func_privacy: dict[str, tuple[bool, str | None]] = {}
@@ -198,6 +204,17 @@ class CodeGen:
             owner = source.rsplit("/", 1)[-1] if source else "its file"
             raise LangError(f"{what} is private to {owner}", line)
 
+    def static_base(self, name: str, source: str | None) -> str:
+        """A unique LLVM-level symbol for a file-scoped name, e.g. f@set."""
+        stem = source.rsplit("/", 1)[-1].removesuffix(".mc") if source else "static"
+        base = candidate = f"{name}@{stem}"
+        counter = 1
+        while candidate in self.used_symbols:
+            counter += 1
+            candidate = f"{base}.{counter}"
+        self.used_symbols.add(candidate)
+        return candidate
+
     def lang_type(self, ref: TypeRef, line: int) -> LangType:
         if ref.name in self.type_bindings and not ref.args:
             base = self.type_bindings[ref.name]
@@ -205,9 +222,12 @@ class CodeGen:
             if ref.args:
                 raise LangError(f"type {ref.name!r} is not generic", line)
             base = TYPES[ref.name]
-        elif ref.name in self.struct_templates:
-            decl = self.struct_templates[ref.name]
-            self.check_access(decl.private, decl.source, f"struct {ref.name!r}", line)
+        elif (self.current_source, ref.name) in self.static_structs \
+                or ref.name in self.struct_templates:
+            decl = self.static_structs.get((self.current_source, ref.name))
+            if decl is None:
+                decl = self.struct_templates[ref.name]
+                self.check_access(decl.private, decl.source, f"struct {ref.name!r}", line)
             if len(ref.args) != len(decl.type_params):
                 raise LangError(
                     f"struct {ref.name!r} expects {len(decl.type_params)} "
@@ -227,7 +247,7 @@ class CodeGen:
     def instantiate_struct(self, decl: StructDecl, args: tuple[LangType, ...]) -> LangType:
         """Return the struct instance for these type arguments, creating its
         LLVM identified type (and resolving field types) on first use."""
-        mangled = decl.name
+        mangled = self.symbol_bases.get((decl.source, decl.name), decl.name)
         if args:
             mangled += "<" + ", ".join(str(a) for a in args) + ">"
         if mangled in self.struct_types:
@@ -268,19 +288,49 @@ class CodeGen:
                 self.program.imports[0][1],
             )
         for decl in self.program.structs:
-            if decl.name in self.struct_templates or decl.name in TYPES:
+            if decl.name in TYPES:
+                raise LangError(f"type {decl.name!r} already defined", decl.line)
+            if decl.static:
+                key = (decl.source, decl.name)
+                if key in self.static_structs:
+                    raise LangError(f"type {decl.name!r} already defined", decl.line)
+                self.static_structs[key] = decl
+                self.symbol_bases[key] = self.static_base(decl.name, decl.source)
+                continue
+            if decl.name in self.struct_templates:
                 raise LangError(f"type {decl.name!r} already defined", decl.line)
             self.struct_templates[decl.name] = decl
+            self.used_symbols.add(decl.name)
         for header in dict.fromkeys(self.program.includes):
             for name, (ret, params, variadic) in HEADER_FUNCS.get(header, {}).items():
                 fnty = ir.FunctionType(ret.ir, [p.ir for p in params], var_arg=variadic)
                 self.funcs[name] = ir.Function(self.module, fnty, name=name)
                 self.signatures[name] = (ret, params, variadic)
+                self.used_symbols.add(name)
+        declared: set[tuple[str | None, str]] = set()
         for func in self.program.functions:
+            key = (func.source, func.name)
+            if key in declared:
+                raise LangError(f"function {func.name!r} already defined", func.line)
+            declared.add(key)
+            self.current_source = func.source  # signatures may name private structs
+            if func.static:
+                self.symbol_bases[key] = self.static_base(func.name, func.source)
+                if func.type_params:
+                    self.static_templates[key] = func
+                    continue
+                symbol = self.symbol_bases[key]
+                ret = self.lang_type(func.ret_type, func.line)
+                params = [self.lang_type(t, func.line) for _, t in func.params]
+                fnty = ir.FunctionType(ret.ir, [p.ir for p in params])
+                self.funcs[symbol] = ir.Function(self.module, fnty, name=symbol)
+                self.signatures[symbol] = (ret, params, False)
+                self.static_funcs[key] = symbol
+                continue
             if func.name in self.funcs or func.name in self.templates:
                 raise LangError(f"function {func.name!r} already defined", func.line)
             self.func_privacy[func.name] = (func.private, func.source)
-            self.current_source = func.source  # signatures may name private structs
+            self.used_symbols.add(func.name)
             if func.type_params:
                 # Generic: no code yet -- instances are stamped out per call.
                 self.templates[func.name] = func
@@ -292,8 +342,9 @@ class CodeGen:
             self.signatures[func.name] = (ret, params, False)
         for func in self.program.functions:
             if not func.type_params:
-                ret, params, _ = self.signatures[func.name]
-                self.gen_function(func, self.funcs[func.name], ret, params)
+                symbol = self.static_funcs.get((func.source, func.name), func.name)
+                ret, params, _ = self.signatures[symbol]
+                self.gen_function(func, self.funcs[symbol], ret, params)
         return self.module
 
     def gen_function(self, func: Func, fn: ir.Function, ret: LangType, params: list[LangType]):
@@ -608,16 +659,25 @@ class CodeGen:
         return TypedValue(self.builder.bitcast(glob, RAWPTR.ir), RAWPTR)
 
     def gen_call(self, expr: Call) -> TypedValue:
+        # File-scoped (@static) names shadow the global namespace.
+        key = (self.current_source, expr.name)
+        if key in self.static_templates:
+            return self.gen_generic_call(expr, self.static_templates[key])
+        if key in self.static_funcs:
+            return self.gen_direct_call(expr, self.static_funcs[key])
         if expr.name in self.templates:
-            return self.gen_generic_call(expr)
-        if expr.type_args:
-            raise LangError(f"{expr.name!r} is not a generic function", expr.line)
-        fn = self.funcs.get(expr.name)
-        if fn is None:
+            return self.gen_generic_call(expr, self.templates[expr.name])
+        if expr.name not in self.funcs:
             raise LangError(f"undefined function {expr.name!r} (missing #include?)", expr.line)
         private, source = self.func_privacy.get(expr.name, (False, None))
         self.check_access(private, source, f"function {expr.name!r}", expr.line)
-        ret, params, variadic = self.signatures[expr.name]
+        return self.gen_direct_call(expr, expr.name)
+
+    def gen_direct_call(self, expr: Call, symbol: str) -> TypedValue:
+        if expr.type_args:
+            raise LangError(f"{expr.name!r} is not a generic function", expr.line)
+        fn = self.funcs[symbol]
+        ret, params, variadic = self.signatures[symbol]
         if len(expr.args) < len(params) or (len(expr.args) > len(params) and not variadic):
             raise LangError(
                 f"{expr.name!r} expects {len(params)} argument(s), got {len(expr.args)}", expr.line
@@ -677,8 +737,7 @@ class CodeGen:
                 self.unify(sub_pattern, sub_actual, type_params, bindings,
                            strict, context, line)
 
-    def gen_generic_call(self, expr: Call) -> TypedValue:
-        func = self.templates[expr.name]
+    def gen_generic_call(self, expr: Call, func: Func) -> TypedValue:
         self.check_access(func.private, func.source, f"function {expr.name!r}", expr.line)
         if len(expr.args) != len(func.params):
             raise LangError(
@@ -730,12 +789,13 @@ class CodeGen:
     ) -> tuple[ir.Function, LangType, list[LangType]]:
         """Return the monomorphized instance of `func` for `bindings`,
         generating (and caching) it on first use."""
-        key = (func.name, tuple(str(bindings[t]) for t in func.type_params))
+        key = (func.source, func.name, tuple(str(bindings[t]) for t in func.type_params))
         if key in self.instances:
             mangled = self.instances[key]
             ret, params, _ = self.signatures[mangled]
             return self.funcs[mangled], ret, params
-        mangled = f"{func.name}<{', '.join(str(bindings[t]) for t in func.type_params)}>"
+        base = self.symbol_bases.get((func.source, func.name), func.name)
+        mangled = f"{base}<{', '.join(str(bindings[t]) for t in func.type_params)}>"
         outer_bindings = self.type_bindings
         outer_source = self.current_source
         self.type_bindings = bindings

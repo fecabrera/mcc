@@ -135,3 +135,19 @@ def test_generic_keys_and_values(tmp_path, capfd):
     )
     assert run_path(main) == 0
     assert capfd.readouterr().out == "1.250000\n42\n"
+
+
+def test_fnv1a_matches_reference(tmp_path, capfd):
+    def fnv1a(data: bytes) -> int:
+        h = 14695981039346656037
+        for byte in data:
+            h = ((h ^ byte) * 1099511628211) % 2**64
+        return h
+
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "fnv1a";\n#include <stdio.h>\n'
+        'fn main() -> int32 { printf("%llu %llu\\n", fnv1a("hello"), fnv1a("")); return 0; }'
+    )
+    assert run_path(main) == 0
+    assert capfd.readouterr().out == f"{fnv1a(b'hello')} {fnv1a(b'')}\n"

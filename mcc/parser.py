@@ -51,16 +51,19 @@ class Parser:
                 self.expect(";")
                 imports.append((path, line))
         while self.cur.kind != "EOF":
-            private = False
+            private = static = False
             while self.cur.kind == "ANNOT":
                 annot = self.advance()
-                if annot.text != "@private":
+                if annot.text == "@private":
+                    private = True
+                elif annot.text == "@static":
+                    static = True
+                else:
                     raise LangError(f"unknown annotation {annot.text!r}", annot.line)
-                private = True
             if self.cur.kind == "struct":
-                structs.append(self.parse_struct(private))
+                structs.append(self.parse_struct(private, static))
             else:
-                functions.append(self.parse_function(private))
+                functions.append(self.parse_function(private, static))
         return Program(imports, includes, structs, functions)
 
     # Tokens that can begin an expression; used to settle the `as T * x`
@@ -105,7 +108,7 @@ class Parser:
             self.expect(">")
         return type_params
 
-    def parse_struct(self, private: bool = False) -> StructDecl:
+    def parse_struct(self, private: bool = False, static: bool = False) -> StructDecl:
         line = self.expect("struct").line
         name = self.expect("IDENT").text
         type_params = self.parse_type_params()
@@ -117,9 +120,9 @@ class Parser:
             fields.append((fname, self.parse_type_ref()))
             self.expect(";")
         self.expect("}")
-        return StructDecl(name, type_params, fields, line, private=private)
+        return StructDecl(name, type_params, fields, line, private=private, static=static)
 
-    def parse_function(self, private: bool = False) -> Func:
+    def parse_function(self, private: bool = False, static: bool = False) -> Func:
         line = self.expect("fn").line
         name = self.expect("IDENT").text
         type_params = self.parse_type_params()
@@ -136,7 +139,7 @@ class Parser:
         if self.accept("->"):
             ret_type = self.parse_type_ref()
         return Func(name, type_params, params, ret_type, self.parse_block(), line,
-                    private=private)
+                    private=private, static=static)
 
     def parse_block(self) -> list:
         self.expect("{")
