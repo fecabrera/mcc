@@ -90,8 +90,17 @@ def test_uninstantiated_template_emits_nothing():
         ("fn f() {} fn main() -> int32 { f<int32>(); return 0; }", "not a generic function"),
         ("fn f<T>(x: int32) -> T { return x; } fn main() -> int32 { return f(1); }",
          "cannot infer type parameter"),
+        ("fn f<T>(a: T, b: T) {} fn main() -> int32 "
+         "{ let x: int32 = 1; let y: int64 = 2; f(x, y); return 0; }",
+         "conflicting types for type parameter T in call to 'f': int32 vs int64"),
+        ("fn f<T>(a: T, b: T) {} fn main() -> int32 "
+         "{ let x: int32 = 1; let y: int64 = 2; f<int64>(x, y); return 0; }",
+         "argument 1 of 'f': expected int64, got int32"),
         ("fn main() -> int32 { return 1.5; }", "expected int32, got float64"),
         ("fn main() -> int32 { let x = 1.5 % 2.0; return 0; }", "not supported for float64"),
+        ("fn main() -> int32 { let x = true + 1; return 0; }", "expected bool, got int32"),
+        ("fn main() -> int32 { let x = true + false; return 0; }",
+         "'\\+' not supported for bool"),
         ("fn main() -> int32 { let x = 1; return 0; }", "type of 'x' is ambiguous"),
         ("fn main() -> int32 { let x = -1; return 0; }", "type of 'x' is ambiguous"),
         ("fn main() -> int32 { let x = (1 + 2) * 3; return 0; }", "type of 'x' is ambiguous"),

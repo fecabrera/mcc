@@ -96,6 +96,20 @@ def test_struct_errors(source, message):
         compile_ir(source)
 
 
+def test_conflict_detected_inside_generic_struct_pattern():
+    with pytest.raises(LangError, match="conflicting types for type parameter T"):
+        compile_ir(
+            "struct box<T> { value: T; }\n"
+            "fn f<T>(a: box<T>*, b: box<T>*) {}\n"
+            "fn main() -> int32 {\n"
+            "    let a: box<int32>* = null;\n"
+            "    let b: box<int64>* = null;\n"
+            "    f(a, b);\n"
+            "    return 0;\n"
+            "}"
+        )
+
+
 def test_sizeof_struct_includes_padding():
     # uint8 followed by int64 pads to 16 bytes.
     assert run(

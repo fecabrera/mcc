@@ -617,24 +617,38 @@ class CodeGen:
             args.append(value)
         return TypedValue(self.builder.call(fn, args), ret)
 
-    def unify(self, pattern: TypeRef, actual: LangType,
-              type_params: list[str], bindings: dict[str, LangType]):
+    def unify(self, pattern: TypeRef, actual: LangType, type_params: list[str],
+              bindings: dict[str, LangType], strict: bool, context: str, line: int):
         """Match a parameter's TypeRef against an argument type, binding any
         type parameters it mentions. `array<T>*` against `array<int32>*`
-        binds T = int32. First binding wins; conflicts surface as ordinary
-        coercion errors afterwards."""
+        binds T = int32.
+
+        When `strict`, two typed arguments that disagree about the same
+        parameter are reported as a conflict. Non-strict matches (untyped
+        constants, or parameters fixed by explicit type arguments) never
+        override or conflict with an existing binding; any mismatch there
+        surfaces as an ordinary coercion error afterwards."""
         peeled = actual
         for _ in range(pattern.stars):
             if not is_pointer(peeled):
                 return
             peeled = peeled.pointee
         if pattern.name in type_params and not pattern.args:
-            bindings.setdefault(pattern.name, peeled)
+            bound = bindings.get(pattern.name)
+            if bound is None:
+                bindings[pattern.name] = peeled
+            elif strict and bound != peeled:
+                raise LangError(
+                    f"conflicting types for type parameter {pattern.name} in {context}: "
+                    f"{bound} vs {peeled}",
+                    line,
+                )
             return
         if pattern.args and peeled.template == pattern.name \
                 and len(peeled.args) == len(pattern.args):
             for sub_pattern, sub_actual in zip(pattern.args, peeled.args):
-                self.unify(sub_pattern, sub_actual, type_params, bindings)
+                self.unify(sub_pattern, sub_actual, type_params, bindings,
+                           strict, context, line)
 
     def gen_generic_call(self, expr: Call) -> TypedValue:
         func = self.templates[expr.name]
@@ -657,11 +671,15 @@ class CodeGen:
         # Infer unbound type parameters from argument types: typed values
         # first, then untyped constants (whose int32 default should not win
         # over a typed value bound to the same parameter). `null` carries no
-        # type information and never participates.
+        # type information and never participates. Disagreement between
+        # typed arguments is a conflict, unless the parameters were fixed
+        # explicitly (then plain coercion errors point at the bad argument).
         for adaptable_pass in (False, True):
+            strict = not adaptable_pass and not expr.type_args
             for (_, ptype), tv in zip(func.params, arg_tvs):
                 if tv.adaptable == adaptable_pass and tv.type is not NULLT:
-                    self.unify(ptype, tv.type, func.type_params, bindings)
+                    self.unify(ptype, tv.type, func.type_params, bindings,
+                               strict, f"call to {expr.name!r}", expr.line)
         missing = [t for t in func.type_params if t not in bindings]
         if missing:
             raise LangError(

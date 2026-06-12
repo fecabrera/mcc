@@ -94,8 +94,9 @@ Generics compile by monomorphization: each distinct set of type arguments
 stamps out its own specialized function (`sum<uint8>`, `sum<int64>`, ...),
 generated on first use and reused after that — there is no boxing or runtime
 dispatch. When type arguments are omitted, they are inferred from the
-argument types (variables take priority over literals). Generic functions
-can call themselves recursively. See
+argument types (variables take priority over literals), and typed arguments
+that disagree are an error: `conflicting types for type parameter T`.
+Generic functions can call themselves recursively. See
 [examples/templates.mc](examples/templates.mc).
 
 ### Variables
