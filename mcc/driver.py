@@ -34,14 +34,16 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
     resolved = path.resolve()
     visited = _visited if _visited is not None else set()
     if resolved in visited:
-        return Program([], [], [], [])
+        return Program([], [], [], [], [])
     visited.add(resolved)
     program = Parser(tokenize(resolved.read_text())).parse_program()
     for func in program.functions:
         func.source = str(resolved)
     for decl in program.structs:
         decl.source = str(resolved)
-    includes, structs, functions = [], [], []
+    for var in program.globals:
+        var.source = str(resolved)
+    includes, structs, functions, globals_ = [], [], [], []
     for import_path, line in program.imports:
         candidates = []
         for base in (resolved.parent, *search_paths):
@@ -57,10 +59,12 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
         includes += imported.includes
         structs += imported.structs
         functions += imported.functions
+        globals_ += imported.globals
     includes += program.includes
     structs += program.structs
     functions += program.functions
-    return Program([], list(dict.fromkeys(includes)), structs, functions)
+    globals_ += program.globals
+    return Program([], list(dict.fromkeys(includes)), structs, functions, globals_)
 
 
 def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None) -> ir.Module:

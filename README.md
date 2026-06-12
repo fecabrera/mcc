@@ -33,6 +33,7 @@ fn main() -> int32 {
   - [Structs](#structs)
   - [Imports](#imports)
   - [Visibility](#visibility)
+  - [Extern declarations](#extern-declarations)
   - [Strings](#strings)
   - [Includes](#includes)
   - [Comments](#comments)
@@ -296,6 +297,35 @@ fn main() -> int32 {
 }
 ```
 
+`@align(N)` raises a struct's alignment to `N` bytes — a power of two; asking
+for less than the natural alignment is an error. `sizeof` rounds up to a
+multiple of the alignment, and field offsets and array strides stay
+consistent with it, including when an aligned struct is nested inside
+another:
+
+```c
+@align(64)
+struct counter {     // sizeof is 64: one per cache line
+    hits: uint64;
+}
+```
+
+`@packed` is the opposite: it removes the padding between fields, placing
+them at consecutive byte offsets, and drops the struct's alignment to 1 —
+the layout for wire formats and file headers. Member accesses are compiled
+as unaligned, but (as in C) taking a pointer *into* a packed struct with
+`&` and dereferencing it elsewhere is unsafe. `@packed` combines with
+`@align(N)`, which then sets the overall alignment and rounds `sizeof`
+back up:
+
+```c
+@packed
+struct header {      // sizeof is 9, not 16
+    tag: uint8;
+    length: uint64;
+}
+```
+
 `sizeof` understands struct layout (including padding), so
 `alloc<struct node<int32>>(n)` allocates correctly. Struct values can be
 passed to and returned from functions, but not to variadic functions like
@@ -352,6 +382,33 @@ Different files can each define their own `@static` function, struct, or
 generic with the same name, and a file's `@static` definition shadows a
 public one imported from elsewhere. From any other file the name is simply
 undefined.
+
+### Extern declarations
+
+`@extern` declares a function or global variable that is *defined
+elsewhere* — in libc, or in another object linked into the program. An
+extern function gives its signature and ends with `;` instead of a body; an
+extern variable is a top-level `let` with a type and no initializer:
+
+```c
+@extern
+fn atoi(s: uint8*) -> int32;
+
+@extern
+let optind: int32;
+
+fn main() -> int32 {
+    return atoi("41") + optind;
+}
+```
+
+Extern functions cannot be generic or variadic. Identical extern
+declarations may appear in any number of imported files — they all name the
+same symbol — but declarations that disagree about the signature are a
+compile error. `@private` applies to extern declarations as usual;
+`@static` cannot be combined with `@extern`, since an external symbol's
+name is fixed. (The [`#include` headers](#includes) are exactly this:
+predeclared extern functions.)
 
 ### Strings
 

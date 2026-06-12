@@ -7,9 +7,10 @@ import re
 from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
-    Assign, Binary, BoolLit, Call, Cast, ExprStmt, FloatLit, Func, If, Index,
-    IntLit, Let, Member, NullLit, Program, Return, SizeOf, StoreDeref,
-    StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
+    Assign, Binary, BoolLit, Call, Cast, ExprStmt, ExternVar, FloatLit, Func,
+    If, Index, IntLit, Let, Member, NullLit, Program, Return, SizeOf,
+    StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary,
+    Var, While,
 )
 
 STRING_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", '"': '"', "\\": "\\"}
@@ -40,7 +41,7 @@ class Parser:
         return self.advance()
 
     def parse_program(self) -> Program:
-        imports, includes, structs, functions = [], [], [], []
+        imports, includes, structs, functions, globals_ = [], [], [], [], []
         while self.cur.kind in ("INCLUDE", "import"):
             if self.cur.kind == "INCLUDE":
                 header = re.search(r"<([^>]+)>", self.advance().text).group(1)
@@ -51,20 +52,50 @@ class Parser:
                 self.expect(";")
                 imports.append((path, line))
         while self.cur.kind != "EOF":
-            private = static = False
+            private = static = extern = packed = False
+            align = None
             while self.cur.kind == "ANNOT":
                 annot = self.advance()
                 if annot.text == "@private":
                     private = True
                 elif annot.text == "@static":
                     static = True
+                elif annot.text == "@extern":
+                    extern = True
+                elif annot.text == "@packed":
+                    packed = True
+                elif annot.text == "@align":
+                    self.expect("(")
+                    align = int(self.expect("INT").text)
+                    self.expect(")")
+                    if align == 0 or align & (align - 1):
+                        raise LangError(
+                            f"@align needs a power of two, not {align}", annot.line
+                        )
                 else:
                     raise LangError(f"unknown annotation {annot.text!r}", annot.line)
+            if extern and static:
+                raise LangError("@extern and @static cannot be combined", self.cur.line)
+            if align is not None and self.cur.kind != "struct":
+                raise LangError("@align only applies to structs", self.cur.line)
+            if packed and self.cur.kind != "struct":
+                raise LangError("@packed only applies to structs", self.cur.line)
             if self.cur.kind == "struct":
-                structs.append(self.parse_struct(private, static))
+                if extern:
+                    raise LangError("@extern does not apply to structs", self.cur.line)
+                structs.append(self.parse_struct(private, static, align, packed))
+            elif self.cur.kind == "let":
+                line = self.advance().line
+                if not extern:
+                    raise LangError("top-level variables must be @extern", line)
+                name = self.expect("IDENT").text
+                self.expect(":")
+                type_name = self.parse_type_ref()
+                self.expect(";")
+                globals_.append(ExternVar(name, type_name, line, private=private))
             else:
-                functions.append(self.parse_function(private, static))
-        return Program(imports, includes, structs, functions)
+                functions.append(self.parse_function(private, static, extern))
+        return Program(imports, includes, structs, functions, globals_)
 
     # Tokens that can begin an expression; used to settle the `as T * x`
     # ambiguity (multiplication, not a pointer type).
@@ -108,7 +139,8 @@ class Parser:
             self.expect(">")
         return type_params
 
-    def parse_struct(self, private: bool = False, static: bool = False) -> StructDecl:
+    def parse_struct(self, private: bool = False, static: bool = False,
+                     align: int | None = None, packed: bool = False) -> StructDecl:
         line = self.expect("struct").line
         name = self.expect("IDENT").text
         type_params = self.parse_type_params()
@@ -120,12 +152,16 @@ class Parser:
             fields.append((fname, self.parse_type_ref()))
             self.expect(";")
         self.expect("}")
-        return StructDecl(name, type_params, fields, line, private=private, static=static)
+        return StructDecl(name, type_params, fields, line,
+                          private=private, static=static, align=align, packed=packed)
 
-    def parse_function(self, private: bool = False, static: bool = False) -> Func:
+    def parse_function(self, private: bool = False, static: bool = False,
+                       extern: bool = False) -> Func:
         line = self.expect("fn").line
         name = self.expect("IDENT").text
         type_params = self.parse_type_params()
+        if extern and type_params:
+            raise LangError("extern functions cannot be generic", line)
         self.expect("(")
         params = []
         while self.cur.kind != ")":
@@ -138,6 +174,10 @@ class Parser:
         ret_type = TypeRef("void")
         if self.accept("->"):
             ret_type = self.parse_type_ref()
+        if extern:  # a declaration: signature only, no body
+            self.expect(";")
+            return Func(name, type_params, params, ret_type, [], line,
+                        private=private, extern=True)
         return Func(name, type_params, params, ret_type, self.parse_block(), line,
                     private=private, static=static)
 

@@ -36,6 +36,13 @@ class LangType:
     # eq/hash: struct types are interned per mangled name, and recursive
     # structs would otherwise make comparison loop forever.
     fields: tuple | None = field(default=None, compare=False)
+    # @align(N) override, for struct types declared with one.
+    align: int | None = field(default=None, compare=False)
+    # @packed: fields at unpadded offsets; the struct's alignment is 1.
+    packed: bool = field(default=False, compare=False)
+    # LLVM element index of each field; in explicitly laid out structs
+    # (see instantiate_struct) padding elements shift the indices.
+    elem_indices: tuple | None = field(default=None, compare=False)
 
     def __str__(self) -> str:
         return self.name
@@ -97,10 +104,26 @@ def type_align(lang_type: LangType) -> int:
     if is_pointer(lang_type):
         return POINTER_SIZE
     if is_struct(lang_type):
-        return max((type_align(ft) for _, ft in lang_type.fields), default=1)
+        if lang_type.packed:
+            return max(1, lang_type.align or 1)
+        natural = max((type_align(ft) for _, ft in lang_type.fields), default=1)
+        return max(natural, lang_type.align or 1)
     if isinstance(lang_type.ir, ir.IntType):
         return max(1, lang_type.ir.width // 8)
     return 8  # float64
+
+
+def over_aligned(lang_type: LangType) -> bool:
+    """True for structs whose alignment exceeds what LLVM would compute from
+    their IR type alone -- an @align override, here or on a nested field --
+    so the layout must be spelled out explicitly (and allocas aligned by
+    hand) rather than left to LLVM's natural rules."""
+    if not is_struct(lang_type):
+        return False
+    if lang_type.packed:  # its IR body is packed (alignment 1) already
+        return (lang_type.align or 1) > 1
+    return (lang_type.align is not None
+            or any(over_aligned(ftype) for _, ftype in lang_type.fields))
 
 
 def type_size(lang_type: LangType) -> int:
@@ -111,8 +134,10 @@ def type_size(lang_type: LangType) -> int:
     if is_struct(lang_type):
         offset = 0
         for _, ftype in lang_type.fields:
-            align = type_align(ftype)
-            offset = (offset + align - 1) // align * align + type_size(ftype)
+            if not lang_type.packed:
+                align = type_align(ftype)
+                offset = (offset + align - 1) // align * align
+            offset += type_size(ftype)
         align = type_align(lang_type)
         return (offset + align - 1) // align * align
     if isinstance(lang_type.ir, ir.IntType):
@@ -202,6 +227,12 @@ class CodeGen:
         self.static_structs: dict[tuple[str | None, str], StructDecl] = {}
         self.symbol_bases: dict[tuple[str | None, str], str] = {}  # static name mangling
         self.used_symbols: set[str] = set()
+        # @extern declarations refer to symbols defined elsewhere; identical
+        # redeclarations across files collapse onto the first one.
+        self.extern_decls: set[str] = set()
+        self.globals: dict[str, tuple[ir.GlobalVariable, LangType]] = {}
+        # name -> (private, source file); for @private access checks
+        self.global_privacy: dict[str, tuple[bool, str | None]] = {}
         self.type_bindings: dict[str, LangType] = {}  # active type-parameter bindings
         # name -> (private, source file); for @private access checks
         self.func_privacy: dict[str, tuple[bool, str | None]] = {}
@@ -265,8 +296,8 @@ class CodeGen:
         if mangled in self.struct_types:
             return self.struct_types[mangled]
         identified = self.module.context.get_identified_type(mangled)
-        struct_type = LangType(mangled, identified, signed=False,
-                               template=decl.name, args=args)
+        struct_type = LangType(mangled, identified, signed=False, template=decl.name,
+                               args=args, align=decl.align, packed=decl.packed)
         # Register before resolving fields so self-referential structs
         # (e.g. node<T> holding a node<T>*) can refer to themselves.
         self.struct_types[mangled] = struct_type
@@ -281,16 +312,45 @@ class CodeGen:
         finally:
             self.type_bindings = outer
             self.current_source = outer_source
-        identified.set_body(*(ftype.ir for _, ftype in fields))
+        natural = 1 if decl.packed \
+            else max((type_align(ftype) for _, ftype in fields), default=1)
+        if decl.align is not None and decl.align < natural:
+            raise LangError(
+                f"@align({decl.align}) is below struct {decl.name!r}'s "
+                f"natural alignment of {natural}",
+                decl.line,
+            )
         object.__setattr__(struct_type, "fields", fields)  # frozen; fields excluded from eq
+        if decl.packed or over_aligned(struct_type):
+            # @packed and @align depart from LLVM's natural layout, so spell
+            # the layout out: a packed body with explicit padding, keeping
+            # field offsets and the LLVM size in agreement with type_size().
+            elements, indices, offset = [], [], 0
+            for _, ftype in fields:
+                pad = 0 if decl.packed else -offset % type_align(ftype)
+                if pad:
+                    elements.append(ir.ArrayType(ir.IntType(8), pad))
+                indices.append(len(elements))
+                elements.append(ftype.ir)
+                offset += pad + type_size(ftype)
+            tail = type_size(struct_type) - offset
+            if tail:
+                elements.append(ir.ArrayType(ir.IntType(8), tail))
+            identified.packed = True
+            identified.set_body(*elements)
+        else:
+            indices = range(len(fields))
+            identified.set_body(*(ftype.ir for _, ftype in fields))
+        object.__setattr__(struct_type, "elem_indices", tuple(indices))
         return struct_type
 
     def struct_field(self, owner: LangType, fname: str, line: int) -> tuple[int, LangType]:
+        """Field lookup: returns (LLVM element index, field type)."""
         if not is_struct(owner):
             raise LangError(f"{owner} is not a struct", line)
         for index, (name, ftype) in enumerate(owner.fields):
             if name == fname:
-                return index, ftype
+                return owner.elem_indices[index], ftype
         raise LangError(f"struct {owner} has no field {fname!r}", line)
 
     def generate(self) -> ir.Module:
@@ -319,8 +379,46 @@ class CodeGen:
                 self.funcs[name] = ir.Function(self.module, fnty, name=name)
                 self.signatures[name] = (ret, params, variadic)
                 self.used_symbols.add(name)
+                self.extern_decls.add(name)  # header funcs are extern declarations
+        for var in self.program.globals:
+            self.current_source = var.source  # the type may name private structs
+            var_type = self.lang_type(var.type_name, var.line)
+            if var_type is VOID:
+                raise LangError(f"cannot declare a void variable {var.name!r}", var.line)
+            if var.name in self.globals:
+                if self.globals[var.name][1] != var_type:
+                    raise LangError(
+                        f"conflicting extern declarations for {var.name!r}", var.line
+                    )
+                continue
+            if var.name in self.funcs:
+                raise LangError(f"variable {var.name!r} already defined", var.line)
+            glob = ir.GlobalVariable(self.module, var_type.ir, name=var.name)
+            self.globals[var.name] = (glob, var_type)
+            self.global_privacy[var.name] = (var.private, var.source)
+            self.used_symbols.add(var.name)
         declared: set[tuple[str | None, str]] = set()
         for func in self.program.functions:
+            if func.extern:
+                self.current_source = func.source  # signatures may name private structs
+                ret = self.lang_type(func.ret_type, func.line)
+                params = [self.lang_type(t, func.line) for _, t in func.params]
+                if func.name in self.extern_decls:
+                    if self.signatures[func.name] != (ret, params, False):
+                        raise LangError(
+                            f"conflicting extern declarations for {func.name!r}", func.line
+                        )
+                    continue
+                if func.name in self.funcs or func.name in self.templates \
+                        or func.name in self.globals:
+                    raise LangError(f"function {func.name!r} already defined", func.line)
+                fnty = ir.FunctionType(ret.ir, [p.ir for p in params])
+                self.funcs[func.name] = ir.Function(self.module, fnty, name=func.name)
+                self.signatures[func.name] = (ret, params, False)
+                self.func_privacy[func.name] = (func.private, func.source)
+                self.extern_decls.add(func.name)
+                self.used_symbols.add(func.name)
+                continue
             key = (func.source, func.name)
             is_overloadable = func.type_params and not func.static
             if not is_overloadable:
@@ -357,7 +455,8 @@ class CodeGen:
                 self.used_symbols.add(base)
                 overloads.append(func)
                 continue
-            if func.name in self.funcs or func.name in self.templates:
+            if func.name in self.funcs or func.name in self.templates \
+                    or func.name in self.globals:
                 raise LangError(f"function {func.name!r} already defined", func.line)
             self.func_privacy[func.name] = (func.private, func.source)
             self.used_symbols.add(func.name)
@@ -367,7 +466,7 @@ class CodeGen:
             self.funcs[func.name] = ir.Function(self.module, fnty, name=func.name)
             self.signatures[func.name] = (ret, params, False)
         for func in self.program.functions:
-            if not func.type_params:
+            if not func.type_params and not func.extern:
                 symbol = self.static_funcs.get((func.source, func.name), func.name)
                 ret, params, _ = self.signatures[symbol]
                 self.gen_function(func, self.funcs[symbol], ret, params)
@@ -381,6 +480,8 @@ class CodeGen:
         for (pname, _), ptype, arg in zip(func.params, params, fn.args):
             arg.name = pname
             slot = self.builder.alloca(arg.type, name=pname)
+            if over_aligned(ptype):
+                slot.align = type_align(ptype)
             self.builder.store(arg, slot)
             self.locals[pname] = (slot, ptype)
         self.gen_block(func.body)
@@ -459,12 +560,12 @@ class CodeGen:
             elif tv.type is VOID:
                 raise LangError(f"cannot assign a void value to {stmt.name!r}", stmt.line)
             slot = self.builder.alloca(tv.type.ir, name=stmt.name)
+            if over_aligned(tv.type):
+                slot.align = type_align(tv.type)
             self.builder.store(tv.value, slot)
             self.locals[stmt.name] = (slot, tv.type)
         elif isinstance(stmt, Assign):
-            if stmt.name not in self.locals:
-                raise LangError(f"undefined variable {stmt.name!r}", stmt.line)
-            slot, var_type = self.locals[stmt.name]
+            slot, var_type = self.var_addr(stmt.name, stmt.line)
             tv = self.coerce(self.gen_expr(stmt.value), var_type, stmt.line, f"assignment to {stmt.name}")
             self.builder.store(tv.value, slot)
         elif isinstance(stmt, If):
@@ -508,12 +609,12 @@ class CodeGen:
                                 stmt.line, "assignment to element")
             self.builder.store(value.value, addr)
         elif isinstance(stmt, StoreMember):
-            addr, ftype = self.gen_member_addr(
+            addr, ftype, align = self.gen_member_addr(
                 stmt.base, stmt.field, stmt.arrow, stmt.line
             )
             value = self.coerce(self.gen_expr(stmt.value), ftype,
                                 stmt.line, f"assignment to field {stmt.field!r}")
-            self.builder.store(value.value, addr)
+            self.builder.store(value.value, addr, align=align)
         elif isinstance(stmt, ExprStmt):
             self.gen_expr(stmt.expr)
         else:
@@ -539,9 +640,7 @@ class CodeGen:
         if isinstance(expr, StrLit):
             return self.gen_string(expr.value)
         if isinstance(expr, Var):
-            if expr.name not in self.locals:
-                raise LangError(f"undefined variable {expr.name!r}", expr.line)
-            slot, var_type = self.locals[expr.name]
+            slot, var_type = self.var_addr(expr.name, expr.line)
             return TypedValue(self.builder.load(slot, name=expr.name), var_type)
         if isinstance(expr, Call):
             return self.gen_call(expr)
@@ -563,24 +662,36 @@ class CodeGen:
                 base = self.gen_expr(expr.base)
                 index, ftype = self.struct_field(base.type, expr.field, expr.line)
                 return TypedValue(self.builder.extract_value(base.value, index), ftype)
-            addr, ftype = self.gen_member_addr(expr.base, expr.field, expr.arrow, expr.line)
-            return TypedValue(self.builder.load(addr), ftype)
+            addr, ftype, align = self.gen_member_addr(expr.base, expr.field, expr.arrow, expr.line)
+            return TypedValue(self.builder.load(addr, align=align), ftype)
         raise LangError(f"cannot compile expression {expr!r}", expr.line)
 
-    def gen_addr(self, expr, line: int) -> tuple[ir.Value, LangType]:
+    def var_addr(self, name: str, line: int) -> tuple[ir.Value, LangType]:
+        """A variable's storage slot: a local alloca, or an @extern global
+        (locals shadow globals). Returns (pointer value, variable type)."""
+        if name in self.locals:
+            return self.locals[name]
+        if name in self.globals:
+            private, source = self.global_privacy[name]
+            self.check_access(private, source, f"variable {name!r}", line)
+            return self.globals[name]
+        raise LangError(f"undefined variable {name!r}", line)
+
+    def gen_addr(self, expr, line: int) -> tuple[ir.Value, LangType, int | None]:
         """Address of an lvalue expression: a variable, *deref, element, or
-        struct field. Returns (pointer value, type pointed to)."""
+        struct field. Returns (pointer value, type pointed to, guaranteed
+        alignment) -- the alignment is None when the address is naturally
+        aligned for its type, 1 when it may not be (a field of a @packed
+        struct, directly or through nesting)."""
         if isinstance(expr, Var):
-            if expr.name not in self.locals:
-                raise LangError(f"undefined variable {expr.name!r}", line)
-            return self.locals[expr.name]
+            return (*self.var_addr(expr.name, line), None)
         if isinstance(expr, Unary) and expr.op == "*":
             tv = self.gen_expr(expr.operand)
             if not is_pointer(tv.type):
                 raise LangError(f"cannot dereference a {tv.type}", line)
-            return tv.value, tv.type.pointee
+            return tv.value, tv.type.pointee, None
         if isinstance(expr, Index):
-            return self.gen_index_addr(expr.base, expr.index, line)
+            return (*self.gen_index_addr(expr.base, expr.index, line), None)
         if isinstance(expr, Member):
             return self.gen_member_addr(expr.base, expr.field, expr.arrow, line)
         raise LangError("expression is not addressable", line)
@@ -597,20 +708,30 @@ class CodeGen:
         return addr, base.type.pointee
 
     def gen_member_addr(self, base_expr, fname: str, arrow: bool,
-                        line: int) -> tuple[ir.Value, LangType]:
-        """Address of base.field / base->field; returns (pointer, field type)."""
+                        line: int) -> tuple[ir.Value, LangType, int | None]:
+        """Address of base.field / base->field; returns (pointer, field type,
+        guaranteed alignment as in gen_addr)."""
         if arrow:
             base = self.gen_expr(base_expr)
             if not is_pointer(base.type):
                 raise LangError(f"'->' requires a struct pointer, got {base.type}", line)
-            owner, base_addr = base.type.pointee, base.value
+            owner, base_addr, base_align = base.type.pointee, base.value, None
         else:
-            base_addr, owner = self.gen_addr(base_expr, line)
+            base_addr, owner, base_align = self.gen_addr(base_expr, line)
         index, ftype = self.struct_field(owner, fname, line)
         addr = self.builder.gep(
             base_addr, [I32_ZERO, ir.Constant(ir.IntType(32), index)], inbounds=True
         )
-        return addr, ftype
+        # A @packed owner (or a base that already sits at a packed offset)
+        # gives no alignment guarantee; loads and stores must say so, or
+        # LLVM would assume the field type's natural alignment.
+        if owner.packed:
+            align = 1
+        elif base_align is not None:
+            align = min(base_align, type_align(ftype))
+        else:
+            align = None
+        return addr, ftype, align
 
     def gen_unary(self, expr: Unary) -> TypedValue:
         # Fold minus on literals so negative constants stay constants (and can
@@ -620,7 +741,10 @@ class CodeGen:
         if expr.op == "-" and isinstance(expr.operand, FloatLit):
             return TypedValue(ir.Constant(FLOAT64.ir, -expr.operand.value), FLOAT64)
         if expr.op == "&":
-            addr, lang_type = self.gen_addr(expr.operand, expr.line)
+            # The pointer type does not carry the (possibly reduced)
+            # alignment: taking the address of a packed field and
+            # dereferencing it elsewhere is unsafe, exactly as in C.
+            addr, lang_type, _ = self.gen_addr(expr.operand, expr.line)
             return TypedValue(addr, pointer_to(lang_type))
         tv = self.gen_expr(expr.operand)
         if expr.op == "*":
