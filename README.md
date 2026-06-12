@@ -278,8 +278,10 @@ fn main() -> int32 {
 passed to and returned from functions, but not to variadic functions like
 printf — pass a pointer or a field instead. See
 [examples/structs.mc](examples/structs.mc) and the data structures built on
-them: the growable [lib/array.mc](lib/array.mc) and the open-addressing
-hash table [lib/set.mc](lib/set.mc).
+them: the growable [lib/array.mc](lib/array.mc), the open-addressing hash
+table [lib/set.mc](lib/set.mc) (borrowing, identity-keyed), and the
+string-keyed [lib/dict.mc](lib/dict.mc), which owns copies of its keys and
+compares them by content.
 
 ### Imports
 
