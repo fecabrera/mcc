@@ -16,6 +16,29 @@ fn main() -> int32 {
 }
 ```
 
+## Contents
+
+- [Requirements](#requirements)
+- [Usage](#usage)
+- [Examples](#examples)
+- [Language reference](#language-reference)
+  - [Functions](#functions)
+  - [Generics](#generics)
+  - [Variables](#variables)
+  - [Control flow](#control-flow)
+  - [Types](#types)
+  - [Operators](#operators)
+  - [Casts](#casts)
+  - [Pointers](#pointers)
+  - [Structs](#structs)
+  - [Imports](#imports)
+  - [Visibility](#visibility)
+  - [Strings](#strings)
+  - [Includes](#includes)
+  - [Comments](#comments)
+- [Tests](#tests)
+- [How it works](#how-it-works)
+
 ## Requirements
 
 - Python 3.14 (see [Pipfile](Pipfile))
