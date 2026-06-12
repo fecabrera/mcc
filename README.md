@@ -60,7 +60,13 @@ pipenv run python -m mcc examples/helloworld.mc --emit-llvm  # print the LLVM IR
 pipenv run python -m mcc examples/helloworld.mc -O3          # optimization level (0-3, default 2)
 pipenv run python -m mcc main.mc -I vendor -I deps           # extra import search paths
 pipenv run python -m mcc main.mc --naked                     # don't put lib/ on the import path
+pipenv run python -m mcc main.mc --target aarch64-unknown-none-elf   # cross-compile to an object file
 ```
+
+`--target` accepts any LLVM triple and emits an object file instead of a
+host executable; link it with that target's toolchain (e.g.
+`aarch64-elf-gcc`). See [examples/baremetal/](examples/baremetal/) for a
+freestanding kernel built this way.
 
 ## Examples
 
@@ -326,6 +332,20 @@ struct header {      // sizeof is 9, not 16
 }
 ```
 
+`@volatile` marks a struct whose loads and stores must all happen exactly
+as written — the optimizer may not elide, merge, or hoist them. This is for
+memory-mapped hardware registers, where reading or writing *is* the side
+effect; it propagates through nested fields, and also applies to `@extern`
+variables:
+
+```c
+@volatile
+struct pl011 {       // a UART's register block; see examples/baremetal/
+    dr: uint32;      // data register: write a byte to transmit
+    ...
+}
+```
+
 `sizeof` understands struct layout (including padding), so
 `alloc<struct node<int32>>(n)` allocates correctly. Struct values can be
 passed to and returned from functions, but not to variadic functions like
@@ -405,10 +425,11 @@ fn main() -> int32 {
 Extern functions cannot be generic or variadic. Identical extern
 declarations may appear in any number of imported files — they all name the
 same symbol — but declarations that disagree about the signature are a
-compile error. `@private` applies to extern declarations as usual;
-`@static` cannot be combined with `@extern`, since an external symbol's
-name is fixed. (The [`#include` headers](#includes) are exactly this:
-predeclared extern functions.)
+compile error. `@private` applies to extern declarations as usual, and
+`@volatile` marks an extern variable whose accesses must not be optimized
+away; `@static` cannot be combined with `@extern`, since an external
+symbol's name is fixed. (The [`#include` headers](#includes) are exactly
+this: predeclared extern functions.)
 
 ### Strings
 

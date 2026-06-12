@@ -52,7 +52,7 @@ class Parser:
                 self.expect(";")
                 imports.append((path, line))
         while self.cur.kind != "EOF":
-            private = static = extern = packed = False
+            private = static = extern = packed = volatile = False
             align = None
             while self.cur.kind == "ANNOT":
                 annot = self.advance()
@@ -64,6 +64,8 @@ class Parser:
                     extern = True
                 elif annot.text == "@packed":
                     packed = True
+                elif annot.text == "@volatile":
+                    volatile = True
                 elif annot.text == "@align":
                     self.expect("(")
                     align = int(self.expect("INT").text)
@@ -83,7 +85,7 @@ class Parser:
             if self.cur.kind == "struct":
                 if extern:
                     raise LangError("@extern does not apply to structs", self.cur.line)
-                structs.append(self.parse_struct(private, static, align, packed))
+                structs.append(self.parse_struct(private, static, align, packed, volatile))
             elif self.cur.kind == "let":
                 line = self.advance().line
                 if not extern:
@@ -92,8 +94,14 @@ class Parser:
                 self.expect(":")
                 type_name = self.parse_type_ref()
                 self.expect(";")
-                globals_.append(ExternVar(name, type_name, line, private=private))
+                globals_.append(ExternVar(name, type_name, line,
+                                          private=private, volatile=volatile))
             else:
+                if volatile:
+                    raise LangError(
+                        "@volatile only applies to structs and extern variables",
+                        self.cur.line,
+                    )
                 functions.append(self.parse_function(private, static, extern))
         return Program(imports, includes, structs, functions, globals_)
 
@@ -140,7 +148,8 @@ class Parser:
         return type_params
 
     def parse_struct(self, private: bool = False, static: bool = False,
-                     align: int | None = None, packed: bool = False) -> StructDecl:
+                     align: int | None = None, packed: bool = False,
+                     volatile: bool = False) -> StructDecl:
         line = self.expect("struct").line
         name = self.expect("IDENT").text
         type_params = self.parse_type_params()
@@ -152,8 +161,8 @@ class Parser:
             fields.append((fname, self.parse_type_ref()))
             self.expect(";")
         self.expect("}")
-        return StructDecl(name, type_params, fields, line,
-                          private=private, static=static, align=align, packed=packed)
+        return StructDecl(name, type_params, fields, line, private=private,
+                          static=static, align=align, packed=packed, volatile=volatile)
 
     def parse_function(self, private: bool = False, static: bool = False,
                        extern: bool = False) -> Func:

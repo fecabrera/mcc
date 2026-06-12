@@ -38,6 +38,7 @@ class StructDecl:
     static: bool = False  # @static: file-scoped name; other files may reuse it
     align: int | None = None  # @align(N): raised alignment, a power of two
     packed: bool = False  # @packed: no padding between fields; alignment 1
+    volatile: bool = False  # @volatile: field accesses cannot be optimized away
     source: str | None = None  # defining file; stamped by the driver
 
 @dataclass
@@ -59,6 +60,7 @@ class ExternVar:  # @extern let name: type;  -- a global defined elsewhere
     type_name: TypeRef
     line: int
     private: bool = False  # @private: only usable within its source file
+    volatile: bool = False  # @volatile: accesses cannot be optimized away
     source: str | None = None  # declaring file; stamped by the driver
 
 @dataclass

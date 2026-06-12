@@ -73,11 +73,18 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None) -> i
     return CodeGen(load_program(path, tuple(search_paths)), path.name).generate()
 
 
-def build_native_module(module: ir.Module, opt_level: int):
-    llvm.initialize_native_target()
-    llvm.initialize_native_asmprinter()
-    target_machine = llvm.Target.from_default_triple().create_target_machine(opt=opt_level)
-    module.triple = llvm.get_default_triple()
+def build_native_module(module: ir.Module, opt_level: int, triple: str | None = None):
+    """Verify and optimize the IR for a target: the host by default, or any
+    LLVM triple (e.g. aarch64-unknown-none-elf for bare metal)."""
+    if triple is None:
+        llvm.initialize_native_target()
+        llvm.initialize_native_asmprinter()
+        triple = llvm.get_default_triple()
+    else:
+        llvm.initialize_all_targets()
+        llvm.initialize_all_asmprinters()
+    target_machine = llvm.Target.from_triple(triple).create_target_machine(opt=opt_level)
+    module.triple = triple
     module.data_layout = str(target_machine.target_data)
     native = llvm.parse_assembly(str(module))
     native.verify()
@@ -99,7 +106,14 @@ def main() -> int:
                      metavar="DIR", help="add a directory to the import search path (repeatable)")
     cli.add_argument("--naked", action="store_true",
                      help="do not add the standard lib/ directory to the import search path")
+    cli.add_argument("--target", metavar="TRIPLE",
+                     help="cross-compile for this LLVM target triple, emitting an object "
+                          "file to link with that target's toolchain")
     args = cli.parse_args()
+
+    if args.target and args.run:
+        print("mcc: error: --run cannot execute cross-compiled code", file=sys.stderr)
+        return 1
 
     search_paths = list(args.import_path)
     if not args.naked:
@@ -118,7 +132,19 @@ def main() -> int:
         print(module)
         return 0
 
-    native, target_machine = build_native_module(module, args.O)
+    try:
+        native, target_machine = build_native_module(module, args.O, args.target)
+    except RuntimeError as err:
+        print(f"mcc: error: {err}", file=sys.stderr)
+        return 1
+
+    if args.target:
+        # No host linker for a foreign target: emit the object file and let
+        # the target toolchain (e.g. aarch64-elf-gcc) link it.
+        output = args.output or args.source.with_suffix(".o")
+        output.write_bytes(target_machine.emit_object(native))
+        print(f"wrote {output}")
+        return 0
 
     if args.run:
         with llvm.create_mcjit_compiler(native, target_machine) as jit:

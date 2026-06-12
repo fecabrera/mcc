@@ -21,3 +21,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [generics.mc](generics.mc) | type inference, generic recursion, multiple type parameters |
 | [fizzbuzz.mc](fizzbuzz.mc) | the classic, with `%` and an `else if` chain |
 | [primes.mc](primes.mc) | trial division: bool-returning helper, nested loops |
+
+The exception to "runnable with `--run`": [baremetal/](baremetal/) is a
+freestanding qemu kernel cross-compiled with `--target`, with `@volatile`
+MMIO and its own build instructions.

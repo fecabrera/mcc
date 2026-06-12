@@ -96,3 +96,31 @@ def test_import_path_flag(tmp_path):
     assert mcc(main, "--naked").returncode == 1  # not found without -I
     result = mcc(main, "--naked", "-I", libs, "--run")
     assert result.returncode == 7
+
+
+def test_target_cross_compiles_an_elf_object(tmp_path):
+    obj = tmp_path / "hello.o"
+    result = mcc(HELLO, "--target", "aarch64-unknown-none-elf", "-o", obj)
+    assert result.returncode == 0, result.stderr
+    assert obj.read_bytes()[:4] == b"\x7fELF"
+
+
+def test_target_defaults_to_object_beside_source(tmp_path):
+    src = tmp_path / "answer.mc"
+    src.write_text("fn answer() -> int32 { return 42; }")
+    result = mcc(src, "--target", "x86_64-unknown-linux-gnu")
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "answer.o").read_bytes()[:4] == b"\x7fELF"
+
+
+def test_target_rejects_run():
+    result = mcc(HELLO, "--target", "aarch64-unknown-none-elf", "--run")
+    assert result.returncode == 1
+    assert "--run" in result.stderr
+
+
+def test_target_bad_triple_is_clean_error():
+    result = mcc(HELLO, "--target", "not-a-triple")
+    assert result.returncode == 1
+    assert "mcc: error:" in result.stderr
+    assert "Traceback" not in result.stderr

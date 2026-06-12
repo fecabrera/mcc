@@ -40,6 +40,8 @@ class LangType:
     align: int | None = field(default=None, compare=False)
     # @packed: fields at unpadded offsets; the struct's alignment is 1.
     packed: bool = field(default=False, compare=False)
+    # @volatile: loads and stores must not be elided, merged, or reordered.
+    volatile: bool = field(default=False, compare=False)
     # LLVM element index of each field; in explicitly laid out structs
     # (see instantiate_struct) padding elements shift the indices.
     elem_indices: tuple | None = field(default=None, compare=False)
@@ -84,6 +86,23 @@ NULLT = LangType("null", RAWPTR.ir, signed=False, pointee=TYPES["uint8"])
 POINTER_SIZE = 8  # bytes; native codegen targets 64-bit platforms
 
 I32_ZERO = ir.Constant(ir.IntType(32), 0)
+
+
+# llvmlite.ir has no volatile flag on memory instructions, so patch the
+# printed form; llvmlite renders modules to IR text before LLVM parses them,
+# making the textual form authoritative.
+class VolatileLoad(ir.LoadInstr):
+    def descr(self, buf):
+        inner: list[str] = []
+        super().descr(inner)
+        buf.append("".join(inner).replace("load ", "load volatile ", 1))
+
+
+class VolatileStore(ir.StoreInstr):
+    def descr(self, buf):
+        inner: list[str] = []
+        super().descr(inner)
+        buf.append("".join(inner).replace("store ", "store volatile ", 1))
 
 
 def is_integer(lang_type: LangType) -> bool:
@@ -230,7 +249,7 @@ class CodeGen:
         # @extern declarations refer to symbols defined elsewhere; identical
         # redeclarations across files collapse onto the first one.
         self.extern_decls: set[str] = set()
-        self.globals: dict[str, tuple[ir.GlobalVariable, LangType]] = {}
+        self.globals: dict[str, tuple[ir.GlobalVariable, LangType, bool]] = {}
         # name -> (private, source file); for @private access checks
         self.global_privacy: dict[str, tuple[bool, str | None]] = {}
         self.type_bindings: dict[str, LangType] = {}  # active type-parameter bindings
@@ -296,8 +315,9 @@ class CodeGen:
         if mangled in self.struct_types:
             return self.struct_types[mangled]
         identified = self.module.context.get_identified_type(mangled)
-        struct_type = LangType(mangled, identified, signed=False, template=decl.name,
-                               args=args, align=decl.align, packed=decl.packed)
+        struct_type = LangType(mangled, identified, signed=False,
+                               template=decl.name, args=args, align=decl.align,
+                               packed=decl.packed, volatile=decl.volatile)
         # Register before resolving fields so self-referential structs
         # (e.g. node<T> holding a node<T>*) can refer to themselves.
         self.struct_types[mangled] = struct_type
@@ -394,7 +414,7 @@ class CodeGen:
             if var.name in self.funcs:
                 raise LangError(f"variable {var.name!r} already defined", var.line)
             glob = ir.GlobalVariable(self.module, var_type.ir, name=var.name)
-            self.globals[var.name] = (glob, var_type)
+            self.globals[var.name] = (glob, var_type, var.volatile)
             self.global_privacy[var.name] = (var.private, var.source)
             self.used_symbols.add(var.name)
         declared: set[tuple[str | None, str]] = set()
@@ -532,6 +552,24 @@ class CodeGen:
             )
         raise LangError(f"{context}: expected {expected}, got {tv.type}", line)
 
+    def gen_load(self, addr, *, align: int | None = None,
+                 volatile: bool = False, name: str = "") -> ir.Instruction:
+        if not volatile:
+            return self.builder.load(addr, name=name, align=align)
+        instr = VolatileLoad(self.builder.block, addr, name=name)
+        instr.align = align
+        self.builder._insert(instr)
+        return instr
+
+    def gen_store(self, value, addr, *, align: int | None = None,
+                  volatile: bool = False):
+        if not volatile:
+            self.builder.store(value, addr, align=align)
+            return
+        instr = VolatileStore(self.builder.block, value, addr)
+        instr.align = align
+        self.builder._insert(instr)
+
     def gen_statement(self, stmt):
         if isinstance(stmt, Return):
             if stmt.value is None:
@@ -565,9 +603,9 @@ class CodeGen:
             self.builder.store(tv.value, slot)
             self.locals[stmt.name] = (slot, tv.type)
         elif isinstance(stmt, Assign):
-            slot, var_type = self.var_addr(stmt.name, stmt.line)
+            slot, var_type, volatile = self.var_addr(stmt.name, stmt.line)
             tv = self.coerce(self.gen_expr(stmt.value), var_type, stmt.line, f"assignment to {stmt.name}")
-            self.builder.store(tv.value, slot)
+            self.gen_store(tv.value, slot, volatile=volatile)
         elif isinstance(stmt, If):
             cond = self.gen_cond(stmt.cond)
             if stmt.otherwise:
@@ -602,19 +640,19 @@ class CodeGen:
                 raise LangError(f"cannot dereference a {ptr.type}", stmt.line)
             value = self.coerce(self.gen_expr(stmt.value), ptr.type.pointee,
                                 stmt.line, "assignment through pointer")
-            self.builder.store(value.value, ptr.value)
+            self.gen_store(value.value, ptr.value, volatile=ptr.type.pointee.volatile)
         elif isinstance(stmt, StoreIndex):
             addr, element = self.gen_index_addr(stmt.base, stmt.index, stmt.line)
             value = self.coerce(self.gen_expr(stmt.value), element,
                                 stmt.line, "assignment to element")
-            self.builder.store(value.value, addr)
+            self.gen_store(value.value, addr, volatile=element.volatile)
         elif isinstance(stmt, StoreMember):
-            addr, ftype, align = self.gen_member_addr(
+            addr, ftype, align, volatile = self.gen_member_addr(
                 stmt.base, stmt.field, stmt.arrow, stmt.line
             )
             value = self.coerce(self.gen_expr(stmt.value), ftype,
                                 stmt.line, f"assignment to field {stmt.field!r}")
-            self.builder.store(value.value, addr, align=align)
+            self.gen_store(value.value, addr, align=align, volatile=volatile)
         elif isinstance(stmt, ExprStmt):
             self.gen_expr(stmt.expr)
         else:
@@ -640,8 +678,9 @@ class CodeGen:
         if isinstance(expr, StrLit):
             return self.gen_string(expr.value)
         if isinstance(expr, Var):
-            slot, var_type = self.var_addr(expr.name, expr.line)
-            return TypedValue(self.builder.load(slot, name=expr.name), var_type)
+            slot, var_type, volatile = self.var_addr(expr.name, expr.line)
+            return TypedValue(self.gen_load(slot, volatile=volatile, name=expr.name),
+                              var_type)
         if isinstance(expr, Call):
             return self.gen_call(expr)
         if isinstance(expr, Unary):
@@ -655,43 +694,52 @@ class CodeGen:
             return TypedValue(ir.Constant(UINT64.ir, size), UINT64)
         if isinstance(expr, Index):
             addr, element = self.gen_index_addr(expr.base, expr.index, expr.line)
-            return TypedValue(self.builder.load(addr), element)
+            return TypedValue(self.gen_load(addr, volatile=element.volatile), element)
         if isinstance(expr, Member):
             if not expr.arrow and not isinstance(expr.base, (Var, Member, Index, Unary)):
                 # Field of a non-addressable struct value, e.g. f().field.
                 base = self.gen_expr(expr.base)
                 index, ftype = self.struct_field(base.type, expr.field, expr.line)
                 return TypedValue(self.builder.extract_value(base.value, index), ftype)
-            addr, ftype, align = self.gen_member_addr(expr.base, expr.field, expr.arrow, expr.line)
-            return TypedValue(self.builder.load(addr, align=align), ftype)
+            addr, ftype, align, volatile = self.gen_member_addr(
+                expr.base, expr.field, expr.arrow, expr.line
+            )
+            return TypedValue(self.gen_load(addr, align=align, volatile=volatile), ftype)
         raise LangError(f"cannot compile expression {expr!r}", expr.line)
 
-    def var_addr(self, name: str, line: int) -> tuple[ir.Value, LangType]:
+    def var_addr(self, name: str, line: int) -> tuple[ir.Value, LangType, bool]:
         """A variable's storage slot: a local alloca, or an @extern global
-        (locals shadow globals). Returns (pointer value, variable type)."""
+        (locals shadow globals). Returns (pointer value, variable type,
+        volatile) -- volatile for @volatile globals and for variables of
+        @volatile struct types."""
         if name in self.locals:
-            return self.locals[name]
+            slot, var_type = self.locals[name]
+            return slot, var_type, var_type.volatile
         if name in self.globals:
             private, source = self.global_privacy[name]
             self.check_access(private, source, f"variable {name!r}", line)
-            return self.globals[name]
+            glob, var_type, volatile = self.globals[name]
+            return glob, var_type, volatile or var_type.volatile
         raise LangError(f"undefined variable {name!r}", line)
 
-    def gen_addr(self, expr, line: int) -> tuple[ir.Value, LangType, int | None]:
+    def gen_addr(self, expr, line: int) -> tuple[ir.Value, LangType, int | None, bool]:
         """Address of an lvalue expression: a variable, *deref, element, or
         struct field. Returns (pointer value, type pointed to, guaranteed
-        alignment) -- the alignment is None when the address is naturally
-        aligned for its type, 1 when it may not be (a field of a @packed
-        struct, directly or through nesting)."""
+        alignment, volatile). The alignment is None when the address is
+        naturally aligned for its type, 1 when it may not be (a field of a
+        @packed struct, directly or through nesting); volatile is True when
+        accesses through the address must not be optimized away."""
         if isinstance(expr, Var):
-            return (*self.var_addr(expr.name, line), None)
+            slot, var_type, volatile = self.var_addr(expr.name, line)
+            return slot, var_type, None, volatile
         if isinstance(expr, Unary) and expr.op == "*":
             tv = self.gen_expr(expr.operand)
             if not is_pointer(tv.type):
                 raise LangError(f"cannot dereference a {tv.type}", line)
-            return tv.value, tv.type.pointee, None
+            return tv.value, tv.type.pointee, None, tv.type.pointee.volatile
         if isinstance(expr, Index):
-            return (*self.gen_index_addr(expr.base, expr.index, line), None)
+            addr, element = self.gen_index_addr(expr.base, expr.index, line)
+            return addr, element, None, element.volatile
         if isinstance(expr, Member):
             return self.gen_member_addr(expr.base, expr.field, expr.arrow, line)
         raise LangError("expression is not addressable", line)
@@ -708,16 +756,17 @@ class CodeGen:
         return addr, base.type.pointee
 
     def gen_member_addr(self, base_expr, fname: str, arrow: bool,
-                        line: int) -> tuple[ir.Value, LangType, int | None]:
+                        line: int) -> tuple[ir.Value, LangType, int | None, bool]:
         """Address of base.field / base->field; returns (pointer, field type,
-        guaranteed alignment as in gen_addr)."""
+        guaranteed alignment, volatile) as in gen_addr."""
         if arrow:
             base = self.gen_expr(base_expr)
             if not is_pointer(base.type):
                 raise LangError(f"'->' requires a struct pointer, got {base.type}", line)
-            owner, base_addr, base_align = base.type.pointee, base.value, None
+            owner, base_addr = base.type.pointee, base.value
+            base_align, base_volatile = None, False
         else:
-            base_addr, owner, base_align = self.gen_addr(base_expr, line)
+            base_addr, owner, base_align, base_volatile = self.gen_addr(base_expr, line)
         index, ftype = self.struct_field(owner, fname, line)
         addr = self.builder.gep(
             base_addr, [I32_ZERO, ir.Constant(ir.IntType(32), index)], inbounds=True
@@ -731,7 +780,8 @@ class CodeGen:
             align = min(base_align, type_align(ftype))
         else:
             align = None
-        return addr, ftype, align
+        # @volatile propagates from the owner down through nested fields.
+        return addr, ftype, align, owner.volatile or base_volatile
 
     def gen_unary(self, expr: Unary) -> TypedValue:
         # Fold minus on literals so negative constants stay constants (and can
@@ -744,13 +794,16 @@ class CodeGen:
             # The pointer type does not carry the (possibly reduced)
             # alignment: taking the address of a packed field and
             # dereferencing it elsewhere is unsafe, exactly as in C.
-            addr, lang_type, _ = self.gen_addr(expr.operand, expr.line)
+            addr, lang_type, _, _ = self.gen_addr(expr.operand, expr.line)
             return TypedValue(addr, pointer_to(lang_type))
         tv = self.gen_expr(expr.operand)
         if expr.op == "*":
             if not is_pointer(tv.type):
                 raise LangError(f"cannot dereference a {tv.type}", expr.line)
-            return TypedValue(self.builder.load(tv.value), tv.type.pointee)
+            return TypedValue(
+                self.gen_load(tv.value, volatile=tv.type.pointee.volatile),
+                tv.type.pointee,
+            )
         if expr.op == "-":
             if is_integer(tv.type) and tv.type.signed:
                 return TypedValue(self.builder.neg(tv.value), tv.type)
