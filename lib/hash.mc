@@ -1,5 +1,5 @@
-import "splitmix64";
-import "fnv1a";
+import "hashing/splitmix64";
+import "hashing/fnv1a";
 
 /**
  * Hashes an integer (or pointer identity) key by value via splitmix64.

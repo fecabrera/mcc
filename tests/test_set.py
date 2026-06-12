@@ -146,7 +146,7 @@ def test_fnv1a_matches_reference(tmp_path, capfd):
 
     main = tmp_path / "main.mc"
     main.write_text(
-        'import "fnv1a";\n#include <stdio.h>\n'
+        'import "hashing/fnv1a";\n#include <stdio.h>\n'
         'fn main() -> int32 { printf("%llu %llu\\n", fnv1a("hello"), fnv1a("")); return 0; }'
     )
     assert run_path(main) == 0
