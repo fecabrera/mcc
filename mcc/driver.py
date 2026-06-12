@@ -125,7 +125,7 @@ def main() -> int:
     output = args.output or args.source.with_suffix("")
     obj_path = output.with_suffix(".o")
     obj_path.write_bytes(target_machine.emit_object(native))
-    subprocess.run(["cc", str(obj_path), "-o", str(output)], check=True)
+    subprocess.run(["cc", str(obj_path), "-o", str(output), "-lm"], check=True)
     obj_path.unlink()
     print(f"wrote {output}")
     return 0

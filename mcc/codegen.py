@@ -139,6 +139,15 @@ HEADER_FUNCS = {
         "memset": (RAWPTR, [RAWPTR, INT32, UINT64], False),
         "strlen": (UINT64, [RAWPTR], False),
     },
+    "math.h": {
+        "sin": (FLOAT64, [FLOAT64], False),
+        "cos": (FLOAT64, [FLOAT64], False),
+        "sqrt": (FLOAT64, [FLOAT64], False),
+        "pow": (FLOAT64, [FLOAT64, FLOAT64], False),
+        "floor": (FLOAT64, [FLOAT64], False),
+        "ceil": (FLOAT64, [FLOAT64], False),
+        "fabs": (FLOAT64, [FLOAT64], False),
+    },
 }
 
 COMPARISON_OPS = ("==", "!=", "<", "<=", ">", ">=")

@@ -369,6 +369,7 @@ functions callable (use `import` for `.mc` files):
 | `stdio.h`  | `printf` (variadic), `puts`, `putchar`, `getchar` |
 | `stdlib.h` | `malloc`, `free`, `exit`, `abs`                   |
 | `string.h` | `memcpy`, `memset`, `strlen`                      |
+| `math.h`   | `sin`, `cos`, `sqrt`, `pow`, `floor`, `ceil`, `fabs` |
 
 Variadic arguments to `printf` follow C promotion rules (small integers are
 widened to `int32`).

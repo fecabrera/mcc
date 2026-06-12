@@ -31,6 +31,19 @@ def test_native_build_and_run(tmp_path):
     assert out.returncode == 0
 
 
+def test_native_build_links_libm(tmp_path):
+    # math.h functions require libm; the driver links -lm.
+    src = tmp_path / "trig.mc"
+    src.write_text(
+        "#include <stdio.h>\n#include <math.h>\n"
+        'fn main() -> int32 { printf("%d\\n", (sqrt(16.0) + sin(0.0)) as int32); return 0; }'
+    )
+    exe = tmp_path / "trig"
+    assert mcc(src, "-o", exe).returncode == 0
+    out = subprocess.run([exe], capture_output=True, text=True)
+    assert out.stdout == "4\n"
+
+
 def test_compile_error_exit_code(tmp_path):
     bad = tmp_path / "bad.mc"
     bad.write_text("fn main() -> int32 { return x; }")
