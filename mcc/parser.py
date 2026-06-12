@@ -16,6 +16,11 @@ from mcc.nodes import (
 STRING_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", '"': '"', "\\": "\\"}
 
 
+def int_value(text: str) -> int:
+    """The value of an INT token; a 0x/0X prefix means hexadecimal."""
+    return int(text, 16 if text[:2] in ("0x", "0X") else 10)
+
+
 class Parser:
     def __init__(self, tokens: list[Token]):
         self.tokens = tokens
@@ -68,7 +73,7 @@ class Parser:
                     volatile = True
                 elif annot.text == "@align":
                     self.expect("(")
-                    align = int(self.expect("INT").text)
+                    align = int_value(self.expect("INT").text)
                     self.expect(")")
                     if align == 0 or align & (align - 1):
                         raise LangError(
@@ -303,7 +308,7 @@ class Parser:
     def parse_primary(self):
         tok = self.advance()
         if tok.kind == "INT":
-            return IntLit(int(tok.text), tok.line)
+            return IntLit(int_value(tok.text), tok.line)
         if tok.kind == "FLOAT":
             return FloatLit(float(tok.text), tok.line)
         if tok.kind in ("true", "false"):

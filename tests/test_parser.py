@@ -62,6 +62,13 @@ def test_unary_minus():
     assert isinstance(expr.operand, Var)
 
 
+def test_hex_literals_decoded():
+    assert first_expr("0xFF").value == 255
+    assert first_expr("0X09000000").value == 150994944
+    assert first_expr("10").value == 10  # leading-zero decimals stay decimal
+    assert first_expr("010").value == 10
+
+
 def test_string_escapes_decoded():
     expr = first_expr(r'f("a\n\t\\")')
     assert isinstance(expr.args[0], StrLit)

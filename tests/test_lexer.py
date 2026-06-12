@@ -55,6 +55,13 @@ def test_float_and_int_literals():
     assert kinds("1.5 2")[:-1] == ["FLOAT", "INT"]
 
 
+def test_hex_literal_is_one_token():
+    tokens = tokenize("0x1F 0XdeadBEEF")
+    assert [(t.kind, t.text) for t in tokens[:-1]] == [
+        ("INT", "0x1F"), ("INT", "0XdeadBEEF"),
+    ]
+
+
 def test_string_literal_with_escape():
     token = tokenize(r'"hello\n"')[0]
     assert token.kind == "STRING"

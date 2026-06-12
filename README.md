@@ -199,7 +199,8 @@ A body that is a single statement does not need braces:
 | `void`                                | `void` (return type only; `void*` is not allowed -- use `uint8*`) |
 
 Literals with a decimal point are `float64` and `true`/`false` are `bool`.
-Integer literals are _untyped constants_: they adapt to the integer type
+Integer literals are written in decimal or hexadecimal (`0xFF`), and are
+_untyped constants_: they adapt to the integer type
 they are used with as long as the value fits (so `let x: uint64 = 5;` and
 `x % 7` both work; `let y: uint8 = 300;` is a compile error). Where no
 context provides a type -- most notably `let` without an annotation -- an
