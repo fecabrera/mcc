@@ -9,7 +9,7 @@ import "fnv1a";
  * @return hashed key
  */
 fn hash<T>(key: T) -> uint64 {
-    return splitmix64(key as uint64);
+    return splitmix64(key);
 }
 
 /**
