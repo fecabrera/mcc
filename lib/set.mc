@@ -1,10 +1,11 @@
 import "memory";
-import "splitmix64";
+import "hash";
 
 /**
  * Open-addressing hash table with linear probing; maps K keys to V values.
- * K must be an integer or pointer type (keys are hashed through a uint64
- * cast). Grows automatically when the load factor reaches 70%.
+ * Integer keys hash by value (splitmix64); pointer keys hash by content
+ * as NUL-terminated buffers (fnv1a) but still compare by address. Grows
+ * automatically when the load factor reaches 70%.
  *
  * Slot states: 0 = empty, 1 = occupied, 2 = tombstone.
  */
@@ -63,7 +64,7 @@ fn set_set<K, V>(self: struct set<K, V>*, key: K, value: V) {
     if (self->length * 10 >= self->capacity * 7)
         set_grow(self);
 
-    let slot = splitmix64(key as uint64) % self->capacity;
+    let slot = hash(key) % self->capacity;
     let tombstone_slot: uint64 = 0;
     let has_tombstone = false;
 
@@ -99,7 +100,7 @@ fn set_set<K, V>(self: struct set<K, V>*, key: K, value: V) {
  * @return true if key was found, false otherwise
  */
 fn set_get<K, V>(self: struct set<K, V>*, key: K, out: V*) -> bool {
-    let slot = splitmix64(key as uint64) % self->capacity;
+    let slot = hash(key) % self->capacity;
 
     while (self->entries[slot].state != 0) {
         if (self->entries[slot].state == 1) {
@@ -121,7 +122,7 @@ fn set_get<K, V>(self: struct set<K, V>*, key: K, out: V*) -> bool {
  * @param key:  key to remove
  */
 fn set_remove<K, V>(self: struct set<K, V>*, key: K) {
-    let slot = splitmix64(key as uint64) % self->capacity;
+    let slot = hash(key) % self->capacity;
 
     while (self->entries[slot].state != 0) {
         if (self->entries[slot].state == 1) {
@@ -158,7 +159,7 @@ fn set_grow<K, V>(self: struct set<K, V>*) {
     i = 0;
     while (i < old_capacity) {
         if (old_entries[i].state == 1) {
-            let slot = splitmix64(old_entries[i].key as uint64) % new_capacity;
+            let slot = hash(old_entries[i].key) % new_capacity;
             while (new_entries[slot].state == 1)
                 slot = (slot + 1) % new_capacity;
 

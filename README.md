@@ -100,6 +100,21 @@ that disagree are an error: `conflicting types for type parameter T`.
 Generic functions can call themselves recursively. See
 [examples/templates.mc](examples/templates.mc).
 
+Generic functions with the same name form an *overload set*, dispatched by
+parameter pattern — a call picks the most specific viable variant (`T*`
+beats `T`, `box<T>*` beats both). This is how libraries specialize by type
+shape: [lib/hash.mc](lib/hash.mc) hashes integer keys by value (splitmix64)
+and pointer keys by content (FNV-1a), and [lib/set.mc](lib/set.mc) simply
+calls `hash(key)`:
+
+```c
+fn hash<T>(key: T) -> uint64 { return splitmix64(key as uint64); }
+fn hash<T>(key: T*) -> uint64 { return fnv1a(key); }
+```
+
+Imported files can extend an overload set with new variants. Two equally
+specific viable variants make the call ambiguous — a compile error.
+
 ### Variables
 
 `let` declares a variable; the type is inferred from the initializer when

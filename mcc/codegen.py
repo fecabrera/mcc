@@ -179,9 +179,12 @@ class CodeGen:
         self.funcs: dict[str, ir.Function] = {}
         # name -> (return type, param types, variadic)
         self.signatures: dict[str, tuple[LangType, list[LangType], bool]] = {}
-        self.templates: dict[str, Func] = {}  # generic functions, by source name
-        # (source, template name, bound types) -> mangled instance name
-        self.instances: dict[tuple[str | None, str, tuple[str, ...]], str] = {}
+        # Generic functions: a name maps to its overload set, distinguished
+        # by parameter patterns (e.g. hash<T>(T) vs hash<T>(T*)).
+        self.templates: dict[str, list[Func]] = {}
+        self.template_bases: dict[int, str] = {}  # id(Func) -> mangle base
+        # (id(template Func), bound types) -> mangled instance name
+        self.instances: dict[tuple[int, tuple[str, ...]], str] = {}
         self.struct_templates: dict[str, StructDecl] = {}
         self.struct_types: dict[str, LangType] = {}  # mangled name -> instance
         # @static declarations: file-scoped names, keyed by (source, name)
@@ -310,9 +313,11 @@ class CodeGen:
         declared: set[tuple[str | None, str]] = set()
         for func in self.program.functions:
             key = (func.source, func.name)
-            if key in declared:
-                raise LangError(f"function {func.name!r} already defined", func.line)
-            declared.add(key)
+            is_overloadable = func.type_params and not func.static
+            if not is_overloadable:
+                if key in declared:
+                    raise LangError(f"function {func.name!r} already defined", func.line)
+                declared.add(key)
             self.current_source = func.source  # signatures may name private structs
             if func.static:
                 self.symbol_bases[key] = self.static_base(func.name, func.source)
@@ -327,14 +332,26 @@ class CodeGen:
                 self.signatures[symbol] = (ret, params, False)
                 self.static_funcs[key] = symbol
                 continue
+            if func.type_params:
+                # Generic: no code yet -- instances are stamped out per call.
+                # Several templates may share a name (an overload set).
+                if func.name in self.funcs:
+                    raise LangError(f"function {func.name!r} already defined", func.line)
+                overloads = self.templates.setdefault(func.name, [])
+                if overloads:
+                    base = f"{func.name}#{len(overloads)}"
+                    while base in self.used_symbols:
+                        base += "'"
+                else:
+                    base = func.name
+                self.template_bases[id(func)] = base
+                self.used_symbols.add(base)
+                overloads.append(func)
+                continue
             if func.name in self.funcs or func.name in self.templates:
                 raise LangError(f"function {func.name!r} already defined", func.line)
             self.func_privacy[func.name] = (func.private, func.source)
             self.used_symbols.add(func.name)
-            if func.type_params:
-                # Generic: no code yet -- instances are stamped out per call.
-                self.templates[func.name] = func
-                continue
             ret = self.lang_type(func.ret_type, func.line)
             params = [self.lang_type(t, func.line) for _, t in func.params]
             fnty = ir.FunctionType(ret.ir, [p.ir for p in params])
@@ -662,7 +679,7 @@ class CodeGen:
         # File-scoped (@static) names shadow the global namespace.
         key = (self.current_source, expr.name)
         if key in self.static_templates:
-            return self.gen_generic_call(expr, self.static_templates[key])
+            return self.gen_generic_call(expr, [self.static_templates[key]])
         if key in self.static_funcs:
             return self.gen_direct_call(expr, self.static_funcs[key])
         if expr.name in self.templates:
@@ -737,43 +754,31 @@ class CodeGen:
                 self.unify(sub_pattern, sub_actual, type_params, bindings,
                            strict, context, line)
 
-    def gen_generic_call(self, expr: Call, func: Func) -> TypedValue:
-        self.check_access(func.private, func.source, f"function {expr.name!r}", expr.line)
-        if len(expr.args) != len(func.params):
-            raise LangError(
-                f"{expr.name!r} expects {len(func.params)} argument(s), got {len(expr.args)}",
-                expr.line,
-            )
-        bindings: dict[str, LangType] = {}
-        if expr.type_args:
-            if len(expr.type_args) != len(func.type_params):
+    def gen_generic_call(self, expr: Call, candidates: list[Func]) -> TypedValue:
+        arg_tvs = [self.gen_expr(arg) for arg in expr.args]
+        if len(candidates) == 1:
+            func = candidates[0]
+            bindings = self.resolve_bindings(func, expr, arg_tvs, lenient=False)
+        else:
+            # Overload set: keep the viable candidates and pick the one with
+            # the most specific parameter patterns (T* beats T, and so on).
+            viable = []
+            for func in candidates:
+                bindings = self.resolve_bindings(func, expr, arg_tvs, lenient=True)
+                if bindings is not None:
+                    viable.append((self.specificity(func), func, bindings))
+            if not viable:
+                arg_types = ", ".join(str(tv.type) for tv in arg_tvs)
                 raise LangError(
-                    f"{expr.name!r} expects {len(func.type_params)} type argument(s), "
-                    f"got {len(expr.type_args)}",
+                    f"no overload of {expr.name!r} matches argument types ({arg_types})",
                     expr.line,
                 )
-            for tparam, targ in zip(func.type_params, expr.type_args):
-                bindings[tparam] = self.lang_type(targ, expr.line)
-        arg_tvs = [self.gen_expr(arg) for arg in expr.args]
-        # Infer unbound type parameters from argument types: typed values
-        # first, then untyped constants (whose int32 default should not win
-        # over a typed value bound to the same parameter). `null` carries no
-        # type information and never participates. Disagreement between
-        # typed arguments is a conflict, unless the parameters were fixed
-        # explicitly (then plain coercion errors point at the bad argument).
-        for adaptable_pass in (False, True):
-            strict = not adaptable_pass and not expr.type_args
-            for (_, ptype), tv in zip(func.params, arg_tvs):
-                if tv.adaptable == adaptable_pass and tv.type is not NULLT:
-                    self.unify(ptype, tv.type, func.type_params, bindings,
-                               strict, f"call to {expr.name!r}", expr.line)
-        missing = [t for t in func.type_params if t not in bindings]
-        if missing:
-            raise LangError(
-                f"cannot infer type parameter(s) {', '.join(missing)} for {expr.name!r}; "
-                f"specify them explicitly, e.g. {expr.name}<int32>(...)",
-                expr.line,
-            )
+            viable.sort(key=lambda entry: entry[0], reverse=True)
+            if len(viable) > 1 and viable[0][0] == viable[1][0]:
+                raise LangError(f"call to {expr.name!r} is ambiguous between overloads",
+                                expr.line)
+            _, func, bindings = viable[0]
+        self.check_access(func.private, func.source, f"function {expr.name!r}", expr.line)
         for tparam, bound in bindings.items():
             if bound is VOID:
                 raise LangError(f"cannot bind type parameter {tparam} to {bound}", expr.line)
@@ -784,17 +789,117 @@ class CodeGen:
         ]
         return TypedValue(self.builder.call(fn, args), ret)
 
+    def resolve_bindings(self, func: Func, expr: Call, arg_tvs: list[TypedValue],
+                         lenient: bool) -> dict[str, LangType] | None:
+        """Determine the type-parameter bindings for calling `func`.
+
+        Inference takes typed values first, then untyped constants (whose
+        int32 default should not win over a typed value bound to the same
+        parameter). `null` carries no type information and never
+        participates. Disagreement between typed arguments is a conflict,
+        unless the parameters were fixed explicitly (then plain coercion
+        errors point at the bad argument).
+
+        When `lenient` (overload trial), any failure returns None instead of
+        raising, and argument shapes must match the parameter patterns.
+        """
+        if len(expr.args) != len(func.params):
+            if lenient:
+                return None
+            raise LangError(
+                f"{expr.name!r} expects {len(func.params)} argument(s), got {len(expr.args)}",
+                expr.line,
+            )
+        bindings: dict[str, LangType] = {}
+        if expr.type_args:
+            if len(expr.type_args) != len(func.type_params):
+                if lenient:
+                    return None
+                raise LangError(
+                    f"{expr.name!r} expects {len(func.type_params)} type argument(s), "
+                    f"got {len(expr.type_args)}",
+                    expr.line,
+                )
+            for tparam, targ in zip(func.type_params, expr.type_args):
+                bindings[tparam] = self.lang_type(targ, expr.line)
+        try:
+            for adaptable_pass in (False, True):
+                strict = not adaptable_pass and not expr.type_args
+                for (_, ptype), tv in zip(func.params, arg_tvs):
+                    if tv.adaptable == adaptable_pass and tv.type is not NULLT:
+                        self.unify(ptype, tv.type, func.type_params, bindings,
+                                   strict, f"call to {expr.name!r}", expr.line)
+        except LangError:
+            if lenient:
+                return None
+            raise
+        missing = [t for t in func.type_params if t not in bindings]
+        if missing:
+            if lenient:
+                return None
+            raise LangError(
+                f"cannot infer type parameter(s) {', '.join(missing)} for {expr.name!r}; "
+                f"specify them explicitly, e.g. {expr.name}<int32>(...)",
+                expr.line,
+            )
+        if lenient:
+            for (_, ptype), tv in zip(func.params, arg_tvs):
+                if not self.shape_matches(ptype, tv.type, tv.adaptable,
+                                          func.type_params, expr.line):
+                    return None
+        return bindings
+
+    def shape_matches(self, pattern: TypeRef, actual: LangType, adaptable: bool,
+                      type_params: list[str], line: int) -> bool:
+        """Whether an argument type structurally fits a parameter pattern
+        (used only to filter overload candidates)."""
+        peeled = actual
+        for _ in range(pattern.stars):
+            if not is_pointer(peeled):
+                return False
+            peeled = peeled.pointee
+            adaptable = False
+        if pattern.name in type_params and not pattern.args:
+            return True
+        if pattern.args:
+            return (peeled.template == pattern.name
+                    and len(peeled.args) == len(pattern.args)
+                    and all(self.shape_matches(p, a, False, type_params, line)
+                            for p, a in zip(pattern.args, peeled.args)))
+        try:
+            resolved = self.lang_type(TypeRef(pattern.name), line)
+        except LangError:
+            return False
+        if peeled == resolved:
+            return True
+        if adaptable and is_integer(resolved) and is_integer(peeled):
+            return True
+        return resolved == RAWPTR and is_pointer(peeled)
+
+    def specificity(self, func: Func) -> int:
+        """Rank an overload: concrete types beat structured patterns, which
+        beat bare type parameters; pointer depth adds specificity."""
+        def score(pattern: TypeRef) -> int:
+            value = pattern.stars
+            if pattern.args:
+                value += 4 + sum(score(a) for a in pattern.args)
+            elif pattern.name not in func.type_params:
+                value += 8
+            return value
+        return sum(score(p) for _, p in func.params)
+
     def instantiate(
         self, func: Func, bindings: dict[str, LangType]
     ) -> tuple[ir.Function, LangType, list[LangType]]:
         """Return the monomorphized instance of `func` for `bindings`,
         generating (and caching) it on first use."""
-        key = (func.source, func.name, tuple(str(bindings[t]) for t in func.type_params))
+        key = (id(func), tuple(str(bindings[t]) for t in func.type_params))
         if key in self.instances:
             mangled = self.instances[key]
             ret, params, _ = self.signatures[mangled]
             return self.funcs[mangled], ret, params
-        base = self.symbol_bases.get((func.source, func.name), func.name)
+        base = self.template_bases.get(id(func)) \
+            or self.symbol_bases.get((func.source, func.name), func.name)
         mangled = f"{base}<{', '.join(str(bindings[t]) for t in func.type_params)}>"
         outer_bindings = self.type_bindings
         outer_source = self.current_source
