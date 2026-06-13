@@ -52,6 +52,7 @@ class Func:
     private: bool = False  # @private: only callable within its source file
     static: bool = False  # @static: file-scoped name; other files may reuse it
     extern: bool = False  # @extern: declaration only; defined elsewhere
+    variadic: bool = False  # extern only: trailing `...`, C-style varargs
     source: str | None = None  # defining file; stamped by the driver
 
 @dataclass

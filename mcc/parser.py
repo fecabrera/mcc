@@ -178,9 +178,25 @@ class Parser:
             raise LangError("extern functions cannot be generic", line)
         self.expect("(")
         params = []
+        variadic = False
         while self.cur.kind != ")":
             if params:
                 self.expect(",")
+            if self.cur.kind == "...":
+                ellipsis = self.advance()
+                if not extern:
+                    raise LangError(
+                        "'...' is only allowed in extern declarations", ellipsis.line
+                    )
+                if not params:
+                    raise LangError(
+                        "'...' needs at least one named parameter before it",
+                        ellipsis.line,
+                    )
+                if self.cur.kind != ")":
+                    raise LangError("'...' must be the last parameter", ellipsis.line)
+                variadic = True
+                break
             pname = self.expect("IDENT").text
             self.expect(":")
             params.append((pname, self.parse_type_ref()))
@@ -191,7 +207,7 @@ class Parser:
         if extern:  # a declaration: signature only, no body
             self.expect(";")
             return Func(name, type_params, params, ret_type, [], line,
-                        private=private, extern=True)
+                        private=private, extern=True, variadic=variadic)
         return Func(name, type_params, params, ret_type, self.parse_block(), line,
                     private=private, static=static)
 

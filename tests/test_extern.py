@@ -66,6 +66,60 @@ def test_conflicting_declarations_are_an_error(tmp_path):
         run_path(main)
 
 
+def test_variadic_extern_function():
+    # snprintf with a null buffer returns the formatted length: 5 for "4-2-7".
+    source = """
+    @extern
+    fn snprintf(buf: uint8*, n: uint64, fmt: uint8*, ...) -> int32;
+    fn main() -> int32 {
+        return snprintf(null, 0, "%d-%d-%d", 4 as int32, 2 as int32, 7 as int32);
+    }
+    """
+    assert run(source) == 5
+
+
+def test_variadic_extern_emits_a_varargs_declaration():
+    ir_text = compile_ir(
+        "@extern\nfn printf(fmt: uint8*, ...) -> int32;\n"
+        'fn main() -> int32 { return printf("hi"); }'
+    )
+    assert 'declare i32 @"printf"(i8* %".1", ...)' in ir_text
+
+
+def test_variadic_redeclaration_of_a_header_function_collapses():
+    source = """
+    #include <stdio.h>
+    @extern
+    fn printf(fmt: uint8*, ...) -> int32;
+    fn main() -> int32 { return printf("four") - 4; }
+    """
+    assert run(source) == 0
+
+
+def test_variadic_mismatch_is_a_conflict(tmp_path):
+    (tmp_path / "a.mc").write_text("@extern\nfn thing(x: int32, ...) -> int32;")
+    (tmp_path / "b.mc").write_text("@extern\nfn thing(x: int32) -> int32;")
+    main = tmp_path / "main.mc"
+    main.write_text('import "a";\nimport "b";\nfn main() -> int32 { return 0; }')
+    with pytest.raises(LangError, match="conflicting extern declarations for 'thing'"):
+        run_path(main)
+
+
+def test_ellipsis_outside_extern_is_an_error():
+    with pytest.raises(LangError, match="only allowed in extern declarations"):
+        parse("fn f(x: int32, ...) {}")
+
+
+def test_ellipsis_must_be_last():
+    with pytest.raises(LangError, match="must be the last parameter"):
+        parse("@extern\nfn f(x: int32, ..., y: int32);")
+
+
+def test_ellipsis_needs_a_named_parameter():
+    with pytest.raises(LangError, match="at least one named parameter"):
+        parse("@extern\nfn f(...);")
+
+
 def test_redeclaring_a_header_function_collapses():
     source = """
     #include <stdlib.h>

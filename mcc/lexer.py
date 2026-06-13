@@ -15,6 +15,7 @@ TOKEN_SPEC = [
     ("COMMENT", r"//[^\n]*|/\*(?s:.*?)\*/"),
     ("WS", r"[ \t\r\n]+"),
     ("ARROW", r"->"),
+    ("ELLIPSIS", r"\.\.\."),
     ("OP2", r"==|!=|<=|>=|<<|>>"),
     ("ANNOT", r"@[A-Za-z_]\w*"),
     ("FLOAT", r"\d+\.\d+"),
@@ -46,7 +47,8 @@ def tokenize(source: str) -> list[Token]:
             raise LangError(f"unexpected character {source[pos]!r}", line)
         kind, text = match.lastgroup, match.group()
         if kind not in ("WS", "COMMENT"):
-            if kind in ("ARROW", "OP", "OP2") or (kind == "IDENT" and text in KEYWORDS):
+            if kind in ("ARROW", "ELLIPSIS", "OP", "OP2") \
+                    or (kind == "IDENT" and text in KEYWORDS):
                 kind = text
             tokens.append(Token(kind, text, line))
         line += text.count("\n")

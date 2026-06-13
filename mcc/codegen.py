@@ -436,7 +436,7 @@ class CodeGen:
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
                 if func.name in self.extern_decls:
-                    if self.signatures[func.name] != (ret, params, False):
+                    if self.signatures[func.name] != (ret, params, func.variadic):
                         raise LangError(
                             f"conflicting extern declarations for {func.name!r}", func.line
                         )
@@ -444,9 +444,10 @@ class CodeGen:
                 if func.name in self.funcs or func.name in self.templates \
                         or func.name in self.globals:
                     raise LangError(f"function {func.name!r} already defined", func.line)
-                fnty = ir.FunctionType(ret.ir, [p.ir for p in params])
+                fnty = ir.FunctionType(ret.ir, [p.ir for p in params],
+                                       var_arg=func.variadic)
                 self.funcs[func.name] = ir.Function(self.module, fnty, name=func.name)
-                self.signatures[func.name] = (ret, params, False)
+                self.signatures[func.name] = (ret, params, func.variadic)
                 self.func_privacy[func.name] = (func.private, func.source)
                 self.extern_decls.add(func.name)
                 self.used_symbols.add(func.name)

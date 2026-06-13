@@ -62,6 +62,10 @@ def test_hex_literal_is_one_token():
     ]
 
 
+def test_ellipsis_is_one_token():
+    assert kinds("...")[:-1] == ["..."]
+
+
 def test_string_literal_with_escape():
     token = tokenize(r'"hello\n"')[0]
     assert token.kind == "STRING"

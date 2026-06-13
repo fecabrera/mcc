@@ -423,7 +423,18 @@ fn main() -> int32 {
 }
 ```
 
-Extern functions cannot be generic or variadic. Identical extern
+A trailing `...` declares a C-style variadic function, such as `printf` or a
+kernel's `printk`; extra arguments follow the same promotion rules as the
+[`#include` functions](#includes):
+
+```c
+@extern
+fn printk(fmt: uint8*, ...);
+```
+
+Extern functions cannot be generic, and `...` is only allowed in extern
+declarations (functions defined in the language cannot read variadic
+arguments). Identical extern
 declarations may appear in any number of imported files — they all name the
 same symbol — but declarations that disagree about the signature are a
 compile error. `@private` applies to extern declarations as usual, and
