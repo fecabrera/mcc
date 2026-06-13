@@ -7,10 +7,10 @@ import re
 from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
-    Assign, Binary, BoolLit, Break, Call, Case, Cast, CharLit, Continue,
-    ExprStmt, ExternVar, FloatLit, Func, If, Index, IntLit, Let, Member,
-    NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex, StoreMember,
-    StrLit, StructDecl, TypeRef, Unary, Var, While,
+    Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast, CharLit,
+    Continue, ExprStmt, ExternVar, FloatLit, Func, If, Index, IntLit, Let,
+    Member, NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex,
+    StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
 
 STRING_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", '"': '"', "\\": "\\"}
@@ -121,6 +121,14 @@ class Parser:
         habit); struct-ness is resolved by name."""
         if self.cur.kind == "fn":
             return self.parse_fn_type(greedy_stars)
+        if self.cur.kind == "(":
+            # A grouped type, so the pointer binds outside a function type:
+            # (fn(int32) -> int32)* is a pointer to a function pointer.
+            self.advance()
+            inner = self.parse_type_ref()
+            self.expect(")")
+            inner.stars += self.parse_stars(greedy_stars)
+            return inner
         self.accept("struct")
         name = self.expect("IDENT").text
         args = []
@@ -386,8 +394,24 @@ class Parser:
                 arrow = self.advance()
                 field = self.expect("IDENT").text
                 expr = Member(expr, field, arrow.kind == "->", arrow.line)
+            elif self.cur.kind == "(":
+                # Calling a function-pointer expression, e.g. table[i](x) or
+                # widget->on_click(x). A bare name call is handled in
+                # parse_primary, where it can also carry generic type arguments.
+                line = self.cur.line
+                expr = CallExpr(expr, self.parse_call_args(), line)
             else:
                 return expr
+
+    def parse_call_args(self) -> list:
+        self.expect("(")
+        args = []
+        while self.cur.kind != ")":
+            if args:
+                self.expect(",")
+            args.append(self.parse_expr())
+        self.expect(")")
+        return args
 
     def parse_primary(self):
         tok = self.advance()
@@ -424,14 +448,7 @@ class Parser:
             type_args = self.try_type_args() if self.cur.kind == "<" else []
             if self.cur.kind != "(":
                 return Var(tok.text, tok.line)
-            self.advance()
-            args = []
-            while self.cur.kind != ")":
-                if args:
-                    self.expect(",")
-                args.append(self.parse_expr())
-            self.expect(")")
-            return Call(tok.text, type_args, args, tok.line)
+            return Call(tok.text, type_args, self.parse_call_args(), tok.line)
         raise LangError(f"unexpected token {tok.text!r}", tok.line)
 
     def try_type_args(self) -> list[TypeRef]:

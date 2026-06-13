@@ -3,8 +3,13 @@
 import pytest
 
 from mcc.errors import LangError
-from mcc.nodes import TypeRef
+from mcc.nodes import CallExpr, TypeRef
 from helpers import compile_ir, parse, run
+
+
+def first_expr(body):
+    (func,) = parse("fn main() { " + body + " }").functions
+    return func.body[0].expr
 
 
 def test_fn_type_parses():
@@ -132,6 +137,87 @@ def test_local_shadows_a_same_named_function():
     }
     """
     assert run(source) == 9
+
+
+def test_calling_an_expression_parses_as_a_call_expr():
+    expr = first_expr("chooser()(5);")
+    assert isinstance(expr, CallExpr)
+    assert [a.value for a in expr.args] == [5]
+
+
+def test_call_the_result_of_a_call():
+    source = """
+    fn dbl(x: int32) -> int32 { return x * 2; }
+    fn chooser() -> fn(int32) -> int32 { return dbl; }
+    fn main() -> int32 { return chooser()(21); }
+    """
+    assert run(source) == 42
+
+
+def test_call_a_struct_field_in_place():
+    source = """
+    struct widget { on_click: fn(int32) -> int32; }
+    fn inc(x: int32) -> int32 { return x + 1; }
+    fn main() -> int32 {
+        let w: struct widget;
+        w.on_click = inc;
+        return w.on_click(40) + 1;     // 41 + 1
+    }
+    """
+    assert run(source) == 42
+
+
+def test_call_a_parenthesized_value():
+    source = """
+    fn dbl(x: int32) -> int32 { return x * 2; }
+    fn main() -> int32 { let f = dbl; return (f)(21); }
+    """
+    assert run(source) == 42
+
+
+def test_call_an_array_element():
+    # A pointer to function pointers needs the grouped type (fn(...) -> ...)*.
+    source = """
+    @extern fn malloc(size: uint64) -> uint8*;
+    @extern fn free(ptr: uint8*);
+    fn dbl(x: int32) -> int32 { return x * 2; }
+    fn inc(x: int32) -> int32 { return x + 1; }
+    fn main() -> int32 {
+        let table = malloc(2 * sizeof(fn(int32) -> int32)) as (fn(int32) -> int32)*;
+        table[0] = dbl;
+        table[1] = inc;
+        let r: int32 = table[0](20) + table[1](1);   // 40 + 2
+        free(table);
+        return r;
+    }
+    """
+    assert run(source) == 42
+
+
+def test_grouped_pointer_to_function_pointer_type():
+    (func,) = parse("fn f(t: (fn(int32) -> int32)*) {}").functions
+    assert str(func.params[0][1]) == "fn(int32) -> int32*"  # printed; the * is outer
+
+
+def test_star_binds_to_the_return_type_without_grouping():
+    # fn(int32) -> int32* is a function returning int32*, not a pointer to a
+    # function pointer.
+    (func,) = parse("fn f(g: fn(int32) -> int32*) {}").functions
+    ret = func.params[0][1].ret
+    assert str(ret) == "int32*" and ret.stars == 1
+
+
+def test_calling_a_non_function_is_an_error():
+    with pytest.raises(LangError, match="'n' is not callable; it is a int32"):
+        compile_ir("fn main() -> int32 { let n: int32 = 5; return n(1); }")
+
+
+def test_arity_mismatch_on_an_expression_call():
+    with pytest.raises(LangError, match=r"call to fn\(int32\) -> int32 expects 1 argument"):
+        compile_ir(
+            "fn dbl(x: int32) -> int32 { return x * 2; }\n"
+            "fn main() -> int32 { return (dbl)(1, 2); }"
+        )
 
 
 def test_emitted_call_is_indirect():

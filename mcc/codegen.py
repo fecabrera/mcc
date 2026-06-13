@@ -18,10 +18,10 @@ from llvmlite import ir
 
 from mcc.errors import LangError
 from mcc.nodes import (
-    Assign, Binary, BoolLit, Break, Call, Case, Cast, CharLit, Continue,
-    ExprStmt, FloatLit, Func, If, Index, IntLit, Let, Member, NullLit, Program,
-    Return, SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl,
-    TypeRef, Unary, Var, While,
+    Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast, CharLit,
+    Continue, ExprStmt, FloatLit, Func, If, Index, IntLit, Let, Member, NullLit,
+    Program, Return, SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit,
+    StructDecl, TypeRef, Unary, Var, While,
 )
 
 
@@ -808,6 +808,10 @@ class CodeGen:
                               var_type)
         if isinstance(expr, Call):
             return self.gen_call(expr)
+        if isinstance(expr, CallExpr):
+            callee = self.gen_expr(expr.callee)
+            return self.gen_indirect_call(callee, expr.args,
+                                          f"call to {callee.type}", expr.line)
         if isinstance(expr, Unary):
             return self.gen_unary(expr)
         if isinstance(expr, Binary):
@@ -987,12 +991,20 @@ class CodeGen:
         return TypedValue(self.builder.bitcast(glob, RAWPTR.ir), RAWPTR)
 
     def gen_call(self, expr: Call) -> TypedValue:
-        # A function-pointer variable (local, parameter, or @extern global) is
-        # called indirectly; it shadows any same-named function, as for any var.
-        if expr.name in self.locals and is_function(self.locals[expr.name][1]):
-            return self.gen_indirect_call(expr, self.gen_expr(Var(expr.name, expr.line)))
-        if expr.name in self.globals and is_function(self.globals[expr.name][1]):
-            return self.gen_indirect_call(expr, self.gen_expr(Var(expr.name, expr.line)))
+        # A variable (local, parameter, or @extern global) shadows any
+        # same-named function. A function-pointer one is called indirectly;
+        # anything else is simply not callable.
+        for table in (self.locals, self.globals):
+            if expr.name in table:
+                var_type = table[expr.name][1]
+                if not is_function(var_type):
+                    raise LangError(
+                        f"{expr.name!r} is not callable; it is a {var_type}", expr.line
+                    )
+                if expr.type_args:
+                    raise LangError(f"{expr.name!r} is not a generic function", expr.line)
+                callee = self.gen_expr(Var(expr.name, expr.line))
+                return self.gen_indirect_call(callee, expr.args, repr(expr.name), expr.line)
         # File-scoped (@static) names shadow the global namespace.
         key = (self.current_source, expr.name)
         if key in self.static_templates:
@@ -1031,29 +1043,32 @@ class CodeGen:
         if expr.type_args:
             raise LangError(f"{expr.name!r} is not a generic function", expr.line)
         ret, params, variadic = self.signatures[symbol]
-        args = self.marshal_args(expr, params, variadic, repr(expr.name))
+        args = self.marshal_args(expr.args, params, variadic, repr(expr.name), expr.line)
         return TypedValue(self.builder.call(self.funcs[symbol], args), ret)
 
-    def gen_indirect_call(self, expr: Call, callee: TypedValue) -> TypedValue:
-        """Call through a function-pointer value (a variable or parameter)."""
-        if expr.type_args:
-            raise LangError(f"{expr.name!r} is not a generic function", expr.line)
+    def gen_indirect_call(self, callee: TypedValue, arg_exprs: list,
+                          label: str, line: int) -> TypedValue:
+        """Call through a function-pointer value -- a variable, a parameter, or
+        any expression of function-pointer type (e.g. a struct field)."""
+        if not is_function(callee.type):
+            raise LangError(f"cannot call a value of type {callee.type}", line)
         ret, params, variadic = callee.type.signature
-        args = self.marshal_args(expr, params, variadic, repr(expr.name))
+        args = self.marshal_args(arg_exprs, params, variadic, label, line)
         return TypedValue(self.builder.call(callee.value, args), ret)
 
-    def marshal_args(self, expr: Call, params, variadic: bool, label: str) -> list:
+    def marshal_args(self, arg_exprs: list, params, variadic: bool,
+                     label: str, line: int) -> list:
         """Evaluate and coerce a call's arguments against the callee's
         parameter types, applying C varargs promotions past a variadic tail."""
-        if len(expr.args) < len(params) or (len(expr.args) > len(params) and not variadic):
+        if len(arg_exprs) < len(params) or (len(arg_exprs) > len(params) and not variadic):
             raise LangError(
-                f"{label} expects {len(params)} argument(s), got {len(expr.args)}", expr.line
+                f"{label} expects {len(params)} argument(s), got {len(arg_exprs)}", line
             )
         args = []
-        for i, arg_expr in enumerate(expr.args):
+        for i, arg_expr in enumerate(arg_exprs):
             tv = self.gen_expr(arg_expr)
             if i < len(params):
-                tv = self.coerce(tv, params[i], expr.line, f"argument {i + 1} of {label}")
+                tv = self.coerce(tv, params[i], line, f"argument {i + 1} of {label}")
                 value = tv.value
             elif is_integer(tv.type) and tv.type.ir.width < 32:
                 # C varargs promote small integers to int (sign- or
@@ -1064,7 +1079,7 @@ class CodeGen:
                 value = self.builder.zext(tv.value, INT32.ir)
             elif is_struct(tv.type):
                 raise LangError(
-                    "cannot pass a struct to a variadic function; pass a pointer", expr.line
+                    "cannot pass a struct to a variadic function; pass a pointer", line
                 )
             else:
                 value = tv.value

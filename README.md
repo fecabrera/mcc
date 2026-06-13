@@ -345,11 +345,21 @@ optional callback works:
 if (cb != null) { cb(x); }
 ```
 
+Any expression of function-pointer type is callable, not just a variable —
+a struct field, an array element, or the result of another call:
+
+```c
+widget->on_click(x);   // a callback stored in a struct
+table[i](x);           // an entry in a dispatch table
+chooser()(x);          // the function a call returned
+```
+
+In a type, `*` binds to the return type, so `fn(int32) -> int32*` is a
+function returning `int32*`. Group with parentheses for a pointer to a
+function pointer: `(fn(int32) -> int32)*`, e.g. an array of callbacks.
+
 Only a single, non-generic function has an address; a generic name like
 `id` cannot be used as a value (there is no one instance to point at).
-Calling is currently limited to a function name or a variable holding a
-pointer — calling the result of an expression directly (`table[i](x)`) is
-not yet supported; assign it to a variable first.
 
 ### Structs
 

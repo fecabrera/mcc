@@ -187,6 +187,12 @@ class Call:
     line: int
 
 @dataclass
+class CallExpr:  # calling a function-pointer expression: callee(args...)
+    callee: object
+    args: list
+    line: int
+
+@dataclass
 class Unary:
     op: str
     operand: object
