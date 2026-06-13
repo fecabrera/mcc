@@ -225,8 +225,12 @@ def fold_int_arithmetic(op: str, a: int, b: int, lang_type: LangType) -> int | N
 
 
 class CodeGen:
-    def __init__(self, program: Program, name: str):
+    def __init__(self, program: Program, name: str, root_source: str | None = None):
         self.program = program
+        # The entry file's resolved path. Definitions from it are this
+        # translation unit's own (external linkage); everything reached through
+        # `import` is shared and gets merged across objects (see def_linkage).
+        self.root_source = root_source
         # A private context so identified struct types don't collide across
         # separate compilations in one process (llvmlite defaults to a
         # global context).
@@ -269,6 +273,18 @@ class CodeGen:
         if private and source != self.current_source:
             owner = source.rsplit("/", 1)[-1] if source else "its file"
             raise LangError(f"{what} is private to {owner}", line)
+
+    def link_shared(self, fn: ir.Function, source: str | None):
+        """Give `fn` mergeable linkage if it is shared across objects. The root
+        file's own definitions keep the default external linkage (a genuine
+        duplicate is a link error); a definition reached through `import`, or a
+        monomorphized generic, is copied into every object that uses it, so it
+        gets `linkonce_odr` and the identical copies merge at link time instead
+        of colliding. With no root_source (single-module JIT or the test
+        helpers) there is nothing to link against, so everything stays
+        external."""
+        if self.root_source is not None and source != self.root_source:
+            fn.linkage = "linkonce_odr"
 
     def static_base(self, name: str, source: str | None) -> str:
         """A unique LLVM-level symbol for a file-scoped name, e.g. f@set."""
@@ -472,7 +488,9 @@ class CodeGen:
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
                 fnty = ir.FunctionType(ret.ir, [p.ir for p in params])
-                self.funcs[symbol] = ir.Function(self.module, fnty, name=symbol)
+                fn = ir.Function(self.module, fnty, name=symbol)
+                self.link_shared(fn, func.source)
+                self.funcs[symbol] = fn
                 self.signatures[symbol] = (ret, params, False)
                 self.static_funcs[key] = symbol
                 continue
@@ -500,7 +518,9 @@ class CodeGen:
             ret = self.lang_type(func.ret_type, func.line)
             params = [self.lang_type(t, func.line) for _, t in func.params]
             fnty = ir.FunctionType(ret.ir, [p.ir for p in params])
-            self.funcs[func.name] = ir.Function(self.module, fnty, name=func.name)
+            fn = ir.Function(self.module, fnty, name=func.name)
+            self.link_shared(fn, func.source)
+            self.funcs[func.name] = fn
             self.signatures[func.name] = (ret, params, False)
         for func in self.program.functions:
             if not func.type_params and not func.extern:
@@ -1173,6 +1193,9 @@ class CodeGen:
             params = [self.lang_type(t, func.line) for _, t in func.params]
             fnty = ir.FunctionType(ret.ir, [p.ir for p in params])
             fn = ir.Function(self.module, fnty, name=mangled)
+            # A generic instance is emitted in every object that uses it, so it
+            # merges like an imported definition rather than colliding.
+            self.link_shared(fn, func.source)
             # Register before generating the body so recursive calls resolve.
             self.funcs[mangled] = fn
             self.signatures[mangled] = (ret, params, False)

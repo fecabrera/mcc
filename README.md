@@ -420,6 +420,15 @@ fn main() -> int32 {
 }
 ```
 
+`import` copies the imported definitions into the module, much like a C
+header. When two separately compiled objects both import the same file —
+or instantiate the same generic, such as `alloc<uint8>` — that definition
+lands in each object. To keep the linker from rejecting it as a duplicate,
+imported and monomorphized-generic definitions are emitted with
+`linkonce_odr` linkage so the identical copies merge. The file you compile
+directly keeps strong linkage, so a real name clash between two such files
+is still a link error.
+
 ### Visibility
 
 Everything is public by default. Marking a function or struct `@private`

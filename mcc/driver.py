@@ -76,7 +76,8 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
 def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None) -> ir.Module:
     if search_paths is None:
         search_paths = (STDLIB_DIR,)
-    return CodeGen(load_program(path, tuple(search_paths)), path.name).generate()
+    program = load_program(path, tuple(search_paths))
+    return CodeGen(program, path.name, root_source=str(path.resolve())).generate()
 
 
 def build_native_module(module: ir.Module, opt_level: int, triple: str | None = None):
