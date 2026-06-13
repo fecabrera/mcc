@@ -80,7 +80,42 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None) -> i
     return CodeGen(program, path.name, root_source=str(path.resolve())).generate()
 
 
-def build_native_module(module: ir.Module, opt_level: int, triple: str | None = None):
+# For each architecture, the LLVM subtarget features that -- when turned off
+# (a leading '-') -- keep generated code off the floating-point/SIMD register
+# file, plus '+soft-float' where the backend needs it. This is the equivalent
+# of gcc's -mgeneral-regs-only: it stops the compiler from quietly using vector
+# registers (e.g. to copy a struct) in code, such as an interrupt handler, that
+# must not touch FP state. Keyed by the architecture in an LLVM triple.
+GENERAL_REGS_ONLY_FEATURES = {
+    "aarch64": "-fp-armv8,-neon",
+    "arm64": "-fp-armv8,-neon",
+    "x86_64": "-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,"
+              "-avx512f,+soft-float",
+    "i386": "-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2,"
+            "-avx512f,+soft-float",
+    "riscv64": "-f,-d,-v",
+    "riscv32": "-f,-d,-v",
+}
+
+
+def restrict_to_general_regs(module: ir.Module, triple: str) -> None:
+    """Tag every defined function with a target-features attribute that bars
+    the floating-point/SIMD registers for `triple`'s architecture -- mcc's
+    -mgeneral-regs-only. Raises if the architecture has no known feature set."""
+    arch = triple.split("-")[0]
+    features = GENERAL_REGS_ONLY_FEATURES.get(arch)
+    if features is None:
+        raise RuntimeError(f"--general-regs-only is not supported for target {arch!r}")
+    attribute = f'"target-features"="{features}"'
+    for func in module.functions:
+        if func.blocks:  # a definition, not an extern declaration
+            # The attribute is a key=value string, which llvmlite's validated
+            # add() rejects; FunctionAttributes is a plain set, so add it raw.
+            set.add(func.attributes, attribute)
+
+
+def build_native_module(module: ir.Module, opt_level: int, triple: str | None = None,
+                        general_regs_only: bool = False):
     """Verify and optimize the IR for a target: the host by default, or any
     LLVM triple (e.g. aarch64-unknown-none-elf for bare metal)."""
     if triple is None:
@@ -93,6 +128,8 @@ def build_native_module(module: ir.Module, opt_level: int, triple: str | None = 
     target_machine = llvm.Target.from_triple(triple).create_target_machine(opt=opt_level)
     module.triple = triple
     module.data_layout = str(target_machine.target_data)
+    if general_regs_only:
+        restrict_to_general_regs(module, triple)
     native = llvm.parse_assembly(str(module))
     native.verify()
     if opt_level > 0:
@@ -116,6 +153,9 @@ def main() -> int:
     cli.add_argument("--target", metavar="TRIPLE",
                      help="cross-compile for this LLVM target triple, emitting an object "
                           "file to link with that target's toolchain")
+    cli.add_argument("--general-regs-only", action="store_true",
+                     help="generate code that uses only general-purpose registers, never "
+                          "the floating-point/SIMD ones (like gcc's -mgeneral-regs-only)")
     args = cli.parse_args()
 
     if args.target and args.run:
@@ -146,7 +186,8 @@ def main() -> int:
         return 0
 
     try:
-        native, target_machine = build_native_module(module, args.O, args.target)
+        native, target_machine = build_native_module(
+            module, args.O, args.target, args.general_regs_only)
     except RuntimeError as err:
         print(f"mcc: error: {err}", file=sys.stderr)
         return 1

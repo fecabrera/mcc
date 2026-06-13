@@ -152,6 +152,22 @@ def test_target_defaults_to_object_beside_source(tmp_path):
     assert (tmp_path / "answer.o").read_bytes()[:4] == b"\x7fELF"
 
 
+def test_general_regs_only_cross_compiles(tmp_path):
+    obj = tmp_path / "hello.o"
+    result = mcc(HELLO, "--target", "aarch64-unknown-none-elf",
+                 "--general-regs-only", "-o", obj)
+    assert result.returncode == 0, result.stderr
+    assert obj.read_bytes()[:4] == b"\x7fELF"
+
+
+def test_general_regs_only_rejects_unknown_arch(tmp_path):
+    result = mcc(HELLO, "--target", "sparc-unknown-none", "--general-regs-only")
+    assert result.returncode == 1
+    assert "mcc: error:" in result.stderr
+    assert "general-regs-only" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_target_rejects_run():
     result = mcc(HELLO, "--target", "aarch64-unknown-none-elf", "--run")
     assert result.returncode == 1

@@ -63,12 +63,19 @@ pipenv run python -m mcc examples/helloworld.mc -O3          # optimization leve
 pipenv run python -m mcc main.mc -I vendor -I deps           # extra import search paths
 pipenv run python -m mcc main.mc --naked                     # don't put lib/ on the import path
 pipenv run python -m mcc main.mc --target aarch64-unknown-none-elf   # cross-compile to an object file
+pipenv run python -m mcc main.mc --general-regs-only          # never use FP/SIMD registers
 ```
 
 `--target` accepts any LLVM triple and emits an object file instead of a
 host executable; link it with that target's toolchain (e.g.
 `aarch64-elf-gcc`). See [examples/baremetal/](examples/baremetal/) for a
 freestanding kernel built this way.
+
+`--general-regs-only` keeps generated code off the floating-point and SIMD
+registers — the equivalent of gcc's `-mgeneral-regs-only`. It stops the
+backend from quietly using a vector register (say, to copy a struct) in
+code that must not touch FP state, such as a kernel or an interrupt
+handler. Supported for aarch64, x86, and riscv targets.
 
 ## Examples
 
