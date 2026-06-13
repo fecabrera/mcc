@@ -242,3 +242,26 @@ def test_continue_in_an_until_loop(capfd):
         """
     )
     assert capfd.readouterr().out == "3 6 "
+
+def test_char_literals(capfd):
+    # Char literals are uint8 values: they index, compare, and do arithmetic
+    # like any byte, and print as characters through %c.
+    run(
+        r"""
+        #include <stdio.h>
+        fn count_spaces(s: uint8*) -> int32 {
+            let n: int32 = 0;
+            let i: uint64 = 0;
+            while (s[i] != '\0') {
+                if (s[i] == ' ') { n = n + 1; }
+                i = i + 1;
+            }
+            return n;
+        }
+        fn main() -> int32 {
+            printf("%c%c %d %d\n", 'h', 'i', count_spaces("a b c"), '9' - '0');
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "hi 2 9\n"

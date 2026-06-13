@@ -18,10 +18,10 @@ from llvmlite import ir
 
 from mcc.errors import LangError
 from mcc.nodes import (
-    Assign, Binary, BoolLit, Break, Call, Cast, Continue, ExprStmt, FloatLit,
-    Func, If, Index, IntLit, Let, Member, NullLit, Program, Return, SizeOf,
-    StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary,
-    Var, While,
+    Assign, Binary, BoolLit, Break, Call, Cast, CharLit, Continue, ExprStmt,
+    FloatLit, Func, If, Index, IntLit, Let, Member, NullLit, Program, Return,
+    SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef,
+    Unary, Var, While,
 )
 
 
@@ -77,6 +77,7 @@ for _width in (8, 16, 32, 64):
     TYPES[f"uint{_width}"] = LangType(f"uint{_width}", ir.IntType(_width), signed=False)
 
 INT32 = TYPES["int32"]
+UINT8 = TYPES["uint8"]
 UINT64 = TYPES["uint64"]
 # uint8* doubles as the "raw memory" pointer (C's void*/char*); string
 # literals have this type, and any pointer implicitly coerces to it.
@@ -707,6 +708,8 @@ class CodeGen:
     def gen_expr(self, expr) -> TypedValue:
         if isinstance(expr, IntLit):
             return TypedValue(ir.Constant(INT32.ir, expr.value), INT32, adaptable=True)
+        if isinstance(expr, CharLit):
+            return TypedValue(ir.Constant(UINT8.ir, expr.value), UINT8)
         if isinstance(expr, FloatLit):
             return TypedValue(ir.Constant(FLOAT64.ir, expr.value), FLOAT64)
         if isinstance(expr, BoolLit):

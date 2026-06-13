@@ -72,6 +72,18 @@ def test_string_literal_with_escape():
     assert token.text == r'"hello\n"'
 
 
+def test_char_literal_is_one_token():
+    tokens = tokenize(r"'a' '\n' '\'' '\\'")
+    assert [(t.kind, t.text) for t in tokens[:-1]] == [
+        ("CHAR", "'a'"), ("CHAR", r"'\n'"), ("CHAR", r"'\''"), ("CHAR", r"'\\'"),
+    ]
+
+
+def test_empty_char_literal_is_an_error():
+    with pytest.raises(LangError, match="unexpected character"):
+        tokenize("''")
+
+
 def test_line_numbers():
     tokens = tokenize("1\n2\n\n3")
     assert [t.line for t in tokens[:3]] == [1, 2, 4]

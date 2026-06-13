@@ -7,10 +7,10 @@ import re
 from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
-    Assign, Binary, BoolLit, Break, Call, Cast, Continue, ExprStmt, ExternVar,
-    FloatLit, Func, If, Index, IntLit, Let, Member, NullLit, Program, Return,
-    SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef,
-    Unary, Var, While,
+    Assign, Binary, BoolLit, Break, Call, Cast, CharLit, Continue, ExprStmt,
+    ExternVar, FloatLit, Func, If, Index, IntLit, Let, Member, NullLit, Program,
+    Return, SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl,
+    TypeRef, Unary, Var, While,
 )
 
 STRING_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", '"': '"', "\\": "\\"}
@@ -112,8 +112,8 @@ class Parser:
 
     # Tokens that can begin an expression; used to settle the `as T * x`
     # ambiguity (multiplication, not a pointer type).
-    EXPR_START = {"INT", "FLOAT", "STRING", "IDENT", "true", "false", "null",
-                  "sizeof", "(", "-", "!", "&"}
+    EXPR_START = {"INT", "FLOAT", "STRING", "CHAR", "IDENT", "true", "false",
+                  "null", "sizeof", "(", "-", "!", "&"}
 
     def parse_type_ref(self, greedy_stars: bool = True) -> TypeRef:
         """A type: `[struct] name[<type, ...>][*...]`. The `struct` keyword
@@ -352,6 +352,14 @@ class Parser:
             raw = tok.text[1:-1]
             text = re.sub(r"\\(.)", lambda m: STRING_ESCAPES.get(m.group(1), m.group(1)), raw)
             return StrLit(text, tok.line)
+        if tok.kind == "CHAR":
+            inner = tok.text[1:-1]  # the single character between the quotes
+            char = STRING_ESCAPES.get(inner[1], inner[1]) if inner[0] == "\\" else inner
+            if ord(char) > 0xFF:
+                raise LangError(
+                    f"character literal {tok.text} is not a single byte", tok.line
+                )
+            return CharLit(ord(char), tok.line)
         if tok.kind == "(":
             expr = self.parse_expr()
             self.expect(")")

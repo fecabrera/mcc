@@ -470,6 +470,17 @@ String literals (with `\n`, `\t`, `\r`, `\0`, `\"`, `\\` escapes) compile to
 constant C strings. They can currently only be passed to functions — there is
 no string variable type yet.
 
+A character literal in single quotes is a `uint8` — the byte value of a
+single character, with the same escapes (`'a'`, `'\n'`, `'\0'`, `'\''`,
+`'\\'`). Being a plain byte, it indexes, compares, and does arithmetic like
+any other `uint8`:
+
+```c
+fn digit_value(c: uint8) -> uint8 {
+    return c - '0';      // '7' - '0' == 7
+}
+```
+
 ### Includes
 
 `#include <header>` at the top of a file makes the corresponding libc

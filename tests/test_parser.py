@@ -2,8 +2,8 @@ import pytest
 
 from mcc.errors import LangError
 from mcc.nodes import (
-    Assign, Binary, Break, Call, Continue, ExprStmt, If, Let, Return, StrLit,
-    Unary, Var,
+    Assign, Binary, Break, Call, CharLit, Continue, ExprStmt, If, Let, Return,
+    StrLit, Unary, Var,
 )
 from helpers import parse
 
@@ -70,6 +70,21 @@ def test_hex_literals_decoded():
     assert first_expr("0X09000000").value == 150994944
     assert first_expr("10").value == 10  # leading-zero decimals stay decimal
     assert first_expr("010").value == 10
+
+
+def test_char_literals_decoded():
+    assert first_expr("'A'").value == 65
+    assert first_expr('\'"\'').value == 34   # a double quote
+    assert first_expr(r"'\n'").value == 10
+    assert first_expr(r"'\0'").value == 0
+    assert first_expr(r"'\''").value == 39   # an escaped single quote
+    assert first_expr(r"'\\'").value == 92   # an escaped backslash
+    assert isinstance(first_expr("'A'"), CharLit)
+
+
+def test_char_literal_must_be_a_single_byte():
+    with pytest.raises(LangError, match="not a single byte"):
+        parse("fn main() { let c: uint8 = '€'; }")
 
 
 def test_string_escapes_decoded():

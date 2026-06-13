@@ -136,6 +136,11 @@ class IntLit:
     line: int
 
 @dataclass
+class CharLit:  # 'a', '\n', '\0' -- a one-byte uint8 constant
+    value: int
+    line: int
+
+@dataclass
 class FloatLit:
     value: float
     line: int
