@@ -3,7 +3,7 @@
 import pytest
 
 from mcc.errors import LangError
-from helpers import run_path
+from helpers import compile_ir, run, run_path
 
 
 def test_same_static_name_in_two_files(tmp_path):
@@ -86,3 +86,59 @@ def test_static_and_public_same_name_same_file(tmp_path):
     )
     with pytest.raises(LangError, match="function 'f' already defined"):
         run_path(main)
+
+
+def test_static_global_has_zero_initialized_storage():
+    # A @static let is a file-scoped variable with its own storage, unlike an
+    # @extern let which is only a declaration.
+    ir_text = compile_ir(
+        "@static let counter: int32;\n"
+        "fn main() -> int32 { counter = counter + 1; return counter; }"
+    )
+    assert "internal global i32 0" in ir_text
+
+
+def test_static_global_persists_across_calls():
+    source = """
+    @static let calls: int32;
+    fn tick() -> int32 { calls = calls + 1; return calls; }
+    fn main() -> int32 { tick(); tick(); return tick(); }
+    """
+    assert run(source) == 3
+
+
+def test_static_array_global():
+    source = """
+    @static let cache: int32[4];
+    fn put(i: int32, v: int32) { cache[i] = v; }
+    fn get(i: int32) -> int32 { return cache[i]; }
+    fn main() -> int32 { put(0, 40); put(3, 2); return get(0) + get(3); }
+    """
+    assert run(source) == 42
+
+
+def test_same_static_global_in_two_files(tmp_path):
+    (tmp_path / "a.mc").write_text(
+        "@static let n: int32;\nfn bump_a() -> int32 { n = n + 10; return n; }"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "a";\n'
+        "@static let n: int32;\n"
+        "fn bump() -> int32 { n = n + 1; return n; }\n"
+        "fn main() -> int32 { return bump() + bump_a() + bump(); }"  # 1 + 10 + 2
+    )
+    assert run_path(main) == 13
+
+
+def test_static_global_invisible_to_other_files(tmp_path):
+    (tmp_path / "a.mc").write_text("@static let secret: int32;")
+    main = tmp_path / "main.mc"
+    main.write_text('import "a";\nfn main() -> int32 { return secret; }')
+    with pytest.raises(LangError, match="undefined variable 'secret'"):
+        run_path(main)
+
+
+def test_top_level_let_requires_extern_or_static():
+    with pytest.raises(LangError, match="must be @extern or @static"):
+        compile_ir("let loose: int32;\nfn main() -> int32 { return 0; }")

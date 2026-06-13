@@ -49,6 +49,9 @@ class LangType:
     # (return type, param types, variadic) for a function-pointer type. Part of
     # equality, so two `fn(int32) -> int32` types match structurally.
     signature: tuple | None = None
+    # element type and length for a fixed-size array type (int32[10]).
+    element: "LangType | None" = None
+    count: int | None = None
 
     def __str__(self) -> str:
         return self.name
@@ -77,6 +80,13 @@ def function_type(ret: LangType, params: tuple, variadic: bool = False) -> LangT
     name = "fn(" + ", ".join(p.name for p in params) + ") -> " + ret.name
     return LangType(name, fnty.as_pointer(), signed=False,
                     signature=(ret, tuple(params), variadic))
+
+
+def array_of(element: LangType, count: int) -> LangType:
+    """A fixed-size array type, e.g. int32[10]. In value contexts it decays to
+    a pointer to its first element (see CodeGen.value_at)."""
+    return LangType(f"{element.name}[{count}]", ir.ArrayType(element.ir, count),
+                    signed=False, element=element, count=count)
 
 
 VOID = LangType("void", ir.VoidType())
@@ -133,6 +143,10 @@ def is_function(lang_type: LangType) -> bool:
     return lang_type.signature is not None
 
 
+def is_array(lang_type: LangType) -> bool:
+    return lang_type.element is not None
+
+
 def is_struct(lang_type: LangType) -> bool:
     return lang_type.fields is not None
 
@@ -140,6 +154,8 @@ def is_struct(lang_type: LangType) -> bool:
 def type_align(lang_type: LangType) -> int:
     if is_pointer(lang_type):
         return POINTER_SIZE
+    if is_array(lang_type):
+        return type_align(lang_type.element)
     if is_struct(lang_type):
         if lang_type.packed:
             return max(1, lang_type.align or 1)
@@ -168,6 +184,8 @@ def type_size(lang_type: LangType) -> int:
     on 64-bit targets, including struct padding)."""
     if is_pointer(lang_type):
         return POINTER_SIZE
+    if is_array(lang_type):
+        return lang_type.count * type_size(lang_type.element)
     if is_struct(lang_type):
         offset = 0
         for _, ftype in lang_type.fields:
@@ -272,6 +290,10 @@ class CodeGen:
         # redeclarations across files collapse onto the first one.
         self.extern_decls: set[str] = set()
         self.globals: dict[str, tuple[ir.GlobalVariable, LangType, bool]] = {}
+        # @static globals are file-scoped storage, keyed by (source, name) so
+        # other files may reuse the name -- like @static functions.
+        self.static_globals: dict[tuple[str | None, str],
+                                  tuple[ir.GlobalVariable, LangType, bool]] = {}
         # name -> (private, source file); for @private access checks
         self.global_privacy: dict[str, tuple[bool, str | None]] = {}
         self.type_bindings: dict[str, LangType] = {}  # active type-parameter bindings
@@ -320,7 +342,7 @@ class CodeGen:
             base = function_type(ret, params)
             for _ in range(ref.stars):
                 base = pointer_to(base)
-            return base
+            return self.apply_dims(base, ref.dims, line)
         if ref.name in self.type_bindings and not ref.args:
             base = self.type_bindings[ref.name]
         elif ref.name in TYPES:
@@ -347,6 +369,15 @@ class CodeGen:
             raise LangError("no void pointers; use uint8* for raw memory", line)
         for _ in range(ref.stars):
             base = pointer_to(base)
+        return self.apply_dims(base, ref.dims, line)
+
+    def apply_dims(self, base: LangType, dims: list[int], line: int) -> LangType:
+        """Wrap `base` in fixed-size array types, innermost dimension last:
+        int32[3][4] is [3 x [4 x i32]]."""
+        if dims and base is VOID:
+            raise LangError("cannot make an array of void", line)
+        for size in reversed(dims):
+            base = array_of(base, size)
         return base
 
     def instantiate_struct(self, decl: StructDecl, args: tuple[LangType, ...]) -> LangType:
@@ -460,6 +491,19 @@ class CodeGen:
             var_type = self.lang_type(var.type_name, var.line)
             if var_type is VOID:
                 raise LangError(f"cannot declare a void variable {var.name!r}", var.line)
+            if var.static:
+                # File-scoped storage with its own zero-initialized definition;
+                # the mangled symbol has internal linkage.
+                key = (var.source, var.name)
+                if key in self.static_globals:
+                    raise LangError(f"variable {var.name!r} already defined", var.line)
+                symbol = self.static_base(var.name, var.source)
+                glob = ir.GlobalVariable(self.module, var_type.ir, name=symbol)
+                glob.linkage = "internal"
+                glob.initializer = ir.Constant(var_type.ir, None)  # zero-initialized
+                self.static_globals[key] = (glob, var_type, var.volatile)
+                self.global_privacy[var.name] = (var.private, var.source)
+                continue
             if var.name in self.globals:
                 if self.globals[var.name][1] != var_type:
                     raise LangError(
@@ -824,13 +868,12 @@ class CodeGen:
             return self.gen_string(expr.value)
         if isinstance(expr, Var):
             # A name that is not a variable may be a function used as a value.
-            if expr.name not in self.locals and expr.name not in self.globals:
+            if self.var_type_of(expr.name) is None:
                 fv = self.func_value(expr.name, expr.line)
                 if fv is not None:
                     return fv
             slot, var_type, volatile = self.var_addr(expr.name, expr.line)
-            return TypedValue(self.gen_load(slot, volatile=volatile, name=expr.name),
-                              var_type)
+            return self.value_at(slot, var_type, volatile=volatile, name=expr.name)
         if isinstance(expr, Call):
             return self.gen_call(expr)
         if isinstance(expr, CallExpr):
@@ -850,7 +893,7 @@ class CodeGen:
             return TypedValue(ir.Constant(UINT64.ir, size), UINT64)
         if isinstance(expr, Index):
             addr, element = self.gen_index_addr(expr.base, expr.index, expr.line)
-            return TypedValue(self.gen_load(addr, volatile=element.volatile), element)
+            return self.value_at(addr, element, volatile=element.volatile)
         if isinstance(expr, Member):
             if not expr.arrow and not isinstance(expr.base, (Var, Member, Index, Unary)):
                 # Field of a non-addressable struct value, e.g. f().field.
@@ -860,23 +903,51 @@ class CodeGen:
             addr, ftype, align, volatile = self.gen_member_addr(
                 expr.base, expr.field, expr.arrow, expr.line
             )
-            return TypedValue(self.gen_load(addr, align=align, volatile=volatile), ftype)
+            return self.value_at(addr, ftype, align=align, volatile=volatile)
         raise LangError(f"cannot compile expression {expr!r}", expr.line)
 
+    def value_at(self, addr, lang_type: LangType, *, align=None, volatile=False,
+                 name="") -> TypedValue:
+        """The value held at `addr`. An array decays to a pointer to its first
+        element (C array-to-pointer decay), so indexing, passing it as a
+        pointer argument, and assigning it all go through the pointer; every
+        other type is loaded normally."""
+        if is_array(lang_type):
+            first = self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
+            return TypedValue(first, pointer_to(lang_type.element))
+        return TypedValue(self.gen_load(addr, align=align, volatile=volatile, name=name),
+                          lang_type)
+
     def var_addr(self, name: str, line: int) -> tuple[ir.Value, LangType, bool]:
-        """A variable's storage slot: a local alloca, or an @extern global
-        (locals shadow globals). Returns (pointer value, variable type,
-        volatile) -- volatile for @volatile globals and for variables of
-        @volatile struct types."""
+        """A variable's storage slot: a local alloca, a file-scoped @static
+        global, or an @extern global (in that order, so locals shadow globals
+        and a file's own @static shadows a same-named extern). Returns (pointer
+        value, variable type, volatile) -- volatile for @volatile globals and
+        for variables of @volatile struct types."""
         if name in self.locals:
             slot, var_type = self.locals[name]
             return slot, var_type, var_type.volatile
-        if name in self.globals:
+        static = self.static_globals.get((self.current_source, name))
+        entry = static or self.globals.get(name)
+        if entry is not None:
             private, source = self.global_privacy[name]
             self.check_access(private, source, f"variable {name!r}", line)
-            glob, var_type, volatile = self.globals[name]
+            glob, var_type, volatile = entry
             return glob, var_type, volatile or var_type.volatile
         raise LangError(f"undefined variable {name!r}", line)
+
+    def var_type_of(self, name: str) -> "LangType | None":
+        """The type of `name` if it is a variable in scope (local, @static, or
+        @extern global), else None -- so a bare name that is not a variable can
+        fall back to being a function value."""
+        if name in self.locals:
+            return self.locals[name][1]
+        static = self.static_globals.get((self.current_source, name))
+        if static is not None:
+            return static[1]
+        if name in self.globals:
+            return self.globals[name][1]
+        return None
 
     def gen_addr(self, expr, line: int) -> tuple[ir.Value, LangType, int | None, bool]:
         """Address of an lvalue expression: a variable, *deref, element, or
@@ -1018,20 +1089,19 @@ class CodeGen:
         return TypedValue(self.builder.bitcast(glob, RAWPTR.ir), RAWPTR)
 
     def gen_call(self, expr: Call) -> TypedValue:
-        # A variable (local, parameter, or @extern global) shadows any
+        # A variable (local, parameter, @static or @extern global) shadows any
         # same-named function. A function-pointer one is called indirectly;
         # anything else is simply not callable.
-        for table in (self.locals, self.globals):
-            if expr.name in table:
-                var_type = table[expr.name][1]
-                if not is_function(var_type):
-                    raise LangError(
-                        f"{expr.name!r} is not callable; it is a {var_type}", expr.line
-                    )
-                if expr.type_args:
-                    raise LangError(f"{expr.name!r} is not a generic function", expr.line)
-                callee = self.gen_expr(Var(expr.name, expr.line))
-                return self.gen_indirect_call(callee, expr.args, repr(expr.name), expr.line)
+        var_type = self.var_type_of(expr.name)
+        if var_type is not None:
+            if not is_function(var_type):
+                raise LangError(
+                    f"{expr.name!r} is not callable; it is a {var_type}", expr.line
+                )
+            if expr.type_args:
+                raise LangError(f"{expr.name!r} is not a generic function", expr.line)
+            callee = self.gen_expr(Var(expr.name, expr.line))
+            return self.gen_indirect_call(callee, expr.args, repr(expr.name), expr.line)
         # File-scoped (@static) names shadow the global namespace.
         key = (self.current_source, expr.name)
         if key in self.static_templates:

@@ -8,7 +8,7 @@ from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
     Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast, CharLit,
-    Continue, ExprStmt, ExternVar, FloatLit, Func, If, Index, IntLit, Let,
+    Continue, ExprStmt, FloatLit, Func, GlobalVar, If, Index, IntLit, Let,
     Logical, Member, NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex,
     StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
@@ -99,14 +99,14 @@ class Parser:
                 structs.append(self.parse_struct(private, static, align, packed, volatile))
             elif self.cur.kind == "let":
                 line = self.advance().line
-                if not extern:
-                    raise LangError("top-level variables must be @extern", line)
+                if not extern and not static:
+                    raise LangError("top-level variables must be @extern or @static", line)
                 name = self.expect("IDENT").text
                 self.expect(":")
                 type_name = self.parse_type_ref()
                 self.expect(";")
-                globals_.append(ExternVar(name, type_name, line,
-                                          private=private, volatile=volatile))
+                globals_.append(GlobalVar(name, type_name, line, private=private,
+                                          volatile=volatile, static=static))
             else:
                 if volatile:
                     raise LangError(
@@ -122,9 +122,10 @@ class Parser:
                   "null", "sizeof", "(", "-", "!", "&"}
 
     def parse_type_ref(self, greedy_stars: bool = True) -> TypeRef:
-        """A type: `[struct] name[<type, ...>][*...]`, or a function-pointer
-        type `fn(type, ...) -> ret`. The `struct` keyword is optional (C
-        habit); struct-ness is resolved by name."""
+        """A type: `[struct] name[<type, ...>][*...][[N]...]`, or a
+        function-pointer type `fn(type, ...) -> ret`. The `struct` keyword is
+        optional (C habit); struct-ness is resolved by name. A trailing `[N]`
+        makes a fixed-size array, so `int32[10]` is ten int32s."""
         if self.cur.kind == "fn":
             return self.parse_fn_type(greedy_stars)
         if self.cur.kind == "(":
@@ -133,7 +134,10 @@ class Parser:
             self.advance()
             inner = self.parse_type_ref()
             self.expect(")")
-            inner.stars += self.parse_stars(greedy_stars)
+            extra = self.parse_stars(greedy_stars)
+            if extra and inner.dims:
+                raise LangError("pointer to an array type is not supported", self.cur.line)
+            inner.stars += extra
             return inner
         self.accept("struct")
         name = self.expect("IDENT").text
@@ -143,7 +147,18 @@ class Parser:
             while self.accept(","):
                 args.append(self.parse_type_ref())
             self.expect_close_angle()
-        return TypeRef(name, args, self.parse_stars(greedy_stars))
+        return TypeRef(name, args, self.parse_stars(greedy_stars), dims=self.parse_dims())
+
+    def parse_dims(self) -> list[int]:
+        dims = []
+        while self.cur.kind == "[":
+            line = self.advance().line
+            size = int_value(self.expect("INT").text)
+            if size < 1:
+                raise LangError(f"array size must be at least 1, not {size}", line)
+            self.expect("]")
+            dims.append(size)
+        return dims
 
     def parse_fn_type(self, greedy_stars: bool) -> TypeRef:
         """A function-pointer type: `fn(A, B) -> R`. A missing `-> R` means

@@ -11,21 +11,25 @@ class TypeRef:
     depth. `struct array<T>**` is TypeRef("array", [TypeRef("T")], 2).
 
     A function-pointer type `fn(A, B) -> R` sets `params` and `ret` instead of
-    `args`; `name` is "fn" and `stars` still applies for `fn(...) -> R*`."""
+    `args`; `name` is "fn" and `stars` still applies for `fn(...) -> R*`.
+
+    `dims` holds fixed array sizes, outermost first: `int32[3][4]` is
+    TypeRef("int32", dims=[3, 4])."""
     name: str
     args: list["TypeRef"] = field(default_factory=list)
     stars: int = 0
     params: list["TypeRef"] | None = None  # set for fn(...) -> ret types
     ret: "TypeRef | None" = None
+    dims: list[int] = field(default_factory=list)  # fixed array sizes, outermost first
 
     def __str__(self) -> str:
         if self.params is not None:
-            sig = "fn(" + ", ".join(str(p) for p in self.params) + ") -> " + str(self.ret)
-            return sig + "*" * self.stars
-        text = self.name
-        if self.args:
-            text += "<" + ", ".join(str(a) for a in self.args) + ">"
-        return text + "*" * self.stars
+            text = "fn(" + ", ".join(str(p) for p in self.params) + ") -> " + str(self.ret)
+        else:
+            text = self.name
+            if self.args:
+                text += "<" + ", ".join(str(a) for a in self.args) + ">"
+        return text + "*" * self.stars + "".join(f"[{d}]" for d in self.dims)
 
 
 @dataclass
@@ -34,7 +38,7 @@ class Program:
     includes: list[str]
     structs: list["StructDecl"]
     functions: list["Func"]
-    globals: list["ExternVar"]
+    globals: list["GlobalVar"]
 
 @dataclass
 class StructDecl:
@@ -64,13 +68,14 @@ class Func:
     source: str | None = None  # defining file; stamped by the driver
 
 @dataclass
-class ExternVar:  # @extern let name: type;  -- a global defined elsewhere
+class GlobalVar:  # a top-level variable: @extern (defined elsewhere) or @static
     name: str
     type_name: TypeRef
     line: int
     private: bool = False  # @private: only usable within its source file
     volatile: bool = False  # @volatile: accesses cannot be optimized away
-    source: str | None = None  # declaring file; stamped by the driver
+    static: bool = False  # @static: file-scoped storage, zero-initialized
+    source: str | None = None  # declaring/defining file; stamped by the driver
 
 @dataclass
 class Let:

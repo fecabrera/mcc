@@ -16,6 +16,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [case_when.mc](case_when.mc) | `case` / `when` / `else:` with no fall-through, integer and character subjects |
 | [functions.mc](functions.mc) | void functions, any-order definitions, recursion, mutual recursion |
 | [function_pointers.mc](function_pointers.mc) | `fn(...) -> R` types, callbacks in structs, dispatch tables, `null` callbacks |
+| [arrays.mc](arrays.mc) | fixed-size `T[N]` arrays, indexing, `sizeof`, pointer decay, multi-dim, a `@static` buffer |
 | [io.mc](io.mc) | printf format specifiers, `puts`, `putchar`, string escapes |
 | [unsigned.mc](unsigned.mc) | unsigned division/comparison semantics, zero-extension |
 | [extern.mc](extern.mc) | `@extern` functions (including variadic `...`), interfacing with libc |

@@ -31,6 +31,7 @@ fn main() -> int32 {
   - [Casts](#casts)
   - [Pointers](#pointers)
   - [Function pointers](#function-pointers)
+  - [Arrays](#arrays)
   - [Structs](#structs)
   - [Imports](#imports)
   - [Visibility](#visibility)
@@ -373,6 +374,28 @@ function pointer: `(fn(int32) -> int32)*`, e.g. an array of callbacks.
 Only a single, non-generic function has an address; a generic name like
 `id` cannot be used as a value (there is no one instance to point at).
 
+### Arrays
+
+`T[N]` is a fixed-size array of `N` elements, laid out inline. A local one
+is stack-allocated; `@static` makes a zero-initialized file-scoped buffer.
+Index with `[]`, and `sizeof` reports the whole array's bytes:
+
+```c
+fn main() -> int32 {
+    let squares: int32[5];                 // five int32s on the stack
+    let i: int32 = 0;
+    while (i < 5) { squares[i] = i * i; i = i + 1; }
+    return squares[4];                      // sizeof(int32[5]) == 20
+}
+```
+
+Like C, an array decays to a pointer to its first element wherever a value
+is used — so it passes to a `T*` parameter and `&arr[i]` gives an element
+address — and there is no whole-array assignment. Arrays nest for multiple
+dimensions (`int32[2][3]`, row-major) and work as struct fields. In a type,
+`*` binds to the element, so `int32*[8]` is an array of eight pointers;
+group for the other order. `N` must be a positive integer literal.
+
 ### Structs
 
 `struct` declares an aggregate type; fields use the same `name: type;` form
@@ -509,10 +532,21 @@ error: line 5: function 'array_grow' is private to array.mc
 
 `@static` goes further, like C's `static`: the name is file-scoped rather
 than merely access-restricted, so it leaves the global namespace entirely.
-Different files can each define their own `@static` function, struct, or
-generic with the same name, and a file's `@static` definition shadows a
-public one imported from elsewhere. From any other file the name is simply
-undefined.
+Different files can each define their own `@static` function, struct,
+generic, or variable with the same name, and a file's `@static` definition
+shadows a public one imported from elsewhere. From any other file the name
+is simply undefined.
+
+`@static` on a top-level `let` makes a file-scoped variable with its own
+zero-initialized storage that persists for the life of the program — a
+static counter, buffer, or lookup table:
+
+```c
+@static let calls: int32;            // starts at 0, kept across calls
+@static let lookup: uint8[256];      // a static buffer
+
+fn next_id() -> int32 { calls = calls + 1; return calls; }
+```
 
 ### Extern declarations
 
