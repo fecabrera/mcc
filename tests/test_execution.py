@@ -180,3 +180,65 @@ def test_uninitialized_let():
         """
     )
     assert status == 42
+
+
+def test_break_and_continue(capfd):
+    status = run(
+        """
+        #include <stdio.h>
+        fn main() -> int32 {
+            let i: int32 = 0;
+            let sum: int32 = 0;
+            while (true) {
+                i = i + 1;
+                if (i > 10) { break; }
+                if (i % 2 == 0) { continue; }
+                sum = sum + i;            // odd numbers 1..9
+            }
+            printf("%d\\n", sum);
+            return 0;
+        }
+        """
+    )
+    assert status == 0
+    assert capfd.readouterr().out == "25\n"
+
+
+def test_break_only_exits_the_inner_loop(capfd):
+    run(
+        """
+        #include <stdio.h>
+        fn main() -> int32 {
+            let i: int32 = 0;
+            until (i == 3) {
+                i = i + 1;
+                let j: int32 = 0;
+                while (j < 10) {
+                    j = j + 1;
+                    if (j == 2) { break; }
+                }
+                printf("%d:%d ", i, j);
+            }
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "1:2 2:2 3:2 "
+
+
+def test_continue_in_an_until_loop(capfd):
+    run(
+        """
+        #include <stdio.h>
+        fn main() -> int32 {
+            let i: int32 = 0;
+            until (i >= 6) {
+                i = i + 1;
+                if (i % 3 != 0) { continue; }
+                printf("%d ", i);
+            }
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "3 6 "

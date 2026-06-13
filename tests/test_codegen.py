@@ -112,6 +112,13 @@ def test_uninstantiated_template_emits_nothing():
         ("fn main() -> int32 { let v: void; return 0; }", "void variable"),
         ("fn main() -> int32 { let x: int32; let x: int32; return 0; }",
          "already declared"),
+        ("fn main() -> int32 { break; return 0; }", "'break' outside a loop"),
+        ("fn main() -> int32 { if (true) { continue; } return 0; }",
+         "'continue' outside a loop"),
+        # A generic instantiated from inside a loop does not inherit it.
+        ("fn f<T>(x: T) -> T { break; return x; } fn main() -> int32 "
+         "{ while (true) { return f(0 as int32); } return 0; }",
+         "'break' outside a loop"),
         ("fn main() -> int32 { let x: nope = 1; return 0; }", "unknown type 'nope'"),
         ("fn f() {} fn main() -> int32 { f<int32>(); return 0; }", "not a generic function"),
         ("fn f<T>(x: int32) -> T { return x; } fn main() -> int32 { return f(1); }",

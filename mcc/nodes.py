@@ -97,6 +97,14 @@ class While:
     until: bool = False  # `until` loops run while the condition is false
 
 @dataclass
+class Break:
+    line: int
+
+@dataclass
+class Continue:
+    line: int
+
+@dataclass
 class ExprStmt:
     expr: object
     line: int

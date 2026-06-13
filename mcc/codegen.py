@@ -18,9 +18,10 @@ from llvmlite import ir
 
 from mcc.errors import LangError
 from mcc.nodes import (
-    Assign, Binary, BoolLit, Call, Cast, ExprStmt, FloatLit, Func, If, Index,
-    IntLit, Let, Member, NullLit, Program, Return, SizeOf, StoreDeref,
-    StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
+    Assign, Binary, BoolLit, Break, Call, Cast, Continue, ExprStmt, FloatLit,
+    Func, If, Index, IntLit, Let, Member, NullLit, Program, Return, SizeOf,
+    StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary,
+    Var, While,
 )
 
 
@@ -259,6 +260,8 @@ class CodeGen:
         self.builder: ir.IRBuilder | None = None
         self.locals: dict[str, tuple[ir.AllocaInstr, LangType]] = {}
         self.ret_type: LangType = VOID
+        # Enclosing loops, innermost last: (continue target, break target).
+        self.loops: list[tuple[ir.Block, ir.Block]] = []
         self.str_count = 0
 
     def check_access(self, private: bool, source: str | None, what: str, line: int):
@@ -510,6 +513,7 @@ class CodeGen:
         self.current_source = func.source
         self.builder = ir.IRBuilder(fn.append_basic_block("entry"))
         self.locals = {}
+        self.loops = []  # break/continue cannot escape into a caller's loop
         for (pname, _), ptype, arg in zip(func.params, params, fn.args):
             arg.name = pname
             slot = self.builder.alloca(arg.type, name=pname)
@@ -652,10 +656,22 @@ class CodeGen:
             else:
                 self.builder.cbranch(cond, body_bb, end_bb)
             self.builder.position_at_end(body_bb)
-            self.gen_block(stmt.body)
+            self.loops.append((cond_bb, end_bb))
+            try:
+                self.gen_block(stmt.body)
+            finally:
+                self.loops.pop()
             if not self.builder.block.is_terminated:
                 self.builder.branch(cond_bb)
             self.builder.position_at_end(end_bb)
+        elif isinstance(stmt, Break):
+            if not self.loops:
+                raise LangError("'break' outside a loop", stmt.line)
+            self.builder.branch(self.loops[-1][1])
+        elif isinstance(stmt, Continue):
+            if not self.loops:
+                raise LangError("'continue' outside a loop", stmt.line)
+            self.builder.branch(self.loops[-1][0])
         elif isinstance(stmt, StoreDeref):
             ptr = self.gen_expr(stmt.ptr)
             if not is_pointer(ptr.type):
@@ -1111,6 +1127,7 @@ class CodeGen:
         mangled = f"{base}<{', '.join(str(bindings[t]) for t in func.type_params)}>"
         outer_bindings = self.type_bindings
         outer_source = self.current_source
+        saved = self.builder, self.locals, self.ret_type, self.loops
         self.type_bindings = bindings
         self.current_source = func.source  # the signature may name private structs
         try:
@@ -1122,10 +1139,9 @@ class CodeGen:
             self.funcs[mangled] = fn
             self.signatures[mangled] = (ret, params, False)
             self.instances[key] = mangled
-            saved = self.builder, self.locals, self.ret_type
             self.gen_function(func, fn, ret, params)
-            self.builder, self.locals, self.ret_type = saved
         finally:
+            self.builder, self.locals, self.ret_type, self.loops = saved
             self.type_bindings = outer_bindings
             self.current_source = outer_source
         return fn, ret, params

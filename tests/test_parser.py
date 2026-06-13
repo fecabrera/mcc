@@ -1,7 +1,10 @@
 import pytest
 
 from mcc.errors import LangError
-from mcc.nodes import Assign, Binary, Call, ExprStmt, If, Let, Return, StrLit, Unary, Var
+from mcc.nodes import (
+    Assign, Binary, Break, Call, Continue, ExprStmt, If, Let, Return, StrLit,
+    Unary, Var,
+)
 from helpers import parse
 
 
@@ -130,6 +133,13 @@ def test_until_is_a_negated_while():
     while_stmt, until_stmt = parse_main_body("while (a) { f(); } until (a) { f(); }")
     assert not while_stmt.until
     assert until_stmt.until
+
+
+def test_break_and_continue_statements():
+    # Loop-context checking happens in codegen, not here.
+    brk, cont = parse_main_body("break; continue;")
+    assert isinstance(brk, Break)
+    assert isinstance(cont, Continue)
 
 
 def test_return_without_value():

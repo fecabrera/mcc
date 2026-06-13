@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 from mcc.errors import LangError
 
-KEYWORDS = {"fn", "return", "let", "if", "else", "while", "until", "true", "false",
-            "import", "as", "sizeof", "struct", "null"}
+KEYWORDS = {"fn", "return", "let", "if", "else", "while", "until", "break",
+            "continue", "true", "false", "import", "as", "sizeof", "struct", "null"}
 
 TOKEN_SPEC = [
     ("INCLUDE", r"#include\s*<[^>\n]+>"),

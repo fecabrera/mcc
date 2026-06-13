@@ -194,11 +194,19 @@ while (x < 10) {
 until (x == 0) {     // inverse of while: stops when the condition is true
     x = x - 1;
 }
+
+while (true) {
+    x = next();
+    if (x == 0) { continue; }   // skip to the next iteration
+    if (x < 0)  { break; }      // leave the loop
+    handle(x);
+}
 ```
 
 Conditions accept `bool` or any integer (compared against zero, as in C).
 A body that is a single statement does not need braces:
 `if (x > 10) return x;`
+`break` and `continue` apply to the innermost enclosing loop.
 
 ### Types
 

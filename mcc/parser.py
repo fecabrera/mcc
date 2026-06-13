@@ -7,10 +7,10 @@ import re
 from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
-    Assign, Binary, BoolLit, Call, Cast, ExprStmt, ExternVar, FloatLit, Func,
-    If, Index, IntLit, Let, Member, NullLit, Program, Return, SizeOf,
-    StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary,
-    Var, While,
+    Assign, Binary, BoolLit, Break, Call, Cast, Continue, ExprStmt, ExternVar,
+    FloatLit, Func, If, Index, IntLit, Let, Member, NullLit, Program, Return,
+    SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef,
+    Unary, Var, While,
 )
 
 STRING_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", '"': '"', "\\": "\\"}
@@ -265,6 +265,14 @@ class Parser:
             cond = self.parse_expr()
             self.expect(")")
             return While(cond, self.parse_body(), tok.line, until=tok.kind == "until")
+        if tok.kind == "break":
+            self.advance()
+            self.expect(";")
+            return Break(tok.line)
+        if tok.kind == "continue":
+            self.advance()
+            self.expect(";")
+            return Continue(tok.line)
         expr = self.parse_expr()
         if self.accept("="):
             value = self.parse_expr()
