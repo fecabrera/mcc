@@ -208,6 +208,26 @@ A body that is a single statement does not need braces:
 `if (x > 10) return x;`
 `break` and `continue` apply to the innermost enclosing loop.
 
+`case` matches a value against a series of `when` arms, with an optional
+`else:` default. The subject is evaluated once, and there is **no
+fall-through** — a matching arm runs only its own statements and then the
+`case` is done:
+
+```c
+case (c) {
+    when 'a': handle_a();
+    when 'b': handle_b();        // arms hold any number of statements
+    else:     handle_other();
+}
+```
+
+A `when` value may be any expression of the subject's type (untyped
+constants adapt to it), and the subject can be any type comparable with
+`==` — integers, `uint8` characters, pointers, `bool`, or `float64`.
+`break` and `continue` inside an arm act on the enclosing loop, not the
+`case`; the no-fall-through semantics mean `break` is never needed to end
+an arm.
+
 ### Types
 
 | Type                                  | LLVM equivalent                                                   |

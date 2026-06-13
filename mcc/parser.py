@@ -7,10 +7,10 @@ import re
 from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
-    Assign, Binary, BoolLit, Break, Call, Cast, CharLit, Continue, ExprStmt,
-    ExternVar, FloatLit, Func, If, Index, IntLit, Let, Member, NullLit, Program,
-    Return, SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl,
-    TypeRef, Unary, Var, While,
+    Assign, Binary, BoolLit, Break, Call, Case, Cast, CharLit, Continue,
+    ExprStmt, ExternVar, FloatLit, Func, If, Index, IntLit, Let, Member,
+    NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex, StoreMember,
+    StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
 
 STRING_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", '"': '"', "\\": "\\"}
@@ -256,9 +256,13 @@ class Parser:
             self.expect(")")
             then = self.parse_body()
             otherwise = []
-            if self.accept("else"):
+            # `else:` belongs to an enclosing `case`, never to this `if`.
+            if self.cur.kind == "else" and self.tokens[self.pos + 1].kind != ":":
+                self.advance()
                 otherwise = self.parse_body()
             return If(cond, then, otherwise, tok.line)
+        if tok.kind == "case":
+            return self.parse_case()
         if tok.kind in ("while", "until"):
             self.advance()
             self.expect("(")
@@ -288,6 +292,33 @@ class Parser:
             raise LangError("invalid assignment target", tok.line)
         self.expect(";")
         return ExprStmt(expr, tok.line)
+
+    def parse_case(self):
+        """case (subject) { when v: stmts... else: stmts... }
+
+        Each `when` arm runs only its own statements -- there is no
+        fall-through -- and the optional `else:` is the default."""
+        line = self.expect("case").line
+        self.expect("(")
+        subject = self.parse_expr()
+        self.expect(")")
+        self.expect("{")
+        arms = []
+        while self.cur.kind == "when":
+            self.advance()
+            value = self.parse_expr()
+            self.expect(":")
+            body = []
+            while self.cur.kind not in ("when", "else", "}"):
+                body.append(self.parse_statement())
+            arms.append((value, body))
+        otherwise = []
+        if self.accept("else"):
+            self.expect(":")
+            while self.cur.kind != "}":
+                otherwise.append(self.parse_statement())
+        self.expect("}")
+        return Case(subject, arms, otherwise, line)
 
     # Expressions, by descending precedence level.
     def parse_expr(self):

@@ -18,10 +18,10 @@ from llvmlite import ir
 
 from mcc.errors import LangError
 from mcc.nodes import (
-    Assign, Binary, BoolLit, Break, Call, Cast, CharLit, Continue, ExprStmt,
-    FloatLit, Func, If, Index, IntLit, Let, Member, NullLit, Program, Return,
-    SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef,
-    Unary, Var, While,
+    Assign, Binary, BoolLit, Break, Call, Case, Cast, CharLit, Continue,
+    ExprStmt, FloatLit, Func, If, Index, IntLit, Let, Member, NullLit, Program,
+    Return, SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl,
+    TypeRef, Unary, Var, While,
 )
 
 
@@ -673,6 +673,26 @@ class CodeGen:
             if not self.loops:
                 raise LangError("'continue' outside a loop", stmt.line)
             self.builder.branch(self.loops[-1][0])
+        elif isinstance(stmt, Case):
+            subject = self.gen_expr(stmt.subject)
+            if is_struct(subject.type) or subject.type is VOID:
+                raise LangError(f"cannot match a {subject.type} in a case", stmt.line)
+            end_bb = self.builder.append_basic_block("case.end")
+            for value_expr, body in stmt.arms:
+                value = self.gen_expr(value_expr)
+                cond = self.gen_equals(subject, value, value_expr.line)
+                arm_bb = self.builder.append_basic_block("case.arm")
+                next_bb = self.builder.append_basic_block("case.next")
+                self.builder.cbranch(cond, arm_bb, next_bb)
+                self.builder.position_at_end(arm_bb)
+                self.gen_block(body)  # no fall-through: each arm exits to the end
+                if not self.builder.block.is_terminated:
+                    self.builder.branch(end_bb)
+                self.builder.position_at_end(next_bb)
+            self.gen_block(stmt.otherwise)  # the else arm, or empty
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_bb)
+            self.builder.position_at_end(end_bb)
         elif isinstance(stmt, StoreDeref):
             ptr = self.gen_expr(stmt.ptr)
             if not is_pointer(ptr.type):
@@ -704,6 +724,21 @@ class CodeGen:
         if is_integer(tv.type):
             return self.builder.icmp_signed("!=", tv.value, ir.Constant(tv.type.ir, 0))
         raise LangError("condition must be a bool or integer", expr.line)
+
+    def gen_equals(self, subject: TypedValue, value: TypedValue, line: int) -> ir.Value:
+        """An i1 for `subject == value`, used to test a `when` arm. The subject
+        is the authoritative type: a `when` value adapts (or must coerce) to it,
+        unless the subject is itself an untyped constant. Equality is
+        sign-agnostic, so integers, pointers, and bools share an integer
+        compare; float64 uses an ordered float compare."""
+        if subject.type != value.type:
+            if subject.adaptable and not value.adaptable:
+                subject = self.coerce(subject, value.type, line, "case subject")
+            else:
+                value = self.coerce(value, subject.type, line, "when value")
+        if subject.type is FLOAT64:
+            return self.builder.fcmp_ordered("==", subject.value, value.value)
+        return self.builder.icmp_unsigned("==", subject.value, value.value)
 
     def gen_expr(self, expr) -> TypedValue:
         if isinstance(expr, IntLit):

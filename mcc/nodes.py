@@ -105,6 +105,13 @@ class Continue:
     line: int
 
 @dataclass
+class Case:  # case (subject) { when v: ... else: ... } -- no fall-through
+    subject: object
+    arms: list  # (value expr, body statements) for each `when`
+    otherwise: list  # the `else:` body, empty if absent
+    line: int
+
+@dataclass
 class ExprStmt:
     expr: object
     line: int
