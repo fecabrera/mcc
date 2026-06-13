@@ -4,6 +4,15 @@
 // storage that persists for the whole program -- here, a histogram buffer.
 @static let counts: int32[10];
 
+// A static lookup table built from an array literal. The outer dimension is
+// left as [] and inferred from the literal; @static initializers must be
+// constant, so the strings live in read-only data.
+@static let cmds: uint8*[][2] = [
+    ["help", "show this help"],
+    ["quit", "exit the program"],
+    ["ls",   "list the files"],
+];
+
 // An array passed to a function decays to a pointer to its first element,
 // so the parameter is a plain int32*.
 fn sum(xs: int32*, n: int32) -> int32 {
@@ -27,10 +36,8 @@ fn main() -> int32 {
     printf("squares[5] = %d, sum = %d\n", squares[5], sum(squares, 6));
     printf("sizeof(int32[6]) = %llu bytes\n", sizeof(int32[6]));
 
-    // Tally some digits into the static histogram, then print it.
-    let digits: int32[7];
-    digits[0] = 3; digits[1] = 1; digits[2] = 4; digits[3] = 1;
-    digits[4] = 5; digits[5] = 9; digits[6] = 1;
+    // An array literal initializes in one place; the size can be inferred.
+    let digits: int32[] = [3, 1, 4, 1, 5, 9, 1];
     i = 0;
     while (i < 7) {
         counts[digits[i]] = counts[digits[i]] + 1;   // counts is the @static buffer
@@ -38,10 +45,17 @@ fn main() -> int32 {
     }
     printf("digit 1 appears %d times\n", counts[1]);
 
-    // Arrays nest for multiple dimensions (row-major).
-    let grid: int32[2][3];
-    grid[0][0] = 7;
-    grid[1][2] = 8;
-    printf("grid corners: %d %d\n", grid[0][0], grid[1][2]);
+    // Print the static lookup table. len() gives the row count -- the size
+    // that was inferred from the literal -- so nothing is hard-coded. It is an
+    // adaptable constant, so it compares against this int32 counter directly.
+    i = 0;
+    while (i < len(cmds)) {
+        printf("  %-6s %s\n", cmds[i][0], cmds[i][1]);
+        i = i + 1;
+    }
+
+    // Nested literals build multi-dimensional arrays (row-major).
+    let grid: int32[2][2] = [[1, 2], [3, 4]];
+    printf("grid corners: %d %d\n", grid[0][0], grid[1][1]);
     return 0;
 }

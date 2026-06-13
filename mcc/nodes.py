@@ -14,13 +14,14 @@ class TypeRef:
     `args`; `name` is "fn" and `stars` still applies for `fn(...) -> R*`.
 
     `dims` holds fixed array sizes, outermost first: `int32[3][4]` is
-    TypeRef("int32", dims=[3, 4])."""
+    TypeRef("int32", dims=[3, 4]). A `None` dim is an inferred `[]`, allowed
+    only as the outermost dimension of an initialized array."""
     name: str
     args: list["TypeRef"] = field(default_factory=list)
     stars: int = 0
     params: list["TypeRef"] | None = None  # set for fn(...) -> ret types
     ret: "TypeRef | None" = None
-    dims: list[int] = field(default_factory=list)  # fixed array sizes, outermost first
+    dims: list[int | None] = field(default_factory=list)  # array sizes, outermost first
 
     def __str__(self) -> str:
         if self.params is not None:
@@ -29,7 +30,8 @@ class TypeRef:
             text = self.name
             if self.args:
                 text += "<" + ", ".join(str(a) for a in self.args) + ">"
-        return text + "*" * self.stars + "".join(f"[{d}]" for d in self.dims)
+        dims = "".join(f"[{d if d is not None else ''}]" for d in self.dims)
+        return text + "*" * self.stars + dims
 
 
 @dataclass
@@ -75,6 +77,7 @@ class GlobalVar:  # a top-level variable: @extern (defined elsewhere) or @static
     private: bool = False  # @private: only usable within its source file
     volatile: bool = False  # @volatile: accesses cannot be optimized away
     static: bool = False  # @static: file-scoped storage, zero-initialized
+    init: object | None = None  # @static initializer (a constant expression)
     source: str | None = None  # declaring/defining file; stamped by the driver
 
 @dataclass
@@ -180,6 +183,11 @@ class NullLit:
     line: int
 
 @dataclass
+class ArrayLit:  # [e0, e1, ...]; nested for multi-dimensional arrays
+    elements: list
+    line: int
+
+@dataclass
 class Var:
     name: str
     line: int
@@ -219,6 +227,11 @@ class Cast:  # value as type
 @dataclass
 class SizeOf:  # sizeof(type)
     type_name: TypeRef
+    line: int
+
+@dataclass
+class Len:  # len(array expression) -> element count
+    operand: object
     line: int
 
 @dataclass

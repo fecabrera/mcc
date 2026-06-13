@@ -12,16 +12,16 @@ arguments, exactly like generic functions monomorphize.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dataclasses_replace
 
 from llvmlite import ir
 
 from mcc.errors import LangError
 from mcc.nodes import (
-    Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast, CharLit,
-    Continue, ExprStmt, FloatLit, Func, If, Index, IntLit, Let, Logical, Member,
-    NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex, StoreMember,
-    StrLit, StructDecl, TypeRef, Unary, Var, While,
+    ArrayLit, Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast,
+    CharLit, Continue, ExprStmt, FloatLit, Func, If, Index, IntLit, Let, Logical,
+    Len, Member, NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex,
+    StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
 
 
@@ -371,14 +371,33 @@ class CodeGen:
             base = pointer_to(base)
         return self.apply_dims(base, ref.dims, line)
 
-    def apply_dims(self, base: LangType, dims: list[int], line: int) -> LangType:
+    def apply_dims(self, base: LangType, dims: list, line: int) -> LangType:
         """Wrap `base` in fixed-size array types, innermost dimension last:
         int32[3][4] is [3 x [4 x i32]]."""
         if dims and base is VOID:
             raise LangError("cannot make an array of void", line)
         for size in reversed(dims):
+            if size is None:
+                raise LangError(
+                    "an inferred array size [] is only allowed on an initialized "
+                    "variable's outermost dimension", line
+                )
             base = array_of(base, size)
         return base
+
+    def array_type_for(self, ref: TypeRef, value, line: int) -> LangType:
+        """Resolve a declared type, filling an inferred outer `[]` from the
+        length of the array-literal initializer. Only the outermost dimension
+        may be inferred."""
+        if ref.dims and ref.dims[0] is None:
+            if any(d is None for d in ref.dims[1:]):
+                raise LangError("only the outermost array dimension can be inferred", line)
+            if not isinstance(value, ArrayLit):
+                raise LangError(
+                    "an inferred array size [] needs an array-literal initializer", line
+                )
+            ref = dataclasses_replace(ref, dims=[len(value.elements), *ref.dims[1:]])
+        return self.lang_type(ref, line)
 
     def instantiate_struct(self, decl: StructDecl, args: tuple[LangType, ...]) -> LangType:
         """Return the struct instance for these type arguments, creating its
@@ -488,19 +507,23 @@ class CodeGen:
                 self.extern_decls.add(name)  # header funcs are extern declarations
         for var in self.program.globals:
             self.current_source = var.source  # the type may name private structs
-            var_type = self.lang_type(var.type_name, var.line)
+            # An initializer can supply an inferred outermost [] dimension.
+            var_type = self.array_type_for(var.type_name, var.init, var.line)
             if var_type is VOID:
                 raise LangError(f"cannot declare a void variable {var.name!r}", var.line)
             if var.static:
-                # File-scoped storage with its own zero-initialized definition;
-                # the mangled symbol has internal linkage.
+                # File-scoped storage with its own definition; the mangled
+                # symbol has internal linkage. An initializer must be constant;
+                # without one the storage is zero-initialized.
                 key = (var.source, var.name)
                 if key in self.static_globals:
                     raise LangError(f"variable {var.name!r} already defined", var.line)
                 symbol = self.static_base(var.name, var.source)
                 glob = ir.GlobalVariable(self.module, var_type.ir, name=symbol)
                 glob.linkage = "internal"
-                glob.initializer = ir.Constant(var_type.ir, None)  # zero-initialized
+                glob.initializer = (self.const_initializer(var.init, var_type, var.line)
+                                    if var.init is not None
+                                    else ir.Constant(var_type.ir, None))
                 self.static_globals[key] = (glob, var_type, var.volatile)
                 self.global_privacy[var.name] = (var.private, var.source)
                 continue
@@ -697,11 +720,29 @@ class CodeGen:
                     slot.align = type_align(declared)
                 self.locals[stmt.name] = (slot, declared)
                 return
+            if isinstance(stmt.value, ArrayLit):  # let xs: T[N] = [...]
+                if stmt.type_name is None:
+                    raise LangError(
+                        "an array literal needs a type annotation, "
+                        "e.g. let xs: int32[3] = [...]", stmt.line
+                    )
+                declared = self.array_type_for(stmt.type_name, stmt.value, stmt.line)
+                if not is_array(declared):
+                    raise LangError(f"an array literal cannot initialize a {declared}", stmt.line)
+                slot = self.builder.alloca(declared.ir, name=stmt.name)
+                self.store_array_literal(slot, stmt.value, declared, stmt.line)
+                self.locals[stmt.name] = (slot, declared)
+                return
             tv = self.gen_expr(stmt.value)
             if stmt.type_name is not None:
                 declared = self.lang_type(stmt.type_name, stmt.line)
                 if declared is VOID:
                     raise LangError("cannot declare a void variable", stmt.line)
+                if is_array(declared):
+                    raise LangError(
+                        f"an array variable is initialized from an array literal, "
+                        f"not a {tv.type}", stmt.line
+                    )
                 tv = self.coerce(tv, declared, stmt.line, f"let {stmt.name}")
             elif tv.adaptable:
                 raise LangError(
@@ -866,6 +907,10 @@ class CodeGen:
             return TypedValue(ir.Constant(RAWPTR.ir, None), NULLT, adaptable=True)
         if isinstance(expr, StrLit):
             return self.gen_string(expr.value)
+        if isinstance(expr, ArrayLit):
+            raise LangError(
+                "an array literal is only allowed as a variable initializer", expr.line
+            )
         if isinstance(expr, Var):
             # A name that is not a variable may be a function used as a value.
             if self.var_type_of(expr.name) is None:
@@ -891,6 +936,15 @@ class CodeGen:
         if isinstance(expr, SizeOf):
             size = type_size(self.lang_type(expr.type_name, expr.line))
             return TypedValue(ir.Constant(UINT64.ir, size), UINT64)
+        if isinstance(expr, Len):
+            # The element count is a compile-time property of the array's type;
+            # read it through the address so the array does not decay first. It
+            # is an adaptable constant -- like writing the literal count -- so it
+            # compares against an int32 counter as readily as a uint64 one.
+            _, lang_type, _, _ = self.gen_addr(expr.operand, expr.line)
+            if not is_array(lang_type):
+                raise LangError(f"len() requires an array, got {lang_type}", expr.line)
+            return TypedValue(ir.Constant(UINT64.ir, lang_type.count), UINT64, adaptable=True)
         if isinstance(expr, Index):
             addr, element = self.gen_index_addr(expr.base, expr.index, expr.line)
             return self.value_at(addr, element, volatile=element.volatile)
@@ -1077,7 +1131,8 @@ class CodeGen:
             return TypedValue(convert(tv.value, target.ir), target)
         raise LangError(f"cannot cast {src} to {target}", expr.line)
 
-    def gen_string(self, text: str) -> TypedValue:
+    def string_global(self, text: str) -> ir.GlobalVariable:
+        """A private constant global holding the NUL-terminated bytes of text."""
         data = bytearray(text.encode("utf8") + b"\0")
         array_ty = ir.ArrayType(ir.IntType(8), len(data))
         glob = ir.GlobalVariable(self.module, array_ty, name=f".str.{self.str_count}")
@@ -1086,7 +1141,69 @@ class CodeGen:
         glob.global_constant = True
         glob.unnamed_addr = True
         glob.initializer = ir.Constant(array_ty, data)
-        return TypedValue(self.builder.bitcast(glob, RAWPTR.ir), RAWPTR)
+        return glob
+
+    def gen_string(self, text: str) -> TypedValue:
+        return TypedValue(self.builder.bitcast(self.string_global(text), RAWPTR.ir), RAWPTR)
+
+    def const_string(self, text: str) -> ir.Constant:
+        """A constant uint8* to a string's first byte, for static initializers."""
+        return self.string_global(text).gep([I32_ZERO, I32_ZERO])
+
+    def store_array_literal(self, addr, lit, arr_type: LangType, line: int):
+        """Fill an array's storage at `addr` from an array literal, element by
+        element (each may be any expression). Nested literals recurse."""
+        if not isinstance(lit, ArrayLit):
+            raise LangError(f"expected {arr_type.count} array elements", line)
+        if len(lit.elements) != arr_type.count:
+            raise LangError(
+                f"array literal has {len(lit.elements)} elements, expected {arr_type.count}",
+                line,
+            )
+        for i, element in enumerate(lit.elements):
+            slot = self.builder.gep(addr, [I32_ZERO, ir.Constant(ir.IntType(32), i)],
+                                    inbounds=True)
+            if is_array(arr_type.element):
+                self.store_array_literal(slot, element, arr_type.element, line)
+            else:
+                tv = self.coerce(self.gen_expr(element), arr_type.element, line,
+                                 "array element")
+                self.gen_store(tv.value, slot)
+
+    def const_initializer(self, expr, expected: LangType, line: int) -> ir.Constant:
+        """A constant of type `expected` for a @static initializer. Arrays use
+        nested literals; scalars must be compile-time constants (number, char,
+        or string literal, or null)."""
+        if isinstance(expr, ArrayLit):
+            if not is_array(expected):
+                raise LangError(f"an array literal cannot initialize a {expected}", line)
+            if len(expr.elements) != expected.count:
+                raise LangError(
+                    f"array literal has {len(expr.elements)} elements, "
+                    f"expected {expected.count}", line
+                )
+            return ir.Constant(expected.ir, [
+                self.const_initializer(e, expected.element, line) for e in expr.elements
+            ])
+        if isinstance(expr, StrLit) and expected == RAWPTR:
+            return self.const_string(expr.value)
+        if isinstance(expr, NullLit) and is_pointer(expected):
+            return ir.Constant(expected.ir, None)
+        if isinstance(expr, (IntLit, CharLit)) and is_integer(expected):
+            return self.coerce(self.gen_const_scalar(expr), expected, line,
+                               "initializer").value
+        if isinstance(expr, FloatLit) and expected is FLOAT64:
+            return ir.Constant(FLOAT64.ir, expr.value)
+        raise LangError(
+            f"a @static initializer must be a constant of type {expected}", line
+        )
+
+    def gen_const_scalar(self, expr) -> TypedValue:
+        """An adaptable constant TypedValue for an integer/char literal, used
+        outside a function body (no builder), for const_initializer."""
+        if isinstance(expr, CharLit):
+            return TypedValue(ir.Constant(UINT8.ir, expr.value), UINT8)
+        return TypedValue(ir.Constant(INT32.ir, expr.value), INT32, adaptable=True)
 
     def gen_call(self, expr: Call) -> TypedValue:
         # A variable (local, parameter, @static or @extern global) shadows any

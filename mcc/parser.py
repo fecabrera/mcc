@@ -7,10 +7,10 @@ import re
 from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
-    Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast, CharLit,
-    Continue, ExprStmt, FloatLit, Func, GlobalVar, If, Index, IntLit, Let,
-    Logical, Member, NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex,
-    StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
+    ArrayLit, Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast,
+    CharLit, Continue, ExprStmt, FloatLit, Func, GlobalVar, If, Index, IntLit,
+    Len, Let, Logical, Member, NullLit, Program, Return, SizeOf, StoreDeref,
+    StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
 
 # C's simple escape sequences, plus \e for ESC (a GCC/Clang extension, handy
@@ -104,9 +104,14 @@ class Parser:
                 name = self.expect("IDENT").text
                 self.expect(":")
                 type_name = self.parse_type_ref()
+                init = None
+                if self.accept("="):
+                    if extern:
+                        raise LangError("an @extern variable cannot have an initializer", line)
+                    init = self.parse_expr()
                 self.expect(";")
                 globals_.append(GlobalVar(name, type_name, line, private=private,
-                                          volatile=volatile, static=static))
+                                          volatile=volatile, static=static, init=init))
             else:
                 if volatile:
                     raise LangError(
@@ -119,7 +124,7 @@ class Parser:
     # Tokens that can begin an expression; used to settle the `as T * x`
     # ambiguity (multiplication, not a pointer type).
     EXPR_START = {"INT", "FLOAT", "STRING", "CHAR", "IDENT", "true", "false",
-                  "null", "sizeof", "(", "-", "!", "&"}
+                  "null", "sizeof", "len", "(", "[", "-", "!", "&"}
 
     def parse_type_ref(self, greedy_stars: bool = True) -> TypeRef:
         """A type: `[struct] name[<type, ...>][*...][[N]...]`, or a
@@ -149,15 +154,18 @@ class Parser:
             self.expect_close_angle()
         return TypeRef(name, args, self.parse_stars(greedy_stars), dims=self.parse_dims())
 
-    def parse_dims(self) -> list[int]:
+    def parse_dims(self) -> list[int | None]:
         dims = []
         while self.cur.kind == "[":
             line = self.advance().line
-            size = int_value(self.expect("INT").text)
-            if size < 1:
-                raise LangError(f"array size must be at least 1, not {size}", line)
+            if self.cur.kind == "]":
+                dims.append(None)  # an inferred [] dimension
+            else:
+                size = int_value(self.expect("INT").text)
+                if size < 1:
+                    raise LangError(f"array size must be at least 1, not {size}", line)
+                dims.append(size)
             self.expect("]")
-            dims.append(size)
         return dims
 
     def parse_fn_type(self, greedy_stars: bool) -> TypeRef:
@@ -476,11 +484,24 @@ class Parser:
             expr = self.parse_expr()
             self.expect(")")
             return expr
+        if tok.kind == "[":
+            elements = []
+            while self.cur.kind != "]":
+                elements.append(self.parse_expr())
+                if not self.accept(","):  # a trailing comma is allowed
+                    break
+            self.expect("]")
+            return ArrayLit(elements, tok.line)
         if tok.kind == "sizeof":
             self.expect("(")
             type_name = self.parse_type_ref()
             self.expect(")")
             return SizeOf(type_name, tok.line)
+        if tok.kind == "len":
+            self.expect("(")
+            operand = self.parse_expr()
+            self.expect(")")
+            return Len(operand, tok.line)
         if tok.kind == "IDENT":
             type_args = self.try_type_args() if self.cur.kind == "<" else []
             if self.cur.kind != "(":

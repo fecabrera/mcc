@@ -9,7 +9,7 @@ from mcc.errors import LangError
 
 KEYWORDS = {"fn", "return", "let", "if", "else", "while", "until", "break",
             "continue", "case", "when", "and", "or", "true", "false", "import",
-            "as", "sizeof", "struct", "null"}
+            "as", "sizeof", "len", "struct", "null"}
 
 TOKEN_SPEC = [
     ("INCLUDE", r"#include\s*<[^>\n]+>"),

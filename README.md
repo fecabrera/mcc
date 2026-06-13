@@ -132,7 +132,7 @@ that disagree are an error: `conflicting types for type parameter T`.
 Generic functions can call themselves recursively. See
 [examples/templates.mc](examples/templates.mc).
 
-Generic functions with the same name form an *overload set*, dispatched by
+Generic functions with the same name form an _overload set_, dispatched by
 parameter pattern — a call picks the most specific viable variant (`T*`
 beats `T`, `box<T>*` beats both). This is how libraries specialize by type
 shape: [lib/hash.mc](lib/hash.mc) hashes integer keys by value (splitmix64)
@@ -389,12 +389,43 @@ fn main() -> int32 {
 }
 ```
 
+An array literal `[a, b, c]` (a trailing comma is allowed) initializes an
+array, nesting for more dimensions. The outermost dimension can be left as
+`[]` and is inferred from the literal's length:
+
+```c
+let primes: int32[] = [2, 3, 5, 7, 11];          // length inferred as 5
+let grid: int32[2][2] = [[1, 2], [3, 4]];        // nested
+```
+
+A local literal's elements may be any expressions; a `@static` one must be
+constant (numbers, characters, string literals, or `null`), so a lookup
+table lives in read-only data:
+
+```c
+@static let cmds: uint8*[][2] = [
+    ["help", "show this help"],
+    ["quit", "exit the program"],
+];
+```
+
+`len(arr)` is the element count — a compile-time constant, handy as a loop
+bound and the way to read a size you let `[]` infer. It adapts to its
+context like a literal, so it compares against any integer counter (`int32`
+or `uint64`) without a cast. For a multi-dimensional array, `len(grid)` is
+the outer length and `len(grid[0])` the inner one:
+
+```c
+let i: int32 = 0;
+while (i < len(cmds)) { use(cmds[i]); i = i + 1; }
+```
+
 Like C, an array decays to a pointer to its first element wherever a value
 is used — so it passes to a `T*` parameter and `&arr[i]` gives an element
-address — and there is no whole-array assignment. Arrays nest for multiple
-dimensions (`int32[2][3]`, row-major) and work as struct fields. In a type,
-`*` binds to the element, so `int32*[8]` is an array of eight pointers;
-group for the other order. `N` must be a positive integer literal.
+address — and there is no whole-array assignment or copy. Arrays work as
+struct fields. In a type, `*` binds to the element, so `int32*[8]` is an
+array of eight pointers; group for the other order. Each `N` must be a
+positive integer literal (`[]` only as the inferred outermost dimension).
 
 ### Structs
 
@@ -444,7 +475,7 @@ struct counter {     // sizeof is 64: one per cache line
 `@packed` is the opposite: it removes the padding between fields, placing
 them at consecutive byte offsets, and drops the struct's alignment to 1 —
 the layout for wire formats and file headers. Member accesses are compiled
-as unaligned, but (as in C) taking a pointer *into* a packed struct with
+as unaligned, but (as in C) taking a pointer _into_ a packed struct with
 `&` and dereferencing it elsewhere is unsafe. `@packed` combines with
 `@align(N)`, which then sets the overall alignment and rounds `sizeof`
 back up:
@@ -459,7 +490,7 @@ struct header {      // sizeof is 9, not 16
 
 `@volatile` marks a struct whose loads and stores must all happen exactly
 as written — the optimizer may not elide, merge, or hoist them. This is for
-memory-mapped hardware registers, where reading or writing *is* the side
+memory-mapped hardware registers, where reading or writing _is_ the side
 effect; it propagates through nested fields, and also applies to `@extern`
 variables:
 
@@ -538,8 +569,9 @@ shadows a public one imported from elsewhere. From any other file the name
 is simply undefined.
 
 `@static` on a top-level `let` makes a file-scoped variable with its own
-zero-initialized storage that persists for the life of the program — a
-static counter, buffer, or lookup table:
+storage that persists for the life of the program — a static counter,
+buffer, or lookup table. It is zero-initialized unless given a constant
+initializer (see [Arrays](#arrays) for a static table):
 
 ```c
 @static let calls: int32;            // starts at 0, kept across calls
@@ -550,8 +582,8 @@ fn next_id() -> int32 { calls = calls + 1; return calls; }
 
 ### Extern declarations
 
-`@extern` declares a function or global variable that is *defined
-elsewhere* — in libc, or in another object linked into the program. An
+`@extern` declares a function or global variable that is _defined
+elsewhere_ — in libc, or in another object linked into the program. An
 extern function gives its signature and ends with `;` instead of a body; an
 extern variable is a top-level `let` with a type and no initializer:
 
