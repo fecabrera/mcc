@@ -1,5 +1,5 @@
-#include <stdlib.h>
-#include <string.h>
+@extern fn malloc(size: uint64) -> uint8*;
+@extern fn free(ptr: uint8*);
 
 /**
  * Allocates heap space for n elements of type T.
