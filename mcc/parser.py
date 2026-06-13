@@ -236,6 +236,15 @@ class Parser:
             self.advance()
             name = self.expect("IDENT").text
             type_name = self.parse_type_ref() if self.accept(":") else None
+            if self.cur.kind == ";":
+                if type_name is None:
+                    raise LangError(
+                        f"an uninitialized variable needs a type: "
+                        f"let {name}: int32;",
+                        tok.line,
+                    )
+                self.advance()
+                return Let(name, type_name, None, tok.line)
             self.expect("=")
             value = self.parse_expr()
             self.expect(";")

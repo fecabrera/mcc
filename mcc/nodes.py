@@ -68,7 +68,7 @@ class ExternVar:  # @extern let name: type;  -- a global defined elsewhere
 class Let:
     name: str
     type_name: TypeRef | None
-    value: object
+    value: object | None  # None: `let x: T;`, declared but uninitialized
     line: int
 
 @dataclass

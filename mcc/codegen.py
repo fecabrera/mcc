@@ -595,6 +595,15 @@ class CodeGen:
         elif isinstance(stmt, Let):
             if stmt.name in self.locals:
                 raise LangError(f"variable {stmt.name!r} already declared", stmt.line)
+            if stmt.value is None:  # let x: T; -- uninitialized, like a C local
+                declared = self.lang_type(stmt.type_name, stmt.line)
+                if declared is VOID:
+                    raise LangError("cannot declare a void variable", stmt.line)
+                slot = self.builder.alloca(declared.ir, name=stmt.name)
+                if over_aligned(declared):
+                    slot.align = type_align(declared)
+                self.locals[stmt.name] = (slot, declared)
+                return
             tv = self.gen_expr(stmt.value)
             if stmt.type_name is not None:
                 declared = self.lang_type(stmt.type_name, stmt.line)

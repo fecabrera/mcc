@@ -163,6 +163,19 @@ let w = x + 1;          // fine: int64, from x
 x = x + 1;
 ```
 
+A declaration may omit the initializer if it has a type annotation. Like a
+C local, the variable holds garbage until assigned — reading it first is
+undefined:
+
+```c
+let n: int32;           // declared, not yet initialized
+if (fancy()) { n = 1; } else { n = 2; }
+
+let p: struct point;    // works for structs too: fill in the fields
+p.x = 4;
+p.y = 2;
+```
+
 ### Control flow
 
 ```c

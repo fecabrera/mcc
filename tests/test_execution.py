@@ -161,3 +161,22 @@ def test_bool_logic(capfd):
         """
     )
     assert capfd.readouterr().out == "right\ncmp\n"
+
+
+def test_uninitialized_let():
+    status = run(
+        """
+        struct point { x: int32; y: int32; }
+        fn main() -> int32 {
+            let n: int32;
+            if (true) { n = 40; } else { n = 7; }
+            let p: struct point;
+            p.x = n;
+            p.y = 2;
+            let q: struct point*;
+            q = &p;
+            return q->x + q->y;
+        }
+        """
+    )
+    assert status == 42

@@ -87,6 +87,18 @@ def test_let_with_and_without_annotation():
     assert isinstance(without, Let) and without.type_name is None
 
 
+def test_let_without_initializer():
+    (stmt,) = parse_main_body("let buf: uint8*;")
+    assert isinstance(stmt, Let)
+    assert str(stmt.type_name) == "uint8*"
+    assert stmt.value is None
+
+
+def test_uninitialized_let_requires_a_type():
+    with pytest.raises(LangError, match="uninitialized variable needs a type"):
+        parse("fn main() { let x; }")
+
+
 def test_else_if_chain_nests():
     (stmt,) = parse_main_body("if (a) { f(); } else if (b) { g(); } else { h(); }")
     assert isinstance(stmt, If)
