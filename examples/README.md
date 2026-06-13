@@ -9,13 +9,16 @@ pipenv run python -m mcc examples/<name>.mc --run
 | Example | Shows |
 |---------|-------|
 | [helloworld.mc](helloworld.mc) | the smallest program: `#include`, `fn main`, `printf` |
-| [variables.mc](variables.mc) | `let`, type inference, annotations, every integer width, mutation |
+| [variables.mc](variables.mc) | `let`, type inference, annotations, every integer width, mutation, uninitialized `let x: T;` |
+| [literals.mc](literals.mc) | hexadecimal integer literals, `uint8` character literals and escapes |
 | [arithmetic.mc](arithmetic.mc) | operators, precedence, comparisons, `!`, float math, `abs` |
-| [control_flow.mc](control_flow.mc) | `if` / `else if` / `else`, integer conditions, `while`, `until`, nested loops |
+| [control_flow.mc](control_flow.mc) | `if` / `else if` / `else`, integer conditions, `while`, `until`, nested loops, `break` / `continue` |
+| [case_when.mc](case_when.mc) | `case` / `when` / `else:` with no fall-through, integer and character subjects |
 | [functions.mc](functions.mc) | void functions, any-order definitions, recursion, mutual recursion |
+| [function_pointers.mc](function_pointers.mc) | `fn(...) -> R` types, callbacks in structs, dispatch tables, `null` callbacks |
 | [io.mc](io.mc) | printf format specifiers, `puts`, `putchar`, string escapes |
 | [unsigned.mc](unsigned.mc) | unsigned division/comparison semantics, zero-extension |
-| [templates.mc](templates.mc) | generic functions with explicit instantiation |
+| [extern.mc](extern.mc) | `@extern` functions (including variadic `...`), interfacing with libc |
 | [structs.mc](structs.mc) | structs, generics structs, `->` / `.`, `null`, linked list, the array lib |
 | [pointers.mc](pointers.mc) | `import`, heap allocation, `&` `*` `[]`, `sizeof`, `as` casts |
 | [generics.mc](generics.mc) | type inference, generic recursion, multiple type parameters |

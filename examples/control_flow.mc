@@ -44,5 +44,17 @@ fn main() -> int32 {
         row = row + 1;
     }
 
+    // `break` leaves the innermost loop; `continue` jumps to its next
+    // iteration. Here: sum the odd numbers from 1, stopping after 9.
+    let sum: int32 = 0;
+    let k: int32 = 0;
+    while (true) {
+        k = k + 1;
+        if (k > 10) { break; }
+        if (k % 2 == 0) { continue; }
+        sum = sum + k;
+    }
+    printf("sum of odds 1..9 = %d\n", sum);
+
     return 0;
 }

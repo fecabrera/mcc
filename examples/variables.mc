@@ -32,5 +32,12 @@ fn main() -> int32 {
     answer = answer * 2;
     printf("answer = %d\n", answer);
 
+    // A declaration may omit the initializer if it has a type annotation.
+    // Like a C local, it holds garbage until assigned -- useful when the
+    // value is decided by branches.
+    let parity: uint8*;
+    if (answer % 2 == 0) { parity = "even"; } else { parity = "odd"; }
+    printf("answer is %s\n", parity);
+
     return 0;
 }
