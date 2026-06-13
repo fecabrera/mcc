@@ -1,5 +1,6 @@
 @extern fn malloc(size: uint64) -> uint8*;
 @extern fn free(ptr: uint8*);
+@extern fn memcpy(dest: uint8*, source: uint8*, count: uint64) -> uint8*;
 
 /**
  * Allocates heap space for n elements of type T.
