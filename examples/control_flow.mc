@@ -17,6 +17,15 @@ fn main() -> int32 {
         puts("non-zero is true");
     }
 
+    // `and` / `or` are the logical operators (no && / ||). They short-circuit
+    // and bind looser than comparisons, so this needs no inner parentheses.
+    if (n > 5 and n < 10) {
+        puts("n is in (5, 10)");
+    }
+    if (n < 0 or n > 5) {
+        puts("n is negative or big");
+    }
+
     // while loops
     let i: int32 = 0;
     while (i < 5) {

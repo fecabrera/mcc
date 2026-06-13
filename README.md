@@ -261,11 +261,23 @@ when promoted. Unary `-` is not allowed on unsigned values. See
 
 By descending precedence: unary `-` `!` `*` `&`, `as` casts, then `*` `/`
 `%`, `+` `-`, shifts `<<` `>>`, bitwise `&`, `^`, `|`, comparisons
-`<` `<=` `>` `>=`, and `==` `!=`. Comparisons yield `bool`; `%` and the
-bitwise/shift operators are integer-only. `>>` is an arithmetic shift for
-signed types and logical for unsigned. Unlike C, bitwise operators bind
-tighter than comparisons, so `a & 4 == 4` means `(a & 4) == 4`. Integer
-constant expressions fold at compile time.
+`<` `<=` `>` `>=`, `==` `!=`, then `and`, and loosest of all `or`.
+Comparisons yield `bool`; `%` and the bitwise/shift operators are
+integer-only. `>>` is an arithmetic shift for signed types and logical for
+unsigned. Unlike C, bitwise operators bind tighter than comparisons, so
+`a & 4 == 4` means `(a & 4) == 4`. Integer constant expressions fold at
+compile time.
+
+`and` and `or` are the logical operators (there is no `&&` / `||`). They
+short-circuit — the right side is evaluated only when the left does not
+already decide the result — take a `bool` or integer on each side (non-zero
+is true, as in a condition), and yield a `bool`. They bind looser than
+comparisons, so parentheses are usually unnecessary:
+
+```c
+if (a > 0 or a < 0 and b < 0) { ... }   // a > 0 or (a < 0 and b < 0)
+if (p != null and p->ready) { ... }     // p->ready read only when p != null
+```
 
 ### Casts
 

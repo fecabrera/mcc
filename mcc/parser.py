@@ -9,7 +9,7 @@ from mcc.lexer import Token
 from mcc.nodes import (
     Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast, CharLit,
     Continue, ExprStmt, ExternVar, FloatLit, Func, If, Index, IntLit, Let,
-    Member, NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex,
+    Logical, Member, NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex,
     StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
 
@@ -354,9 +354,25 @@ class Parser:
         self.expect("}")
         return Case(subject, arms, otherwise, line)
 
-    # Expressions, by descending precedence level.
+    # Expressions, by descending precedence level. `or` is loosest, then
+    # `and`; both bind looser than comparisons, so `a > 0 or b < 0` needs no
+    # parentheses. They short-circuit, so they are not part of PRECEDENCE.
     def parse_expr(self):
-        return self.parse_binary(0)
+        return self.parse_or()
+
+    def parse_or(self):
+        expr = self.parse_and()
+        while self.cur.kind == "or":
+            line = self.advance().line
+            expr = Logical("or", expr, self.parse_and(), line)
+        return expr
+
+    def parse_and(self):
+        expr = self.parse_binary(0)
+        while self.cur.kind == "and":
+            line = self.advance().line
+            expr = Logical("and", expr, self.parse_binary(0), line)
+        return expr
 
     # Bitwise operators bind tighter than comparisons (unlike C), so
     # `a & b == c` means `(a & b) == c`.

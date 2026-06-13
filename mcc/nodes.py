@@ -193,6 +193,13 @@ class CallExpr:  # calling a function-pointer expression: callee(args...)
     line: int
 
 @dataclass
+class Logical:  # short-circuiting `and` / `or`; result is bool
+    op: str
+    lhs: object
+    rhs: object
+    line: int
+
+@dataclass
 class Unary:
     op: str
     operand: object

@@ -19,9 +19,9 @@ from llvmlite import ir
 from mcc.errors import LangError
 from mcc.nodes import (
     Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast, CharLit,
-    Continue, ExprStmt, FloatLit, Func, If, Index, IntLit, Let, Member, NullLit,
-    Program, Return, SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit,
-    StructDecl, TypeRef, Unary, Var, While,
+    Continue, ExprStmt, FloatLit, Func, If, Index, IntLit, Let, Logical, Member,
+    NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex, StoreMember,
+    StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
 
 
@@ -769,6 +769,31 @@ class CodeGen:
             return self.builder.icmp_signed("!=", tv.value, ir.Constant(tv.type.ir, 0))
         raise LangError("condition must be a bool or integer", expr.line)
 
+    def gen_logical(self, expr: Logical) -> TypedValue:
+        """Short-circuiting `and` / `or`. Each operand is tested like a
+        condition (bool or integer); the result is a bool. The right operand is
+        evaluated only when the left does not already decide the answer."""
+        lhs = self.gen_cond(expr.lhs)
+        lhs_block = self.builder.block
+        rhs_block = self.builder.append_basic_block(f"{expr.op}.rhs")
+        end_block = self.builder.append_basic_block(f"{expr.op}.end")
+        # `and` runs the rhs only when lhs is true; `or` only when lhs is false.
+        if expr.op == "and":
+            self.builder.cbranch(lhs, rhs_block, end_block)
+        else:
+            self.builder.cbranch(lhs, end_block, rhs_block)
+        self.builder.position_at_end(rhs_block)
+        rhs = self.gen_cond(expr.rhs)
+        rhs_block = self.builder.block  # the rhs may have added blocks of its own
+        self.builder.branch(end_block)
+        self.builder.position_at_end(end_block)
+        phi = self.builder.phi(BOOL.ir)
+        # When short-circuited, the answer is the lhs's deciding value: false
+        # for `and` (lhs was false), true for `or` (lhs was true).
+        phi.add_incoming(ir.Constant(BOOL.ir, expr.op == "or"), lhs_block)
+        phi.add_incoming(rhs, rhs_block)
+        return TypedValue(phi, BOOL)
+
     def gen_equals(self, subject: TypedValue, value: TypedValue, line: int) -> ir.Value:
         """An i1 for `subject == value`, used to test a `when` arm. The subject
         is the authoritative type: a `when` value adapts (or must coerce) to it,
@@ -814,6 +839,8 @@ class CodeGen:
                                           f"call to {callee.type}", expr.line)
         if isinstance(expr, Unary):
             return self.gen_unary(expr)
+        if isinstance(expr, Logical):
+            return self.gen_logical(expr)
         if isinstance(expr, Binary):
             return self.gen_binary(expr)
         if isinstance(expr, Cast):

@@ -12,7 +12,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [variables.mc](variables.mc) | `let`, type inference, annotations, every integer width, mutation, uninitialized `let x: T;` |
 | [literals.mc](literals.mc) | hexadecimal integer literals, `uint8` character literals and escapes |
 | [arithmetic.mc](arithmetic.mc) | operators, precedence, comparisons, `!`, float math, `abs` |
-| [control_flow.mc](control_flow.mc) | `if` / `else if` / `else`, integer conditions, `while`, `until`, nested loops, `break` / `continue` |
+| [control_flow.mc](control_flow.mc) | `if` / `else if` / `else`, integer conditions, `and` / `or`, `while`, `until`, nested loops, `break` / `continue` |
 | [case_when.mc](case_when.mc) | `case` / `when` / `else:` with no fall-through, integer and character subjects |
 | [functions.mc](functions.mc) | void functions, any-order definitions, recursion, mutual recursion |
 | [function_pointers.mc](function_pointers.mc) | `fn(...) -> R` types, callbacks in structs, dispatch tables, `null` callbacks |
