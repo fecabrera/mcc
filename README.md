@@ -373,6 +373,11 @@ In a type, `*` binds to the return type, so `fn(int32) -> int32*` is a
 function returning `int32*`. Group with parentheses for a pointer to a
 function pointer: `(fn(int32) -> int32)*`, e.g. an array of callbacks.
 
+A function value is a pointer underneath, so it casts like one: `add as
+uint64` is the function's address as an integer, `addr as fn(...) -> R`
+turns an address back into a callable pointer, and it bitcasts to/from a
+data pointer such as `uint8*`.
+
 Only a single, non-generic function has an address; a generic name like
 `id` cannot be used as a value (there is no one instance to point at).
 
