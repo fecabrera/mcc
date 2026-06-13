@@ -82,6 +82,19 @@ def test_char_literals_decoded():
     assert isinstance(first_expr("'A'"), CharLit)
 
 
+def test_c_control_escapes_decoded():
+    # The full set of C simple escapes, plus the \e (ESC) extension, by their
+    # ASCII byte values.
+    expected = {r"'\a'": 7, r"'\b'": 8, r"'\e'": 27, r"'\f'": 12, r"'\n'": 10,
+                r"'\r'": 13, r"'\t'": 9, r"'\v'": 11, r"'\?'": 63}
+    for literal, value in expected.items():
+        assert first_expr(literal).value == value
+
+
+def test_unknown_escape_keeps_the_bare_character():
+    assert first_expr(r"'\q'").value == ord("q")
+
+
 def test_char_literal_must_be_a_single_byte():
     with pytest.raises(LangError, match="not a single byte"):
         parse("fn main() { let c: uint8 = '€'; }")
@@ -91,6 +104,8 @@ def test_string_escapes_decoded():
     expr = first_expr(r'f("a\n\t\\")')
     assert isinstance(expr.args[0], StrLit)
     assert expr.args[0].value == "a\n\t\\"
+    bells = first_expr(r'f("\a\b\f\v")')
+    assert bells.args[0].value == "\a\b\f\v"
 
 
 def test_assignment_vs_expression_statement():

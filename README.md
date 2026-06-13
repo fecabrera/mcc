@@ -543,12 +543,15 @@ this: predeclared extern functions.)
 
 ### Strings
 
-String literals (with `\n`, `\t`, `\r`, `\0`, `\"`, `\\` escapes) compile to
-constant C strings. They can currently only be passed to functions — there is
-no string variable type yet.
+String literals compile to constant C strings. They support C's simple
+escape sequences — `\a` `\b` `\f` `\n` `\r` `\t` `\v`, the quotes `\'` `\"`,
+`\\`, `\?`, and `\0` for NUL — plus `\e` for ESC (a GCC/Clang extension,
+handy for ANSI terminal codes). Any other escape keeps the bare character.
+Strings can currently only be passed to functions — there is no string
+variable type yet.
 
 A character literal in single quotes is a `uint8` — the byte value of a
-single character, with the same escapes (`'a'`, `'\n'`, `'\0'`, `'\''`,
+single character, using the same escapes (`'a'`, `'\n'`, `'\0'`, `'\''`,
 `'\\'`). Being a plain byte, it indexes, compares, and does arithmetic like
 any other `uint8`:
 

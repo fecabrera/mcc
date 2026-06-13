@@ -13,7 +13,13 @@ from mcc.nodes import (
     StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
 
-STRING_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "0": "\0", '"': '"', "\\": "\\"}
+# C's simple escape sequences, plus \e for ESC (a GCC/Clang extension, handy
+# for ANSI terminal codes). Any other escape (e.g. \q) keeps the bare
+# character. \0 is the NUL byte.
+STRING_ESCAPES = {
+    "a": "\a", "b": "\b", "e": "\x1b", "f": "\f", "n": "\n", "r": "\r",
+    "t": "\t", "v": "\v", "0": "\0", "'": "'", '"': '"', "?": "?", "\\": "\\",
+}
 
 
 def int_value(text: str) -> int:
