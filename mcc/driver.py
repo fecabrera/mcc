@@ -34,7 +34,7 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
     resolved = path.resolve()
     visited = _visited if _visited is not None else set()
     if resolved in visited:
-        return Program([], [], [], [], [])
+        return Program([], [], [], [], [], [])
     visited.add(resolved)
     try:
         program = Parser(tokenize(resolved.read_text())).parse_program()
@@ -48,7 +48,9 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
         decl.source = str(resolved)
     for var in program.globals:
         var.source = str(resolved)
-    includes, structs, functions, globals_ = [], [], [], []
+    for const in program.consts:
+        const.source = str(resolved)
+    includes, structs, functions, globals_, consts = [], [], [], [], []
     for import_path, line in program.imports:
         candidates = []
         for base in (resolved.parent, *search_paths):
@@ -66,11 +68,14 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
         structs += imported.structs
         functions += imported.functions
         globals_ += imported.globals
+        consts += imported.consts
     includes += program.includes
     structs += program.structs
     functions += program.functions
     globals_ += program.globals
-    return Program([], list(dict.fromkeys(includes)), structs, functions, globals_)
+    consts += program.consts
+    return Program([], list(dict.fromkeys(includes)), structs, functions,
+                   globals_, consts)
 
 
 def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None) -> ir.Module:

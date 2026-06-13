@@ -25,6 +25,7 @@ fn main() -> int32 {
   - [Functions](#functions)
   - [Generics](#generics)
   - [Variables](#variables)
+  - [Constants](#constants)
   - [Control flow](#control-flow)
   - [Types](#types)
   - [Operators](#operators)
@@ -184,6 +185,39 @@ let p: struct point;    // works for structs too: fill in the fields
 p.x = 4;
 p.y = 2;
 ```
+
+### Constants
+
+`const` declares a named compile-time constant — mcc's answer to C's
+`#define NAME value`, but typed and scoped rather than textual. It has **no
+storage**: each use is folded in at compile time.
+
+```c
+const DEBUG = 1;             // untyped int: adapts like a literal
+const MAX_USERS: uint64 = 1024;
+const GREETING = "hello";
+
+let buf: int32[MAX_USERS];   // an integer const can size an array
+```
+
+The initializer must be a constant expression — literals, other constants,
+`sizeof`, casts, and integer/float arithmetic — evaluated when the program
+is compiled:
+
+```c
+const WIDTH  = 80;
+const HEIGHT = 24;
+const CELLS  = WIDTH * HEIGHT;       // 1920, folded
+const ROW_BYTES = WIDTH * sizeof(int32);
+```
+
+An untyped integer const stays *adaptable* like a literal, so it takes on
+whatever integer type the context needs (`uint64`, `int32`, …) without a
+cast. Add an annotation (`const N: uint8 = 4;`) to pin the type. Constants
+follow the same [visibility](#visibility) rules as other declarations:
+file-scoped names are shared across the program, and `@private` keeps one to
+its file. Assigning to a const, or using a non-constant initializer, is a
+compile error.
 
 ### Control flow
 

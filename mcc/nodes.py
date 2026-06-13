@@ -15,13 +15,15 @@ class TypeRef:
 
     `dims` holds fixed array sizes, outermost first: `int32[3][4]` is
     TypeRef("int32", dims=[3, 4]). A `None` dim is an inferred `[]`, allowed
-    only as the outermost dimension of an initialized array."""
+    only as the outermost dimension of an initialized array. A `str` dim is the
+    name of an integer `const`, resolved to its value during code generation
+    (so `int32[N]` sizes the array by the constant N)."""
     name: str
     args: list["TypeRef"] = field(default_factory=list)
     stars: int = 0
     params: list["TypeRef"] | None = None  # set for fn(...) -> ret types
     ret: "TypeRef | None" = None
-    dims: list[int | None] = field(default_factory=list)  # array sizes, outermost first
+    dims: list[int | str | None] = field(default_factory=list)  # array sizes, outermost first
 
     def __str__(self) -> str:
         if self.params is not None:
@@ -30,7 +32,7 @@ class TypeRef:
             text = self.name
             if self.args:
                 text += "<" + ", ".join(str(a) for a in self.args) + ">"
-        dims = "".join(f"[{d if d is not None else ''}]" for d in self.dims)
+        dims = "".join(f"[{'' if d is None else d}]" for d in self.dims)
         return text + "*" * self.stars + dims
 
 
@@ -41,6 +43,7 @@ class Program:
     structs: list["StructDecl"]
     functions: list["Func"]
     globals: list["GlobalVar"]
+    consts: list["Const"] = field(default_factory=list)
 
 @dataclass
 class StructDecl:
@@ -79,6 +82,15 @@ class GlobalVar:  # a top-level variable: @extern (defined elsewhere) or @static
     static: bool = False  # @static: file-scoped storage, zero-initialized
     init: object | None = None  # @static initializer (a constant expression)
     source: str | None = None  # declaring/defining file; stamped by the driver
+
+@dataclass
+class Const:  # a named compile-time constant: const NAME [: type] = value;
+    name: str
+    type_name: TypeRef | None  # optional annotation; else the value's own type
+    value: object  # a constant expression, folded at compile time
+    line: int
+    private: bool = False  # @private: only usable within its source file
+    source: str | None = None  # defining file; stamped by the driver
 
 @dataclass
 class Let:

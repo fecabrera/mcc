@@ -258,6 +258,16 @@ def fold_int_arithmetic(op: str, a: int, b: int, lang_type: LangType) -> int | N
     return value % (1 << width)
 
 
+def wrap_int(value: int, lang_type: LangType) -> int:
+    """Wrap a Python integer into lang_type's range (two's complement), as a
+    narrowing or signedness-changing cast does."""
+    width = lang_type.ir.width
+    if lang_type.signed:
+        half = 1 << (width - 1)
+        return (value + half) % (1 << width) - half
+    return value % (1 << width)
+
+
 class CodeGen:
     def __init__(self, program: Program, name: str, root_source: str | None = None):
         self.program = program
@@ -296,6 +306,10 @@ class CodeGen:
                                   tuple[ir.GlobalVariable, LangType, bool]] = {}
         # name -> (private, source file); for @private access checks
         self.global_privacy: dict[str, tuple[bool, str | None]] = {}
+        # Named compile-time constants: name -> folded TypedValue (no storage is
+        # emitted; references are substituted). Used as values and array sizes.
+        self.consts: dict[str, TypedValue] = {}
+        self.const_privacy: dict[str, tuple[bool, str | None]] = {}
         self.type_bindings: dict[str, LangType] = {}  # active type-parameter bindings
         # name -> (private, source file); for @private access checks
         self.func_privacy: dict[str, tuple[bool, str | None]] = {}
@@ -382,8 +396,27 @@ class CodeGen:
                     "an inferred array size [] is only allowed on an initialized "
                     "variable's outermost dimension", line
                 )
+            if isinstance(size, str):  # a const name, e.g. int32[N]
+                size = self.const_dim(size, line)
             base = array_of(base, size)
         return base
+
+    def const_dim(self, name: str, line: int) -> int:
+        """Resolve a const used as an array size to its positive integer value."""
+        const = self.consts.get(name)
+        if const is None:
+            raise LangError(
+                f"unknown array size {name!r}; expected an integer constant", line
+            )
+        self.check_access(*self.const_privacy[name], f"constant {name!r}", line)
+        if not is_integer(const.type):
+            raise LangError(
+                f"array size {name!r} must be an integer constant, not {const.type}", line
+            )
+        size = const.value.constant
+        if size < 1:
+            raise LangError(f"array size must be at least 1, not {size}", line)
+        return size
 
     def array_type_for(self, ref: TypeRef, value, line: int) -> LangType:
         """Resolve a declared type, filling an inferred outer `[]` from the
@@ -505,6 +538,20 @@ class CodeGen:
                 self.signatures[name] = (ret, params, variadic)
                 self.used_symbols.add(name)
                 self.extern_decls.add(name)  # header funcs are extern declarations
+        # Constants are folded before globals, so a global's type (or a later
+        # const) may use one as an array size. They are evaluated in source
+        # order, so a const may reference any declared earlier (as in C).
+        for const in self.program.consts:
+            self.current_source = const.source
+            if const.name in self.consts:
+                raise LangError(f"constant {const.name!r} already defined", const.line)
+            value = self.eval_const(const.value, const.line)
+            if const.type_name is not None:
+                declared = self.lang_type(const.type_name, const.line)
+                value = self.const_coerce(value, declared, const.line,
+                                          f"const {const.name}")
+            self.consts[const.name] = value
+            self.const_privacy[const.name] = (const.private, const.source)
         for var in self.program.globals:
             self.current_source = var.source  # the type may name private structs
             # An initializer can supply an inferred outermost [] dimension.
@@ -912,8 +959,14 @@ class CodeGen:
                 "an array literal is only allowed as a variable initializer", expr.line
             )
         if isinstance(expr, Var):
-            # A name that is not a variable may be a function used as a value.
+            # A name that is not a variable may be a constant or a function used
+            # as a value.
             if self.var_type_of(expr.name) is None:
+                const = self.consts.get(expr.name)
+                if const is not None:
+                    self.check_access(*self.const_privacy[expr.name],
+                                      f"constant {expr.name!r}", expr.line)
+                    return const
                 fv = self.func_value(expr.name, expr.line)
                 if fv is not None:
                     return fv
@@ -988,6 +1041,8 @@ class CodeGen:
             self.check_access(private, source, f"variable {name!r}", line)
             glob, var_type, volatile = entry
             return glob, var_type, volatile or var_type.volatile
+        if name in self.consts:
+            raise LangError(f"cannot assign to constant {name!r}", line)
         raise LangError(f"undefined variable {name!r}", line)
 
     def var_type_of(self, name: str) -> "LangType | None":
@@ -1209,6 +1264,132 @@ class CodeGen:
         if isinstance(expr, CharLit):
             return TypedValue(ir.Constant(UINT8.ir, expr.value), UINT8)
         return TypedValue(ir.Constant(INT32.ir, expr.value), INT32, adaptable=True)
+
+    def eval_const(self, expr, line: int) -> TypedValue:
+        """Fold a `const` initializer to a TypedValue whose value is an
+        ir.Constant: literals, references to other consts, sizeof, numeric
+        casts, and integer/float arithmetic. An untyped integer result stays
+        adaptable, like a literal. Anything needing the runtime is an error.
+        Built without a builder -- consts are folded before any function."""
+        if isinstance(expr, IntLit):
+            return TypedValue(ir.Constant(INT32.ir, expr.value), INT32, adaptable=True)
+        if isinstance(expr, CharLit):
+            return TypedValue(ir.Constant(UINT8.ir, expr.value), UINT8)
+        if isinstance(expr, FloatLit):
+            return TypedValue(ir.Constant(FLOAT64.ir, expr.value), FLOAT64)
+        if isinstance(expr, BoolLit):
+            return TypedValue(ir.Constant(BOOL.ir, int(expr.value)), BOOL)
+        if isinstance(expr, NullLit):
+            return TypedValue(ir.Constant(RAWPTR.ir, None), NULLT, adaptable=True)
+        if isinstance(expr, StrLit):
+            return TypedValue(self.const_string(expr.value), RAWPTR)
+        if isinstance(expr, SizeOf):
+            size = type_size(self.lang_type(expr.type_name, line))
+            return TypedValue(ir.Constant(UINT64.ir, size), UINT64)
+        if isinstance(expr, Var):
+            const = self.consts.get(expr.name)
+            if const is None:
+                raise LangError(
+                    f"{expr.name!r} is not a constant; a const initializer must be "
+                    "a compile-time constant", expr.line
+                )
+            self.check_access(*self.const_privacy[expr.name],
+                              f"constant {expr.name!r}", expr.line)
+            return const
+        if isinstance(expr, Unary):
+            return self.eval_const_unary(expr)
+        if isinstance(expr, Cast):
+            return self.eval_const_cast(expr)
+        if isinstance(expr, Binary):
+            return self.eval_const_binary(expr)
+        raise LangError("a const initializer must be a compile-time constant", line)
+
+    def const_coerce(self, tv: TypedValue, expected: LangType, line: int,
+                     context: str) -> TypedValue:
+        """coerce() for constants: equality, null -> pointer, and adaptable
+        integer narrowing, all without a builder."""
+        if tv.type == expected:
+            return tv
+        if tv.type is NULLT and (is_pointer(expected) or is_function(expected)):
+            return TypedValue(ir.Constant(expected.ir, None), expected)
+        if (tv.adaptable and is_integer(tv.type) and is_integer(expected)
+                and isinstance(tv.value.constant, int)):
+            width = expected.ir.width
+            lo, hi = ((-(1 << (width - 1)), 1 << (width - 1)) if expected.signed
+                      else (0, 1 << width))
+            if lo <= tv.value.constant < hi:
+                return TypedValue(ir.Constant(expected.ir, tv.value.constant), expected)
+            raise LangError(
+                f"constant {tv.value.constant} is out of range for {expected}", line
+            )
+        raise LangError(f"{context}: expected {expected}, got {tv.type}", line)
+
+    def eval_const_unary(self, expr: Unary) -> TypedValue:
+        operand = self.eval_const(expr.operand, expr.line)
+        if expr.op == "-" and is_integer(operand.type):
+            return TypedValue(
+                ir.Constant(operand.type.ir, wrap_int(-operand.value.constant, operand.type)),
+                operand.type, adaptable=operand.adaptable,
+            )
+        if expr.op == "-" and operand.type is FLOAT64:
+            return TypedValue(ir.Constant(FLOAT64.ir, -operand.value.constant), FLOAT64)
+        if expr.op == "!" and operand.type is BOOL:
+            return TypedValue(ir.Constant(BOOL.ir, int(not operand.value.constant)), BOOL)
+        raise LangError(
+            f"operator {expr.op!r} is not a compile-time constant for {operand.type}",
+            expr.line,
+        )
+
+    def eval_const_cast(self, expr: Cast) -> TypedValue:
+        tv = self.eval_const(expr.value, expr.line)
+        target = self.lang_type(expr.type_name, expr.line)
+        src = tv.type
+        if src == target:
+            return TypedValue(tv.value, target)
+        if is_integer(src) and is_integer(target):
+            return TypedValue(ir.Constant(target.ir, wrap_int(tv.value.constant, target)), target)
+        if is_integer(src) and target is BOOL:
+            return TypedValue(ir.Constant(BOOL.ir, int(tv.value.constant != 0)), BOOL)
+        if is_integer(src) and target is FLOAT64:
+            return TypedValue(ir.Constant(FLOAT64.ir, float(tv.value.constant)), FLOAT64)
+        if src is FLOAT64 and is_integer(target):
+            return TypedValue(ir.Constant(target.ir, wrap_int(int(tv.value.constant), target)), target)
+        raise LangError(f"cannot cast {src} to {target} in a constant", expr.line)
+
+    def eval_const_binary(self, expr: Binary) -> TypedValue:
+        lhs = self.eval_const(expr.lhs, expr.line)
+        rhs = self.eval_const(expr.rhs, expr.line)
+        if lhs.type != rhs.type:
+            if rhs.adaptable:
+                rhs = self.const_coerce(rhs, lhs.type, expr.line, f"operand of {expr.op!r}")
+            elif lhs.adaptable:
+                lhs = self.const_coerce(lhs, rhs.type, expr.line, f"operand of {expr.op!r}")
+            else:
+                raise LangError(
+                    f"operands of {expr.op!r} have different types: "
+                    f"{lhs.type} and {rhs.type}", expr.line
+                )
+        op_type = lhs.type
+        a, b = lhs.value.constant, rhs.value.constant
+        if expr.op in COMPARISON_OPS and (is_integer(op_type) or op_type in (BOOL, FLOAT64)):
+            result = {"==": a == b, "!=": a != b, "<": a < b, "<=": a <= b,
+                      ">": a > b, ">=": a >= b}[expr.op]
+            return TypedValue(ir.Constant(BOOL.ir, int(result)), BOOL)
+        if is_integer(op_type):
+            folded = fold_int_arithmetic(expr.op, a, b, op_type)
+            if folded is None:
+                raise LangError(
+                    f"{expr.op!r} is not a compile-time constant here "
+                    "(division by zero or out-of-range shift)", expr.line
+                )
+            return TypedValue(ir.Constant(op_type.ir, folded), op_type,
+                              adaptable=lhs.adaptable and rhs.adaptable)
+        if op_type is FLOAT64 and expr.op in ("+", "-", "*", "/"):
+            result = {"+": a + b, "-": a - b, "*": a * b, "/": a / b}[expr.op]
+            return TypedValue(ir.Constant(FLOAT64.ir, result), FLOAT64)
+        raise LangError(
+            f"operator {expr.op!r} is not a compile-time constant for {op_type}", expr.line
+        )
 
     def gen_call(self, expr: Call) -> TypedValue:
         # A variable (local, parameter, @static or @extern global) shadows any

@@ -8,9 +8,10 @@ from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
     ArrayLit, Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast,
-    CharLit, Continue, ExprStmt, FloatLit, Func, GlobalVar, If, Index, IntLit,
-    Len, Let, Logical, Member, NullLit, Program, Return, SizeOf, StoreDeref,
-    StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
+    CharLit, Const, Continue, ExprStmt, FloatLit, Func, GlobalVar, If, Index,
+    IntLit, Len, Let, Logical, Member, NullLit, Program, Return, SizeOf,
+    StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary,
+    Var, While,
 )
 
 # C's simple escape sequences, plus \e for ESC (a GCC/Clang extension, handy
@@ -52,7 +53,7 @@ class Parser:
         return self.advance()
 
     def parse_program(self) -> Program:
-        imports, includes, structs, functions, globals_ = [], [], [], [], []
+        imports, includes, structs, functions, globals_, consts = [], [], [], [], [], []
         while self.cur.kind in ("INCLUDE", "import"):
             if self.cur.kind == "INCLUDE":
                 header = re.search(r"<([^>]+)>", self.advance().text).group(1)
@@ -112,6 +113,19 @@ class Parser:
                 self.expect(";")
                 globals_.append(GlobalVar(name, type_name, line, private=private,
                                           volatile=volatile, static=static, init=init))
+            elif self.cur.kind == "const":
+                line = self.advance().line
+                if static or extern or volatile:
+                    raise LangError(
+                        "a const is already compile-time; @static/@extern/@volatile "
+                        "do not apply", line
+                    )
+                name = self.expect("IDENT").text
+                type_name = self.parse_type_ref() if self.accept(":") else None
+                self.expect("=")
+                value = self.parse_expr()
+                self.expect(";")
+                consts.append(Const(name, type_name, value, line, private=private))
             else:
                 if volatile:
                     raise LangError(
@@ -119,7 +133,7 @@ class Parser:
                         self.cur.line,
                     )
                 functions.append(self.parse_function(private, static, extern))
-        return Program(imports, includes, structs, functions, globals_)
+        return Program(imports, includes, structs, functions, globals_, consts)
 
     # Tokens that can begin an expression; used to settle the `as T * x`
     # ambiguity (multiplication, not a pointer type).
@@ -154,12 +168,14 @@ class Parser:
             self.expect_close_angle()
         return TypeRef(name, args, self.parse_stars(greedy_stars), dims=self.parse_dims())
 
-    def parse_dims(self) -> list[int | None]:
+    def parse_dims(self) -> list[int | str | None]:
         dims = []
         while self.cur.kind == "[":
             line = self.advance().line
             if self.cur.kind == "]":
                 dims.append(None)  # an inferred [] dimension
+            elif self.cur.kind == "IDENT":
+                dims.append(self.advance().text)  # a const name, resolved in codegen
             else:
                 size = int_value(self.expect("INT").text)
                 if size < 1:
