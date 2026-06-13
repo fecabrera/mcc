@@ -1,5 +1,6 @@
 """CLI tests: drive `python -m mcc` as a subprocess."""
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -50,6 +51,44 @@ def test_compile_error_exit_code(tmp_path):
     result = mcc(bad)
     assert result.returncode == 1
     assert "error: line 1: undefined variable 'x'" in result.stderr
+
+
+def test_error_names_the_file_it_came_from(tmp_path):
+    # The failing line is in the imported file; the message must say so
+    # rather than blaming the entry file.
+    (tmp_path / "lib.mc").write_text(
+        "@extern fn ext(n: uint64);\n"
+        "fn wrap(n: uint64) -> int32* {\n"
+        "    return ext(n) as int32*;\n"
+        "}\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text('import "lib";\nfn main() -> int32 { let p = wrap(4); return 0; }')
+    result = mcc(main)
+    assert result.returncode == 1
+    assert f"{tmp_path / 'lib.mc'}: error: line 3:" in result.stderr
+    assert "main.mc" not in result.stderr
+
+
+def test_parse_error_names_the_imported_file(tmp_path):
+    (tmp_path / "bad.mc").write_text("fn broken( {}")
+    main = tmp_path / "main.mc"
+    main.write_text('import "bad";\nfn main() {}')
+    result = mcc(main)
+    assert result.returncode == 1
+    assert f"{tmp_path / 'bad.mc'}: error: line 1:" in result.stderr
+
+
+def test_error_paths_under_cwd_print_relative(tmp_path):
+    (tmp_path / "lib.mc").write_text("fn broken( {}")
+    (tmp_path / "main.mc").write_text('import "lib";\nfn main() {}')
+    result = subprocess.run(
+        [sys.executable, "-m", "mcc", "main.mc"],
+        cwd=tmp_path, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+    )
+    assert result.returncode == 1
+    assert result.stderr.startswith("lib.mc: error: line 1:")
 
 
 def test_missing_file_is_clean_error():

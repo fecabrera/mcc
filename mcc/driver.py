@@ -36,7 +36,12 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
     if resolved in visited:
         return Program([], [], [], [], [])
     visited.add(resolved)
-    program = Parser(tokenize(resolved.read_text())).parse_program()
+    try:
+        program = Parser(tokenize(resolved.read_text())).parse_program()
+    except LangError as err:
+        if err.source is None:
+            err.source = str(resolved)
+        raise
     for func in program.functions:
         func.source = str(resolved)
     for decl in program.structs:
@@ -54,7 +59,8 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
         target = next((c for c in candidates if c.is_file()), None)
         if target is None:
             tried = ", ".join(str(c) for c in candidates)
-            raise LangError(f"cannot import {import_path!r}: tried {tried}", line)
+            raise LangError(f"cannot import {import_path!r}: tried {tried}", line,
+                            source=str(resolved))
         imported = load_program(target, search_paths, visited)
         includes += imported.includes
         structs += imported.structs
@@ -125,7 +131,13 @@ def main() -> int:
         print(f"mcc: error: cannot read {args.source}: {err.strerror}", file=sys.stderr)
         return 1
     except LangError as err:
-        print(f"{args.source}: error: {err}", file=sys.stderr)
+        source = Path(err.source) if err.source else args.source
+        if source.is_absolute():  # imported files resolve to absolute paths
+            try:
+                source = source.relative_to(Path.cwd())
+            except ValueError:
+                pass
+        print(f"{source}: error: {err}", file=sys.stderr)
         return 1
 
     if args.emit_llvm:

@@ -335,10 +335,13 @@ class CodeGen:
         natural = 1 if decl.packed \
             else max((type_align(ftype) for _, ftype in fields), default=1)
         if decl.align is not None and decl.align < natural:
+            # current_source was restored to the instantiating file above,
+            # but decl.line belongs to the declaring file.
             raise LangError(
                 f"@align({decl.align}) is below struct {decl.name!r}'s "
                 f"natural alignment of {natural}",
                 decl.line,
+                source=decl.source,
             )
         object.__setattr__(struct_type, "fields", fields)  # frozen; fields excluded from eq
         if decl.packed or over_aligned(struct_type):
@@ -374,12 +377,21 @@ class CodeGen:
         raise LangError(f"struct {owner} has no field {fname!r}", line)
 
     def generate(self) -> ir.Module:
+        try:
+            return self.gen_program()
+        except LangError as err:
+            if err.source is None:
+                err.source = self.current_source
+            raise
+
+    def gen_program(self) -> ir.Module:
         if self.program.imports:
             raise LangError(
                 "imports must be resolved before code generation (compile via the driver)",
                 self.program.imports[0][1],
             )
         for decl in self.program.structs:
+            self.current_source = decl.source
             if decl.name in TYPES:
                 raise LangError(f"type {decl.name!r} already defined", decl.line)
             if decl.static:
