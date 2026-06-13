@@ -230,3 +230,41 @@ def test_emitted_call_is_indirect():
     )
     # The call goes through the loaded pointer, not a direct @add call.
     assert "call i32 %" in ir_text
+
+
+def test_function_address_as_uint64():
+    # A function value casts to its integer address, like a function name in C.
+    ir_text = compile_ir(
+        "fn add(a: int32, b: int32) -> int32 { return a + b; }\n"
+        "fn main() -> uint64 {\n"
+        "    let op: fn(int32, int32) -> int32 = add;\n"
+        "    return op as uint64;\n"
+        "}"
+    )
+    assert "ptrtoint i32 (i32, i32)*" in ir_text
+
+
+def test_address_round_trips_through_an_integer():
+    # int -> function pointer (inttoptr) yields a callable pointer again.
+    source = """
+    fn add(a: int32, b: int32) -> int32 { return a + b; }
+    fn main() -> int32 {
+        let addr: uint64 = add as uint64;
+        let op: fn(int32, int32) -> int32 = addr as fn(int32, int32) -> int32;
+        return op(2, 3);
+    }
+    """
+    assert run(source) == 5
+
+
+def test_function_pointer_bitcasts_to_a_data_pointer():
+    # Pointers all the way down: a function value bitcasts to/from uint8*.
+    source = """
+    fn add(a: int32, b: int32) -> int32 { return a + b; }
+    fn main() -> int32 {
+        let raw: uint8* = add as uint8*;
+        let op: fn(int32, int32) -> int32 = raw as fn(int32, int32) -> int32;
+        return op(4, 5);
+    }
+    """
+    assert run(source) == 9

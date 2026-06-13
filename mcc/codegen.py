@@ -1101,11 +1101,16 @@ class CodeGen:
         src = tv.type
         if src == target:
             return TypedValue(tv.value, target)
-        if is_pointer(src) and is_pointer(target):
+        # A function value is a pointer underneath (LLVM `ret (args)*`), so it
+        # casts like one: between pointer kinds, and to/from a 64-bit integer
+        # address -- exactly as a function name converts to an address in C.
+        src_addr = is_pointer(src) or is_function(src)
+        target_addr = is_pointer(target) or is_function(target)
+        if src_addr and target_addr:
             return TypedValue(self.builder.bitcast(tv.value, target.ir), target)
-        if is_pointer(src) and is_integer(target) and target.ir.width == 64:
+        if src_addr and is_integer(target) and target.ir.width == 64:
             return TypedValue(self.builder.ptrtoint(tv.value, target.ir), target)
-        if is_integer(src) and is_pointer(target):
+        if is_integer(src) and target_addr:
             return TypedValue(self.builder.inttoptr(tv.value, target.ir), target)
         if is_struct(src) or is_struct(target):
             raise LangError(f"cannot cast {src} to {target}", expr.line)
