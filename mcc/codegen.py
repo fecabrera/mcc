@@ -46,6 +46,9 @@ class LangType:
     # LLVM element index of each field; in explicitly laid out structs
     # (see instantiate_struct) padding elements shift the indices.
     elem_indices: tuple | None = field(default=None, compare=False)
+    # (return type, param types, variadic) for a function-pointer type. Part of
+    # equality, so two `fn(int32) -> int32` types match structurally.
+    signature: tuple | None = None
 
     def __str__(self) -> str:
         return self.name
@@ -65,6 +68,15 @@ class TypedValue:
 def pointer_to(lang_type: LangType) -> LangType:
     return LangType(lang_type.name + "*", lang_type.ir.as_pointer(),
                     signed=False, pointee=lang_type)
+
+
+def function_type(ret: LangType, params: tuple, variadic: bool = False) -> LangType:
+    """A function-pointer type, e.g. fn(int32, int32) -> int32. Its LLVM type
+    is a pointer to the LLVM function type, so a value is callable directly."""
+    fnty = ir.FunctionType(ret.ir, [p.ir for p in params], var_arg=variadic)
+    name = "fn(" + ", ".join(p.name for p in params) + ") -> " + ret.name
+    return LangType(name, fnty.as_pointer(), signed=False,
+                    signature=(ret, tuple(params), variadic))
 
 
 VOID = LangType("void", ir.VoidType())
@@ -115,6 +127,10 @@ def is_integer(lang_type: LangType) -> bool:
 
 def is_pointer(lang_type: LangType) -> bool:
     return lang_type.pointee is not None
+
+
+def is_function(lang_type: LangType) -> bool:
+    return lang_type.signature is not None
 
 
 def is_struct(lang_type: LangType) -> bool:
@@ -298,6 +314,13 @@ class CodeGen:
         return candidate
 
     def lang_type(self, ref: TypeRef, line: int) -> LangType:
+        if ref.params is not None:  # a fn(...) -> ret function-pointer type
+            ret = self.lang_type(ref.ret, line)
+            params = tuple(self.lang_type(p, line) for p in ref.params)
+            base = function_type(ret, params)
+            for _ in range(ref.stars):
+                base = pointer_to(base)
+            return base
         if ref.name in self.type_bindings and not ref.args:
             base = self.type_bindings[ref.name]
         elif ref.name in TYPES:
@@ -562,12 +585,13 @@ class CodeGen:
 
         An adaptable integer constant may take on any integer type its value
         fits into (so `let x: uint64 = 5;` works), and `null` adapts to any
-        pointer type. Any pointer coerces to uint8* (raw memory, like C's
-        void*). Other values never convert implicitly -- use `as`.
+        pointer or function-pointer type. Any pointer coerces to uint8* (raw
+        memory, like C's void*). Other values never convert implicitly -- use
+        `as`.
         """
         if tv.type == expected:
             return tv
-        if tv.type is NULLT and is_pointer(expected):
+        if tv.type is NULLT and (is_pointer(expected) or is_function(expected)):
             return TypedValue(ir.Constant(expected.ir, None), expected)
         if expected == RAWPTR and is_pointer(tv.type):
             return TypedValue(self.builder.bitcast(tv.value, RAWPTR.ir), RAWPTR)
@@ -774,6 +798,11 @@ class CodeGen:
         if isinstance(expr, StrLit):
             return self.gen_string(expr.value)
         if isinstance(expr, Var):
+            # A name that is not a variable may be a function used as a value.
+            if expr.name not in self.locals and expr.name not in self.globals:
+                fv = self.func_value(expr.name, expr.line)
+                if fv is not None:
+                    return fv
             slot, var_type, volatile = self.var_addr(expr.name, expr.line)
             return TypedValue(self.gen_load(slot, volatile=volatile, name=expr.name),
                               var_type)
@@ -958,6 +987,12 @@ class CodeGen:
         return TypedValue(self.builder.bitcast(glob, RAWPTR.ir), RAWPTR)
 
     def gen_call(self, expr: Call) -> TypedValue:
+        # A function-pointer variable (local, parameter, or @extern global) is
+        # called indirectly; it shadows any same-named function, as for any var.
+        if expr.name in self.locals and is_function(self.locals[expr.name][1]):
+            return self.gen_indirect_call(expr, self.gen_expr(Var(expr.name, expr.line)))
+        if expr.name in self.globals and is_function(self.globals[expr.name][1]):
+            return self.gen_indirect_call(expr, self.gen_expr(Var(expr.name, expr.line)))
         # File-scoped (@static) names shadow the global namespace.
         key = (self.current_source, expr.name)
         if key in self.static_templates:
@@ -972,20 +1007,53 @@ class CodeGen:
         self.check_access(private, source, f"function {expr.name!r}", expr.line)
         return self.gen_direct_call(expr, expr.name)
 
+    def func_value(self, name: str, line: int) -> "TypedValue | None":
+        """A bare function name used as a value: its address, typed as a
+        function pointer. Only a single monomorphic function qualifies -- a
+        generic or overloaded name has no one address. Returns None if the name
+        is not a function at all (so the caller can report it as a variable)."""
+        key = (self.current_source, name)
+        if key in self.static_templates or name in self.templates:
+            raise LangError(
+                f"{name!r} is generic; a function value needs a single function", line
+            )
+        symbol = self.static_funcs.get(key)
+        if symbol is None and name in self.funcs:
+            private, source = self.func_privacy.get(name, (False, None))
+            self.check_access(private, source, f"function {name!r}", line)
+            symbol = name
+        if symbol is None:
+            return None
+        ret, params, variadic = self.signatures[symbol]
+        return TypedValue(self.funcs[symbol], function_type(ret, tuple(params), variadic))
+
     def gen_direct_call(self, expr: Call, symbol: str) -> TypedValue:
         if expr.type_args:
             raise LangError(f"{expr.name!r} is not a generic function", expr.line)
-        fn = self.funcs[symbol]
         ret, params, variadic = self.signatures[symbol]
+        args = self.marshal_args(expr, params, variadic, repr(expr.name))
+        return TypedValue(self.builder.call(self.funcs[symbol], args), ret)
+
+    def gen_indirect_call(self, expr: Call, callee: TypedValue) -> TypedValue:
+        """Call through a function-pointer value (a variable or parameter)."""
+        if expr.type_args:
+            raise LangError(f"{expr.name!r} is not a generic function", expr.line)
+        ret, params, variadic = callee.type.signature
+        args = self.marshal_args(expr, params, variadic, repr(expr.name))
+        return TypedValue(self.builder.call(callee.value, args), ret)
+
+    def marshal_args(self, expr: Call, params, variadic: bool, label: str) -> list:
+        """Evaluate and coerce a call's arguments against the callee's
+        parameter types, applying C varargs promotions past a variadic tail."""
         if len(expr.args) < len(params) or (len(expr.args) > len(params) and not variadic):
             raise LangError(
-                f"{expr.name!r} expects {len(params)} argument(s), got {len(expr.args)}", expr.line
+                f"{label} expects {len(params)} argument(s), got {len(expr.args)}", expr.line
             )
         args = []
         for i, arg_expr in enumerate(expr.args):
             tv = self.gen_expr(arg_expr)
             if i < len(params):
-                tv = self.coerce(tv, params[i], expr.line, f"argument {i + 1} of {expr.name!r}")
+                tv = self.coerce(tv, params[i], expr.line, f"argument {i + 1} of {label}")
                 value = tv.value
             elif is_integer(tv.type) and tv.type.ir.width < 32:
                 # C varargs promote small integers to int (sign- or
@@ -1001,7 +1069,7 @@ class CodeGen:
             else:
                 value = tv.value
             args.append(value)
-        return TypedValue(self.builder.call(fn, args), ret)
+        return args
 
     def unify(self, pattern: TypeRef, actual: LangType, type_params: list[str],
               bindings: dict[str, LangType], strict: bool, context: str, line: int):
@@ -1218,7 +1286,7 @@ class CodeGen:
                 lhs = self.coerce(lhs, rhs.type, expr.line, f"operand of {expr.op!r}")
         op_type = lhs.type
         if expr.op in COMPARISON_OPS:
-            if is_pointer(op_type):
+            if is_pointer(op_type) or is_function(op_type):
                 if expr.op not in ("==", "!="):
                     raise LangError(f"operator {expr.op!r} not supported for {op_type}", expr.line)
                 return TypedValue(

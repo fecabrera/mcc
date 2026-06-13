@@ -116,8 +116,11 @@ class Parser:
                   "null", "sizeof", "(", "-", "!", "&"}
 
     def parse_type_ref(self, greedy_stars: bool = True) -> TypeRef:
-        """A type: `[struct] name[<type, ...>][*...]`. The `struct` keyword
-        is optional (C habit); struct-ness is resolved by name."""
+        """A type: `[struct] name[<type, ...>][*...]`, or a function-pointer
+        type `fn(type, ...) -> ret`. The `struct` keyword is optional (C
+        habit); struct-ness is resolved by name."""
+        if self.cur.kind == "fn":
+            return self.parse_fn_type(greedy_stars)
         self.accept("struct")
         name = self.expect("IDENT").text
         args = []
@@ -126,13 +129,30 @@ class Parser:
             while self.accept(","):
                 args.append(self.parse_type_ref())
             self.expect_close_angle()
+        return TypeRef(name, args, self.parse_stars(greedy_stars))
+
+    def parse_fn_type(self, greedy_stars: bool) -> TypeRef:
+        """A function-pointer type: `fn(A, B) -> R`. A missing `-> R` means
+        the function returns void, as in a declaration."""
+        self.expect("fn")
+        self.expect("(")
+        params = []
+        while self.cur.kind != ")":
+            if params:
+                self.expect(",")
+            params.append(self.parse_type_ref())
+        self.expect(")")
+        ret = self.parse_type_ref() if self.accept("->") else TypeRef("void")
+        return TypeRef("fn", [], self.parse_stars(greedy_stars), params=params, ret=ret)
+
+    def parse_stars(self, greedy_stars: bool) -> int:
         stars = 0
         while self.cur.kind == "*" and (
             greedy_stars or self.tokens[self.pos + 1].kind not in self.EXPR_START
         ):
             self.advance()
             stars += 1
-        return TypeRef(name, args, stars)
+        return stars
 
     def expect_close_angle(self):
         """Close a type-argument list. A `>>` token here is two closings of

@@ -8,12 +8,20 @@ from dataclasses import dataclass, field
 @dataclass
 class TypeRef:
     """A type as written in source: base name, generic arguments, pointer
-    depth. `struct array<T>**` is TypeRef("array", [TypeRef("T")], 2)."""
+    depth. `struct array<T>**` is TypeRef("array", [TypeRef("T")], 2).
+
+    A function-pointer type `fn(A, B) -> R` sets `params` and `ret` instead of
+    `args`; `name` is "fn" and `stars` still applies for `fn(...) -> R*`."""
     name: str
     args: list["TypeRef"] = field(default_factory=list)
     stars: int = 0
+    params: list["TypeRef"] | None = None  # set for fn(...) -> ret types
+    ret: "TypeRef | None" = None
 
     def __str__(self) -> str:
+        if self.params is not None:
+            sig = "fn(" + ", ".join(str(p) for p in self.params) + ") -> " + str(self.ret)
+            return sig + "*" * self.stars
         text = self.name
         if self.args:
             text += "<" + ", ".join(str(a) for a in self.args) + ">"

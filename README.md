@@ -30,6 +30,7 @@ fn main() -> int32 {
   - [Operators](#operators)
   - [Casts](#casts)
   - [Pointers](#pointers)
+  - [Function pointers](#function-pointers)
   - [Structs](#structs)
   - [Imports](#imports)
   - [Visibility](#visibility)
@@ -312,6 +313,43 @@ String literals have type `uint8*`, so `"hi"[0]` is the byte `104`. There is
 no pointer arithmetic (`p + 1`); use `&p[1]`. See
 [examples/pointers.mc](examples/pointers.mc) and
 [lib/memory.mc](lib/memory.mc) for a generic typed allocator.
+
+### Function pointers
+
+`fn(A, B) -> R` is the type of a pointer to a function taking `A, B` and
+returning `R` (a missing `-> R` means `void`, as in a declaration). A bare
+function name — written without the call parentheses — is a value of that
+type, so functions can be stored in variables and struct fields, passed as
+arguments, and returned:
+
+```c
+fn add(a: int32, b: int32) -> int32 { return a + b; }
+fn sub(a: int32, b: int32) -> int32 { return a - b; }
+
+fn apply(op: fn(int32, int32) -> int32, x: int32, y: int32) -> int32 {
+    return op(x, y);            // call through the parameter
+}
+
+fn main() -> int32 {
+    let op: fn(int32, int32) -> int32 = add;
+    op = sub;                                    // reassignable
+    return apply(op, 10, 3) + apply(add, 1, 1);
+}
+```
+
+The signature must match exactly — `add` does not fit a `fn(int32) -> int32`.
+`null` is a valid function pointer and they compare with `==` / `!=`, so an
+optional callback works:
+
+```c
+if (cb != null) { cb(x); }
+```
+
+Only a single, non-generic function has an address; a generic name like
+`id` cannot be used as a value (there is no one instance to point at).
+Calling is currently limited to a function name or a variable holding a
+pointer — calling the result of an expression directly (`table[i](x)`) is
+not yet supported; assign it to a variable first.
 
 ### Structs
 
