@@ -130,7 +130,7 @@ dispatch. When type arguments are omitted, they are inferred from the
 argument types (variables take priority over literals), and typed arguments
 that disagree are an error: `conflicting types for type parameter T`.
 Generic functions can call themselves recursively. See
-[examples/templates.mc](examples/templates.mc).
+[examples/generics.mc](examples/generics.mc).
 
 Generic functions with the same name form an _overload set_, dispatched by
 parameter pattern — a call picks the most specific viable variant (`T*`
@@ -232,14 +232,16 @@ an arm.
 
 ### Types
 
-| Type                                  | LLVM equivalent                                                   |
-| ------------------------------------- | ----------------------------------------------------------------- |
-| `int8`, `int16`, `int32`, `int64`     | `i8`, `i16`, `i32`, `i64` (signed)                                |
-| `uint8`, `uint16`, `uint32`, `uint64` | `i8`, `i16`, `i32`, `i64` (unsigned)                              |
-| `bool`                                | `i1`                                                              |
-| `float64`                             | `double`                                                          |
-| `T*` (any type + `*`s)                | pointer                                                           |
-| `void`                                | `void` (return type only; `void*` is not allowed -- use `uint8*`) |
+| Type                                                  | LLVM equivalent                                                   |
+| ----------------------------------------------------- | ----------------------------------------------------------------- |
+| `int8`, `int16`, `int32`, `int64`                     | `i8`, `i16`, `i32`, `i64` (signed)                                |
+| `uint8`, `uint16`, `uint32`, `uint64`                 | `i8`, `i16`, `i32`, `i64` (unsigned)                              |
+| `bool`                                                | `i1`                                                              |
+| `float64`                                             | `double`                                                          |
+| `T*` (any type + `*`s)                                | pointer                                                           |
+| `T[N]` (fixed-size [array](#arrays))                  | `[N x T]`                                                         |
+| `fn(A) -> R` ([function pointer](#function-pointers)) | `R (A)*`                                                          |
+| `void`                                                | `void` (return type only; `void*` is not allowed -- use `uint8*`) |
 
 Literals with a decimal point are `float64` and `true`/`false` are `bool`.
 Integer literals are written in decimal or hexadecimal (`0xFF`), and are
@@ -621,12 +623,14 @@ this: predeclared extern functions.)
 
 ### Strings
 
-String literals compile to constant C strings. They support C's simple
-escape sequences — `\a` `\b` `\f` `\n` `\r` `\t` `\v`, the quotes `\'` `\"`,
-`\\`, `\?`, and `\0` for NUL — plus `\e` for ESC (a GCC/Clang extension,
-handy for ANSI terminal codes). Any other escape keeps the bare character.
-Strings can currently only be passed to functions — there is no string
-variable type yet.
+String literals compile to constant C strings and have type `uint8*`, so a
+string is just a pointer to its bytes: it can be stored in a `uint8*`
+variable, array, or struct field, indexed (`"hi"[0]` is `104`), and passed
+to functions — there is no separate `string` type or built-in mutable string
+storage. They support C's simple escape sequences — `\a` `\b` `\f` `\n` `\r`
+`\t` `\v`, the quotes `\'` `\"`, `\\`, `\?`, and `\0` for NUL — plus `\e` for
+ESC (a GCC/Clang extension, handy for ANSI terminal codes). Any other escape
+keeps the bare character.
 
 A character literal in single quotes is a `uint8` — the byte value of a
 single character, using the same escapes (`'a'`, `'\n'`, `'\0'`, `'\''`,

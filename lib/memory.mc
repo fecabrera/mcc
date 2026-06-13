@@ -1,6 +1,7 @@
 @extern fn malloc(size: uint64) -> uint8*;
 @extern fn free(ptr: uint8*);
 @extern fn memcpy(dest: uint8*, source: uint8*, count: uint64) -> uint8*;
+@extern fn memset(dest: uint8*, ch: int32, count: uint64) -> uint8*;
 
 /**
  * Allocates heap space for n elements of type T.
@@ -36,6 +37,19 @@ fn copy_bytes<T>(dst: T*, src: T*, n: uint64) {
 }
 
 /**
+ * Fills the n elements of type T at dst with the byte `value`, in a single
+ * memset. The element size is computed from T, so callers count elements,
+ * not bytes; pass 0 to zero the region.
+ *
+ * @param dst:   destination, with room for at least n elements
+ * @param value: the byte written to every byte of the region
+ * @param n:     number of elements to fill
+ */
+fn set_bytes<T>(dst: T*, value: uint8, n: uint64) {
+    memset(dst, value as int32, n * sizeof(T));   // libc memset takes an int
+}
+
+/**
  * Copies n elements of type T from src to dst one item at a time.
  *
  * @param dst: destination, with room for at least n elements
@@ -49,3 +63,20 @@ fn copy_items<T>(dst: T*, src: T*, n: uint64) {
         i = i + 1;
     }
 }
+
+/**
+ * Sets the n elements of type T at dst to `value`, one item at a time -- so
+ * it writes whole T values, not just a repeated byte pattern.
+ *
+ * @param dst:   destination, with room for at least n elements
+ * @param value: the value written to each element
+ * @param n:     number of elements to set
+ */
+fn set_items<T>(dst: T*, value: T, n: uint64) {
+    let i: uint64 = 0;
+    while (i < n) {
+        dst[i] = value;
+        i = i + 1;
+    }
+}
+
