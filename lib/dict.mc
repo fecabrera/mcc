@@ -1,27 +1,41 @@
 import "memory";
 import "hash";
+import "libc/string";
 
-#include <string.h>
+// Slot states
+@private const DICT_ENTRY_STATE_EMPTY = 0;
+@private const DICT_ENTRY_STATE_OCCUPIED = 1;
+@private const DICT_ENTRY_STATE_TOMBSTONE = 2;
 
 /**
- * Hash map from NUL-terminated string keys (uint8*) to V values, with the
- * same open-addressing layout as lib/set.mc but content-keyed: keys hash
- * and compare by their bytes, and the dict owns private copies of them
- * (copied on insert, freed on remove/destroy). Callers keep ownership of
- * the strings they pass in and may free or reuse them immediately.
+ * One slot in a dict's backing array.
  *
- * Slot states: 0 = empty, 1 = occupied, 2 = tombstone.
+ * @field key:   owned, heap-allocated copy of the NUL-terminated key string;
+ *               null when state != OCCUPIED
+ * @field value: associated value; valid only when state == OCCUPIED
+ * @field state: slot lifecycle — EMPTY (0), OCCUPIED (1), or TOMBSTONE (2)
  */
 struct dict_entry<V> {
-    key: uint8*;  // owned copy
+    key: uint8*;
     value: V;
     state: uint8;
 }
 
+/**
+ * Open-addressing hash map from NUL-terminated string keys to V values.
+ * Keys are content-hashed and compared by bytes; the dict owns private copies
+ * (allocated on insert, freed on remove/destroy). Callers keep ownership of
+ * the strings they pass in and may free or reuse them immediately.
+ * Grows automatically when the load factor reaches 70%.
+ *
+ * @field entries:  heap-allocated slot array of length capacity
+ * @field length:   number of live (OCCUPIED) entries
+ * @field capacity: total number of allocated slots
+ */
 struct dict<V> {
-    entries: struct dict_entry<V>*;  // heap-allocated slot array
-    length: uint64;                  // number of live entries
-    capacity: uint64;                // total allocated slots
+    entries: struct dict_entry<V>*;
+    length: uint64;
+    capacity: uint64;
 }
 
 /**
@@ -71,7 +85,7 @@ fn dict_init<V>(self: struct dict<V>*, capacity: uint64) {
 
     let i: uint64 = 0;
     while (i < capacity) {
-        self->entries[i].state = 0;
+        self->entries[i].state = DICT_ENTRY_STATE_EMPTY;
         i = i + 1;
     }
 }
@@ -85,7 +99,7 @@ fn dict_init<V>(self: struct dict<V>*, capacity: uint64) {
 fn dict_destroy<V>(self: struct dict<V>*) {
     let i: uint64 = 0;
     while (i < self->capacity) {
-        if (self->entries[i].state == 1)
+        if (self->entries[i].state == DICT_ENTRY_STATE_OCCUPIED)
             dealloc(self->entries[i].key);
         i = i + 1;
     }
@@ -113,8 +127,8 @@ fn dict_set<V>(self: struct dict<V>*, key: uint8*, value: V) {
     let tombstone_slot: uint64 = 0;
     let has_tombstone = false;
 
-    while (self->entries[slot].state != 0) {
-        if (self->entries[slot].state == 1) {
+    while (self->entries[slot].state != DICT_ENTRY_STATE_EMPTY) {
+        if (self->entries[slot].state == DICT_ENTRY_STATE_OCCUPIED) {
             if (str_eq(self->entries[slot].key, key)) {
                 self->entries[slot].value = value;
                 return;
@@ -131,7 +145,7 @@ fn dict_set<V>(self: struct dict<V>*, key: uint8*, value: V) {
 
     self->entries[slot].key = str_clone(key);
     self->entries[slot].value = value;
-    self->entries[slot].state = 1;
+    self->entries[slot].state = DICT_ENTRY_STATE_OCCUPIED;
     self->length = self->length + 1;
 }
 
@@ -148,8 +162,8 @@ fn dict_set<V>(self: struct dict<V>*, key: uint8*, value: V) {
 fn dict_get<V>(self: struct dict<V>*, key: uint8*, out: V*) -> bool {
     let slot = hash(key) % self->capacity;
 
-    while (self->entries[slot].state != 0) {
-        if (self->entries[slot].state == 1) {
+    while (self->entries[slot].state != DICT_ENTRY_STATE_EMPTY) {
+        if (self->entries[slot].state == DICT_ENTRY_STATE_OCCUPIED) {
             if (str_eq(self->entries[slot].key, key)) {
                 *out = self->entries[slot].value;
                 return true;
@@ -171,12 +185,12 @@ fn dict_get<V>(self: struct dict<V>*, key: uint8*, out: V*) -> bool {
 fn dict_remove<V>(self: struct dict<V>*, key: uint8*) {
     let slot = hash(key) % self->capacity;
 
-    while (self->entries[slot].state != 0) {
-        if (self->entries[slot].state == 1) {
+    while (self->entries[slot].state != DICT_ENTRY_STATE_EMPTY) {
+        if (self->entries[slot].state == DICT_ENTRY_STATE_OCCUPIED) {
             if (str_eq(self->entries[slot].key, key)) {
                 dealloc(self->entries[slot].key);
                 self->entries[slot].key = null;
-                self->entries[slot].state = 2;
+                self->entries[slot].state = DICT_ENTRY_STATE_TOMBSTONE;
                 self->length = self->length - 1;
                 return;
             }
@@ -202,15 +216,15 @@ fn dict_grow<V>(self: struct dict<V>*) {
 
     let i: uint64 = 0;
     while (i < new_capacity) {
-        new_entries[i].state = 0;
+        new_entries[i].state = DICT_ENTRY_STATE_EMPTY;
         i = i + 1;
     }
 
     i = 0;
     while (i < old_capacity) {
-        if (old_entries[i].state == 1) {
+        if (old_entries[i].state == DICT_ENTRY_STATE_OCCUPIED) {
             let slot = hash(old_entries[i].key) % new_capacity;
-            while (new_entries[slot].state == 1)
+            while (new_entries[slot].state == DICT_ENTRY_STATE_OCCUPIED)
                 slot = (slot + 1) % new_capacity;
 
             new_entries[slot] = old_entries[i];
