@@ -338,6 +338,7 @@ class CodeGen:
         self.current_source: str | None = None  # file owning the code being generated
         self.builder: ir.IRBuilder | None = None
         self.locals: dict[str, tuple[ir.AllocaInstr, LangType]] = {}
+        self.scope_names: set[str] = set()  # names declared in the current block
         self.ret_type: LangType = VOID
         # Enclosing loops, innermost last: (continue target, break target).
         self.loops: list[tuple[ir.Block, ir.Block]] = []
@@ -737,6 +738,7 @@ class CodeGen:
         self.current_variadic = func.variadic  # gates va_start
         self.builder = ir.IRBuilder(fn.append_basic_block("entry"))
         self.locals = {}
+        self.scope_names = set()  # the body block resets this, but be explicit
         self.loops = []  # break/continue cannot escape into a caller's loop
         for (pname, _), ptype, arg in zip(func.params, params, fn.args):
             arg.name = pname
@@ -755,10 +757,26 @@ class CodeGen:
                 raise LangError(f"function {func.name!r} may end without a return", func.line)
 
     def gen_block(self, statements: list):
-        for stmt in statements:
-            if self.builder.block.is_terminated:
-                break  # unreachable code after return
-            self.gen_statement(stmt)
+        # Each block is its own scope: outer names stay visible, names declared
+        # here vanish at the end, and an inner declaration may shadow an outer
+        # one (the outer binding is restored on exit). Allocas live for the
+        # whole function regardless, so this only governs name visibility.
+        outer_locals, outer_names = dict(self.locals), self.scope_names
+        self.scope_names = set()
+        try:
+            for stmt in statements:
+                if self.builder.block.is_terminated:
+                    break  # unreachable code after return
+                self.gen_statement(stmt)
+        finally:
+            self.locals, self.scope_names = outer_locals, outer_names
+
+    def bind_local(self, name: str, slot, lang_type: LangType):
+        """Record a local in the current scope. The name shadows any outer one
+        until the enclosing block ends; redeclaring it in the same block is an
+        error (checked by the caller against scope_names)."""
+        self.locals[name] = (slot, lang_type)
+        self.scope_names.add(name)
 
     def coerce(self, tv: TypedValue, expected: LangType, line: int, context: str) -> TypedValue:
         """Check that `tv` has type `expected`, adapting untyped constants.
@@ -822,8 +840,10 @@ class CodeGen:
                 tv = self.coerce(self.gen_expr(stmt.value), self.ret_type, stmt.line, "return value")
                 self.builder.ret(tv.value)
         elif isinstance(stmt, Let):
-            if stmt.name in self.locals:
-                raise LangError(f"variable {stmt.name!r} already declared", stmt.line)
+            if stmt.name in self.scope_names:
+                raise LangError(
+                    f"variable {stmt.name!r} already declared in this scope", stmt.line
+                )
             if stmt.value is None:  # let x: T; -- uninitialized, like a C local
                 declared = self.lang_type(stmt.type_name, stmt.line)
                 if declared is VOID:
@@ -833,7 +853,7 @@ class CodeGen:
                     slot.align = type_align(declared)
                 elif is_valist(declared):
                     slot.align = self.va_list_align  # ABI alignment for va_start
-                self.locals[stmt.name] = (slot, declared)
+                self.bind_local(stmt.name, slot, declared)
                 return
             if isinstance(stmt.value, ArrayLit):  # let xs: T[N] = [...]
                 if stmt.type_name is None:
@@ -846,7 +866,7 @@ class CodeGen:
                     raise LangError(f"an array literal cannot initialize a {declared}", stmt.line)
                 slot = self.builder.alloca(declared.ir, name=stmt.name)
                 self.store_array_literal(slot, stmt.value, declared, stmt.line)
-                self.locals[stmt.name] = (slot, declared)
+                self.bind_local(stmt.name, slot, declared)
                 return
             tv = self.gen_expr(stmt.value)
             if stmt.type_name is not None:
@@ -872,7 +892,7 @@ class CodeGen:
             if over_aligned(tv.type):
                 slot.align = type_align(tv.type)
             self.builder.store(tv.value, slot)
-            self.locals[stmt.name] = (slot, tv.type)
+            self.bind_local(stmt.name, slot, tv.type)
         elif isinstance(stmt, Assign):
             slot, var_type, volatile = self.var_addr(stmt.name, stmt.line)
             tv = self.coerce(self.gen_expr(stmt.value), var_type, stmt.line, f"assignment to {stmt.name}")
@@ -1787,7 +1807,7 @@ class CodeGen:
         outer_bindings = self.type_bindings
         outer_source = self.current_source
         saved = (self.builder, self.locals, self.ret_type, self.loops,
-                 self.current_variadic)
+                 self.current_variadic, self.scope_names)
         self.type_bindings = bindings
         self.current_source = func.source  # the signature may name private structs
         try:
@@ -1805,7 +1825,7 @@ class CodeGen:
             self.gen_function(func, fn, ret, params)
         finally:
             (self.builder, self.locals, self.ret_type, self.loops,
-             self.current_variadic) = saved
+             self.current_variadic, self.scope_names) = saved
             self.type_bindings = outer_bindings
             self.current_source = outer_source
         return fn, ret, params

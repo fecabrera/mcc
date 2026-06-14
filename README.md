@@ -218,6 +218,27 @@ p.x = 4;
 p.y = 2;
 ```
 
+Variables are block-scoped, as in C: a `let` is visible only until the end of
+its enclosing `{ }` — including the body of an `if`/`else` branch or a
+`while`/`until` loop — so sibling and sequential blocks can reuse a name. An
+inner block may **shadow** a variable from an outer one; the outer binding
+returns when the block ends. Redeclaring a name in the *same* block is an
+error.
+
+```c
+let x: int32 = 1;
+if (cond) {
+    let x: int32 = 2;   // shadows the outer x, only within this block
+    use(x);             // 2
+}
+use(x);                 // 1 again
+
+while (i < n) {
+    let row = grid[i];  // fresh each iteration; not visible after the loop
+    i = i + 1;
+}
+```
+
 ### Constants
 
 `const` declares a named compile-time constant — mcc's answer to C's
