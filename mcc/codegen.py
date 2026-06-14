@@ -28,55 +28,102 @@ from mcc.nodes import (
 
 @dataclass(frozen=True)
 class LangType:
+    """A source-level type paired with its LLVM representation.
+
+    LLVM integer types carry no signedness, so ``signed`` and the optional
+    fields below record the source-level distinctions (pointers, structs,
+    arrays, function pointers) that the IR type alone does not. Struct types are
+    interned per mangled name; the layout attributes marked ``compare=False``
+    are excluded from equality/hash so recursive structs do not loop during
+    comparison.
+
+    Attributes:
+        name: The source-level type name, e.g. ``"int32"`` or ``"array<T>*"``.
+        ir: The corresponding ``llvmlite.ir`` type.
+        signed: Whether an integer type is signed; meaningful only for ints.
+        pointee: The pointed-to type for a pointer, else ``None``.
+        template: Struct template name, used for unification.
+        args: Struct type arguments.
+        fields: ``(field name, LangType)`` pairs for a struct type, else
+            ``None``; excluded from equality/hash.
+        align: ``@align(N)`` override for a struct, else ``None``.
+        packed: ``@packed`` -- fields at unpadded offsets, alignment 1.
+        volatile: ``@volatile`` -- loads/stores must not be elided, merged, or
+            reordered.
+        elem_indices: LLVM element index of each field; padding elements in an
+            explicitly laid-out struct shift these.
+        signature: ``(return type, param types, variadic)`` for a
+            function-pointer type; part of equality, so structurally equal
+            function types match.
+        element: Element type of a fixed-size array, else ``None``.
+        count: Length of a fixed-size array, else ``None``.
+    """
+
     name: str
     ir: ir.Type
-    signed: bool = True  # only meaningful for integer types
-    pointee: "LangType | None" = None  # set for pointer types
-    template: str | None = None  # struct template name, for unification
-    args: tuple = ()  # struct type arguments
-    # (field name, LangType) pairs; set for struct types. Excluded from
-    # eq/hash: struct types are interned per mangled name, and recursive
-    # structs would otherwise make comparison loop forever.
+    signed: bool = True
+    pointee: "LangType | None" = None
+    template: str | None = None
+    args: tuple = ()
     fields: tuple | None = field(default=None, compare=False)
-    # @align(N) override, for struct types declared with one.
     align: int | None = field(default=None, compare=False)
-    # @packed: fields at unpadded offsets; the struct's alignment is 1.
     packed: bool = field(default=False, compare=False)
-    # @volatile: loads and stores must not be elided, merged, or reordered.
     volatile: bool = field(default=False, compare=False)
-    # LLVM element index of each field; in explicitly laid out structs
-    # (see instantiate_struct) padding elements shift the indices.
     elem_indices: tuple | None = field(default=None, compare=False)
-    # (return type, param types, variadic) for a function-pointer type. Part of
-    # equality, so two `fn(int32) -> int32` types match structurally.
     signature: tuple | None = None
-    # element type and length for a fixed-size array type (int32[10]).
     element: "LangType | None" = None
     count: int | None = None
 
     def __str__(self) -> str:
+        """Return the type's source-level name."""
         return self.name
 
 
 @dataclass
 class TypedValue:
+    """An evaluated expression: an LLVM value with its source-level type.
+
+    Attributes:
+        value: The LLVM value the expression produced.
+        type: The value's ``LangType``.
+        adaptable: ``True`` for constants without a definite type yet (bare
+            integer literals, constant arithmetic on them, and ``null``); such
+            values may still take on a compatible type, while everything else
+            keeps its type unless explicitly cast.
+    """
+
     value: ir.Value
     type: LangType
-    # True for constants that have not been given a definite type yet (bare
-    # integer literals, constant arithmetic on them, and null). Adaptable
-    # values may still take on a compatible type; everything else keeps its
-    # type unless explicitly cast.
     adaptable: bool = False
 
 
 def pointer_to(lang_type: LangType) -> LangType:
+    """Build the pointer type ``T*`` for a type ``T``.
+
+    Args:
+        lang_type: The pointee type.
+
+    Returns:
+        A ``LangType`` for a pointer to ``lang_type``.
+    """
     return LangType(lang_type.name + "*", lang_type.ir.as_pointer(),
                     signed=False, pointee=lang_type)
 
 
 def function_type(ret: LangType, params: tuple, variadic: bool = False) -> LangType:
-    """A function-pointer type, e.g. fn(int32, int32) -> int32. Its LLVM type
-    is a pointer to the LLVM function type, so a value is callable directly."""
+    """Build a function-pointer type, e.g. ``fn(int32, int32) -> int32``.
+
+    Its LLVM type is a pointer to the LLVM function type, so a value of it is
+    callable directly.
+
+    Args:
+        ret: The return type.
+        params: The parameter types, in order.
+        variadic: Whether the function takes C-style varargs.
+
+    Returns:
+        A ``LangType`` for the function-pointer type.
+    """
     fnty = ir.FunctionType(ret.ir, [p.ir for p in params], var_arg=variadic)
     name = "fn(" + ", ".join(p.name for p in params) + ") -> " + ret.name
     return LangType(name, fnty.as_pointer(), signed=False,
@@ -84,8 +131,18 @@ def function_type(ret: LangType, params: tuple, variadic: bool = False) -> LangT
 
 
 def array_of(element: LangType, count: int) -> LangType:
-    """A fixed-size array type, e.g. int32[10]. In value contexts it decays to
-    a pointer to its first element (see CodeGen.value_at)."""
+    """Build a fixed-size array type, e.g. ``int32[10]``.
+
+    In value contexts an array decays to a pointer to its first element (see
+    :meth:`CodeGen.value_at`).
+
+    Args:
+        element: The element type.
+        count: The number of elements.
+
+    Returns:
+        A ``LangType`` for the fixed-size array.
+    """
     return LangType(f"{element.name}[{count}]", ir.ArrayType(element.ir, count),
                     signed=False, element=element, count=count)
 
@@ -131,8 +188,16 @@ TARGET_ARCH_VALUES = {
 
 
 def classify_os(triple: str) -> str:
-    """The OS_* name for an LLVM triple's operating-system component. A triple
-    with no OS (e.g. aarch64-unknown-none-elf for bare metal) reports OS_NONE."""
+    """Classify the OS component of an LLVM triple.
+
+    Args:
+        triple: The LLVM target triple.
+
+    Returns:
+        The ``OS_*`` name for the triple's operating system; a triple with no
+        OS (e.g. ``aarch64-unknown-none-elf`` for bare metal) reports
+        ``OS_NONE``.
+    """
     if any(s in triple for s in ("darwin", "macos", "ios", "apple")):
         return "OS_DARWIN"
     if "linux" in triple:
@@ -145,7 +210,14 @@ def classify_os(triple: str) -> str:
 
 
 def classify_arch(triple: str) -> str:
-    """The ARCH_* name for an LLVM triple's architecture component."""
+    """Classify the architecture component of an LLVM triple.
+
+    Args:
+        triple: The LLVM target triple.
+
+    Returns:
+        The ``ARCH_*`` name for the triple's architecture.
+    """
     arch = triple.split("-", 1)[0]
     if arch in ("x86_64", "amd64"):
         return "ARCH_X86_64"
@@ -162,56 +234,145 @@ I32_ZERO = ir.Constant(ir.IntType(32), 0)
 # printed form; llvmlite renders modules to IR text before LLVM parses them,
 # making the textual form authoritative.
 class VolatileLoad(ir.LoadInstr):
+    """A load instruction rendered with the ``volatile`` flag.
+
+    llvmlite.ir has no volatile flag on memory instructions, so the printed IR
+    text -- which is authoritative, as LLVM parses it -- is patched directly.
+    """
+
     def descr(self, buf):
+        """Append this instruction's IR text with ``load`` made volatile.
+
+        Args:
+            buf: The output buffer list llvmlite appends rendered text to.
+        """
         inner: list[str] = []
         super().descr(inner)
         buf.append("".join(inner).replace("load ", "load volatile ", 1))
 
 
 class VolatileStore(ir.StoreInstr):
+    """A store instruction rendered with the ``volatile`` flag.
+
+    The companion of :class:`VolatileLoad`; see its note on why the printed IR
+    is patched.
+    """
+
     def descr(self, buf):
+        """Append this instruction's IR text with ``store`` made volatile.
+
+        Args:
+            buf: The output buffer list llvmlite appends rendered text to.
+        """
         inner: list[str] = []
         super().descr(inner)
         buf.append("".join(inner).replace("store ", "store volatile ", 1))
 
 
 def is_integer(lang_type: LangType) -> bool:
-    """True for the intN/uintN types (not bool, which is i1 underneath)."""
+    """Report whether a type is one of the ``intN``/``uintN`` types.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` for the sized integer types, but not ``bool`` (an ``i1``
+        underneath) or pointers.
+    """
     return (isinstance(lang_type.ir, ir.IntType) and lang_type is not BOOL
             and lang_type.pointee is None)
 
 
 def is_pointer(lang_type: LangType) -> bool:
+    """Report whether a type is a pointer.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type has a pointee.
+    """
     return lang_type.pointee is not None
 
 
 def is_function(lang_type: LangType) -> bool:
+    """Report whether a type is a function-pointer type.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type carries a function signature.
+    """
     return lang_type.signature is not None
 
 
 def is_array(lang_type: LangType) -> bool:
+    """Report whether a type is a fixed-size array.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type has an element type.
+    """
     return lang_type.element is not None
 
 
 def is_struct(lang_type: LangType) -> bool:
+    """Report whether a type is a struct.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type has a field list.
+    """
     return lang_type.fields is not None
 
 
 def is_valist(lang_type: LangType) -> bool:
-    """The platform va_list type. Only CodeGen.valist() builds one, and
-    lang_type() reserves the name, so the name is an unambiguous marker."""
+    """Report whether a type is the platform ``va_list`` type.
+
+    Only :meth:`CodeGen.valist` builds one and ``lang_type()`` reserves the
+    name, so the name is an unambiguous marker.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type is ``va_list``.
+    """
     return lang_type.name == "va_list"
 
 
 def _host_triple() -> str:
-    """The host target triple, for picking the native va_list layout when no
-    --target was given. Imported lazily so codegen has no hard dependency on
-    the LLVM binding layer when va_list is unused."""
+    """Return the host target triple.
+
+    Used to pick the native ``va_list`` layout when no ``--target`` is given.
+    The LLVM binding layer is imported lazily so codegen has no hard dependency
+    on it when ``va_list`` is unused.
+
+    Returns:
+        The host's default LLVM target triple.
+    """
     import llvmlite.binding as llvm
     return llvm.get_default_triple()
 
 
 def type_align(lang_type: LangType) -> int:
+    """Compute a type's alignment in bytes.
+
+    Honors ``@packed`` (alignment 1, raised by ``@align``) and ``@align(N)``
+    overrides, and takes a struct's alignment from its most-aligned field
+    otherwise.
+
+    Args:
+        lang_type: The type to measure.
+
+    Returns:
+        The alignment in bytes.
+    """
     if is_pointer(lang_type):
         return POINTER_SIZE
     if is_array(lang_type):
@@ -227,10 +388,19 @@ def type_align(lang_type: LangType) -> int:
 
 
 def over_aligned(lang_type: LangType) -> bool:
-    """True for structs whose alignment exceeds what LLVM would compute from
-    their IR type alone -- an @align override, here or on a nested field --
-    so the layout must be spelled out explicitly (and allocas aligned by
-    hand) rather than left to LLVM's natural rules."""
+    """Report whether a struct needs an explicitly spelled-out layout.
+
+    True when a struct's alignment exceeds what LLVM would compute from its IR
+    type alone -- an ``@align`` override, here or on a nested field -- so the
+    layout must be laid out by hand (and allocas aligned manually) rather than
+    left to LLVM's natural rules.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` for an over-aligned struct, ``False`` otherwise.
+    """
     if not is_struct(lang_type):
         return False
     if lang_type.packed:  # its IR body is packed (alignment 1) already
@@ -240,8 +410,16 @@ def over_aligned(lang_type: LangType) -> bool:
 
 
 def type_size(lang_type: LangType) -> int:
-    """Size in bytes, as sizeof() reports it (matching LLVM's natural layout
-    on 64-bit targets, including struct padding)."""
+    """Compute a type's size in bytes, as ``sizeof()`` reports it.
+
+    Matches LLVM's natural layout on 64-bit targets, including struct padding.
+
+    Args:
+        lang_type: The type to measure.
+
+    Returns:
+        The size in bytes.
+    """
     if is_pointer(lang_type):
         return POINTER_SIZE
     if is_array(lang_type):
@@ -264,9 +442,21 @@ COMPARISON_OPS = ("==", "!=", "<", "<=", ">", ">=")
 
 
 def fold_int_arithmetic(op: str, a: int, b: int, lang_type: LangType) -> int | None:
-    """Evaluate a op b at compile time (C semantics: division truncates
-    toward zero, >> is arithmetic for signed types), wrapped to the type's
-    range. None if it cannot fold."""
+    """Evaluate ``a op b`` at compile time, wrapped to the type's range.
+
+    Uses C semantics: division truncates toward zero and ``>>`` is arithmetic
+    for signed types.
+
+    Args:
+        op: The binary operator token (e.g. ``"+"``, ``"<<"``).
+        a: The left operand value.
+        b: The right operand value.
+        lang_type: The result type, whose width and signedness fix the wrap.
+
+    Returns:
+        The folded value wrapped to ``lang_type``'s range, or ``None`` when it
+        cannot fold (division by zero, an out-of-range shift).
+    """
     width = lang_type.ir.width
     if op in ("/", "%") and b == 0:
         return None  # leave division by zero to the runtime instruction
@@ -289,8 +479,17 @@ def fold_int_arithmetic(op: str, a: int, b: int, lang_type: LangType) -> int | N
 
 
 def wrap_int(value: int, lang_type: LangType) -> int:
-    """Wrap a Python integer into lang_type's range (two's complement), as a
-    narrowing or signedness-changing cast does."""
+    """Wrap a Python integer into a type's range (two's complement).
+
+    Mirrors what a narrowing or signedness-changing cast does at runtime.
+
+    Args:
+        value: The integer to wrap.
+        lang_type: The target integer type whose width/signedness fix the wrap.
+
+    Returns:
+        ``value`` reduced to ``lang_type``'s representable range.
+    """
     width = lang_type.ir.width
     if lang_type.signed:
         half = 1 << (width - 1)
@@ -299,8 +498,30 @@ def wrap_int(value: int, lang_type: LangType) -> int:
 
 
 class CodeGen:
+    """Lowers a merged ``Program`` to an LLVM IR module.
+
+    Walks the AST and emits IR with ``llvmlite.ir``. Generic functions and
+    structs are monomorphized on first use and cached; ``@static`` and
+    ``@private`` declarations are tracked per source file for name scoping and
+    access checks; and ``import``-reached or monomorphized definitions get
+    mergeable linkage so identical copies collapse at link time. The many
+    instance attributes set up in :meth:`__init__` hold this bookkeeping and are
+    documented inline there.
+    """
+
     def __init__(self, program: Program, name: str, root_source: str | None = None,
                  target: str | None = None):
+        """Initialize the code generator.
+
+        Args:
+            program: The merged program to compile.
+            name: The LLVM module name, typically the entry file's name.
+            root_source: Resolved path of the entry file; its own definitions
+                keep external linkage while imported ones become mergeable.
+                ``None`` for a single-module JIT or the test helpers.
+            target: The LLVM target triple, or ``None`` for the host; fixes the
+                ``va_list`` layout.
+        """
         self.program = program
         # Target triple (None = host); fixes the platform va_list layout.
         self.target = target
@@ -366,24 +587,51 @@ class CodeGen:
         self.str_count = 0
 
     def check_access(self, private: bool, source: str | None, what: str, line: int):
+        """Enforce ``@private`` visibility for a referenced declaration.
+
+        Args:
+            private: Whether the referenced declaration is ``@private``.
+            source: The file that defines it.
+            what: A description of the declaration, for the error message.
+            line: Line of the reference, for diagnostics.
+
+        Raises:
+            LangError: When a ``@private`` declaration is referenced from a file
+                other than the one being generated.
+        """
         if private and source != self.current_source:
             owner = source.rsplit("/", 1)[-1] if source else "its file"
             raise LangError(f"{what} is private to {owner}", line)
 
     def link_shared(self, fn: ir.Function, source: str | None):
-        """Give `fn` mergeable linkage if it is shared across objects. The root
-        file's own definitions keep the default external linkage (a genuine
-        duplicate is a link error); a definition reached through `import`, or a
-        monomorphized generic, is copied into every object that uses it, so it
-        gets `linkonce_odr` and the identical copies merge at link time instead
-        of colliding. With no root_source (single-module JIT or the test
-        helpers) there is nothing to link against, so everything stays
-        external."""
+        """Give a function mergeable linkage when it is shared across objects.
+
+        The root file's own definitions keep the default external linkage (a
+        genuine duplicate is a link error); a definition reached through
+        ``import``, or a monomorphized generic, is copied into every object that
+        uses it, so it gets ``linkonce_odr`` and the identical copies merge at
+        link time instead of colliding. With no ``root_source`` (single-module
+        JIT or the test helpers) there is nothing to link against, so everything
+        stays external.
+
+        Args:
+            fn: The IR function to set linkage on.
+            source: The file the function was defined in.
+        """
         if self.root_source is not None and source != self.root_source:
             fn.linkage = "linkonce_odr"
 
     def static_base(self, name: str, source: str | None) -> str:
-        """A unique LLVM-level symbol for a file-scoped name, e.g. f@set."""
+        """Mint a unique LLVM symbol for a file-scoped (``@static``) name.
+
+        Args:
+            name: The source-level name.
+            source: The defining file, used to build the symbol stem.
+
+        Returns:
+            A unique symbol such as ``f@set``, disambiguated with a numeric
+            suffix when needed.
+        """
         stem = source.rsplit("/", 1)[-1].removesuffix(".mc") if source else "static"
         base = candidate = f"{name}@{stem}"
         counter = 1
@@ -394,17 +642,24 @@ class CodeGen:
         return candidate
 
     def valist(self, line: int) -> LangType:
-        """The platform's va_list type, built once per target architecture.
-        Records both the storage layout (`.ir`, what `let ap: va_list;`
-        allocates) and the form it takes when passed to a function
-        (`va_list_passed_ir`); these differ on every ABI -- see the table in
-        the README's Variadic functions section.
+        """Return the platform's ``va_list`` type, built once per target.
 
-        An architecture without a known layout gets a harmless i8* placeholder
-        and `va_list_supported = False`: that lets a binding merely *declare* an
-        extern with a va_list parameter (e.g. importing libc/stdio) on any
-        target, while actually *using* va_list -- a local, va_start/va_end, or
-        passing one -- is rejected by require_valist()."""
+        Records both the storage layout (``.ir``, what ``let ap: va_list;``
+        allocates) and the form a ``va_list`` takes when passed to a function
+        (``va_list_passed_ir``); these differ on every ABI -- see the table in
+        the README's Variadic functions section. An architecture without a known
+        layout gets a harmless ``i8*`` placeholder and
+        ``va_list_supported = False``, so a binding may merely *declare* an
+        extern with a ``va_list`` parameter (e.g. importing ``libc/stdio``) on
+        any target, while actually *using* one -- a local, ``va_start``/
+        ``va_end``, or passing it -- is rejected by :meth:`require_valist`.
+
+        Args:
+            line: Source line for diagnostics.
+
+        Returns:
+            The cached ``va_list`` ``LangType`` for the current target.
+        """
         if self.va_list_type is not None:
             return self.va_list_type
         triple = (self.target or _host_triple()).lower()
@@ -432,8 +687,17 @@ class CodeGen:
         return self.va_list_type
 
     def require_valist(self, line: int):
-        """Reject actually using a va_list on a target with no known layout
-        (declaring an extern that takes one is still allowed)."""
+        """Reject actually using a ``va_list`` on an unsupported target.
+
+        Declaring an extern that merely takes one is still allowed.
+
+        Args:
+            line: Source line for diagnostics.
+
+        Raises:
+            LangError: When ``va_list`` has no known layout for the current
+                target's architecture.
+        """
         self.valist(line)
         if not self.va_list_supported:
             raise LangError(
@@ -442,12 +706,15 @@ class CodeGen:
             )
 
     def seed_target_consts(self):
-        """Define the built-in target facts as compile-time constants before any
-        user const is folded: TARGET_OS and TARGET_ARCH (the current target's
-        values), plus every OS_*/ARCH_* enum name. These reserve their names and
-        let library code select platform-specific bindings -- e.g. stdout's
-        linker symbol -- at compile time. A bare-metal triple such as
-        aarch64-unknown-none-elf reports OS_NONE / ARCH_AARCH64."""
+        """Define the built-in target facts as compile-time constants.
+
+        Seeds ``TARGET_OS`` and ``TARGET_ARCH`` (the current target's values)
+        plus every ``OS_*``/``ARCH_*`` enum name before any user ``const`` is
+        folded, reserving their names and letting library code select
+        platform-specific bindings -- e.g. stdout's linker symbol -- at compile
+        time. A bare-metal triple such as ``aarch64-unknown-none-elf`` reports
+        ``OS_NONE`` / ``ARCH_AARCH64``.
+        """
         triple = (self.target or _host_triple()).lower()
         values = {**TARGET_OS_VALUES, **TARGET_ARCH_VALUES}
         values["TARGET_OS"] = TARGET_OS_VALUES[classify_os(triple)]
@@ -461,15 +728,37 @@ class CodeGen:
         self.target_facts = values
 
     def eval_static_cond(self, expr) -> bool:
-        """Whether a compile-time @if branch is taken. The condition is a
-        constant expression over the target facts (TARGET_OS, TARGET_ARCH, and
-        the OS_*/ARCH_* names); a nonzero result is true, as in C's #if."""
+        """Evaluate whether a compile-time ``@if`` branch is taken.
+
+        The condition is a constant expression over the target facts
+        (``TARGET_OS``, ``TARGET_ARCH``, and the ``OS_*``/``ARCH_*`` names); a
+        nonzero result is true, as in C's ``#if``.
+
+        Args:
+            expr: The condition expression.
+
+        Returns:
+            ``True`` when the condition evaluates nonzero.
+        """
         return self.eval_static_value(expr) != 0
 
     def eval_static_value(self, expr) -> int:
-        """Evaluate an @if condition to an integer. Only the target facts,
-        integer/bool literals, comparisons, logical and/or/not, and integer
-        arithmetic are allowed -- nothing that needs the runtime."""
+        """Evaluate an ``@if`` condition to an integer.
+
+        Only the target facts, integer/bool literals, comparisons, logical
+        ``and``/``or``/``not``, and integer arithmetic are allowed -- nothing
+        that needs the runtime.
+
+        Args:
+            expr: The constant expression to evaluate.
+
+        Returns:
+            The integer value of the expression.
+
+        Raises:
+            LangError: On a disallowed name or operator, division by zero, or a
+                non-constant expression.
+        """
         if isinstance(expr, IntLit) or isinstance(expr, CharLit):
             return expr.value
         if isinstance(expr, BoolLit):
@@ -517,11 +806,13 @@ class CodeGen:
         )
 
     def flatten_conditionals(self):
-        """Resolve top-level @if blocks before anything is emitted: evaluate
-        each condition over the target facts and splice the live branch's
-        declarations into the program, in source order, dropping the dead
-        branch entirely (it is parsed but never type-checked). Branches may
-        nest, so newly spliced conditionals are resolved in turn."""
+        """Resolve top-level ``@if`` blocks before anything is emitted.
+
+        Evaluates each condition over the target facts and splices the live
+        branch's declarations into the program in source order, dropping the
+        dead branch entirely (it is parsed but never type-checked). Branches may
+        nest, so newly spliced conditionals are resolved in turn.
+        """
         pending = list(self.program.conditionals)
         while pending:
             cond = pending.pop(0)
@@ -539,11 +830,37 @@ class CodeGen:
                     self.program.functions.append(item)
 
     def param_irs(self, params) -> list:
-        """LLVM types for a function's parameters: a va_list lowers to the form
-        it is passed in (a pointer on every ABI), not its storage layout."""
+        """Map a function's parameter types to their LLVM argument types.
+
+        A ``va_list`` lowers to the form it is passed in (a pointer on every
+        ABI), not its storage layout.
+
+        Args:
+            params: The parameter ``LangType``s.
+
+        Returns:
+            The LLVM types to use for the parameters.
+        """
         return [self.va_list_passed_ir if is_valist(p) else p.ir for p in params]
 
     def lang_type(self, ref: TypeRef, line: int) -> LangType:
+        """Resolve a parsed ``TypeRef`` to a ``LangType``.
+
+        Handles function-pointer types, active type-parameter bindings, the
+        built-in scalar types, ``va_list``, and (generic) structs, then applies
+        pointer ``*`` depth and fixed-array dimensions.
+
+        Args:
+            ref: The parsed type reference.
+            line: Source line for diagnostics.
+
+        Returns:
+            The resolved ``LangType``.
+
+        Raises:
+            LangError: On an unknown type, a wrong generic arity, a ``void``
+                pointer, or another malformed type.
+        """
         if ref.params is not None:  # a fn(...) -> ret function-pointer type
             ret = self.lang_type(ref.ret, line)
             params = tuple(self.lang_type(p, line) for p in ref.params)
@@ -584,8 +901,22 @@ class CodeGen:
         return self.apply_dims(base, ref.dims, line)
 
     def apply_dims(self, base: LangType, dims: list, line: int) -> LangType:
-        """Wrap `base` in fixed-size array types, innermost dimension last:
-        int32[3][4] is [3 x [4 x i32]]."""
+        """Wrap a base type in fixed-size array types, innermost dimension last.
+
+        ``int32[3][4]`` becomes ``[3 x [4 x i32]]``.
+
+        Args:
+            base: The element base type.
+            dims: The dimensions, outermost first -- an integer size or the
+                ``str`` name of an integer ``const``.
+            line: Source line for diagnostics.
+
+        Returns:
+            The array ``LangType``, or ``base`` when ``dims`` is empty.
+
+        Raises:
+            LangError: On an array of ``void`` or an inferred ``[]`` here.
+        """
         if dims and base is VOID:
             raise LangError("cannot make an array of void", line)
         for size in reversed(dims):
@@ -600,7 +931,19 @@ class CodeGen:
         return base
 
     def const_dim(self, name: str, line: int) -> int:
-        """Resolve a const used as an array size to its positive integer value."""
+        """Resolve a ``const`` used as an array size to its integer value.
+
+        Args:
+            name: The constant's name.
+            line: Source line for diagnostics.
+
+        Returns:
+            The positive integer size.
+
+        Raises:
+            LangError: When the name is unknown, not an integer constant, or
+                less than 1.
+        """
         const = self.consts.get(name)
         if const is None:
             raise LangError(
@@ -617,9 +960,23 @@ class CodeGen:
         return size
 
     def array_type_for(self, ref: TypeRef, value, line: int) -> LangType:
-        """Resolve a declared type, filling an inferred outer `[]` from the
-        length of the array-literal initializer. Only the outermost dimension
-        may be inferred."""
+        """Resolve a declared type, inferring an outer ``[]`` from a literal.
+
+        Fills an inferred outermost dimension from the length of an
+        array-literal initializer; only the outermost dimension may be inferred.
+
+        Args:
+            ref: The declared type reference.
+            value: The initializer expression.
+            line: Source line for diagnostics.
+
+        Returns:
+            The resolved ``LangType``.
+
+        Raises:
+            LangError: When a non-outermost dimension is ``[]`` or the
+                initializer is not an array literal.
+        """
         if ref.dims and ref.dims[0] is None:
             if any(d is None for d in ref.dims[1:]):
                 raise LangError("only the outermost array dimension can be inferred", line)
@@ -631,8 +988,24 @@ class CodeGen:
         return self.lang_type(ref, line)
 
     def instantiate_struct(self, decl: StructDecl, args: tuple[LangType, ...]) -> LangType:
-        """Return the struct instance for these type arguments, creating its
-        LLVM identified type (and resolving field types) on first use."""
+        """Return the struct instance for a set of type arguments.
+
+        Creates the LLVM identified type and resolves field types on first use,
+        registering the instance before resolving fields so self-referential
+        structs (e.g. ``node<T>`` holding a ``node<T>*``) can refer to
+        themselves. ``@packed``/``@align`` structs get an explicitly laid-out
+        body with padding.
+
+        Args:
+            decl: The struct template declaration.
+            args: The type arguments to instantiate with.
+
+        Returns:
+            The cached or newly built struct ``LangType``.
+
+        Raises:
+            LangError: When ``@align`` is below the struct's natural alignment.
+        """
         mangled = self.symbol_bases.get((decl.source, decl.name), decl.name)
         if args:
             mangled += "<" + ", ".join(str(a) for a in args) + ">"
@@ -692,7 +1065,19 @@ class CodeGen:
         return struct_type
 
     def struct_field(self, owner: LangType, fname: str, line: int) -> tuple[int, LangType]:
-        """Field lookup: returns (LLVM element index, field type)."""
+        """Look up a struct field by name.
+
+        Args:
+            owner: The struct type.
+            fname: The field name.
+            line: Source line for diagnostics.
+
+        Returns:
+            A ``(LLVM element index, field type)`` pair.
+
+        Raises:
+            LangError: When ``owner`` is not a struct or has no such field.
+        """
         if not is_struct(owner):
             raise LangError(f"{owner} is not a struct", line)
         for index, (name, ftype) in enumerate(owner.fields):
@@ -701,6 +1086,15 @@ class CodeGen:
         raise LangError(f"struct {owner} has no field {fname!r}", line)
 
     def generate(self) -> ir.Module:
+        """Generate the IR module, attaching a source file to any error.
+
+        Returns:
+            The emitted LLVM IR module.
+
+        Raises:
+            LangError: On any compile error; its ``source`` is filled in with
+                the file being generated when not already set.
+        """
         try:
             return self.gen_program()
         except LangError as err:
@@ -709,6 +1103,21 @@ class CodeGen:
             raise
 
     def gen_program(self) -> ir.Module:
+        """Emit the whole module from the merged program.
+
+        Resolves compile-time ``@if`` (seeding the target facts and flattening
+        live branches), then registers structs, folds consts, declares globals
+        and function signatures (handling ``@extern``, ``@static``, and generic
+        overload sets), and finally generates a body for every non-generic,
+        non-extern function.
+
+        Returns:
+            The completed LLVM IR module.
+
+        Raises:
+            LangError: On unresolved imports or any semantic error -- redefined
+                names, conflicting externs, and the like.
+        """
         if self.program.imports:
             raise LangError(
                 "imports must be resolved before code generation (compile via the driver)",
@@ -871,6 +1280,21 @@ class CodeGen:
         return self.module
 
     def gen_function(self, func: Func, fn: ir.Function, ret: LangType, params: list[LangType]):
+        """Emit the body of one already-declared function.
+
+        Sets up the entry block, spills parameters to allocas, generates the
+        body, and supplies an implicit ``return`` for ``void`` and for ``main``.
+
+        Args:
+            func: The AST function node.
+            fn: The IR function to fill in.
+            ret: The resolved return type.
+            params: The resolved parameter types.
+
+        Raises:
+            LangError: When a non-void, non-``main`` function may fall off its
+                end without returning.
+        """
         self.ret_type = ret
         self.current_source = func.source
         self.current_variadic = func.variadic  # gates va_start
@@ -896,6 +1320,16 @@ class CodeGen:
                 raise LangError(f"function {func.name!r} may end without a return", func.line)
 
     def gen_block(self, statements: list):
+        """Generate a block of statements in its own name scope.
+
+        Outer names stay visible, names declared here vanish at the end (an
+        inner declaration may shadow an outer one), and the block's ``defer``
+        actions run in LIFO order if control reaches the end. Allocas live for
+        the whole function regardless, so this governs only name visibility.
+
+        Args:
+            statements: The statements to emit.
+        """
         # Each block is its own scope: outer names stay visible, names declared
         # here vanish at the end, and an inner declaration may shadow an outer
         # one (the outer binding is restored on exit). Allocas live for the
@@ -917,39 +1351,72 @@ class CodeGen:
             self.locals, self.scope_names = outer_locals, outer_names
 
     def run_deferred_scope(self, scope: list):
-        """Emit one block's deferred actions, last-registered first. Each body
-        runs while the block's locals are still in scope, so it can refer to
-        them."""
+        """Emit one block's deferred actions, last-registered first.
+
+        Each body runs while the block's locals are still in scope, so it can
+        refer to them.
+
+        Args:
+            scope: The list of deferred action bodies for one block.
+        """
         for body in reversed(scope):
             if self.builder.block.is_terminated:
                 break
             self.gen_block(body)
 
     def run_defers_through(self, depth: int):
-        """Unwind the deferred scopes from the innermost down to `depth`,
-        emitting each in LIFO order -- used when control jumps out of several
-        blocks at once (a return unwinds all; break/continue to the loop body).
-        The stack is snapshotted first, since emitting a body pushes scopes."""
+        """Unwind deferred scopes from the innermost down to a given depth.
+
+        Emits each in LIFO order -- used when control jumps out of several
+        blocks at once (a ``return`` unwinds all; ``break``/``continue`` to the
+        loop body). The stack is snapshotted first, since emitting a body pushes
+        scopes.
+
+        Args:
+            depth: The depth to stop above; scopes at indices ``>= depth`` are
+                unwound.
+        """
         for scope in reversed([list(s) for s in self.defer_stack[depth:]]):
             if self.builder.block.is_terminated:
                 break
             self.run_deferred_scope(scope)
 
     def bind_local(self, name: str, slot, lang_type: LangType):
-        """Record a local in the current scope. The name shadows any outer one
-        until the enclosing block ends; redeclaring it in the same block is an
-        error (checked by the caller against scope_names)."""
+        """Record a local in the current scope.
+
+        The name shadows any outer one until the enclosing block ends;
+        redeclaring it in the same block is an error (checked by the caller
+        against ``scope_names``).
+
+        Args:
+            name: The local variable's name.
+            slot: The alloca holding the variable.
+            lang_type: The variable's type.
+        """
         self.locals[name] = (slot, lang_type)
         self.scope_names.add(name)
 
     def coerce(self, tv: TypedValue, expected: LangType, line: int, context: str) -> TypedValue:
-        """Check that `tv` has type `expected`, adapting untyped constants.
+        """Check a value against an expected type, adapting untyped constants.
 
         An adaptable integer constant may take on any integer type its value
-        fits into (so `let x: uint64 = 5;` works), and `null` adapts to any
-        pointer or function-pointer type. Any pointer coerces to uint8* (raw
-        memory, like C's void*). Other values never convert implicitly -- use
-        `as`.
+        fits into (so ``let x: uint64 = 5;`` works), and ``null`` adapts to any
+        pointer or function-pointer type. Any pointer coerces to ``uint8*`` (raw
+        memory, like C's ``void*``). Other values never convert implicitly --
+        use ``as``.
+
+        Args:
+            tv: The value to check or adapt.
+            expected: The required type.
+            line: Source line for diagnostics.
+            context: A label describing the site, for the error message.
+
+        Returns:
+            ``tv`` unchanged, or a new ``TypedValue`` adapted to ``expected``.
+
+        Raises:
+            LangError: When the value cannot match ``expected``, or an adaptable
+                constant is out of range.
         """
         if tv.type == expected:
             return tv
@@ -978,6 +1445,17 @@ class CodeGen:
 
     def gen_load(self, addr, *, align: int | None = None,
                  volatile: bool = False, name: str = "") -> ir.Instruction:
+        """Emit a load, using a volatile load when requested.
+
+        Args:
+            addr: The pointer to load from.
+            align: Explicit alignment, or ``None`` for the default.
+            volatile: Whether the load must not be optimized away.
+            name: An optional name for the result value.
+
+        Returns:
+            The load instruction.
+        """
         if not volatile:
             return self.builder.load(addr, name=name, align=align)
         instr = VolatileLoad(self.builder.block, addr, name=name)
@@ -987,6 +1465,14 @@ class CodeGen:
 
     def gen_store(self, value, addr, *, align: int | None = None,
                   volatile: bool = False):
+        """Emit a store, using a volatile store when requested.
+
+        Args:
+            value: The value to store.
+            addr: The pointer to store into.
+            align: Explicit alignment, or ``None`` for the default.
+            volatile: Whether the store must not be optimized away.
+        """
         if not volatile:
             self.builder.store(value, addr, align=align)
             return
@@ -995,6 +1481,21 @@ class CodeGen:
         self.builder._insert(instr)
 
     def gen_statement(self, stmt):
+        """Emit code for one statement node.
+
+        Dispatches on the statement type: returns (with ``defer`` unwinding),
+        ``let`` and the assignment/store forms, control flow (``if``,
+        ``while``/``until``, ``case``, ``for``), ``break``/``continue`` (running
+        intervening defers), ``defer`` registration, bare blocks, and expression
+        statements.
+
+        Args:
+            stmt: The statement AST node to generate.
+
+        Raises:
+            LangError: On a type mismatch or misuse (e.g. ``break`` outside a
+                loop), surfaced from the per-statement handling.
+        """
         if isinstance(stmt, Return):
             if stmt.value is None:
                 if self.ret_type is not VOID:
@@ -1173,14 +1674,24 @@ class CodeGen:
             raise LangError(f"cannot compile statement {stmt!r}", stmt.line)
 
     def gen_for(self, stmt: For):
-        """Lower `for x in obj { body }` to the iter/next protocol:
+        """Lower ``for x in obj { body }`` to the iter/next protocol.
 
-            { let _it = iter(obj); let x: T; while (next(&_it, &x)) { body } }
+        Emits roughly::
 
-        The iterator is a compiler-held temporary -- never a named local -- so
-        it cannot collide with user code, and the element variable lives in a
-        fresh block scope, gone once the loop ends. The element type T is read
-        from the resolved `next` overload's out-parameter."""
+            { let _it = iter(obj); let x: T;
+              while (next(&_it, &x)) { body } }
+
+        The iterator is a compiler-held temporary -- never a named local -- so it
+        cannot collide with user code, and the element variable lives in a fresh
+        block scope, gone once the loop ends. The element type ``T`` is read from
+        the resolved ``next`` overload's out-parameter.
+
+        Args:
+            stmt: The ``For`` node to lower.
+
+        Raises:
+            LangError: When no ``iter`` (or matching ``next``) is in scope.
+        """
         # iter(obj) -- resolves and instantiates iter for obj's type.
         if not self.callable_exists("iter"):
             raise LangError(
@@ -1224,15 +1735,37 @@ class CodeGen:
             self.locals, self.scope_names = outer_locals, outer_names
 
     def callable_exists(self, name: str) -> bool:
+        """Report whether a callable named ``name`` is in scope.
+
+        Args:
+            name: The function name to look up.
+
+        Returns:
+            ``True`` if a generic template, a concrete function, or a file-scoped
+            ``@static`` of that name is visible from the current source.
+        """
         key = (self.current_source, name)
         return (name in self.templates or name in self.funcs
                 or key in self.static_templates or key in self.static_funcs)
 
     def resolve_protocol_next(self, iter_type: LangType, line: int):
-        """Find the `next` overload that consumes `iter_type` and return its
-        instantiated function plus the element type it yields (its out-param's
-        pointee). `next` is dispatched on the iterator alone, so the element
-        type can be learned before the loop variable is declared."""
+        """Resolve the ``next`` overload that consumes an iterator type.
+
+        ``next`` is dispatched on the iterator alone, so the element type can be
+        learned before the loop variable is declared.
+
+        Args:
+            iter_type: The iterator type returned by ``iter``.
+            line: Source line for diagnostics.
+
+        Returns:
+            A ``(function, element type)`` pair: the instantiated ``next`` and
+            the element type it yields (its out-parameter's pointee).
+
+        Raises:
+            LangError: When no viable ``next`` exists, the choice is ambiguous,
+                or the chosen ``next`` has the wrong signature.
+        """
         want = pointer_to(iter_type)
         candidates = list(self.templates.get("next", []))
         static = self.static_templates.get((self.current_source, "next"))
@@ -1270,6 +1803,20 @@ class CodeGen:
         return fn, params[1].pointee
 
     def gen_cond(self, expr) -> ir.Value:
+        """Evaluate an expression as an ``i1`` condition.
+
+        A ``bool`` is used directly; an integer is compared against zero, as in
+        C.
+
+        Args:
+            expr: The condition expression.
+
+        Returns:
+            The ``i1`` value of the condition.
+
+        Raises:
+            LangError: When the expression is neither a bool nor an integer.
+        """
         tv = self.gen_expr(expr)
         if tv.type is BOOL:
             return tv.value
@@ -1278,9 +1825,18 @@ class CodeGen:
         raise LangError("condition must be a bool or integer", expr.line)
 
     def gen_logical(self, expr: Logical) -> TypedValue:
-        """Short-circuiting `and` / `or`. Each operand is tested like a
-        condition (bool or integer); the result is a bool. The right operand is
-        evaluated only when the left does not already decide the answer."""
+        """Emit a short-circuiting ``and`` / ``or``.
+
+        Each operand is tested like a condition (bool or integer) and the result
+        is a ``bool``. The right operand is evaluated only when the left does not
+        already decide the answer.
+
+        Args:
+            expr: The ``Logical`` node.
+
+        Returns:
+            The ``bool`` result as a ``TypedValue``.
+        """
         lhs = self.gen_cond(expr.lhs)
         lhs_block = self.builder.block
         rhs_block = self.builder.append_basic_block(f"{expr.op}.rhs")
@@ -1303,11 +1859,21 @@ class CodeGen:
         return TypedValue(phi, BOOL)
 
     def gen_equals(self, subject: TypedValue, value: TypedValue, line: int) -> ir.Value:
-        """An i1 for `subject == value`, used to test a `when` arm. The subject
-        is the authoritative type: a `when` value adapts (or must coerce) to it,
-        unless the subject is itself an untyped constant. Equality is
-        sign-agnostic, so integers, pointers, and bools share an integer
-        compare; float64 uses an ordered float compare."""
+        """Emit an ``i1`` for ``subject == value`` (to test a ``when`` arm).
+
+        The subject is the authoritative type: a ``when`` value adapts (or must
+        coerce) to it, unless the subject is itself an untyped constant. Equality
+        is sign-agnostic, so integers, pointers, and bools share an integer
+        compare while ``float64`` uses an ordered float compare.
+
+        Args:
+            subject: The matched subject value.
+            value: The arm's candidate value.
+            line: Source line for diagnostics.
+
+        Returns:
+            The ``i1`` comparison result.
+        """
         if subject.type != value.type:
             if subject.adaptable and not value.adaptable:
                 subject = self.coerce(subject, value.type, line, "case subject")
@@ -1318,6 +1884,21 @@ class CodeGen:
         return self.builder.icmp_unsigned("==", subject.value, value.value)
 
     def gen_expr(self, expr) -> TypedValue:
+        """Evaluate an expression to a ``TypedValue``.
+
+        Dispatches on the expression type: literals, variables (and names that
+        resolve to a constant or a function value), calls, unary/binary/logical
+        operators, casts, ``sizeof``/``len``, indexing, and member access.
+
+        Args:
+            expr: The expression AST node.
+
+        Returns:
+            The evaluated value paired with its type.
+
+        Raises:
+            LangError: On an ill-typed or unsupported expression.
+        """
         if isinstance(expr, IntLit):
             return TypedValue(ir.Constant(INT32.ir, expr.value), INT32, adaptable=True)
         if isinstance(expr, CharLit):
@@ -1391,10 +1972,22 @@ class CodeGen:
 
     def value_at(self, addr, lang_type: LangType, *, align=None, volatile=False,
                  name="") -> TypedValue:
-        """The value held at `addr`. An array decays to a pointer to its first
-        element (C array-to-pointer decay), so indexing, passing it as a
-        pointer argument, and assigning it all go through the pointer; every
-        other type is loaded normally."""
+        """Load the value held at an address.
+
+        An array decays to a pointer to its first element (C array-to-pointer
+        decay), so indexing, passing it as a pointer argument, and assigning it
+        all go through the pointer; every other type is loaded normally.
+
+        Args:
+            addr: The address to read.
+            lang_type: The type stored at ``addr``.
+            align: Explicit alignment, or ``None`` for the default.
+            volatile: Whether the load must not be optimized away.
+            name: An optional name for the result value.
+
+        Returns:
+            The loaded value (or decayed pointer) as a ``TypedValue``.
+        """
         if is_array(lang_type):
             first = self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
             return TypedValue(first, pointer_to(lang_type.element))
@@ -1402,11 +1995,24 @@ class CodeGen:
                           lang_type)
 
     def var_addr(self, name: str, line: int) -> tuple[ir.Value, LangType, bool]:
-        """A variable's storage slot: a local alloca, a file-scoped @static
-        global, or an @extern global (in that order, so locals shadow globals
-        and a file's own @static shadows a same-named extern). Returns (pointer
-        value, variable type, volatile) -- volatile for @volatile globals and
-        for variables of @volatile struct types."""
+        """Resolve a variable's storage slot.
+
+        Checks a local alloca, then a file-scoped ``@static`` global, then an
+        ``@extern`` global, so locals shadow globals and a file's own
+        ``@static`` shadows a same-named extern.
+
+        Args:
+            name: The variable name.
+            line: Source line for diagnostics.
+
+        Returns:
+            A ``(pointer value, variable type, volatile)`` tuple; ``volatile`` is
+            set for ``@volatile`` globals and for variables of ``@volatile``
+            struct types.
+
+        Raises:
+            LangError: When the name is a constant (not assignable) or undefined.
+        """
         if name in self.locals:
             slot, var_type = self.locals[name]
             return slot, var_type, var_type.volatile
@@ -1422,9 +2028,17 @@ class CodeGen:
         raise LangError(f"undefined variable {name!r}", line)
 
     def var_type_of(self, name: str) -> "LangType | None":
-        """The type of `name` if it is a variable in scope (local, @static, or
-        @extern global), else None -- so a bare name that is not a variable can
-        fall back to being a function value."""
+        """Return a name's type if it is a variable in scope, else ``None``.
+
+        Checks locals, ``@static`` globals, and ``@extern`` globals, so a bare
+        name that is not a variable can fall back to being a function value.
+
+        Args:
+            name: The name to look up.
+
+        Returns:
+            The variable's type, or ``None`` when ``name`` is not a variable.
+        """
         if name in self.locals:
             return self.locals[name][1]
         static = self.static_globals.get((self.current_source, name))
@@ -1435,12 +2049,24 @@ class CodeGen:
         return None
 
     def gen_addr(self, expr, line: int) -> tuple[ir.Value, LangType, int | None, bool]:
-        """Address of an lvalue expression: a variable, *deref, element, or
-        struct field. Returns (pointer value, type pointed to, guaranteed
-        alignment, volatile). The alignment is None when the address is
-        naturally aligned for its type, 1 when it may not be (a field of a
-        @packed struct, directly or through nesting); volatile is True when
-        accesses through the address must not be optimized away."""
+        """Compute the address of an lvalue expression.
+
+        Handles a variable, ``*deref``, an element, or a struct field.
+
+        Args:
+            expr: The lvalue expression.
+            line: Source line for diagnostics.
+
+        Returns:
+            A ``(pointer value, pointee type, guaranteed alignment, volatile)``
+            tuple. The alignment is ``None`` when the address is naturally
+            aligned for its type and ``1`` when it may not be (a ``@packed``
+            field, directly or through nesting); ``volatile`` is ``True`` when
+            accesses must not be optimized away.
+
+        Raises:
+            LangError: When the expression is not addressable.
+        """
         if isinstance(expr, Var):
             slot, var_type, volatile = self.var_addr(expr.name, line)
             return slot, var_type, None, volatile
@@ -1457,7 +2083,20 @@ class CodeGen:
         raise LangError("expression is not addressable", line)
 
     def gen_index_addr(self, base_expr, index_expr, line: int) -> tuple[ir.Value, LangType]:
-        """Address of base[index]; returns (pointer value, element type)."""
+        """Compute the address of ``base[index]``.
+
+        Args:
+            base_expr: The indexed base expression (a pointer or array).
+            index_expr: The index expression (an integer).
+            line: Source line for diagnostics.
+
+        Returns:
+            A ``(pointer value, element type)`` pair.
+
+        Raises:
+            LangError: When the base is not indexable or the index is not an
+                integer.
+        """
         base = self.gen_expr(base_expr)
         if not is_pointer(base.type):
             raise LangError(f"cannot index a {base.type}", line)
@@ -1469,8 +2108,22 @@ class CodeGen:
 
     def gen_member_addr(self, base_expr, fname: str, arrow: bool,
                         line: int) -> tuple[ir.Value, LangType, int | None, bool]:
-        """Address of base.field / base->field; returns (pointer, field type,
-        guaranteed alignment, volatile) as in gen_addr."""
+        """Compute the address of ``base.field`` or ``base->field``.
+
+        Args:
+            base_expr: The struct value or pointer expression.
+            fname: The field name.
+            arrow: ``True`` for ``->`` (through a pointer), ``False`` for ``.``.
+            line: Source line for diagnostics.
+
+        Returns:
+            A ``(pointer, field type, guaranteed alignment, volatile)`` tuple, as
+            in :meth:`gen_addr`.
+
+        Raises:
+            LangError: When ``->`` is used on a non-pointer, or the field is
+                unknown.
+        """
         if arrow:
             base = self.gen_expr(base_expr)
             if not is_pointer(base.type):
@@ -1496,6 +2149,22 @@ class CodeGen:
         return addr, ftype, align, owner.volatile or base_volatile
 
     def gen_unary(self, expr: Unary) -> TypedValue:
+        """Emit a unary operation: ``-``, ``!``, ``*`` (deref), or ``&``.
+
+        Negation on a literal folds so negative constants stay adaptable
+        constants; ``&`` yields a plain pointer (without any reduced packed
+        alignment -- unsafe to dereference elsewhere, exactly as in C).
+
+        Args:
+            expr: The ``Unary`` node.
+
+        Returns:
+            The result as a ``TypedValue``.
+
+        Raises:
+            LangError: On dereferencing a non-pointer, negating an unsupported
+                type, or ``!`` on a non-bool.
+        """
         # Fold minus on literals so negative constants stay constants (and can
         # still coerce to other integer types).
         if expr.op == "-" and isinstance(expr.operand, IntLit):
@@ -1527,6 +2196,21 @@ class CodeGen:
         return TypedValue(self.builder.not_(tv.value), BOOL)
 
     def gen_cast(self, expr: Cast) -> TypedValue:
+        """Emit an explicit ``value as type`` conversion.
+
+        Supports pointer/function-pointer bitcasts, pointer-integer conversions,
+        integer truncation/extension (by signedness), integer-to-bool, and the
+        ``float64`` conversions. Struct casts are rejected.
+
+        Args:
+            expr: The ``Cast`` node.
+
+        Returns:
+            The converted value as a ``TypedValue``.
+
+        Raises:
+            LangError: On an unsupported conversion (e.g. involving a struct).
+        """
         tv = self.gen_expr(expr.value)
         target = self.lang_type(expr.type_name, expr.line)
         src = tv.type
@@ -1568,7 +2252,15 @@ class CodeGen:
         raise LangError(f"cannot cast {src} to {target}", expr.line)
 
     def string_global(self, text: str) -> ir.GlobalVariable:
-        """A private constant global holding the NUL-terminated bytes of text."""
+        """Create a private constant global holding a string's bytes.
+
+        Args:
+            text: The string contents.
+
+        Returns:
+            A private, unnamed, constant ``GlobalVariable`` holding the
+            NUL-terminated UTF-8 bytes of ``text``.
+        """
         data = bytearray(text.encode("utf8") + b"\0")
         array_ty = ir.ArrayType(ir.IntType(8), len(data))
         glob = ir.GlobalVariable(self.module, array_ty, name=f".str.{self.str_count}")
@@ -1580,15 +2272,45 @@ class CodeGen:
         return glob
 
     def gen_string(self, text: str) -> TypedValue:
+        """Emit a ``uint8*`` pointing at a string literal's bytes.
+
+        Args:
+            text: The string contents.
+
+        Returns:
+            A ``RAWPTR`` (``uint8*``) ``TypedValue`` to the string's first byte.
+        """
         return TypedValue(self.builder.bitcast(self.string_global(text), RAWPTR.ir), RAWPTR)
 
     def const_string(self, text: str) -> ir.Constant:
-        """A constant uint8* to a string's first byte, for static initializers."""
+        """Build a constant ``uint8*`` to a string's first byte.
+
+        For use in ``@static`` initializers, where no builder is available.
+
+        Args:
+            text: The string contents.
+
+        Returns:
+            A constant pointer to the string's first byte.
+        """
         return self.string_global(text).gep([I32_ZERO, I32_ZERO])
 
     def store_array_literal(self, addr, lit, arr_type: LangType, line: int):
-        """Fill an array's storage at `addr` from an array literal, element by
-        element (each may be any expression). Nested literals recurse."""
+        """Fill an array's storage from an array literal, element by element.
+
+        Each element may be any expression; nested literals recurse for
+        multi-dimensional arrays.
+
+        Args:
+            addr: The array's storage address.
+            lit: The ``ArrayLit`` providing the elements.
+            arr_type: The array type being filled.
+            line: Source line for diagnostics.
+
+        Raises:
+            LangError: When the literal's shape or length does not match
+                ``arr_type``.
+        """
         if not isinstance(lit, ArrayLit):
             raise LangError(f"expected {arr_type.count} array elements", line)
         if len(lit.elements) != arr_type.count:
@@ -1607,9 +2329,22 @@ class CodeGen:
                 self.gen_store(tv.value, slot)
 
     def const_initializer(self, expr, expected: LangType, line: int) -> ir.Constant:
-        """A constant of type `expected` for a @static initializer. Arrays use
-        nested literals; scalars must be compile-time constants (number, char,
-        or string literal, or null)."""
+        """Build a constant of a given type for a ``@static`` initializer.
+
+        Arrays use nested literals; scalars must be compile-time constants (a
+        number, char, or string literal, or ``null``).
+
+        Args:
+            expr: The initializer expression.
+            expected: The required constant type.
+            line: Source line for diagnostics.
+
+        Returns:
+            The constant value.
+
+        Raises:
+            LangError: When ``expr`` is not a constant of ``expected``.
+        """
         if isinstance(expr, ArrayLit):
             if not is_array(expected):
                 raise LangError(f"an array literal cannot initialize a {expected}", line)
@@ -1635,18 +2370,39 @@ class CodeGen:
         )
 
     def gen_const_scalar(self, expr) -> TypedValue:
-        """An adaptable constant TypedValue for an integer/char literal, used
-        outside a function body (no builder), for const_initializer."""
+        """Build an adaptable constant for an integer or char literal.
+
+        Used outside a function body (no builder is available), for
+        :meth:`const_initializer`.
+
+        Args:
+            expr: An ``IntLit`` or ``CharLit``.
+
+        Returns:
+            The literal as a ``TypedValue``.
+        """
         if isinstance(expr, CharLit):
             return TypedValue(ir.Constant(UINT8.ir, expr.value), UINT8)
         return TypedValue(ir.Constant(INT32.ir, expr.value), INT32, adaptable=True)
 
     def eval_const(self, expr, line: int) -> TypedValue:
-        """Fold a `const` initializer to a TypedValue whose value is an
-        ir.Constant: literals, references to other consts, sizeof, numeric
-        casts, and integer/float arithmetic. An untyped integer result stays
-        adaptable, like a literal. Anything needing the runtime is an error.
-        Built without a builder -- consts are folded before any function."""
+        """Fold a ``const`` initializer to a constant ``TypedValue``.
+
+        Handles literals, references to other consts, ``sizeof``, numeric casts,
+        and integer/float arithmetic; an untyped integer result stays adaptable,
+        like a literal. Anything that needs the runtime is an error. Built
+        without a builder, since consts are folded before any function.
+
+        Args:
+            expr: The initializer expression.
+            line: Source line for diagnostics.
+
+        Returns:
+            The folded value as a ``TypedValue`` wrapping an ``ir.Constant``.
+
+        Raises:
+            LangError: When the expression is not a compile-time constant.
+        """
         if isinstance(expr, IntLit):
             return TypedValue(ir.Constant(INT32.ir, expr.value), INT32, adaptable=True)
         if isinstance(expr, CharLit):
@@ -1682,8 +2438,24 @@ class CodeGen:
 
     def const_coerce(self, tv: TypedValue, expected: LangType, line: int,
                      context: str) -> TypedValue:
-        """coerce() for constants: equality, null -> pointer, and adaptable
-        integer narrowing, all without a builder."""
+        """Coerce a constant to an expected type without a builder.
+
+        The constant-evaluation counterpart of :meth:`coerce`: handles equality,
+        ``null`` to a pointer, and adaptable integer narrowing.
+
+        Args:
+            tv: The constant value to coerce.
+            expected: The required type.
+            line: Source line for diagnostics.
+            context: A label for the error message.
+
+        Returns:
+            ``tv`` unchanged, or a new constant adapted to ``expected``.
+
+        Raises:
+            LangError: When the constant cannot match ``expected`` or is out of
+                range.
+        """
         if tv.type == expected:
             return tv
         if tv.type is NULLT and (is_pointer(expected) or is_function(expected)):
@@ -1701,6 +2473,17 @@ class CodeGen:
         raise LangError(f"{context}: expected {expected}, got {tv.type}", line)
 
     def eval_const_unary(self, expr: Unary) -> TypedValue:
+        """Fold a unary operation on a constant operand.
+
+        Args:
+            expr: The ``Unary`` node.
+
+        Returns:
+            The folded ``TypedValue``.
+
+        Raises:
+            LangError: When the operator is not constant for the operand type.
+        """
         operand = self.eval_const(expr.operand, expr.line)
         if expr.op == "-" and is_integer(operand.type):
             return TypedValue(
@@ -1717,6 +2500,17 @@ class CodeGen:
         )
 
     def eval_const_cast(self, expr: Cast) -> TypedValue:
+        """Fold a numeric ``as`` cast on a constant operand.
+
+        Args:
+            expr: The ``Cast`` node.
+
+        Returns:
+            The converted constant ``TypedValue``.
+
+        Raises:
+            LangError: On a cast not allowed in a constant (e.g. a pointer cast).
+        """
         tv = self.eval_const(expr.value, expr.line)
         target = self.lang_type(expr.type_name, expr.line)
         src = tv.type
@@ -1733,6 +2527,22 @@ class CodeGen:
         raise LangError(f"cannot cast {src} to {target} in a constant", expr.line)
 
     def eval_const_binary(self, expr: Binary) -> TypedValue:
+        """Fold a binary operation on constant operands.
+
+        Adapts an untyped operand to the other's type, then folds comparisons,
+        integer arithmetic (via :func:`fold_int_arithmetic`), and the basic
+        float operations.
+
+        Args:
+            expr: The ``Binary`` node.
+
+        Returns:
+            The folded ``TypedValue``.
+
+        Raises:
+            LangError: On mismatched operand types or a non-constant operation
+                (division by zero, out-of-range shift, unsupported operator).
+        """
         lhs = self.eval_const(expr.lhs, expr.line)
         rhs = self.eval_const(expr.rhs, expr.line)
         if lhs.type != rhs.type:
@@ -1768,6 +2578,23 @@ class CodeGen:
         )
 
     def gen_call(self, expr: Call) -> TypedValue:
+        """Emit a call to a named function.
+
+        Resolves the name in order: the ``va_start``/``va_end`` builtins, a
+        same-named variable holding a function pointer (called indirectly), a
+        file-scoped ``@static`` function or generic, then a global function or
+        generic overload set.
+
+        Args:
+            expr: The ``Call`` node.
+
+        Returns:
+            The call's result as a ``TypedValue``.
+
+        Raises:
+            LangError: When the name is not callable, is undefined, or misuses
+                generic type arguments.
+        """
         # va_start/va_end are builtins, not real functions: they lower to LLVM
         # intrinsics over the va_list's address.
         if expr.name in ("va_start", "va_end") and not expr.type_args:
@@ -1800,10 +2627,24 @@ class CodeGen:
         return self.gen_direct_call(expr, expr.name)
 
     def valist_arg(self, expr, line: int) -> ir.Value:
-        """The value passed when a va_list is handed to a function, derived from
-        its storage address: load the cursor (scalar va_list, e.g. Apple arm64),
-        decay to the first tag (array va_list, x86-64 SysV), or pass the address
-        itself (struct va_list, AArch64 AAPCS) -- a pointer on every ABI."""
+        """Lower a ``va_list`` argument to the value passed on this ABI.
+
+        Derived from the ``va_list``'s storage address: load the cursor (scalar
+        ``va_list``, e.g. Apple arm64), decay to the first tag (array
+        ``va_list``, x86-64 SysV), or pass the address itself (struct
+        ``va_list``, AArch64 AAPCS) -- a pointer on every ABI.
+
+        Args:
+            expr: The argument expression, which must have ``va_list`` type.
+            line: Source line for diagnostics.
+
+        Returns:
+            The LLVM value to pass for the ``va_list``.
+
+        Raises:
+            LangError: When the argument is not a ``va_list`` or ``va_list`` is
+                unsupported on the target.
+        """
         addr, t, _, _ = self.gen_addr(expr, line)
         if not is_valist(t):
             raise LangError(f"expected a va_list argument, got {t}", line)
@@ -1816,9 +2657,21 @@ class CodeGen:
         return addr  # struct: pass its address
 
     def gen_va_builtin(self, expr: Call) -> TypedValue:
-        """va_start(ap, last) / va_end(ap): initialise or finalise a va_list via
-        the LLVM intrinsics. The intrinsic takes only the va_list's address; the
-        named `last` parameter is accepted for C familiarity but unused."""
+        """Emit ``va_start(ap, last)`` or ``va_end(ap)`` via the LLVM intrinsics.
+
+        The intrinsic takes only the ``va_list``'s address; the named ``last``
+        parameter is accepted for C familiarity but unused.
+
+        Args:
+            expr: The ``Call`` node for the builtin.
+
+        Returns:
+            A ``void`` ``TypedValue``.
+
+        Raises:
+            LangError: On the wrong arity, ``va_start`` outside a variadic
+                function, a non-``va_list`` argument, or an unsupported target.
+        """
         arity = 2 if expr.name == "va_start" else 1
         if len(expr.args) != arity:
             form = "va_start(ap, last_named_param)" if arity == 2 else "va_end(ap)"
@@ -1833,7 +2686,14 @@ class CodeGen:
         return TypedValue(self.builder.call(self.va_intrinsic(expr.name), [i8ptr]), VOID)
 
     def va_intrinsic(self, kind: str) -> ir.Function:
-        """The void(i8*) llvm.va_start / llvm.va_end intrinsic, declared once."""
+        """Return the ``llvm.va_start`` / ``llvm.va_end`` intrinsic.
+
+        Args:
+            kind: ``"va_start"`` or ``"va_end"``.
+
+        Returns:
+            The ``void(i8*)`` intrinsic function, declared once on first use.
+        """
         name = "llvm.va_start" if kind == "va_start" else "llvm.va_end"
         fn = self.funcs.get(name)
         if fn is None:
@@ -1843,10 +2703,24 @@ class CodeGen:
         return fn
 
     def func_value(self, name: str, line: int) -> "TypedValue | None":
-        """A bare function name used as a value: its address, typed as a
-        function pointer. Only a single monomorphic function qualifies -- a
-        generic or overloaded name has no one address. Returns None if the name
-        is not a function at all (so the caller can report it as a variable)."""
+        """Resolve a bare function name used as a value.
+
+        Yields the function's address typed as a function pointer. Only a single
+        monomorphic function qualifies -- a generic or overloaded name has no one
+        address.
+
+        Args:
+            name: The function name.
+            line: Source line for diagnostics.
+
+        Returns:
+            The function pointer as a ``TypedValue``, or ``None`` when ``name``
+            is not a function at all (so the caller can report it as a variable).
+
+        Raises:
+            LangError: When the name is generic, or ``@private`` and referenced
+                from another file.
+        """
         key = (self.current_source, name)
         if key in self.static_templates or name in self.templates:
             raise LangError(
@@ -1863,6 +2737,19 @@ class CodeGen:
         return TypedValue(self.funcs[symbol], function_type(ret, tuple(params), variadic))
 
     def gen_direct_call(self, expr: Call, symbol: str) -> TypedValue:
+        """Emit a direct call to a known, non-generic function.
+
+        Args:
+            expr: The ``Call`` node.
+            symbol: The resolved LLVM symbol to call.
+
+        Returns:
+            The call's result as a ``TypedValue``.
+
+        Raises:
+            LangError: When generic type arguments are given for a non-generic
+                function, or an argument fails to coerce.
+        """
         if expr.type_args:
             raise LangError(f"{expr.name!r} is not a generic function", expr.line)
         ret, params, variadic = self.signatures[symbol]
@@ -1871,8 +2758,23 @@ class CodeGen:
 
     def gen_indirect_call(self, callee: TypedValue, arg_exprs: list,
                           label: str, line: int) -> TypedValue:
-        """Call through a function-pointer value -- a variable, a parameter, or
-        any expression of function-pointer type (e.g. a struct field)."""
+        """Emit a call through a function-pointer value.
+
+        The callee may be a variable, a parameter, or any expression of
+        function-pointer type (e.g. a struct field).
+
+        Args:
+            callee: The function-pointer value to call.
+            arg_exprs: The argument expressions.
+            label: A description of the callee, for error messages.
+            line: Source line for diagnostics.
+
+        Returns:
+            The call's result as a ``TypedValue``.
+
+        Raises:
+            LangError: When ``callee`` is not callable or an argument is wrong.
+        """
         if not is_function(callee.type):
             raise LangError(f"cannot call a value of type {callee.type}", line)
         ret, params, variadic = callee.type.signature
@@ -1881,8 +2783,26 @@ class CodeGen:
 
     def marshal_args(self, arg_exprs: list, params, variadic: bool,
                      label: str, line: int) -> list:
-        """Evaluate and coerce a call's arguments against the callee's
-        parameter types, applying C varargs promotions past a variadic tail."""
+        """Evaluate and coerce a call's arguments against the parameter types.
+
+        Applies C varargs promotions (small integers and bools widen to
+        ``int32``) past a variadic tail, and hands a ``va_list`` over in its
+        platform-specific passed form.
+
+        Args:
+            arg_exprs: The argument expressions.
+            params: The callee's parameter types.
+            variadic: Whether the callee takes varargs.
+            label: A description of the callee, for error messages.
+            line: Source line for diagnostics.
+
+        Returns:
+            The marshalled LLVM argument values.
+
+        Raises:
+            LangError: On a wrong argument count, a coercion failure, or passing
+                a struct to a variadic function.
+        """
         if len(arg_exprs) < len(params) or (len(arg_exprs) > len(params) and not variadic):
             raise LangError(
                 f"{label} expects {len(params)} argument(s), got {len(arg_exprs)}", line
@@ -1916,15 +2836,26 @@ class CodeGen:
 
     def unify(self, pattern: TypeRef, actual: LangType, type_params: list[str],
               bindings: dict[str, LangType], strict: bool, context: str, line: int):
-        """Match a parameter's TypeRef against an argument type, binding any
-        type parameters it mentions. `array<T>*` against `array<int32>*`
-        binds T = int32.
+        """Match a parameter pattern against an argument type, binding params.
 
-        When `strict`, two typed arguments that disagree about the same
-        parameter are reported as a conflict. Non-strict matches (untyped
-        constants, or parameters fixed by explicit type arguments) never
-        override or conflict with an existing binding; any mismatch there
-        surfaces as an ordinary coercion error afterwards."""
+        For example, ``array<T>*`` against ``array<int32>*`` binds ``T =
+        int32``.
+
+        Args:
+            pattern: The parameter's ``TypeRef`` pattern.
+            actual: The argument's resolved type.
+            type_params: The function's type-parameter names.
+            bindings: The accumulating ``{name: type}`` map, updated in place.
+            strict: When ``True``, two typed arguments that disagree about the
+                same parameter are reported as a conflict; non-strict matches
+                (untyped constants, or parameters fixed by explicit type
+                arguments) never override or conflict with an existing binding.
+            context: A label for the error message.
+            line: Source line for diagnostics.
+
+        Raises:
+            LangError: On a strict conflict for a type parameter.
+        """
         peeled = actual
         for _ in range(pattern.stars):
             if not is_pointer(peeled):
@@ -1948,6 +2879,24 @@ class CodeGen:
                            strict, context, line)
 
     def gen_generic_call(self, expr: Call, candidates: list[Func]) -> TypedValue:
+        """Resolve and emit a call to a generic function or overload set.
+
+        Infers type-parameter bindings from the arguments; with several
+        candidates, keeps the viable ones and picks the most specific parameter
+        pattern (``T*`` beats ``T``, and so on), then instantiates the chosen
+        template and emits the call.
+
+        Args:
+            expr: The ``Call`` node.
+            candidates: The generic overload set to dispatch over.
+
+        Returns:
+            The call's result as a ``TypedValue``.
+
+        Raises:
+            LangError: When no overload matches, the choice is ambiguous, a type
+                parameter binds to ``void``, or access is denied.
+        """
         arg_tvs = [self.gen_expr(arg) for arg in expr.args]
         if len(candidates) == 1:
             func = candidates[0]
@@ -1984,17 +2933,29 @@ class CodeGen:
 
     def resolve_bindings(self, func: Func, expr: Call, arg_tvs: list[TypedValue],
                          lenient: bool) -> dict[str, LangType] | None:
-        """Determine the type-parameter bindings for calling `func`.
+        """Determine the type-parameter bindings for calling a generic function.
 
         Inference takes typed values first, then untyped constants (whose
-        int32 default should not win over a typed value bound to the same
-        parameter). `null` carries no type information and never
-        participates. Disagreement between typed arguments is a conflict,
-        unless the parameters were fixed explicitly (then plain coercion
-        errors point at the bad argument).
+        ``int32`` default should not win over a typed value bound to the same
+        parameter); ``null`` carries no type information and never participates.
+        Disagreement between typed arguments is a conflict unless the parameters
+        were fixed explicitly (then plain coercion errors point at the bad
+        argument).
 
-        When `lenient` (overload trial), any failure returns None instead of
-        raising, and argument shapes must match the parameter patterns.
+        Args:
+            func: The candidate generic function.
+            expr: The ``Call`` node.
+            arg_tvs: The already-evaluated argument values.
+            lenient: When ``True`` (an overload trial), any failure returns
+                ``None`` instead of raising, and argument shapes must match the
+                parameter patterns.
+
+        Returns:
+            The ``{type parameter: type}`` bindings, or ``None`` when lenient and
+            the candidate does not match.
+
+        Raises:
+            LangError: On a non-lenient mismatch (arity, inference, or shape).
         """
         if len(expr.args) != len(func.params):
             if lenient:
@@ -2044,8 +3005,20 @@ class CodeGen:
 
     def shape_matches(self, pattern: TypeRef, actual: LangType, adaptable: bool,
                       type_params: list[str], line: int) -> bool:
-        """Whether an argument type structurally fits a parameter pattern
-        (used only to filter overload candidates)."""
+        """Report whether an argument type structurally fits a parameter pattern.
+
+        Used only to filter overload candidates.
+
+        Args:
+            pattern: The parameter's ``TypeRef`` pattern.
+            actual: The argument's resolved type.
+            adaptable: Whether the argument is an adaptable untyped constant.
+            type_params: The function's type-parameter names.
+            line: Source line for diagnostics.
+
+        Returns:
+            ``True`` when ``actual`` can match ``pattern``.
+        """
         peeled = actual
         for _ in range(pattern.stars):
             if not is_pointer(peeled):
@@ -2070,9 +3043,19 @@ class CodeGen:
         return resolved == RAWPTR and is_pointer(peeled)
 
     def specificity(self, func: Func) -> int:
-        """Rank an overload: concrete types beat structured patterns, which
-        beat bare type parameters; pointer depth adds specificity."""
+        """Rank an overload by how specific its parameter patterns are.
+
+        Concrete types beat structured patterns, which beat bare type
+        parameters; pointer depth adds specificity.
+
+        Args:
+            func: The candidate function.
+
+        Returns:
+            The summed specificity score across the parameters.
+        """
         def score(pattern: TypeRef) -> int:
+            """Score one parameter pattern's specificity."""
             value = pattern.stars
             if pattern.args:
                 value += 4 + sum(score(a) for a in pattern.args)
@@ -2084,8 +3067,19 @@ class CodeGen:
     def instantiate(
         self, func: Func, bindings: dict[str, LangType]
     ) -> tuple[ir.Function, LangType, list[LangType]]:
-        """Return the monomorphized instance of `func` for `bindings`,
-        generating (and caching) it on first use."""
+        """Return the monomorphized instance of a generic function.
+
+        Generates (and caches) the instance for ``bindings`` on first use,
+        registering it before emitting the body so recursive calls resolve. The
+        instance gets mergeable linkage, like an imported definition.
+
+        Args:
+            func: The generic function template.
+            bindings: The type-parameter bindings to instantiate with.
+
+        Returns:
+            A ``(function, return type, param types)`` tuple for the instance.
+        """
         key = (id(func), tuple(str(bindings[t]) for t in func.type_params))
         if key in self.instances:
             mangled = self.instances[key]
@@ -2121,6 +3115,22 @@ class CodeGen:
         return fn, ret, params
 
     def gen_binary(self, expr: Binary) -> TypedValue:
+        """Emit a binary arithmetic, bitwise, shift, or comparison operation.
+
+        Adapts an untyped constant operand to the other side's type, then emits
+        the signedness-correct instruction (e.g. ``sdiv``/``udiv``, signed vs
+        unsigned compares) for integers, pointers, or ``float64``.
+
+        Args:
+            expr: The ``Binary`` node.
+
+        Returns:
+            The result as a ``TypedValue``.
+
+        Raises:
+            LangError: On operands of mismatched or unsupported types for the
+                operator.
+        """
         lhs = self.gen_expr(expr.lhs)
         rhs = self.gen_expr(expr.rhs)
         if lhs.type != rhs.type:

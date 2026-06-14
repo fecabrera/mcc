@@ -19,11 +19,18 @@ from mcc.nodes import Conditional, Program
 from mcc.parser import Parser
 
 
-# The project's lib/ directory, importable by bare name (the "standard
-# library") unless --naked is passed. It lives beside the package when
-# installed as a wheel (mcc/lib) and at the repo root in a source checkout
-# (../lib); $MCC_STDLIB overrides both.
 def _find_stdlib() -> Path:
+    """Locate the bundled lib/ standard-library directory.
+
+    The directory is importable by bare name (the "standard library") unless
+    ``--naked`` is passed. It lives beside the package when installed as a
+    wheel (mcc/lib) and at the repo root in a source checkout (../lib); the
+    ``$MCC_STDLIB`` environment variable overrides both.
+
+    Returns:
+        The first candidate directory that exists, falling back to the
+        source-checkout path (../lib) when none is found yet.
+    """
     override = os.environ.get("MCC_STDLIB")
     if override:
         return Path(override)
@@ -38,8 +45,16 @@ STDLIB_DIR = _find_stdlib()
 
 
 def _stamp_conditionals(conditionals, source: str) -> None:
-    """Stamp `source` onto every declaration inside a top-level @if, recursing
-    through nested conditionals in both branches."""
+    """Record the owning file on declarations inside top-level ``@if`` blocks.
+
+    Recurses through nested conditionals, stamping both the ``then`` and
+    ``otherwise`` branches so each declaration's source survives the flattening
+    that codegen performs later.
+
+    Args:
+        conditionals: The top-level ``Conditional`` nodes to walk.
+        source: Path of the file these conditionals were parsed from.
+    """
     for cond in conditionals:
         for item in (*cond.then, *cond.otherwise):
             if isinstance(item, Conditional):
@@ -49,8 +64,16 @@ def _stamp_conditionals(conditionals, source: str) -> None:
 
 
 def _stamp_sources(program: Program, source: str) -> None:
-    """Stamp `source` onto every declaration in a parsed file, so @private and
-    linkage know which file each came from."""
+    """Record the owning file on every declaration in a parsed program.
+
+    Functions, structs, globals, consts, and the declarations inside top-level
+    ``@if`` branches each get ``source`` set, so ``@private`` access checks and
+    linkage can tell which file a declaration came from.
+
+    Args:
+        program: The freshly parsed program to annotate, modified in place.
+        source: Path of the file ``program`` was parsed from.
+    """
     for func in program.functions:
         func.source = source
     for decl in program.structs:
@@ -68,13 +91,31 @@ def merge_imports(program: Program, base_dir: Path,
                   search_paths: tuple[Path, ...] = (),
                   visited: set[Path] | None = None,
                   source: str | None = None) -> Program:
-    """Recursively merge a parsed program's `import "file";` graph into one
-    Program. Imports resolve relative to base_dir first, then through the
-    search-path directories in order; the .mc suffix is optional. A file
-    imported more than once (including cycles) is only loaded the first time.
+    """Merge a parsed program's ``import "file";`` graph into one program.
 
-    `source` names the importing file for error reporting (None for a program
-    parsed from a string)."""
+    Each import resolves relative to ``base_dir`` first, then through the
+    search-path directories in order; the ``.mc`` suffix is optional. A file
+    imported more than once (including via cycles) is loaded only the first
+    time. Imported declarations are placed before the importing program's own.
+
+    Args:
+        program: The parsed program whose imports to resolve.
+        base_dir: Directory the program was loaded from; imports resolve
+            relative to it first.
+        search_paths: Additional directories to search, in order, after
+            ``base_dir``.
+        visited: Set of already-loaded absolute paths, shared across the
+            recursion to break cycles; created when ``None``.
+        source: Path of the importing file, used for error reporting; ``None``
+            for a program parsed from a string.
+
+    Returns:
+        A new ``Program`` with the import list resolved and every imported
+        declaration merged in.
+
+    Raises:
+        LangError: When an imported file cannot be found on any search path.
+    """
     if visited is None:
         visited = set()
     structs, functions = [], []
@@ -107,7 +148,24 @@ def merge_imports(program: Program, base_dir: Path,
 
 def load_program(path: Path, search_paths: tuple[Path, ...] = (),
                  _visited: set[Path] | None = None) -> Program:
-    """Parse a source file and recursively merge its `import "file";` graph."""
+    """Parse a source file and recursively merge its import graph.
+
+    A file already present in ``_visited`` resolves to an empty program, so a
+    file shared by several imports (or a cycle) is parsed only once.
+
+    Args:
+        path: The source file to load.
+        search_paths: Directories to search for imports, in order.
+        _visited: Set of already-loaded absolute paths, shared across the
+            recursion; created when ``None``.
+
+    Returns:
+        The program parsed from ``path`` with all of its imports merged in.
+
+    Raises:
+        LangError: On a lex/parse error or a failed import; the error's
+            ``source`` is filled in with this file when not already set.
+    """
     resolved = path.resolve()
     visited = _visited if _visited is not None else set()
     if resolved in visited:
@@ -126,6 +184,17 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
 
 def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
                   target: str | None = None) -> ir.Module:
+    """Load a source file and lower it to an LLVM IR module.
+
+    Args:
+        path: The entry source file to compile.
+        search_paths: Import search-path directories; defaults to just the
+            bundled standard library when ``None``.
+        target: An LLVM target triple to build for, or ``None`` for the host.
+
+    Returns:
+        The generated, unverified LLVM IR module.
+    """
     if search_paths is None:
         search_paths = (STDLIB_DIR,)
     program = load_program(path, tuple(search_paths))
@@ -152,9 +221,21 @@ GENERAL_REGS_ONLY_FEATURES = {
 
 
 def restrict_to_general_regs(module: ir.Module, triple: str) -> None:
-    """Tag every defined function with a target-features attribute that bars
-    the floating-point/SIMD registers for `triple`'s architecture -- mcc's
-    -mgeneral-regs-only. Raises if the architecture has no known feature set."""
+    """Bar the FP/SIMD registers from every defined function in a module.
+
+    Tags each definition with a ``target-features`` attribute that disables the
+    floating-point/SIMD register file for ``triple``'s architecture -- mcc's
+    equivalent of gcc's ``-mgeneral-regs-only``. Extern declarations (no body)
+    are left untouched.
+
+    Args:
+        module: The IR module to annotate, modified in place.
+        triple: The LLVM target triple whose architecture selects the features.
+
+    Raises:
+        RuntimeError: When the architecture has no known general-regs-only
+            feature set.
+    """
     arch = triple.split("-")[0]
     features = GENERAL_REGS_ONLY_FEATURES.get(arch)
     if features is None:
@@ -169,8 +250,24 @@ def restrict_to_general_regs(module: ir.Module, triple: str) -> None:
 
 def build_native_module(module: ir.Module, opt_level: int, triple: str | None = None,
                         general_regs_only: bool = False):
-    """Verify and optimize the IR for a target: the host by default, or any
-    LLVM triple (e.g. aarch64-unknown-none-elf for bare metal)."""
+    """Verify and optimize an IR module for a target machine.
+
+    Initializes the backend, attaches the target's triple and data layout,
+    optionally restricts the code to general-purpose registers, verifies the
+    module, and runs LLVM's optimization pipeline when ``opt_level`` is above 0.
+
+    Args:
+        module: The IR module to finalize.
+        opt_level: Optimization level 0-3; 0 skips the pass pipeline.
+        triple: An LLVM target triple (e.g. ``aarch64-unknown-none-elf`` for
+            bare metal), or ``None`` to build for the host.
+        general_regs_only: When ``True``, bar the FP/SIMD registers via
+            :func:`restrict_to_general_regs`.
+
+    Returns:
+        A tuple ``(native, target_machine)`` of the parsed, verified, optimized
+        module and the target machine it was built for.
+    """
     if triple is None:
         llvm.initialize_native_target()
         llvm.initialize_native_asmprinter()
@@ -193,6 +290,18 @@ def build_native_module(module: ir.Module, opt_level: int, triple: str | None = 
 
 
 def main() -> int:
+    """Run the ``mcc`` command-line interface.
+
+    Parses arguments, compiles the source file to IR, and then -- depending on
+    the flags -- prints the IR (``--emit-llvm``), emits an object file for a
+    cross target (``--target``), JIT-executes ``main`` (``--run``), or links a
+    native executable with ``cc``. Compile and I/O errors are reported as
+    ``file: error: ...`` on stderr.
+
+    Returns:
+        A process exit status: 0 on success, 1 on a reported error, or the
+        value returned by the program's ``main`` under ``--run``.
+    """
     cli = argparse.ArgumentParser(prog="mcc", description="Compile .mc source files with LLVM.")
     cli.add_argument("source", type=Path)
     cli.add_argument("-o", "--output", type=Path, help="output executable name")

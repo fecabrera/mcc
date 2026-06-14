@@ -32,12 +32,38 @@ MASTER_RE = re.compile("|".join(f"(?P<{name}>{pat})" for name, pat in TOKEN_SPEC
 
 @dataclass
 class Token:
-    kind: str  # FLOAT, INT, IDENT, STRING, EOF, or the literal text
+    """A single lexical token.
+
+    Attributes:
+        kind: The token category -- FLOAT, INT, IDENT, STRING, CHAR, or EOF --
+            or, for punctuation and keywords, the literal text itself (e.g.
+            "->", "fn", ";").
+        text: The exact source text the token was matched from.
+        line: The 1-based line number where the token begins.
+    """
+
+    kind: str
     text: str
     line: int
 
 
 def tokenize(source: str) -> list[Token]:
+    """Scan source text into a flat list of tokens.
+
+    Whitespace and comments are discarded. Operator, arrow, ellipsis, and
+    keyword tokens are normalized so their ``kind`` is the literal text, while
+    INT, FLOAT, IDENT, STRING, and CHAR keep their category. A terminating EOF
+    token is always appended.
+
+    Args:
+        source: The full source text of one file.
+
+    Returns:
+        The tokens in source order, ending with an EOF token.
+
+    Raises:
+        LangError: On an unterminated block comment or an unexpected character.
+    """
     tokens = []
     line = 1
     pos = 0

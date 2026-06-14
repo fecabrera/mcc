@@ -24,35 +24,98 @@ STRING_ESCAPES = {
 
 
 def int_value(text: str) -> int:
-    """The value of an INT token; a 0x/0X prefix means hexadecimal."""
+    """Parse the integer value of an INT token.
+
+    Args:
+        text: The token text, in decimal or with a ``0x``/``0X`` hex prefix.
+
+    Returns:
+        The integer value.
+    """
     return int(text, 16 if text[:2] in ("0x", "0X") else 10)
 
 
 class Parser:
+    """A recursive-descent parser over a token list.
+
+    Builds an AST from the tokens produced by the lexer, using precedence
+    climbing for binary expressions. The parser holds a cursor (``pos``) into
+    ``tokens`` and never backtracks except for the bounded speculation in
+    :meth:`try_type_args`.
+
+    Attributes:
+        tokens: The token list being parsed, ending with an EOF token.
+        pos: Index of the current token.
+    """
+
     def __init__(self, tokens: list[Token]):
+        """Initialize the parser.
+
+        Args:
+            tokens: The tokens to parse, as returned by ``tokenize``.
+        """
         self.tokens = tokens
         self.pos = 0
 
     @property
     def cur(self) -> Token:
+        """The token at the cursor, without consuming it.
+
+        Returns:
+            The current token.
+        """
         return self.tokens[self.pos]
 
     def advance(self) -> Token:
+        """Consume the current token and advance the cursor.
+
+        Returns:
+            The token that was current before advancing.
+        """
         tok = self.cur
         self.pos += 1
         return tok
 
     def accept(self, kind: str) -> Token | None:
+        """Consume the current token if it matches ``kind``.
+
+        Args:
+            kind: The token kind to match.
+
+        Returns:
+            The consumed token, or ``None`` when the current token did not
+            match.
+        """
         if self.cur.kind == kind:
             return self.advance()
         return None
 
     def expect(self, kind: str) -> Token:
+        """Consume the current token, requiring it to match ``kind``.
+
+        Args:
+            kind: The token kind that must appear next.
+
+        Returns:
+            The consumed token.
+
+        Raises:
+            LangError: When the current token is not of kind ``kind``.
+        """
         if self.cur.kind != kind:
             raise LangError(f"expected {kind!r}, got {self.cur.text!r}", self.cur.line)
         return self.advance()
 
     def parse_program(self) -> Program:
+        """Parse a whole file: leading imports, then top-level declarations.
+
+        Returns:
+            A ``Program`` with imports collected and each declaration sorted
+            into structs, functions, globals, consts, or conditionals.
+
+        Raises:
+            LangError: On any syntax error in the file.
+        """
         imports = []
         structs, functions, globals_, consts, conditionals = [], [], [], [], []
         while self.cur.kind == "import":
@@ -68,9 +131,17 @@ class Parser:
         return Program(imports, structs, functions, globals_, consts, conditionals)
 
     def parse_toplevel_block(self) -> list:
-        """A brace-delimited group of top-level declarations -- a branch of a
-        top-level @if. Imports must precede all declarations, so they are not
-        allowed here."""
+        """Parse a brace-delimited group of top-level declarations.
+
+        Used for a branch of a top-level ``@if``. Imports must precede all
+        declarations, so they are not allowed here.
+
+        Returns:
+            The declarations parsed from the block.
+
+        Raises:
+            LangError: When an ``import`` appears inside the block.
+        """
         self.expect("{")
         items = []
         while self.cur.kind != "}":
@@ -81,10 +152,18 @@ class Parser:
         return items
 
     def parse_conditional(self, parse_block):
-        """@if (cond) { ... } [@else @if (...) { ... }] [@else { ... }] --
-        compile-time conditional compilation. `parse_block` parses one branch
-        body: top-level declarations or statements, depending on the context.
-        The dead branch is parsed but never compiled."""
+        """Parse an ``@if`` / ``@else @if`` / ``@else`` compile-time selection.
+
+        The dead branch is still parsed (so it must be syntactically valid) but
+        never compiled. An ``@else @if`` chain is handled by recursing.
+
+        Args:
+            parse_block: Callback that parses one branch body -- top-level
+                declarations or statements, depending on the context.
+
+        Returns:
+            A ``Conditional`` node for the selection.
+        """
         line = self.advance().line  # @if
         self.expect("(")
         cond = self.parse_expr()
@@ -100,7 +179,20 @@ class Parser:
         return Conditional(cond, then, otherwise, line)
 
     def parse_toplevel_item(self):
-        """One top-level item: a struct, global, const, function, or @if."""
+        """Parse one top-level item: a struct, global, const, function, or @if.
+
+        Leading annotations (``@private``, ``@static``, ``@extern``,
+        ``@packed``, ``@volatile``, ``@align``, ``@symbol``) are collected and
+        validated against the declaration they precede.
+
+        Returns:
+            The parsed ``StructDecl``, ``GlobalVar``, ``Const``, ``Func``, or
+            ``Conditional``.
+
+        Raises:
+            LangError: On a misplaced ``@else``, an unknown or misapplied
+                annotation, or an otherwise invalid declaration.
+        """
         if self.cur.kind == "ANNOT" and self.cur.text == "@if":
             return self.parse_conditional(self.parse_toplevel_block)
         if self.cur.kind == "ANNOT" and self.cur.text == "@else":
@@ -198,10 +290,26 @@ class Parser:
                   "null", "sizeof", "len", "(", "[", "-", "!", "&"}
 
     def parse_type_ref(self, greedy_stars: bool = True) -> TypeRef:
-        """A type: `[struct] name[<type, ...>][*...][[N]...]`, or a
-        function-pointer type `fn(type, ...) -> ret`. The `struct` keyword is
-        optional (C habit); struct-ness is resolved by name. A trailing `[N]`
-        makes a fixed-size array, so `int32[10]` is ten int32s."""
+        """Parse a type reference.
+
+        Handles ``[struct] name[<type, ...>][*...][[N]...]``, the
+        function-pointer form ``fn(type, ...) -> ret``, and parenthesized
+        grouping so a ``*`` can bind outside a function type. The ``struct``
+        keyword is optional (C habit); struct-ness is resolved later by name. A
+        trailing ``[N]`` makes a fixed-size array, so ``int32[10]`` is ten
+        int32s.
+
+        Args:
+            greedy_stars: When ``True``, take every following ``*`` as pointer
+                depth; when ``False``, stop where a ``*`` begins a
+                multiplication (used after ``as``).
+
+        Returns:
+            The parsed ``TypeRef``.
+
+        Raises:
+            LangError: On a pointer to an array type, or other malformed type.
+        """
         if self.cur.kind == "fn":
             return self.parse_fn_type(greedy_stars)
         if self.cur.kind == "(":
@@ -226,6 +334,16 @@ class Parser:
         return TypeRef(name, args, self.parse_stars(greedy_stars), dims=self.parse_dims())
 
     def parse_dims(self) -> list[int | str | None]:
+        """Parse trailing fixed-array dimensions ``[N]``, ``[name]``, or ``[]``.
+
+        Returns:
+            The dimensions, outermost first: an integer size, the ``str`` name
+            of an integer ``const`` (resolved in codegen), or ``None`` for an
+            inferred ``[]``.
+
+        Raises:
+            LangError: When an explicit array size is less than 1.
+        """
         dims = []
         while self.cur.kind == "[":
             line = self.advance().line
@@ -242,8 +360,18 @@ class Parser:
         return dims
 
     def parse_fn_type(self, greedy_stars: bool) -> TypeRef:
-        """A function-pointer type: `fn(A, B) -> R`. A missing `-> R` means
-        the function returns void, as in a declaration."""
+        """Parse a function-pointer type ``fn(A, B) -> R``.
+
+        A missing ``-> R`` means the function returns ``void``, as in a
+        declaration.
+
+        Args:
+            greedy_stars: Passed to :meth:`parse_stars` for any ``*`` that
+                follows the type.
+
+        Returns:
+            A ``TypeRef`` named ``"fn"`` with its ``params`` and ``ret`` set.
+        """
         self.expect("fn")
         self.expect("(")
         params = []
@@ -256,6 +384,16 @@ class Parser:
         return TypeRef("fn", [], self.parse_stars(greedy_stars), params=params, ret=ret)
 
     def parse_stars(self, greedy_stars: bool) -> int:
+        """Count the pointer ``*`` tokens following a type.
+
+        Args:
+            greedy_stars: When ``False``, stop at a ``*`` whose next token can
+                begin an expression, leaving it as multiplication (the
+                ``as T * x`` ambiguity); when ``True``, consume every ``*``.
+
+        Returns:
+            The number of ``*`` consumed -- the pointer depth.
+        """
         stars = 0
         while self.cur.kind == "*" and (
             greedy_stars or self.tokens[self.pos + 1].kind not in self.EXPR_START
@@ -265,15 +403,26 @@ class Parser:
         return stars
 
     def expect_close_angle(self):
-        """Close a type-argument list. A `>>` token here is two closings of
-        nested generics (e.g. array<array<int32>>): split it, consuming the
-        first `>` and leaving the second as the current token."""
+        """Consume the ``>`` closing a type-argument list.
+
+        A ``>>`` token here closes two nested generics (e.g.
+        ``array<array<int32>>``): it is split, consuming the first ``>`` and
+        leaving the second as the current token.
+
+        Raises:
+            LangError: When the current token is neither ``>`` nor ``>>``.
+        """
         if self.cur.kind == ">>":
             self.tokens[self.pos] = Token(">", ">", self.cur.line)
             return
         self.expect(">")
 
     def parse_type_params(self) -> list[str]:
+        """Parse an optional generic parameter list ``<A, B, ...>``.
+
+        Returns:
+            The type-parameter names, or an empty list when absent.
+        """
         type_params = []
         if self.accept("<"):
             type_params.append(self.expect("IDENT").text)
@@ -285,6 +434,18 @@ class Parser:
     def parse_struct(self, private: bool = False, static: bool = False,
                      align: int | None = None, packed: bool = False,
                      volatile: bool = False) -> StructDecl:
+        """Parse a ``struct`` declaration with its (optionally generic) fields.
+
+        Args:
+            private: Whether ``@private`` was applied.
+            static: Whether ``@static`` was applied.
+            align: The ``@align(N)`` value, or ``None``.
+            packed: Whether ``@packed`` was applied.
+            volatile: Whether ``@volatile`` was applied.
+
+        Returns:
+            The parsed ``StructDecl``.
+        """
         line = self.expect("struct").line
         name = self.expect("IDENT").text
         type_params = self.parse_type_params()
@@ -301,6 +462,25 @@ class Parser:
 
     def parse_function(self, private: bool = False, static: bool = False,
                        extern: bool = False, symbol: str | None = None) -> Func:
+        """Parse a function definition or an ``@extern`` declaration.
+
+        Reads the (optionally generic) signature, an optional trailing ``...``
+        for an extern variadic, and then either a body or, for an extern, a
+        terminating ``;``.
+
+        Args:
+            private: Whether ``@private`` was applied.
+            static: Whether ``@static`` was applied.
+            extern: Whether ``@extern`` was applied (declaration only).
+            symbol: The ``@symbol("...")`` linker name, or ``None``.
+
+        Returns:
+            The parsed ``Func``.
+
+        Raises:
+            LangError: On a generic-extern, generic-variadic, or malformed
+                ``...`` parameter.
+        """
         line = self.expect("fn").line
         name = self.expect("IDENT").text
         type_params = self.parse_type_params()
@@ -340,6 +520,11 @@ class Parser:
                     private=private, static=static, variadic=variadic)
 
     def parse_block(self) -> list:
+        """Parse a brace-delimited ``{ ... }`` block of statements.
+
+        Returns:
+            The statements in the block.
+        """
         self.expect("{")
         statements = []
         while self.cur.kind != "}":
@@ -348,12 +533,29 @@ class Parser:
         return statements
 
     def parse_body(self) -> list:
-        """A control-flow body: a braced block, or a single statement."""
+        """Parse a control-flow body: a braced block or a single statement.
+
+        Returns:
+            The body's statements, as a list either way.
+        """
         if self.cur.kind == "{":
             return self.parse_block()
         return [self.parse_statement()]
 
     def parse_statement(self):
+        """Parse one statement inside a function body.
+
+        Covers ``@if``, blocks, ``return``, ``let``, ``if``/``else``, ``case``,
+        ``while``/``until``, ``break``, ``continue``, ``defer``, ``for``, and
+        expression statements -- including assignments, recognized by their
+        target form (a variable, ``*ptr``, ``base[i]``, or a member).
+
+        Returns:
+            The parsed statement node.
+
+        Raises:
+            LangError: On a syntax error or an invalid assignment target.
+        """
         tok = self.cur
         if tok.kind == "ANNOT" and tok.text == "@if":
             return self.parse_conditional(self.parse_body)
@@ -438,10 +640,14 @@ class Parser:
         return ExprStmt(expr, tok.line)
 
     def parse_case(self):
-        """case (subject) { when v: stmts... else: stmts... }
+        """Parse a ``case (subject) { when v: ... else: ... }`` statement.
 
-        Each `when` arm runs only its own statements -- there is no
-        fall-through -- and the optional `else:` is the default."""
+        Each ``when`` arm runs only its own statements -- there is no
+        fall-through -- and the optional ``else:`` is the default.
+
+        Returns:
+            The parsed ``Case`` node.
+        """
         line = self.expect("case").line
         self.expect("(")
         subject = self.parse_expr()
@@ -468,9 +674,19 @@ class Parser:
     # `and`; both bind looser than comparisons, so `a > 0 or b < 0` needs no
     # parentheses. They short-circuit, so they are not part of PRECEDENCE.
     def parse_expr(self):
+        """Parse a full expression (the lowest-precedence entry point).
+
+        Returns:
+            The parsed expression node.
+        """
         return self.parse_or()
 
     def parse_or(self):
+        """Parse a left-associative ``or`` chain (the loosest operator).
+
+        Returns:
+            A ``Logical`` node, or the inner expression when no ``or`` appears.
+        """
         expr = self.parse_and()
         while self.cur.kind == "or":
             line = self.advance().line
@@ -478,6 +694,11 @@ class Parser:
         return expr
 
     def parse_and(self):
+        """Parse a left-associative ``and`` chain.
+
+        Returns:
+            A ``Logical`` node, or the inner expression when no ``and`` appears.
+        """
         expr = self.parse_binary(0)
         while self.cur.kind == "and":
             line = self.advance().line
@@ -490,6 +711,16 @@ class Parser:
                   ["<<", ">>"], ["+", "-"], ["*", "/", "%"]]
 
     def parse_binary(self, level: int):
+        """Parse a binary-operator expression by precedence climbing.
+
+        Args:
+            level: Index into ``PRECEDENCE``; higher levels bind tighter.
+                Calling with ``0`` parses a full binary expression.
+
+        Returns:
+            The parsed expression node -- a ``Binary`` tree, or a tighter
+            expression when no operator at this level appears.
+        """
         if level == len(self.PRECEDENCE):
             return self.parse_as()
         lhs = self.parse_binary(level + 1)
@@ -500,8 +731,14 @@ class Parser:
         return lhs
 
     def parse_as(self):
-        # `as` binds tighter than binary operators: a + b as int64
-        # parses as a + (b as int64).
+        """Parse a chain of ``as`` casts.
+
+        ``as`` binds tighter than the binary operators, so ``a + b as int64``
+        parses as ``a + (b as int64)``.
+
+        Returns:
+            A ``Cast`` node, or the inner expression when no ``as`` appears.
+        """
         expr = self.parse_unary()
         while self.cur.kind == "as":
             line = self.advance().line
@@ -509,12 +746,26 @@ class Parser:
         return expr
 
     def parse_unary(self):
+        """Parse a prefix unary operator (``-``, ``!``, ``*``, ``&``) or below.
+
+        Returns:
+            A ``Unary`` node, or a postfix expression when no prefix operator
+            appears.
+        """
         if self.cur.kind in ("-", "!", "*", "&"):
             op = self.advance()
             return Unary(op.kind, self.parse_unary(), op.line)
         return self.parse_postfix()
 
     def parse_postfix(self):
+        """Parse postfix operators: indexing, member access, and calls.
+
+        Applies ``[i]``, ``.field`` / ``->field``, and ``(args)`` (a call
+        through a function-pointer expression) left to right onto a primary.
+
+        Returns:
+            The parsed expression node.
+        """
         expr = self.parse_primary()
         while True:
             if self.cur.kind == "[":
@@ -536,6 +787,11 @@ class Parser:
                 return expr
 
     def parse_call_args(self) -> list:
+        """Parse a parenthesized, comma-separated argument list.
+
+        Returns:
+            The argument expressions.
+        """
         self.expect("(")
         args = []
         while self.cur.kind != ")":
@@ -546,6 +802,19 @@ class Parser:
         return args
 
     def parse_primary(self):
+        """Parse a primary expression.
+
+        Covers literals (int, float, bool, ``null``, string, char), a
+        parenthesized expression, an array literal, ``sizeof`` / ``len``, and an
+        identifier -- which becomes a ``Var`` or, with ``(...)``, a ``Call``
+        (optionally carrying generic type arguments).
+
+        Returns:
+            The parsed expression node.
+
+        Raises:
+            LangError: On an unexpected token or an out-of-range char literal.
+        """
         tok = self.advance()
         if tok.kind == "INT":
             return IntLit(int_value(tok.text), tok.line)
@@ -597,10 +866,14 @@ class Parser:
         raise LangError(f"unexpected token {tok.text!r}", tok.line)
 
     def try_type_args(self) -> list[TypeRef]:
-        """Speculatively parse `<type, ...>` at a call site, e.g. sum<int32>(...).
+        """Speculatively parse ``<type, ...>`` generic arguments at a call site.
 
-        Only commits when the closing `>` is immediately followed by `(`;
-        otherwise the `<` was a comparison and the position is restored.
+        Only commits when the closing ``>`` is immediately followed by ``(``;
+        otherwise the ``<`` was a comparison and the cursor is restored.
+
+        Returns:
+            The parsed type arguments (e.g. for ``sum<int32>(...)``), or an
+            empty list when the ``<`` was not a generic-argument list.
         """
         saved = self.pos
         self.advance()  # '<'
