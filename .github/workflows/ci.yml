@@ -1,4 +1,4 @@
-name: tests
+name: CI
 
 on:
   push:
@@ -41,3 +41,35 @@ jobs:
           echo "# Coverage Report (${{ matrix.os }})" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           pipenv run python -m coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY"
+
+  examples:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pipenv
+
+      - name: Install pipenv
+        run: pip install pipenv
+
+      - name: Install dependencies
+        run: pipenv sync --dev
+
+      - name: Compile every example
+        run: |
+          for f in examples/*.mc; do
+            echo "== $f =="
+            pipenv run python -m mcc "$f" -o "$RUNNER_TEMP/$(basename "$f" .mc)"
+          done
+
+      - name: Cross-compile the bare-metal kernel
+        run: |
+          pipenv run python -m mcc examples/baremetal/kernel.mc \
+            --target aarch64-unknown-none-elf -o "$RUNNER_TEMP/kernel.o"
