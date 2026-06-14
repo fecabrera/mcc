@@ -1,16 +1,16 @@
-import "libc/stdio";
+import "std";
 
 fn main() -> int32 {
     let i: int32 = 1;
     while (i <= 20) {
         if (i % 15 == 0) {
-            puts("FizzBuzz");
+            println("FizzBuzz");
         } else if (i % 3 == 0) {
-            puts("Fizz");
+            println("Fizz");
         } else if (i % 5 == 0) {
-            puts("Buzz");
+            println("Buzz");
         } else {
-            printf("%d\n", i);
+            println("%d", i);
         }
         i = i + 1;
     }

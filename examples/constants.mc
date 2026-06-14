@@ -1,4 +1,4 @@
-import "libc/stdio";
+import "std";
 
 // `const` declares a named compile-time constant -- mcc's typed answer to
 // C's `#define`. It has no storage; every use is folded in when compiling.
@@ -32,11 +32,11 @@ fn main() -> int32 {
         row = row + 1;
     }
 
-    printf("%s: %d cells, %d bytes per row\n", TITLE, CELLS, ROW_BYTES);
-    printf("last cell = %d, max level = %d\n",
+    println("%s: %d cells, %d bytes per row", TITLE, CELLS, ROW_BYTES);
+    println("last cell = %d, max level = %d",
            grid[CELLS - 1], MAX_LEVEL as int32);
 
     // len() reports the size that the const fixed -- nothing is hard-coded.
-    printf("grid holds %llu ints\n", len(grid));
+    println("grid holds %llu ints", len(grid));
     return 0;
 }

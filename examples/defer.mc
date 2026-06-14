@@ -1,5 +1,6 @@
-import "libc/stdio";
+import "std";
 import "memory";
+import "array";
 
 // `defer` schedules an action to run when the enclosing block exits -- however
 // it exits: falling off the end, a return, or a break/continue out of a loop.
@@ -21,28 +22,60 @@ fn process(n: int32) -> int32 {
     buffer[0] = 'O';
     buffer[1] = 'K';
     buffer[2] = 0;
-    puts(buffer);                     // both buffers freed as this returns
+    println("%s", buffer);                     // both buffers freed as this returns
     return n * 2;
+}
+
+// Defers nest: a defer block can hold its own defers. This cleanup block frees
+// every element of a dynamic array -- advancing the index with an inner
+// `defer i = i + 1` that runs at the end of each loop pass -- then destroys the
+// array itself once the loop is done.
+fn build_labels(n: uint64) {
+    let labels: array<uint8*>;
+    array_init(&labels, n);
+    defer {
+        let i: uint64 = 0;
+        while (i < labels.length) {
+            defer i = i + 1;                 // bump at the end of each iteration
+            println("  free %s", labels.data[i]);
+            dealloc(labels.data[i]);
+        }
+        array_destroy(&labels);              // runs after the loop, last of all
+    }
+
+    let i: uint64 = 0;
+    while (i < n) {
+        let label: uint8* = alloc<uint8>(2);
+        label[0] = 'a' + i as uint8;
+        label[1] = 0;
+        array_append(&labels, label);
+        i = i + 1;
+    }
+    println("built %llu labels", labels.length);
+    // falling off the end here runs the cleanup block above
 }
 
 fn main() -> int32 {
     // The block form defers several statements at once.
     defer {
-        puts("cleaning up");
-        puts("goodbye");
+        println("cleaning up");
+        println("goodbye");
     }
 
-    printf("process(7)  -> %d\n", process(7));
-    printf("process(-1) -> %d\n", process(-1));
+    println("process(7)  -> %d", process(7));
+    println("process(-1) -> %d", process(-1));
 
     // A defer inside a loop body runs every iteration, at the end of that pass.
     let i: int32 = 0;
     while (i < 3) {
-        defer printf("| ");          // marks the end of each iteration
-        printf("step %d ", i);
+        defer print("| ");          // marks the end of each iteration
+        print("step %d ", i);
         i = i + 1;
     }
-    printf("\n");
+    println("");
+
+    // A defer block can itself contain defers -- they nest.
+    build_labels(3);
 
     return 0;   // the block defer ("cleaning up" / "goodbye") runs here, last
 }

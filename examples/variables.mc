@@ -1,4 +1,4 @@
-import "libc/stdio";
+import "std";
 
 fn main() -> int32 {
     // `let` declares a variable. A bare integer constant has no definite
@@ -20,24 +20,28 @@ fn main() -> int32 {
     let big: int64 = 9000000000;
     let huge: uint64 = 18000000000000000000;
 
-    printf("answer = %d\n", answer);
-    printf("pi     = %f\n", pi);
-    printf("yes    = %d\n", yes);
-    printf("byte   = %u\n", byte);
-    printf("short  = %d\n", short);
-    printf("big    = %lld\n", big);
-    printf("huge   = %llu\n", huge);
+    println("answer = %d", answer);
+    println("pi     = %f", pi);
+    println("yes    = %d", yes);
+    println("byte   = %u", byte);
+    println("short  = %d", short);
+    println("big    = %lld", big);
+    println("huge   = %llu", huge);
 
     // Variables are mutable; assignment keeps the declared type.
     answer = answer * 2;
-    printf("answer = %d\n", answer);
+    println("answer = %d", answer);
 
     // A declaration may omit the initializer if it has a type annotation.
     // Like a C local, it holds garbage until assigned -- useful when the
     // value is decided by branches.
     let parity: uint8*;
-    if (answer % 2 == 0) { parity = "even"; } else { parity = "odd"; }
-    printf("answer is %s\n", parity);
+    if (answer % 2 == 0) {
+        parity = "even";
+    } else {
+        parity = "odd";
+    }
+    println("answer is %s", parity);
 
     return 0;
 }

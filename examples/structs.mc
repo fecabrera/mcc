@@ -1,4 +1,4 @@
-import "libc/stdio";
+import "std";
 import "array";
 
 // A plain struct. Fields are declared `name: type;`.
@@ -28,13 +28,13 @@ fn main() -> int32 {
     let p = alloc<struct point>(1);
     p->x = 3;
     p->y = 4;
-    printf("point = (%d, %d)\n", p->x, p->y);
-    printf("sizeof(point) = %llu\n", sizeof(struct point));
+    println("point = (%d, %d)", p->x, p->y);
+    println("sizeof(point) = %llu", sizeof(struct point));
 
     // Dereferencing copies the struct; `.` accesses fields of a value.
     let q = *p;
     q.x = 30;
-    printf("q = (%d, %d), p untouched = (%d, %d)\n", q.x, q.y, p->x, p->y);
+    println("q = (%d, %d), p untouched = (%d, %d)", q.x, q.y, p->x, p->y);
     dealloc(p);
 
     // A linked list of three nodes, terminated by null.
@@ -44,7 +44,7 @@ fn main() -> int32 {
     a->value = 1;  a->next = b;
     b->value = 2;  b->next = c;
     c->value = 4;  c->next = null;
-    printf("list sum = %d\n", sum_list(a));
+    println("list sum = %d", sum_list(a));
     dealloc(a); dealloc(b); dealloc(c);
 
     // The growable array<T> from lib/array.mc.
@@ -55,10 +55,10 @@ fn main() -> int32 {
         array_append(nums, i * i);
         i = i + 1;
     }
-    printf("array length = %llu, capacity = %llu\n", nums->length, nums->capacity);
+    println("array length = %llu, capacity = %llu", nums->length, nums->capacity);
     let value: int32 = 0;
     if (array_get(nums, 6, &value))
-        printf("nums[6] = %d\n", value);
+        println("nums[6] = %d", value);
     array_destroy(nums);
     dealloc(nums);
 

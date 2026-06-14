@@ -1,7 +1,7 @@
-import "libc/stdio";
+import "std";
 
 fn main() -> int32 {
-    printf("hello, world\n");
+    println("hello, world");
 
     return 0;
 }

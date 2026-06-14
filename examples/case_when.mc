@@ -1,4 +1,4 @@
-import "libc/stdio";
+import "std";
 
 // `case` matches a value against a series of `when` arms, with an optional
 // `else:` default. There is no fall-through: a matching arm runs only its
@@ -28,7 +28,7 @@ fn kind_of(c: uint8) -> uint8* {
 fn main() -> int32 {
     let i: int32 = 0;
     while (i < 4) {
-        printf("%d is %s\n", i, name_of(i));
+        println("%d is %s", i, name_of(i));
         i = i + 1;
     }
 
@@ -40,11 +40,11 @@ fn main() -> int32 {
         n = n + 1;
         case (n % 3) {
             when 0: continue;        // skip multiples of 3
-            else:   printf("%d ", n);
+            else:   print("%d ", n);
         }
     }
-    putchar(10);
+    println("");
 
-    printf("'0' -> %s, ' ' -> %s\n", kind_of('0'), kind_of(' '));
+    println("'0' -> %s, ' ' -> %s", kind_of('0'), kind_of(' '));
     return 0;
 }

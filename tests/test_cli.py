@@ -6,7 +6,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-HELLO = ROOT / "examples" / "helloworld.mc"
+# The libc variant: a minimal valid program with no std/va_list dependency, so
+# it compiles far enough to exercise target and codegen flags on any arch.
+HELLO = ROOT / "examples" / "helloworld-libc.mc"
 
 
 def mcc(*args, **kwargs):

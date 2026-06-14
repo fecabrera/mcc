@@ -7,6 +7,19 @@ the [mcc/](mcc/) package, with one module per stage: lexer, parser, code
 generator, and driver.
 
 ```c
+import "std";
+
+fn main() -> int32 {
+    println("hello, world");
+
+    return 0;
+}
+```
+
+`println` comes from the [standard library](#standard-library); you can also
+call libc's `printf` directly:
+
+```c
 import "libc/stdio";
 
 fn main() -> int32 {
@@ -22,6 +35,7 @@ fn main() -> int32 {
 - [Install](#install)
 - [Usage](#usage)
 - [Examples](#examples)
+- [Standard library](#standard-library)
 - [Language reference](#language-reference)
   - [Functions](#functions)
   - [Variadic functions](#variadic-functions)
@@ -121,6 +135,25 @@ handler. Supported for aarch64, x86, and riscv targets.
 feature per file, from hello world through unsigned arithmetic and generics
 to fizzbuzz and a prime sieve. See the [index](examples/README.md).
 
+## Standard library
+
+The modules under [lib/](lib/) are on the import search path by default, so
+they import by bare name. For everyday output, `import "std";` provides `print`
+and `println` — printf-style formatting, written in mcc on top of the libc
+bindings:
+
+```c
+import "std";
+fn main() -> int32 { println("answer = %d", 42); return 0; }
+```
+
+Alongside `std` are `memory` (typed `alloc`/`dealloc`), the `array`/`set`/`dict`
+containers, and the `hashing/*` functions. The [`libc/`](lib/libc/) modules are
+instead `@extern` bindings for the C library itself — `printf`, `malloc`, the
+`str*`/`mem*` functions, `FILE*` streams, and so on — which you reach for when
+you want C directly; see [Reaching libc](#reaching-libc). The
+[standard library index](lib/README.md) lists every module.
+
 ## Language reference
 
 ### Functions
@@ -135,7 +168,7 @@ fn add(a: int32, b: int32) -> int32 {
 }
 
 fn greet() {
-    puts("hi");
+    println("hi");
 }
 ```
 
@@ -397,11 +430,11 @@ distinct from the runtime `if`/`else`.
 
 ```c
 if (x > 10) {
-    puts("big");
+    println("big");
 } else if (x > 5) {
-    puts("medium");
+    println("medium");
 } else {
-    puts("small");
+    println("small");
 }
 
 while (x < 10) {
@@ -955,6 +988,10 @@ streams, math, time, errno, …); see the
 import "libc/stdio";
 fn main() -> int32 { printf("hello\n"); return 0; }
 ```
+
+For ordinary output you usually want the [`std`](#standard-library) `print` /
+`println` wrappers rather than `printf` directly; the `libc/` bindings are for
+reaching the rest of the C library.
 
 Anything the bindings do not cover, you can [declare yourself](#extern-declarations)
 with `@extern`. Variadic arguments to functions like `printf` follow C promotion

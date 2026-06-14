@@ -1,6 +1,5 @@
-import "libc/stdio";
-@extern fn malloc(size: uint64) -> uint8*;
-@extern fn free(ptr: uint8*);
+import "std";
+import "memory";   // alloc, dealloc
 
 // `fn(A, B) -> R` is the type of a pointer to a function. A bare function
 // name -- written without the call parentheses -- is a value of that type.
@@ -34,34 +33,35 @@ fn loud(x: int32) -> int32 { return x * 100; }
 fn main() -> int32 {
     // In a variable, reassignable.
     let op: fn(int32, int32) -> int32 = add;
-    printf("add(10, 3) = %d\n", op(10, 3));
+    println("add(10, 3) = %d", op(10, 3));
     op = sub;
-    printf("sub(10, 3) = %d\n", op(10, 3));
+    println("sub(10, 3) = %d", op(10, 3));
 
     // Passed as an argument.
-    printf("apply(add) = %d\n", apply(add, 4, 5));
+    println("apply(add) = %d", apply(add, 4, 5));
 
     // Calling the result of a call directly.
-    printf("op_for('-')(9, 2) = %d\n", op_for('-')(9, 2));
+    println("op_for('-')(9, 2) = %d", op_for('-')(9, 2));
 
     // Calling a callback stored in a struct field, in place.
     let b: struct button;
     b.label = "press me";
     b.on_press = loud;
-    printf("%s -> %d\n", b.label, b.on_press(7));
+    println("%s -> %d", b.label, b.on_press(7));
 
-    // A dispatch table: a pointer to function pointers needs the grouped
-    // type (fn(...) -> ...)*, so the * binds outside the function type.
-    let table = malloc(2 * sizeof(fn(int32, int32) -> int32)) as (fn(int32, int32) -> int32)*;
+    // A dispatch table: alloc<T> returns a typed T*, here a pointer to
+    // function pointers -- no sizeof or cast needed. The element type is the
+    // grouped (fn(...) -> ...) so the * from T* binds outside it.
+    let table = alloc<fn(int32, int32) -> int32>(2);
     table[0] = add;
     table[1] = sub;
-    printf("table[0](2, 3) = %d, table[1](2, 3) = %d\n", table[0](2, 3), table[1](2, 3));
-    free(table);
+    println("table[0](2, 3) = %d, table[1](2, 3) = %d", table[0](2, 3), table[1](2, 3));
+    dealloc(table);
 
     // null is a valid function pointer; optional callbacks compare with ==/!=.
     let maybe: fn(int32) -> int32 = null;
     if (maybe == null) {
-        puts("no callback set");
+        println("no callback set");
     }
 
     return 0;

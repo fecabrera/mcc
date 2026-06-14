@@ -1,20 +1,20 @@
-import "libc/stdio";
+import "std";
 
 // Functions may be defined in any order: all signatures are collected in a
 // first pass, so main can call everything below it.
 fn main() -> int32 {
     greet();
-    printf("gcd(252, 105) = %d\n", gcd(252, 105));
-    printf("fib(10)       = %d\n", fib(10));
+    println("gcd(252, 105) = %d", gcd(252, 105));
+    println("fib(10)       = %d", fib(10));
     if (is_even(10)) {
-        puts("10 is even");
+        println("10 is even");
     }
     return 0;
 }
 
 // Omitting `-> type` means the function returns void.
 fn greet() {
-    puts("hello from a void function");
+    println("hello from a void function");
 }
 
 // Parameters are mutable locals, so iterative algorithms can reassign them.

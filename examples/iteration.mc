@@ -1,4 +1,4 @@
-import "libc/stdio";
+import "std";
 import "array";
 
 // `for x in obj` walks anything that provides the iter/next protocol -- here
@@ -22,18 +22,20 @@ fn main() -> int32 {
     for sq in &nums {
         if (sq % 2 == 0) { continue; }   // skip the even squares
         if (sq > 20) { break; }          // and stop past 20
-        printf("odd square: %d\n", sq);
+        println("odd square: %d", sq);
         sum = sum + sq;
     }
-    printf("sum of odd squares <= 20: %d\n", sum);   // 1 + 9 = 10
+    println("sum of odd squares <= 20: %d", sum);   // 1 + 9 = 10
 
     // A bare { } block is its own scope -- a place for a short-lived helper
     // and its cleanup, without leaking names into the rest of the function.
     {
         let scratch: uint8* = alloc<uint8>(8);
         defer dealloc(scratch);
-        scratch[0] = 'h'; scratch[1] = 'i'; scratch[2] = 0;
-        puts(scratch);
+        scratch[0] = 'h';
+        scratch[1] = 'i';
+        scratch[2] = 0;
+        println("%s", scratch);
     }   // scratch is freed and out of scope here
 
     return 0;

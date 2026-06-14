@@ -1,35 +1,35 @@
-import "libc/stdio";
+import "std";
 
 fn main() -> int32 {
     // if / else if / else
     let n: int32 = 7;
     if (n > 10) {
-        puts("big");
+        println("big");
     } else if (n > 5) {
-        puts("medium");
+        println("medium");
     } else {
-        puts("small");
+        println("small");
     }
 
     // Any integer works as a condition: non-zero is true, as in C.
     let flag: int32 = 1;
     if (flag) {
-        puts("non-zero is true");
+        println("non-zero is true");
     }
 
     // `and` / `or` are the logical operators (no && / ||). They short-circuit
     // and bind looser than comparisons, so this needs no inner parentheses.
     if (n > 5 and n < 10) {
-        puts("n is in (5, 10)");
+        println("n is in (5, 10)");
     }
     if (n < 0 or n > 5) {
-        puts("n is negative or big");
+        println("n is negative or big");
     }
 
     // while loops
     let i: int32 = 0;
     while (i < 5) {
-        printf("i = %d\n", i);
+        println("i = %d", i);
         i = i + 1;
     }
 
@@ -37,7 +37,7 @@ fn main() -> int32 {
     // is false and stops once it becomes true.
     let countdown: int32 = 3;
     until (countdown == 0) {
-        printf("countdown = %d\n", countdown);
+        println("countdown = %d", countdown);
         countdown = countdown - 1;
     }
 
@@ -46,10 +46,10 @@ fn main() -> int32 {
     while (row <= 3) {
         let col: int32 = 1;
         while (col <= 3) {
-            printf("%2d ", row * col);
+            print("%2d ", row * col);
             col = col + 1;
         }
-        putchar(10);  // newline
+        println("");  // newline
         row = row + 1;
     }
 
@@ -63,7 +63,7 @@ fn main() -> int32 {
         if (k % 2 == 0) { continue; }
         sum = sum + k;
     }
-    printf("sum of odds 1..9 = %d\n", sum);
+    println("sum of odds 1..9 = %d", sum);
 
     return 0;
 }

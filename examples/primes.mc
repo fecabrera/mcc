@@ -1,4 +1,4 @@
-import "libc/stdio";
+import "std";
 
 fn is_prime(n: int32) -> bool {
     if (n < 2) {
@@ -19,11 +19,11 @@ fn main() -> int32 {
     let n: int32 = 2;
     while (n < 50) {
         if (is_prime(n)) {
-            printf("%d ", n);
+            print("%d ", n);
             count = count + 1;
         }
         n = n + 1;
     }
-    printf("\n%d primes below 50\n", count);
+    print("\n%d primes below 50\n", count);
     return 0;
 }
