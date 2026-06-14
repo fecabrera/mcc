@@ -257,10 +257,6 @@ class Parser:
                 self.expect(",")
             if self.cur.kind == "...":
                 ellipsis = self.advance()
-                if not extern:
-                    raise LangError(
-                        "'...' is only allowed in extern declarations", ellipsis.line
-                    )
                 if not params:
                     raise LangError(
                         "'...' needs at least one named parameter before it",
@@ -277,12 +273,14 @@ class Parser:
         ret_type = TypeRef("void")
         if self.accept("->"):
             ret_type = self.parse_type_ref()
+        if variadic and type_params:
+            raise LangError("a generic function cannot be variadic", line)
         if extern:  # a declaration: signature only, no body
             self.expect(";")
             return Func(name, type_params, params, ret_type, [], line,
                         private=private, extern=True, variadic=variadic)
         return Func(name, type_params, params, ret_type, self.parse_block(), line,
-                    private=private, static=static)
+                    private=private, static=static, variadic=variadic)
 
     def parse_block(self) -> list:
         self.expect("{")

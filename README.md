@@ -23,6 +23,7 @@ fn main() -> int32 {
 - [Examples](#examples)
 - [Language reference](#language-reference)
   - [Functions](#functions)
+  - [Variadic functions](#variadic-functions)
   - [Generics](#generics)
   - [Variables](#variables)
   - [Constants](#constants)
@@ -112,6 +113,37 @@ fn fib(n: int32) -> int32 {
     return fib(n - 1) + fib(n - 2);
 }
 ```
+
+### Variadic functions
+
+A trailing `...` after at least one named parameter makes a function
+variadic, both in [`@extern` declarations](#extern-declarations) (C's
+`printf`) and in functions you define. A defined variadic function can
+**forward** its extra arguments to a C `v*` function (`vsnprintf`,
+`vfprintf`, …) through a `va_list`:
+
+```c
+import "libc/stdio";   // @extern fn vsnprintf(..., args: va_list) -> int32;
+
+fn logf(fmt: uint8*, ...) -> int32 {
+    let buf: uint8[256];
+    let ap: va_list;
+    va_start(ap, fmt);                       // ap, then the last named param
+    let n = vsnprintf(&buf[0], 256, fmt, ap);
+    va_end(ap);
+    puts(&buf[0]);
+    return n;
+}
+
+logf("%s = %d (0x%X)", "answer", 42, 255);   // answer = 42 (0xFF)
+```
+
+`va_list` is the C argument-cursor type; `va_start(ap, last)` initializes it
+(naming the parameter just before the `...`), and `va_end(ap)` releases it.
+Its layout is platform-specific, so `va_list` is opaque — you can hand it to
+a function but not read individual arguments from it in mcc (there is no
+`va_arg`); let a C `v*` function consume it. The right layout is chosen for
+the target (it works for x86-64, arm64/aarch64, and Apple arm64).
 
 ### Generics
 

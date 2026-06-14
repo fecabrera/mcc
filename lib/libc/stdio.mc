@@ -11,7 +11,21 @@
  *
  * @return number of characters written, not including the null terminator
  */
-// @extern fn vsprintf(str: uint8*, format: uint8*, __builtin_va_list args) -> int32;
+@extern fn vsprintf(str: uint8*, format: uint8*, args: va_list) -> int32;
+
+/**
+ * Like vsprintf, but writes at most size-1 characters plus a NUL terminator,
+ * so it cannot overflow str. Prefer this over vsprintf for fixed buffers.
+ *
+ * @param str:    output buffer
+ * @param size:   capacity of str in bytes, including the NUL terminator
+ * @param format: printf-style format string
+ * @param args:   variadic argument list (must be initialized by the caller)
+ *
+ * @return number of characters that would have been written (excluding the
+ *         NUL), which may exceed size-1 if the output was truncated
+ */
+@extern fn vsnprintf(str: uint8*, size: uint64, format: uint8*, args: va_list) -> int32;
 
 /**
  * Formats a string into str using a printf-style format.

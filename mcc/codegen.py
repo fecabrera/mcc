@@ -151,6 +151,20 @@ def is_struct(lang_type: LangType) -> bool:
     return lang_type.fields is not None
 
 
+def is_valist(lang_type: LangType) -> bool:
+    """The platform va_list type. Only CodeGen.valist() builds one, and
+    lang_type() reserves the name, so the name is an unambiguous marker."""
+    return lang_type.name == "va_list"
+
+
+def _host_triple() -> str:
+    """The host target triple, for picking the native va_list layout when no
+    --target was given. Imported lazily so codegen has no hard dependency on
+    the LLVM binding layer when va_list is unused."""
+    import llvmlite.binding as llvm
+    return llvm.get_default_triple()
+
+
 def type_align(lang_type: LangType) -> int:
     if is_pointer(lang_type):
         return POINTER_SIZE
@@ -269,8 +283,16 @@ def wrap_int(value: int, lang_type: LangType) -> int:
 
 
 class CodeGen:
-    def __init__(self, program: Program, name: str, root_source: str | None = None):
+    def __init__(self, program: Program, name: str, root_source: str | None = None,
+                 target: str | None = None):
         self.program = program
+        # Target triple (None = host); fixes the platform va_list layout.
+        self.target = target
+        # va_list is platform-specific, so it is built lazily on first use.
+        self.va_list_type: "LangType | None" = None
+        self.va_list_passed_ir = None  # IR type a va_list takes as an argument
+        self.va_list_align = 8
+        self.current_variadic = False  # is the function being generated variadic?
         # The entry file's resolved path. Definitions from it are this
         # translation unit's own (external linkage); everything reached through
         # `import` is shared and gets merged across objects (see def_linkage).
@@ -349,6 +371,43 @@ class CodeGen:
         self.used_symbols.add(candidate)
         return candidate
 
+    def valist(self, line: int) -> LangType:
+        """The platform's va_list type, built once per target architecture.
+        Records both the storage layout (`.ir`, what `let ap: va_list;`
+        allocates) and the form it takes when passed to a function
+        (`va_list_passed_ir`); these differ on every ABI -- see the table in
+        the README's Variadic functions section."""
+        if self.va_list_type is not None:
+            return self.va_list_type
+        triple = (self.target or _host_triple()).lower()
+        arch = triple.split("-")[0]
+        apple = any(s in triple for s in ("apple", "darwin", "macos", "ios"))
+        i8p = ir.IntType(8).as_pointer()
+        ctx = self.module.context
+        if arch in ("arm64", "aarch64") and apple:
+            storage, passed, align = i8p, i8p, 8           # va_list is char*
+        elif arch in ("arm64", "aarch64"):                 # AAPCS __va_list
+            st = ctx.get_identified_type("struct.__va_list")
+            st.set_body(i8p, i8p, i8p, ir.IntType(32), ir.IntType(32))
+            storage, passed, align = st, st.as_pointer(), 8
+        elif arch in ("x86_64", "amd64"):                  # SysV __va_list_tag[1]
+            tag = ctx.get_identified_type("struct.__va_list_tag")
+            tag.set_body(ir.IntType(32), ir.IntType(32), i8p, i8p)
+            storage, passed, align = ir.ArrayType(tag, 1), tag.as_pointer(), 16
+        else:
+            raise LangError(
+                f"va_list is not supported for target architecture {arch!r}", line
+            )
+        self.va_list_type = LangType("va_list", storage, signed=False)
+        self.va_list_passed_ir = passed
+        self.va_list_align = align
+        return self.va_list_type
+
+    def param_irs(self, params) -> list:
+        """LLVM types for a function's parameters: a va_list lowers to the form
+        it is passed in (a pointer on every ABI), not its storage layout."""
+        return [self.va_list_passed_ir if is_valist(p) else p.ir for p in params]
+
     def lang_type(self, ref: TypeRef, line: int) -> LangType:
         if ref.params is not None:  # a fn(...) -> ret function-pointer type
             ret = self.lang_type(ref.ret, line)
@@ -363,6 +422,10 @@ class CodeGen:
             if ref.args:
                 raise LangError(f"type {ref.name!r} is not generic", line)
             base = TYPES[ref.name]
+        elif ref.name == "va_list":
+            if ref.args:
+                raise LangError("type 'va_list' is not generic", line)
+            base = self.valist(line)
         elif (self.current_source, ref.name) in self.static_structs \
                 or ref.name in self.struct_templates:
             decl = self.static_structs.get((self.current_source, ref.name))
@@ -601,7 +664,7 @@ class CodeGen:
                 if func.name in self.funcs or func.name in self.templates \
                         or func.name in self.globals:
                     raise LangError(f"function {func.name!r} already defined", func.line)
-                fnty = ir.FunctionType(ret.ir, [p.ir for p in params],
+                fnty = ir.FunctionType(ret.ir, self.param_irs(params),
                                        var_arg=func.variadic)
                 self.funcs[func.name] = ir.Function(self.module, fnty, name=func.name)
                 self.signatures[func.name] = (ret, params, func.variadic)
@@ -624,11 +687,12 @@ class CodeGen:
                 symbol = self.symbol_bases[key]
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
-                fnty = ir.FunctionType(ret.ir, [p.ir for p in params])
+                fnty = ir.FunctionType(ret.ir, self.param_irs(params),
+                                       var_arg=func.variadic)
                 fn = ir.Function(self.module, fnty, name=symbol)
                 self.link_shared(fn, func.source)
                 self.funcs[symbol] = fn
-                self.signatures[symbol] = (ret, params, False)
+                self.signatures[symbol] = (ret, params, func.variadic)
                 self.static_funcs[key] = symbol
                 continue
             if func.type_params:
@@ -654,11 +718,12 @@ class CodeGen:
             self.used_symbols.add(func.name)
             ret = self.lang_type(func.ret_type, func.line)
             params = [self.lang_type(t, func.line) for _, t in func.params]
-            fnty = ir.FunctionType(ret.ir, [p.ir for p in params])
+            fnty = ir.FunctionType(ret.ir, self.param_irs(params),
+                                   var_arg=func.variadic)
             fn = ir.Function(self.module, fnty, name=func.name)
             self.link_shared(fn, func.source)
             self.funcs[func.name] = fn
-            self.signatures[func.name] = (ret, params, False)
+            self.signatures[func.name] = (ret, params, func.variadic)
         for func in self.program.functions:
             if not func.type_params and not func.extern:
                 symbol = self.static_funcs.get((func.source, func.name), func.name)
@@ -669,6 +734,7 @@ class CodeGen:
     def gen_function(self, func: Func, fn: ir.Function, ret: LangType, params: list[LangType]):
         self.ret_type = ret
         self.current_source = func.source
+        self.current_variadic = func.variadic  # gates va_start
         self.builder = ir.IRBuilder(fn.append_basic_block("entry"))
         self.locals = {}
         self.loops = []  # break/continue cannot escape into a caller's loop
@@ -765,6 +831,8 @@ class CodeGen:
                 slot = self.builder.alloca(declared.ir, name=stmt.name)
                 if over_aligned(declared):
                     slot.align = type_align(declared)
+                elif is_valist(declared):
+                    slot.align = self.va_list_align  # ABI alignment for va_start
                 self.locals[stmt.name] = (slot, declared)
                 return
             if isinstance(stmt.value, ArrayLit):  # let xs: T[N] = [...]
@@ -1392,6 +1460,10 @@ class CodeGen:
         )
 
     def gen_call(self, expr: Call) -> TypedValue:
+        # va_start/va_end are builtins, not real functions: they lower to LLVM
+        # intrinsics over the va_list's address.
+        if expr.name in ("va_start", "va_end") and not expr.type_args:
+            return self.gen_va_builtin(expr)
         # A variable (local, parameter, @static or @extern global) shadows any
         # same-named function. A function-pointer one is called indirectly;
         # anything else is simply not callable.
@@ -1418,6 +1490,47 @@ class CodeGen:
         private, source = self.func_privacy.get(expr.name, (False, None))
         self.check_access(private, source, f"function {expr.name!r}", expr.line)
         return self.gen_direct_call(expr, expr.name)
+
+    def valist_arg(self, expr, line: int) -> ir.Value:
+        """The value passed when a va_list is handed to a function, derived from
+        its storage address: load the cursor (scalar va_list, e.g. Apple arm64),
+        decay to the first tag (array va_list, x86-64 SysV), or pass the address
+        itself (struct va_list, AArch64 AAPCS) -- a pointer on every ABI."""
+        addr, t, _, _ = self.gen_addr(expr, line)
+        if not is_valist(t):
+            raise LangError(f"expected a va_list argument, got {t}", line)
+        storage = t.ir
+        if isinstance(storage, ir.ArrayType):
+            return self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
+        if isinstance(storage, ir.PointerType):
+            return self.gen_load(addr)
+        return addr  # struct: pass its address
+
+    def gen_va_builtin(self, expr: Call) -> TypedValue:
+        """va_start(ap, last) / va_end(ap): initialise or finalise a va_list via
+        the LLVM intrinsics. The intrinsic takes only the va_list's address; the
+        named `last` parameter is accepted for C familiarity but unused."""
+        arity = 2 if expr.name == "va_start" else 1
+        if len(expr.args) != arity:
+            form = "va_start(ap, last_named_param)" if arity == 2 else "va_end(ap)"
+            raise LangError(f"{form} takes {arity} argument(s)", expr.line)
+        if expr.name == "va_start" and not self.current_variadic:
+            raise LangError("va_start is only valid inside a variadic function", expr.line)
+        addr, t, _, _ = self.gen_addr(expr.args[0], expr.line)
+        if not is_valist(t):
+            raise LangError(f"{expr.name} requires a va_list, got {t}", expr.line)
+        i8ptr = self.builder.bitcast(addr, RAWPTR.ir)
+        return TypedValue(self.builder.call(self.va_intrinsic(expr.name), [i8ptr]), VOID)
+
+    def va_intrinsic(self, kind: str) -> ir.Function:
+        """The void(i8*) llvm.va_start / llvm.va_end intrinsic, declared once."""
+        name = "llvm.va_start" if kind == "va_start" else "llvm.va_end"
+        fn = self.funcs.get(name)
+        if fn is None:
+            fnty = ir.FunctionType(ir.VoidType(), [RAWPTR.ir])
+            fn = ir.Function(self.module, fnty, name=name)
+            self.funcs[name] = fn
+        return fn
 
     def func_value(self, name: str, line: int) -> "TypedValue | None":
         """A bare function name used as a value: its address, typed as a
@@ -1466,6 +1579,11 @@ class CodeGen:
             )
         args = []
         for i, arg_expr in enumerate(arg_exprs):
+            if i < len(params) and is_valist(params[i]):
+                # A va_list is handed over in its platform-specific passed form,
+                # derived from its storage; coerce/decay do not apply.
+                args.append(self.valist_arg(arg_expr, line))
+                continue
             tv = self.gen_expr(arg_expr)
             if i < len(params):
                 tv = self.coerce(tv, params[i], line, f"argument {i + 1} of {label}")
@@ -1668,13 +1786,14 @@ class CodeGen:
         mangled = f"{base}<{', '.join(str(bindings[t]) for t in func.type_params)}>"
         outer_bindings = self.type_bindings
         outer_source = self.current_source
-        saved = self.builder, self.locals, self.ret_type, self.loops
+        saved = (self.builder, self.locals, self.ret_type, self.loops,
+                 self.current_variadic)
         self.type_bindings = bindings
         self.current_source = func.source  # the signature may name private structs
         try:
             ret = self.lang_type(func.ret_type, func.line)
             params = [self.lang_type(t, func.line) for _, t in func.params]
-            fnty = ir.FunctionType(ret.ir, [p.ir for p in params])
+            fnty = ir.FunctionType(ret.ir, self.param_irs(params))
             fn = ir.Function(self.module, fnty, name=mangled)
             # A generic instance is emitted in every object that uses it, so it
             # merges like an imported definition rather than colliding.
@@ -1685,7 +1804,8 @@ class CodeGen:
             self.instances[key] = mangled
             self.gen_function(func, fn, ret, params)
         finally:
-            self.builder, self.locals, self.ret_type, self.loops = saved
+            (self.builder, self.locals, self.ret_type, self.loops,
+             self.current_variadic) = saved
             self.type_bindings = outer_bindings
             self.current_source = outer_source
         return fn, ret, params

@@ -105,9 +105,16 @@ def test_variadic_mismatch_is_a_conflict(tmp_path):
         run_path(main)
 
 
-def test_ellipsis_outside_extern_is_an_error():
-    with pytest.raises(LangError, match="only allowed in extern declarations"):
-        parse("fn f(x: int32, ...) {}")
+def test_variadic_definition_is_allowed():
+    # `...` is no longer extern-only: a function may be defined as variadic
+    # (to forward its args through a va_list).
+    (func,) = parse("fn f(x: int32, ...) { return; }").functions
+    assert func.variadic and not func.extern
+
+
+def test_generic_function_cannot_be_variadic():
+    with pytest.raises(LangError, match="generic function cannot be variadic"):
+        parse("fn f<T>(x: T, ...) {}")
 
 
 def test_ellipsis_must_be_last():

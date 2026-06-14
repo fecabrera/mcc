@@ -78,11 +78,13 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
                    globals_, consts)
 
 
-def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None) -> ir.Module:
+def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
+                  target: str | None = None) -> ir.Module:
     if search_paths is None:
         search_paths = (STDLIB_DIR,)
     program = load_program(path, tuple(search_paths))
-    return CodeGen(program, path.name, root_source=str(path.resolve())).generate()
+    return CodeGen(program, path.name, root_source=str(path.resolve()),
+                   target=target).generate()
 
 
 # For each architecture, the LLVM subtarget features that -- when turned off
@@ -172,7 +174,7 @@ def main() -> int:
         search_paths.append(STDLIB_DIR)
 
     try:
-        module = compile_to_ir(args.source, search_paths)
+        module = compile_to_ir(args.source, search_paths, args.target)
     except OSError as err:
         print(f"mcc: error: cannot read {args.source}: {err.strerror}", file=sys.stderr)
         return 1
