@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -19,8 +20,21 @@ from mcc.parser import Parser
 
 
 # The project's lib/ directory, importable by bare name (the "standard
-# library") unless --naked is passed.
-STDLIB_DIR = Path(__file__).resolve().parent.parent / "lib"
+# library") unless --naked is passed. It lives beside the package when
+# installed as a wheel (mcc/lib) and at the repo root in a source checkout
+# (../lib); $MCC_STDLIB overrides both.
+def _find_stdlib() -> Path:
+    override = os.environ.get("MCC_STDLIB")
+    if override:
+        return Path(override)
+    here = Path(__file__).resolve().parent
+    for candidate in (here / "lib", here.parent / "lib"):
+        if candidate.is_dir():
+            return candidate
+    return here.parent / "lib"
+
+
+STDLIB_DIR = _find_stdlib()
 
 
 def _stamp_conditionals(conditionals, source: str) -> None:

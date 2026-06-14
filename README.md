@@ -19,6 +19,7 @@ fn main() -> int32 {
 ## Contents
 
 - [Requirements](#requirements)
+- [Install](#install)
 - [Usage](#usage)
 - [Examples](#examples)
 - [Language reference](#language-reference)
@@ -52,22 +53,48 @@ fn main() -> int32 {
 - llvmlite
 - A C compiler on `PATH` (`cc`) for linking native executables
 
+## Install
+
+### Homebrew
+
+```bash
+brew install fecabrera/mcc/mcc
+```
+
+### pip
+
+The compiler is a regular Python package that installs an `mcc` command and
+bundles the [standard library](lib/README.md):
+
+```bash
+pip install git+https://github.com/fecabrera/mcc
+mcc examples/helloworld.mc --run
+```
+
+### From source
+
+For development, work in a checkout with [pipenv](https://pipenv.pypa.io/):
+
 ```bash
 pipenv install
+pipenv run python -m mcc examples/helloworld.mc --run
 ```
+
+`pipenv run python -m mcc` and an installed `mcc` are interchangeable; the
+examples below use the `mcc` command.
 
 ## Usage
 
 ```bash
-pipenv run python -m mcc examples/helloworld.mc              # compile to a native executable
-pipenv run python -m mcc examples/helloworld.mc -o hello     # choose the output name
-pipenv run python -m mcc examples/helloworld.mc --run        # JIT-compile and run immediately
-pipenv run python -m mcc examples/helloworld.mc --emit-llvm  # print the LLVM IR instead of compiling
-pipenv run python -m mcc examples/helloworld.mc -O3          # optimization level (0-3, default 2)
-pipenv run python -m mcc main.mc -I vendor -I deps           # extra import search paths
-pipenv run python -m mcc main.mc --naked                     # don't put lib/ on the import path
-pipenv run python -m mcc main.mc --target aarch64-unknown-none-elf   # cross-compile to an object file
-pipenv run python -m mcc main.mc --general-regs-only          # never use FP/SIMD registers
+mcc examples/helloworld.mc              # compile to a native executable
+mcc examples/helloworld.mc -o hello     # choose the output name
+mcc examples/helloworld.mc --run        # JIT-compile and run immediately
+mcc examples/helloworld.mc --emit-llvm  # print the LLVM IR instead of compiling
+mcc examples/helloworld.mc -O3          # optimization level (0-3, default 2)
+mcc main.mc -I vendor -I deps           # extra import search paths
+mcc main.mc --naked                     # don't put lib/ on the import path
+mcc main.mc --target aarch64-unknown-none-elf   # cross-compile to an object file
+mcc main.mc --general-regs-only         # never use FP/SIMD registers
 ```
 
 `--target` accepts any LLVM triple and emits an object file instead of a

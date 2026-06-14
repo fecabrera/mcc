@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcc"
+version = "0.1.0"
+description = "A small, modern-C-style language compiled to native code via LLVM"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "Felipe Cabrera" }]
+keywords = ["compiler", "llvm", "language", "codegen"]
+dependencies = ["llvmlite"]
+
+[project.urls]
+Homepage = "https://github.com/fecabrera/mcc"
+Repository = "https://github.com/fecabrera/mcc"
+
+[project.scripts]
+mcc = "mcc.driver:main"
+
+# The mcc package plus the bundled standard library. The lib/ tree lives at the
+# repo root for development; here it is mapped under the package (mcc/lib) so it
+# ships inside the wheel, where driver._find_stdlib() picks it up.
+[tool.setuptools]
+packages = ["mcc", "mcc.lib", "mcc.lib.libc", "mcc.lib.hashing"]
+
+[tool.setuptools.package-dir]
+"mcc.lib" = "lib"
+"mcc.lib.libc" = "lib/libc"
+"mcc.lib.hashing" = "lib/hashing"
+
+[tool.setuptools.package-data]
+"mcc.lib" = ["*.mc", "*.md"]
+"mcc.lib.libc" = ["*.mc"]
+"mcc.lib.hashing" = ["*.mc"]

@@ -3,6 +3,11 @@ __pycache__/
 *.py[cod]
 .venv/
 
+# Packaging artifacts
+/build/
+/dist/
+*.egg-info/
+
 # Test and coverage artifacts
 .pytest_cache/
 .coverage
