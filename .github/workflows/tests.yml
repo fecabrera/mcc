@@ -26,5 +26,9 @@ jobs:
       - name: Install dependencies
         run: pipenv sync --dev
 
-      - name: Run tests
-        run: pipenv run pytest -v
+      - name: Run tests with coverage
+        run: |
+          pipenv run python -m coverage run --source=mcc -m pytest -v
+          echo "# Coverage Report (${{ matrix.os }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          pipenv run python -m coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY"
