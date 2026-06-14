@@ -1,16 +1,3 @@
-
-/**
- * Converts a signed integer to a null-terminated string in the given base. Negative values are only
- * supported for base 10.
- *
- * @param value: integer to convert
- * @param str: output buffer (must be large enough to hold the result)
- * @param base: numeric base (e.g. 2, 8, 10, 16)
- *
- * @return str
- */
-@extern fn itoa(value: int64, str: uint8*, base: int32) -> uint8*;
-
 /**
  * Converts the initial decimal digits of str to an integer, skipping leading whitespace and
  * handling an optional leading sign. Stops at the first non-digit character.

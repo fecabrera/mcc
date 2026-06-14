@@ -26,20 +26,6 @@
  */
 @extern fn strncpy(dest: uint8*, src: uint8*, count: uint64) -> uint8*;
 
-/**
- * Copies src into dest, stripping trailing whitespace and non-printable
- * characters. Reads at most count bytes from src. The result is always
- * null-terminated.
- *
- * @param dest:  destination buffer; must be at least count + 1 bytes
- * @param src:   source buffer to trim and copy from
- * @param count: maximum number of bytes to read from src
- *
- * @return number of characters written to dest, not including the null terminator;
- *         0 if src contains only whitespace or non-printable characters
- */
-@extern fn strntrimend(dest: uint8*, src: uint8*, count: uint64) -> uint64;
-
 /***************************************
  * String examination
  ***************************************/
