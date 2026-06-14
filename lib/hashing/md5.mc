@@ -1,7 +1,5 @@
 import "memory";
-
-#include <string.h>
-#include <math.h>
+import "libc/math";   // sin/floor/fabs, for the K constant table
 
 /**
  * Rotates x left by s bits.

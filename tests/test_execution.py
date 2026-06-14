@@ -9,7 +9,7 @@ from helpers import run
 def test_hello_world(capfd):
     status = run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             printf("hello, world\\n");
             return 0;
@@ -27,7 +27,7 @@ def test_exit_status_is_main_return_value():
 def test_loops_recursion_and_varargs(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn fib(n: int32) -> int32 {
             if (n < 2) { return n; }
             return fib(n - 1) + fib(n - 2);
@@ -48,7 +48,7 @@ def test_loops_recursion_and_varargs(capfd):
 def test_if_else_chain(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn label(n: int32) {
             if (n > 10) { puts("big"); }
             else if (n > 5) { puts("medium"); }
@@ -68,7 +68,7 @@ def test_if_else_chain(capfd):
 def test_until_loop(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let n: int32 = 27;
             let steps: int32 = 0;
@@ -89,7 +89,7 @@ def test_until_loop(capfd):
 def test_unsigned_semantics(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let big: uint32 = 4000000000;
             printf("%u\\n", big / 2);
@@ -110,7 +110,7 @@ def test_unsigned_semantics(capfd):
 def test_generics_explicit_inferred_and_recursive(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn max<T>(a: T, b: T) -> T {
             if (a > b) { return a; }
             return b;
@@ -136,7 +136,7 @@ def test_generics_explicit_inferred_and_recursive(capfd):
 def test_float_arithmetic(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let x = 3.5;
             printf("%f\\n", (x + 0.5) * 2.0 / 4.0 - 1.0);
@@ -150,7 +150,7 @@ def test_float_arithmetic(capfd):
 def test_bool_logic(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let t = true;
             if (!t) { puts("wrong"); } else { puts("right"); }
@@ -185,7 +185,7 @@ def test_uninitialized_let():
 def test_break_and_continue(capfd):
     status = run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let i: int32 = 0;
             let sum: int32 = 0;
@@ -207,7 +207,7 @@ def test_break_and_continue(capfd):
 def test_break_only_exits_the_inner_loop(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let i: int32 = 0;
             until (i == 3) {
@@ -229,7 +229,7 @@ def test_break_only_exits_the_inner_loop(capfd):
 def test_continue_in_an_until_loop(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let i: int32 = 0;
             until (i >= 6) {
@@ -248,7 +248,7 @@ def test_char_literals(capfd):
     # like any byte, and print as characters through %c.
     run(
         r"""
-        #include <stdio.h>
+        import "libc/stdio";
         fn count_spaces(s: uint8*) -> int32 {
             let n: int32 = 0;
             let i: uint64 = 0;

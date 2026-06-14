@@ -62,7 +62,7 @@ def test_volatile_stores_survive_optimization():
 
 def test_volatile_struct_still_computes_correctly():
     source = """
-    #include <stdlib.h>
+    import "libc/stdlib";
     @volatile
     struct reg { value: int32; }
     fn main() -> int32 {

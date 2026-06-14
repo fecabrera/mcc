@@ -84,7 +84,7 @@ def test_struct_keyword_is_optional_in_types():
         ("fn f(p: point*) {}", "unknown type 'point'"),
         ("struct pair<A, B> { a: A; b: B; }\nfn f(p: pair<int32>*) {}",
          "expects 2 type argument"),
-        ('#include <stdio.h>\n' + POINT +
+        ('import "libc/stdio";\n' + POINT +
          'fn f(p: struct point) { printf("%d", p); }',
          "cannot pass a struct to a variadic"),
         (POINT + "fn f(p: struct point) -> int32 { return p as int32; }",
@@ -123,8 +123,8 @@ def test_sizeof_struct_includes_padding():
 def test_struct_fields_roundtrip(capfd):
     run(
         """
-        #include <stdio.h>
-        #include <stdlib.h>
+        import "libc/stdio";
+        import "libc/stdlib";
         struct point { x: int32; y: int32; }
         fn main() -> int32 {
             let p = malloc(sizeof(struct point)) as struct point*;
@@ -144,8 +144,8 @@ def test_struct_fields_roundtrip(capfd):
 def test_null_and_linked_list(capfd):
     run(
         """
-        #include <stdio.h>
-        #include <stdlib.h>
+        import "libc/stdio";
+        import "libc/stdlib";
         struct node<T> { value: T; next: struct node<T>*; }
         fn push(head: struct node<int64>*, value: int64) -> struct node<int64>* {
             let n = malloc(sizeof(struct node<int64>)) as struct node<int64>*;
@@ -178,8 +178,8 @@ def test_null_and_linked_list(capfd):
 def test_address_of_field(capfd):
     run(
         """
-        #include <stdio.h>
-        #include <stdlib.h>
+        import "libc/stdio";
+        import "libc/stdlib";
         struct point { x: int32; y: int32; }
         fn bump(v: int32*) { *v = *v + 1; }
         fn main() -> int32 {
@@ -202,7 +202,7 @@ def test_memory_lib_copies(tmp_path, capfd):
     main.write_text(
         f'import "{lib_dir / "memory"}";\n'
         """
-        #include <stdio.h>
+        import \"libc/stdio\";
         struct point { x: int32; y: int32; }
         fn main() -> int32 {
             let src = alloc<int64>(3);
@@ -238,7 +238,7 @@ def test_array_lib(tmp_path, capfd):
     main.write_text(
         f'import "{lib_dir / "array"}";\n'
         """
-        #include <stdio.h>
+        import \"libc/stdio\";
         fn main() -> int32 {
             let floats = alloc<struct array<float64>>(1);
             array_init(floats, 1);
@@ -267,7 +267,7 @@ def test_array_iterator(tmp_path, capfd):
     main.write_text(
         f'import "{lib_dir / "array"}";\n'
         """
-        #include <stdio.h>
+        import \"libc/stdio\";
         fn main() -> int32 {
             let xs: struct array<int32>;
             array_init(&xs, 2);
@@ -300,7 +300,7 @@ def test_for_in_loop(tmp_path, capfd):
     main.write_text(
         f'import "{lib_dir / "array"}";\n'
         """
-        #include <stdio.h>
+        import \"libc/stdio\";
         fn main() -> int32 {
             let xs: struct array<int32>;
             array_init(&xs, 2);

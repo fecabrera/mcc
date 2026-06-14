@@ -41,7 +41,7 @@ fn main() -> int32 {
   - [Visibility](#visibility)
   - [Extern declarations](#extern-declarations)
   - [Strings](#strings)
-  - [Includes](#includes)
+  - [Reaching libc](#reaching-libc)
   - [Comments](#comments)
 - [Tests](#tests)
 - [How it works](#how-it-works)
@@ -854,8 +854,8 @@ fn main() -> int32 {
 ```
 
 A trailing `...` declares a C-style variadic function, such as `printf` or a
-kernel's `printk`; extra arguments follow the same promotion rules as the
-[`#include` functions](#includes):
+kernel's `printk`; extra arguments follow C's promotion rules (small integers
+widen to `int32`):
 
 ```c
 @extern
@@ -870,8 +870,8 @@ same symbol — but declarations that disagree about the signature are a
 compile error. `@private` applies to extern declarations as usual, and
 `@volatile` marks an extern variable whose accesses must not be optimized
 away; `@static` cannot be combined with `@extern`, since an external
-symbol's name is fixed. (The [`#include` headers](#includes) are exactly
-this: predeclared extern functions.)
+symbol's name is fixed. (The [libc bindings](#reaching-libc) are exactly
+this: files full of predeclared extern functions.)
 
 `@symbol("name")` binds an extern to a linker symbol that differs from its mcc
 name — for symbols that aren't valid identifiers, are versioned, or vary by
@@ -907,29 +907,23 @@ fn digit_value(c: uint8) -> uint8 {
 }
 ```
 
-### Includes
+### Reaching libc
 
-The standard way to reach libc is to import a binding module from
+To call into the C library, import a binding module from
 [lib/libc/](lib/libc/) — `import "libc/stdio";`, `import "libc/string";`, and
-so on. These are ordinary [`@extern` declarations](#extern-declarations)
-covering far more than the shim below (`sprintf`, the `scanf` family, `strcmp`,
-`abs`, character classification, …); see the
-[standard library index](lib/README.md).
+so on. These are ordinary [`@extern` declarations](#extern-declarations) for the
+C functions, covering most of the standard headers (the `printf`/`scanf`
+families, the `str*`/`mem*` functions, `malloc`/`qsort`/`strtol`, `FILE*`
+streams, math, time, errno, …); see the
+[standard library index](lib/README.md) for the full list.
 
-`#include <header>` is a small built-in convenience that predeclares a handful
-of the most common functions without an import:
+```c
+import "libc/stdio";
+fn main() -> int32 { printf("hello\n"); return 0; }
+```
 
-| Header     | Functions                                            |
-| ---------- | ---------------------------------------------------- |
-| `stdio.h`  | `printf` (variadic), `puts`, `putchar`, `getchar`    |
-| `stdlib.h` | `malloc`, `free`, `exit`, `abs`                      |
-| `string.h` | `memcpy`, `memset`, `strlen`                         |
-| `math.h`   | `sin`, `cos`, `sqrt`, `pow`, `floor`, `ceil`, `fabs` |
-
-The two declare the same symbols the same way, so they can be mixed freely (a
-function declared by both just collapses). The `#include` shim is **slated for
-removal** in favor of the `libc/` bindings — new code should prefer the
-imports, as the examples do. Variadic arguments to `printf` follow C promotion
+Anything the bindings do not cover, you can [declare yourself](#extern-declarations)
+with `@extern`. Variadic arguments to functions like `printf` follow C promotion
 rules (small integers are widened to `int32`).
 
 ### Comments

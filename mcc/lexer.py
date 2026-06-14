@@ -13,7 +13,6 @@ KEYWORDS = {"fn", "return", "let", "const", "if", "else", "while", "until",
             "null"}
 
 TOKEN_SPEC = [
-    ("INCLUDE", r"#include\s*<[^>\n]+>"),
     ("COMMENT", r"//[^\n]*|/\*(?s:.*?)\*/"),
     ("WS", r"[ \t\r\n]+"),
     ("ARROW", r"->"),
@@ -33,7 +32,7 @@ MASTER_RE = re.compile("|".join(f"(?P<{name}>{pat})" for name, pat in TOKEN_SPEC
 
 @dataclass
 class Token:
-    kind: str  # INCLUDE, FLOAT, INT, IDENT, STRING, EOF, or the literal text
+    kind: str  # FLOAT, INT, IDENT, STRING, EOF, or the literal text
     text: str
     line: int
 

@@ -34,41 +34,40 @@ def _stamp_conditionals(conditionals, source: str) -> None:
                 item.source = source
 
 
-def load_program(path: Path, search_paths: tuple[Path, ...] = (),
-                 _visited: set[Path] | None = None) -> Program:
-    """Parse a source file and recursively merge its `import "file";` graph.
+def _stamp_sources(program: Program, source: str) -> None:
+    """Stamp `source` onto every declaration in a parsed file, so @private and
+    linkage know which file each came from."""
+    for func in program.functions:
+        func.source = source
+    for decl in program.structs:
+        decl.source = source
+    for var in program.globals:
+        var.source = source
+    for const in program.consts:
+        const.source = source
+    # A top-level @if's branches hold declarations too; stamp them so their
+    # source survives flattening in codegen.
+    _stamp_conditionals(program.conditionals, source)
 
-    Imports resolve relative to the importing file first, then through the
+
+def merge_imports(program: Program, base_dir: Path,
+                  search_paths: tuple[Path, ...] = (),
+                  visited: set[Path] | None = None,
+                  source: str | None = None) -> Program:
+    """Recursively merge a parsed program's `import "file";` graph into one
+    Program. Imports resolve relative to base_dir first, then through the
     search-path directories in order; the .mc suffix is optional. A file
     imported more than once (including cycles) is only loaded the first time.
-    """
-    resolved = path.resolve()
-    visited = _visited if _visited is not None else set()
-    if resolved in visited:
-        return Program([], [], [], [], [], [], [])
-    visited.add(resolved)
-    try:
-        program = Parser(tokenize(resolved.read_text())).parse_program()
-    except LangError as err:
-        if err.source is None:
-            err.source = str(resolved)
-        raise
-    for func in program.functions:
-        func.source = str(resolved)
-    for decl in program.structs:
-        decl.source = str(resolved)
-    for var in program.globals:
-        var.source = str(resolved)
-    for const in program.consts:
-        const.source = str(resolved)
-    # A top-level @if's branches hold declarations too; stamp them so their
-    # source (for @private/linkage) survives flattening in codegen.
-    _stamp_conditionals(program.conditionals, str(resolved))
-    includes, structs, functions = [], [], []
+
+    `source` names the importing file for error reporting (None for a program
+    parsed from a string)."""
+    if visited is None:
+        visited = set()
+    structs, functions = [], []
     globals_, consts, conditionals = [], [], []
     for import_path, line in program.imports:
         candidates = []
-        for base in (resolved.parent, *search_paths):
+        for base in (base_dir, *search_paths):
             target = base / import_path
             if target.suffix != ".mc":
                 target = target.with_suffix(".mc")
@@ -77,22 +76,38 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
         if target is None:
             tried = ", ".join(str(c) for c in candidates)
             raise LangError(f"cannot import {import_path!r}: tried {tried}", line,
-                            source=str(resolved))
+                            source=source)
         imported = load_program(target, search_paths, visited)
-        includes += imported.includes
         structs += imported.structs
         functions += imported.functions
         globals_ += imported.globals
         consts += imported.consts
         conditionals += imported.conditionals
-    includes += program.includes
     structs += program.structs
     functions += program.functions
     globals_ += program.globals
     consts += program.consts
     conditionals += program.conditionals
-    return Program([], list(dict.fromkeys(includes)), structs, functions,
-                   globals_, consts, conditionals)
+    return Program([], structs, functions, globals_, consts, conditionals)
+
+
+def load_program(path: Path, search_paths: tuple[Path, ...] = (),
+                 _visited: set[Path] | None = None) -> Program:
+    """Parse a source file and recursively merge its `import "file";` graph."""
+    resolved = path.resolve()
+    visited = _visited if _visited is not None else set()
+    if resolved in visited:
+        return Program([], [], [], [], [], [])
+    visited.add(resolved)
+    try:
+        program = Parser(tokenize(resolved.read_text())).parse_program()
+    except LangError as err:
+        if err.source is None:
+            err.source = str(resolved)
+        raise
+    _stamp_sources(program, str(resolved))
+    return merge_imports(program, resolved.parent, search_paths, visited,
+                         source=str(resolved))
 
 
 def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,

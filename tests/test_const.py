@@ -131,7 +131,7 @@ def test_comparison_const():
 
 def test_string_const(capfd):
     source = (
-        "#include <stdio.h>\n"
+        "import \"libc/stdio\";\n"
         'const GREETING = "hi, const";\n'
         'fn main() -> int32 { printf("%s\\n", GREETING); return 0; }\n'
     )

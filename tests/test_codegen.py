@@ -7,7 +7,7 @@ MAIN = "fn main() -> int32 {{ {body} return 0; }}"
 
 
 def main_ir(body):
-    return compile_ir("#include <stdio.h>\n" + MAIN.format(body=body))
+    return compile_ir("import \"libc/stdio\";\n" + MAIN.format(body=body))
 
 
 def test_include_declares_printf():
@@ -102,7 +102,7 @@ def test_uninstantiated_template_emits_nothing():
         ("fn main() -> int32 { let a: uint32 = 1; let b = -a; return 0; }",
          "cannot negate a uint32"),
         ("fn main() -> int32 { return x; }", "undefined variable 'x'"),
-        ("fn main() -> int32 { printf(\"hi\"); return 0; }", "missing #include"),
+        ("fn main() -> int32 { printf(\"hi\"); return 0; }", "missing import"),
         ("fn main() -> int32 { let x: int32 = 1; let x: int32 = 2; return 0; }",
          "already declared"),
         ("fn f() {} fn f() {} fn main() -> int32 { return 0; }", "already defined"),

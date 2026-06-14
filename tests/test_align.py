@@ -18,7 +18,7 @@ def test_sizeof_rounds_up_to_alignment():
 def test_array_stride_matches_sizeof():
     # p[1] must land sizeof(cell) bytes in, or the writes would overlap.
     source = """
-    #include <stdlib.h>
+    import "libc/stdlib";
     @align(8)
     struct cell { x: int32; }
     fn main() -> int32 {
@@ -38,7 +38,7 @@ def test_over_aligned_field_offsets_in_outer_struct():
     # inner is 16-aligned, so it sits at offset 16 of outer (checked through
     # raw bytes) and pushes outer's size to 48.
     source = """
-    #include <stdlib.h>
+    import "libc/stdlib";
     @align(16)
     struct inner { x: int32; }
     struct outer {

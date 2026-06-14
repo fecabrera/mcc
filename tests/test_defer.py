@@ -15,7 +15,7 @@ def out(capfd, source):
 
 def test_runs_at_block_end(capfd):
     source = r"""
-    #include <stdio.h>
+    import "libc/stdio";
     fn main() -> int32 { defer printf("A"); printf("B"); return 0; }
     """
     assert out(capfd, source) == "BA"
@@ -23,7 +23,7 @@ def test_runs_at_block_end(capfd):
 
 def test_lifo_order(capfd):
     source = r"""
-    #include <stdio.h>
+    import "libc/stdio";
     fn main() -> int32 {
         defer printf("1"); defer printf("2"); defer printf("3");
         return 0;
@@ -34,7 +34,7 @@ def test_lifo_order(capfd):
 
 def test_block_form(capfd):
     source = r"""
-    #include <stdio.h>
+    import "libc/stdio";
     fn main() -> int32 {
         defer { printf("a"); printf("b"); }
         printf("X");
@@ -46,7 +46,7 @@ def test_block_form(capfd):
 
 def test_runs_on_return_from_nested_block(capfd):
     source = r"""
-    #include <stdio.h>
+    import "libc/stdio";
     fn f() { defer printf("X"); if (true) { return; } printf("unreached"); }
     fn main() -> int32 { f(); return 0; }
     """
@@ -56,7 +56,7 @@ def test_runs_on_return_from_nested_block(capfd):
 def test_inner_block_scope(capfd):
     # The defer fires at the end of its own block, before code after it.
     source = r"""
-    #include <stdio.h>
+    import "libc/stdio";
     fn main() -> int32 {
         if (true) { defer printf("in"); printf("body"); }
         printf("after");
@@ -68,7 +68,7 @@ def test_inner_block_scope(capfd):
 
 def test_runs_on_break(capfd):
     source = r"""
-    #include <stdio.h>
+    import "libc/stdio";
     fn main() -> int32 {
         let i: int32 = 0;
         while (i < 3) {
@@ -87,7 +87,7 @@ def test_runs_on_break(capfd):
 
 def test_runs_on_continue(capfd):
     source = r"""
-    #include <stdio.h>
+    import "libc/stdio";
     fn main() -> int32 {
         let i: int32 = 0;
         while (i < 3) {
@@ -117,7 +117,7 @@ def test_return_value_is_taken_before_defers_run():
 
 def test_nested_returns_unwind_all_scopes(capfd):
     source = r"""
-    #include <stdio.h>
+    import "libc/stdio";
     fn f() {
         defer printf("outer");
         while (true) {
@@ -133,7 +133,7 @@ def test_nested_returns_unwind_all_scopes(capfd):
 
 def test_realistic_alloc_free(capfd):
     source = r"""
-    #include <stdio.h>
+    import "libc/stdio";
     @extern fn malloc(n: uint64) -> uint8*;
     @extern fn free(p: uint8*);
     fn main() -> int32 {

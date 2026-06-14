@@ -21,10 +21,10 @@ def test_keyword_prefix_stays_identifier():
     assert tokens[1].text == "letter"
 
 
-def test_include_directive_is_one_token():
-    tokens = tokenize("#include <stdio.h>\n")
-    assert tokens[0].kind == "INCLUDE"
-    assert "stdio.h" in tokens[0].text
+def test_hash_is_rejected():
+    # #include was removed; '#' is no longer a valid character.
+    with pytest.raises(LangError, match="unexpected character"):
+        tokenize("#include <stdio.h>\n")
 
 
 def test_comments_and_whitespace_skipped():

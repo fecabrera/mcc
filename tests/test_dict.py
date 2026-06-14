@@ -10,7 +10,7 @@ def test_lookup_by_content_not_address(tmp_path, capfd):
     main.write_text(
         """
         import "dict";
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let d = alloc<struct dict<int32>>(1);
             dict_init(d, 4);
@@ -40,7 +40,7 @@ def test_dict_owns_key_copies(tmp_path, capfd):
     main.write_text(
         """
         import "dict";
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let d = alloc<struct dict<int32>>(1);
             dict_init(d, 2);
@@ -90,7 +90,7 @@ def test_remove_and_tombstone_reuse(tmp_path, capfd):
     main.write_text(
         """
         import "dict";
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let d = alloc<struct dict<int32>>(1);
             dict_init(d, 8);

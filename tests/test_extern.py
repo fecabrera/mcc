@@ -88,7 +88,7 @@ def test_variadic_extern_emits_a_varargs_declaration():
 
 def test_variadic_redeclaration_of_a_header_function_collapses():
     source = """
-    #include <stdio.h>
+    import "libc/stdio";
     @extern
     fn printf(fmt: uint8*, ...) -> int32;
     fn main() -> int32 { return printf("four") - 4; }
@@ -129,7 +129,7 @@ def test_ellipsis_needs_a_named_parameter():
 
 def test_redeclaring_a_header_function_collapses():
     source = """
-    #include <stdlib.h>
+    import "libc/stdlib";
     @extern
     fn abs(x: int32) -> int32;
     fn main() -> int32 { return abs(-9); }

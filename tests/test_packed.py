@@ -22,7 +22,7 @@ def test_sizeof_has_no_padding():
 def test_fields_sit_at_unpadded_offsets():
     # b lives at byte 1; check its first byte through a raw pointer.
     source = """
-    #include <stdlib.h>
+    import "libc/stdlib";
     @packed
     struct header {
         tag: uint8;
@@ -45,7 +45,7 @@ def test_fields_sit_at_unpadded_offsets():
 
 def test_array_stride_matches_sizeof():
     source = """
-    #include <stdlib.h>
+    import "libc/stdlib";
     @packed
     struct cell { a: uint8; b: int32; }
     fn main() -> int32 {
@@ -65,7 +65,7 @@ def test_nested_struct_fields_inherit_the_misalignment():
     # pair keeps its internal layout but sits at byte 1, so pair.y lands at
     # byte 5 -- and its accesses must not assume natural alignment.
     source = """
-    #include <stdlib.h>
+    import "libc/stdlib";
     struct pair { x: int32; y: int32; }
     @packed
     struct framed {

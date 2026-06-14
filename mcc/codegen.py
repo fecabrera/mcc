@@ -260,36 +260,6 @@ def type_size(lang_type: LangType) -> int:
     return 8  # float64
 
 
-# Functions made available by `#include <header>`: name -> (ret, params, variadic)
-HEADER_FUNCS = {
-    "stdio.h": {
-        "printf": (INT32, [RAWPTR], True),
-        "puts": (INT32, [RAWPTR], False),
-        "putchar": (INT32, [INT32], False),
-        "getchar": (INT32, [], False),
-    },
-    "stdlib.h": {
-        "malloc": (RAWPTR, [UINT64], False),
-        "free": (VOID, [RAWPTR], False),
-        "exit": (VOID, [INT32], False),
-        "abs": (INT32, [INT32], False),
-    },
-    "string.h": {
-        "memcpy": (RAWPTR, [RAWPTR, RAWPTR, UINT64], False),
-        "memset": (RAWPTR, [RAWPTR, INT32, UINT64], False),
-        "strlen": (UINT64, [RAWPTR], False),
-    },
-    "math.h": {
-        "sin": (FLOAT64, [FLOAT64], False),
-        "cos": (FLOAT64, [FLOAT64], False),
-        "sqrt": (FLOAT64, [FLOAT64], False),
-        "pow": (FLOAT64, [FLOAT64, FLOAT64], False),
-        "floor": (FLOAT64, [FLOAT64], False),
-        "ceil": (FLOAT64, [FLOAT64], False),
-        "fabs": (FLOAT64, [FLOAT64], False),
-    },
-}
-
 COMPARISON_OPS = ("==", "!=", "<", "<=", ">", ">=")
 
 
@@ -764,13 +734,6 @@ class CodeGen:
                 raise LangError(f"type {decl.name!r} already defined", decl.line)
             self.struct_templates[decl.name] = decl
             self.used_symbols.add(decl.name)
-        for header in dict.fromkeys(self.program.includes):
-            for name, (ret, params, variadic) in HEADER_FUNCS.get(header, {}).items():
-                fnty = ir.FunctionType(ret.ir, [p.ir for p in params], var_arg=variadic)
-                self.funcs[name] = ir.Function(self.module, fnty, name=name)
-                self.signatures[name] = (ret, params, variadic)
-                self.used_symbols.add(name)
-                self.extern_decls.add(name)  # header funcs are extern declarations
         # Constants are folded before globals, so a global's type (or a later
         # const) may use one as an array size. They are evaluated in source
         # order, so a const may reference any declared earlier (as in C). The
@@ -1831,7 +1794,7 @@ class CodeGen:
         if expr.name in self.templates:
             return self.gen_generic_call(expr, self.templates[expr.name])
         if expr.name not in self.funcs:
-            raise LangError(f"undefined function {expr.name!r} (missing #include?)", expr.line)
+            raise LangError(f"undefined function {expr.name!r} (missing import?)", expr.line)
         private, source = self.func_privacy.get(expr.name, (False, None))
         self.check_access(private, source, f"function {expr.name!r}", expr.line)
         return self.gen_direct_call(expr, expr.name)

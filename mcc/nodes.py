@@ -39,7 +39,6 @@ class TypeRef:
 @dataclass
 class Program:
     imports: list[tuple[str, int]]  # (path, line); resolved and merged by the driver
-    includes: list[str]
     structs: list["StructDecl"]
     functions: list["Func"]
     globals: list["GlobalVar"]

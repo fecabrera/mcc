@@ -36,7 +36,7 @@ def test_native_build_links_libm(tmp_path):
     # math.h functions require libm; the driver links -lm.
     src = tmp_path / "trig.mc"
     src.write_text(
-        "#include <stdio.h>\n#include <math.h>\n"
+        "import \"libc/stdio\";\nimport \"libc/math\";\n"
         'fn main() -> int32 { printf("%d\\n", (sqrt(16.0) + sin(0.0)) as int32); return 0; }'
     )
     exe = tmp_path / "trig"
@@ -46,7 +46,7 @@ def test_native_build_links_libm(tmp_path):
 
 
 def test_libc_math_binding(tmp_path):
-    # The lib/libc/math.mc bindings, linked the same way as the #include shim.
+    # The lib/libc/math.mc bindings, linked against libm by the driver.
     src = tmp_path / "m.mc"
     src.write_text(
         'import "libc/stdio";\n'
@@ -205,7 +205,7 @@ def test_missing_file_is_clean_error():
 
 STDLIB_IMPORT = """
 import "memory";
-#include <stdio.h>
+import "libc/stdio";
 fn main() -> int32 {
     let p = alloc<int32>(1);
     dealloc(p);

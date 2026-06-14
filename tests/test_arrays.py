@@ -172,7 +172,7 @@ def test_trailing_comma_allowed():
 def test_static_array_literal_of_strings(capfd):
     # The motivating example: a static command table with an inferred row count.
     source = r"""
-    #include <stdio.h>
+    import "libc/stdio";
     @static let cmds: uint8*[][2] = [
         ["help", "show help"],
         ["quit", "exit"],

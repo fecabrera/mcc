@@ -1,6 +1,7 @@
 // @extern declares a function or global defined elsewhere -- in libc, or in
-// another object linked into the program. This is how to reach C without an
-// `#include` header entry: give the signature and end with `;`.
+// another object linked into the program: give the signature and end with `;`.
+// The lib/libc/ modules are ready-made @extern bindings (import "libc/stdio";);
+// declare your own here when you need something they do not cover.
 @extern fn strlen(s: uint8*) -> uint64;
 @extern fn putchar(c: int32) -> int32;
 

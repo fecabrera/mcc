@@ -6,7 +6,7 @@ from pathlib import Path
 import llvmlite.binding as llvm
 
 from mcc.codegen import CodeGen
-from mcc.driver import build_native_module, compile_to_ir
+from mcc.driver import STDLIB_DIR, build_native_module, compile_to_ir, merge_imports
 from mcc.lexer import tokenize
 from mcc.nodes import Program
 from mcc.parser import Parser
@@ -16,9 +16,20 @@ def parse(source: str) -> Program:
     return Parser(tokenize(source)).parse_program()
 
 
+def _resolve(source: str) -> Program:
+    """Parse a source string and merge any `import "...";` it declares against
+    the standard lib/ directory, so tests can pull in libc bindings and the
+    standard library the way real programs do. The string's own declarations
+    keep source=None (external linkage), as before."""
+    program = parse(source)
+    if not program.imports:
+        return program
+    return merge_imports(program, STDLIB_DIR, (STDLIB_DIR,))
+
+
 def compile_ir(source: str) -> str:
     """Compile source to LLVM IR text (unoptimized, unverified)."""
-    return str(CodeGen(parse(source), "test").generate())
+    return str(CodeGen(_resolve(source), "test").generate())
 
 
 def _execute(module) -> int:
@@ -39,7 +50,7 @@ def run(source: str) -> int:
     printf output goes to the real stdout file descriptor, so tests can
     observe it with pytest's capfd fixture.
     """
-    return _execute(CodeGen(parse(source), "test").generate())
+    return _execute(CodeGen(_resolve(source), "test").generate())
 
 
 def run_path(path: Path) -> int:

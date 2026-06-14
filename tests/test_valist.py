@@ -7,13 +7,13 @@ individual args with va_arg is intentionally not supported.
 
 import pytest
 
-from mcc.driver import compile_to_ir
+from mcc.driver import STDLIB_DIR, compile_to_ir
 from mcc.errors import LangError
 from helpers import compile_ir, parse, run
 
 # A forwarding wrapper used by several tests.
 WRAPPER = r"""
-#include <stdio.h>
+import "libc/stdio";
 @extern fn vsnprintf(str: uint8*, size: uint64, format: uint8*, args: va_list) -> int32;
 
 fn logf(fmt: uint8*, ...) -> int32 {
@@ -32,7 +32,7 @@ def compile_for(source, target):
     import tempfile, pathlib
     d = pathlib.Path(tempfile.mkdtemp())
     (d / "t.mc").write_text(source)
-    return str(compile_to_ir(d / "t.mc", (), target))
+    return str(compile_to_ir(d / "t.mc", (STDLIB_DIR,), target))
 
 
 # --- parsing / definitions ---

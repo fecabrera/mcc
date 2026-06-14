@@ -6,9 +6,9 @@ importable by bare name — `import "memory";`, `import "std";`,
 function carries a doc comment; this page is the index.
 
 The `libc/` modules are `@extern` declarations for functions provided by the C
-library you link against (or your own freestanding implementation) — an
-alternative to the built-in [`#include <...>`](../README.md#includes) shim.
-Everything else is implemented in mcc.
+library you link against (or your own freestanding implementation); see
+[Reaching libc](../README.md#reaching-libc). Everything else is implemented
+in mcc.
 
 ## Core
 

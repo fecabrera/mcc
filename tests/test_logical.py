@@ -82,7 +82,7 @@ def test_and_short_circuits(capfd):
     # The right operand must not run when the left is false.
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn loud() -> bool { printf("ran "); return true; }
         fn main() -> int32 {
             if (false and loud()) {}
@@ -97,7 +97,7 @@ def test_and_short_circuits(capfd):
 def test_or_short_circuits(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn loud() -> bool { printf("ran "); return false; }
         fn main() -> int32 {
             if (true or loud()) {}

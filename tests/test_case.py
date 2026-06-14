@@ -9,7 +9,7 @@ from helpers import compile_ir, parse, run
 
 def case_in_main(body):
     return run(
-        "#include <stdio.h>\n"
+        "import \"libc/stdio\";\n"
         "fn main() -> int32 {\n" + body + "\nreturn out; }"
     )
 
@@ -61,7 +61,7 @@ def test_no_arm_and_no_else_is_a_no_op():
 def test_char_subject(capfd):
     run(
         r"""
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let s: uint8* = "a1b";
             let i: uint64 = 0;
@@ -83,7 +83,7 @@ def test_char_subject(capfd):
 def test_break_in_an_arm_exits_the_enclosing_loop(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let i: int32 = 0;
             while (i < 5) {

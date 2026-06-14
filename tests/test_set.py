@@ -26,7 +26,7 @@ def test_nested_generic_type_args_split_shift_token():
 def test_hash_matches_splitmix64(tmp_path, capfd):
     main = tmp_path / "main.mc"
     main.write_text(
-        'import "set";\n#include <stdio.h>\n'
+        'import "set";\nimport "libc/stdio";\n'
         'fn main() -> int32 { printf("%llu\\n", splitmix64(12345)); return 0; }'
     )
     assert run_path(main) == 0
@@ -38,7 +38,7 @@ def test_set_behaves_like_a_dict(tmp_path, capfd):
     main.write_text(
         """
         import "set";
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
             set_init(s, 4);
@@ -106,7 +106,7 @@ def test_generic_keys_and_values(tmp_path, capfd):
     main.write_text(
         """
         import "set";
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             // int32 keys mapping to float64 values
             let prices = alloc<struct set<int32, float64>>(1);
@@ -146,7 +146,7 @@ def test_fnv1a_matches_reference(tmp_path, capfd):
 
     main = tmp_path / "main.mc"
     main.write_text(
-        'import "hashing/fnv1a";\n#include <stdio.h>\n'
+        'import "hashing/fnv1a";\nimport "libc/stdio";\n'
         'fn main() -> int32 { printf("%llu %llu\\n", fnv1a("hello"), fnv1a("")); return 0; }'
     )
     assert run_path(main) == 0

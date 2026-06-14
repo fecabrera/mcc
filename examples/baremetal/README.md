@@ -30,9 +30,9 @@ hello from bare-metal mcc
 - **[kernel.mc](kernel.mc)** — the kernel. The PL011's registers are
   described as a `@volatile` struct so the busy-wait on the flag register
   is re-read on every iteration; without it the optimizer would hoist the
-  load and spin forever. No `#include` works here: there is no libc on
-  bare metal (`@extern` is how you would declare your own runtime's
-  functions instead).
+  load and spin forever. The libc bindings under `lib/libc/` are useless
+  here -- there is no libc on bare metal -- so `@extern` is how you would
+  declare your own runtime's functions instead.
 - **[start.S](start.S)** — a five-instruction boot stub. qemu starts the
   CPU with no stack pointer, so it sets one and calls `kmain`. Assembled
   and linked by `aarch64-elf-gcc` in the same command.

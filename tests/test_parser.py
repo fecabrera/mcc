@@ -19,9 +19,9 @@ def first_expr(expr_source):
     return stmt.expr
 
 
-def test_includes_collected():
-    program = parse("#include <stdio.h>\n#include <stdlib.h>\nfn main() {}")
-    assert program.includes == ["stdio.h", "stdlib.h"]
+def test_imports_collected():
+    program = parse('import "libc/stdio";\nimport "libc/stdlib";\nfn main() {}')
+    assert program.imports == [("libc/stdio", 1), ("libc/stdlib", 2)]
 
 
 def test_function_signature():

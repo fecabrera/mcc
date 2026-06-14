@@ -53,24 +53,19 @@ class Parser:
         return self.advance()
 
     def parse_program(self) -> Program:
-        imports, includes = [], []
+        imports = []
         structs, functions, globals_, consts, conditionals = [], [], [], [], []
-        while self.cur.kind in ("INCLUDE", "import"):
-            if self.cur.kind == "INCLUDE":
-                header = re.search(r"<([^>]+)>", self.advance().text).group(1)
-                includes.append(header)
-            else:
-                line = self.advance().line
-                path = self.expect("STRING").text[1:-1]
-                self.expect(";")
-                imports.append((path, line))
+        while self.cur.kind == "import":
+            line = self.advance().line
+            path = self.expect("STRING").text[1:-1]
+            self.expect(";")
+            imports.append((path, line))
         while self.cur.kind != "EOF":
             item = self.parse_toplevel_item()
             target = {StructDecl: structs, Func: functions, GlobalVar: globals_,
                       Const: consts, Conditional: conditionals}[type(item)]
             target.append(item)
-        return Program(imports, includes, structs, functions, globals_, consts,
-                       conditionals)
+        return Program(imports, structs, functions, globals_, consts, conditionals)
 
     def parse_toplevel_block(self) -> list:
         """A brace-delimited group of top-level declarations -- a branch of a
@@ -79,7 +74,7 @@ class Parser:
         self.expect("{")
         items = []
         while self.cur.kind != "}":
-            if self.cur.kind in ("INCLUDE", "import"):
+            if self.cur.kind == "import":
                 raise LangError("import is not allowed inside @if", self.cur.line)
             items.append(self.parse_toplevel_item())
         self.expect("}")

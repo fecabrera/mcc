@@ -51,22 +51,21 @@ def test_invalid_assignment_target():
 
 
 def test_import_directive():
-    program = parse('import "lib/memory";\n#include <stdio.h>\nfn main() {}')
-    assert program.imports == [("lib/memory", 1)]
-    assert program.includes == ["stdio.h"]
+    program = parse('import "lib/memory";\nimport "libc/stdio";\nfn main() {}')
+    assert program.imports == [("lib/memory", 1), ("libc/stdio", 2)]
 
 
 # -------------------------------------------------------------------- codegen
 
 def test_stdlib_declares_malloc_and_free():
-    ir_text = compile_ir('#include <stdlib.h>\nfn main() -> int32 { return 0; }')
+    ir_text = compile_ir('import "libc/stdlib";\nfn main() -> int32 { return 0; }')
     assert 'declare i8* @"malloc"(i64 %".1")' in ir_text
     assert 'declare void @"free"(i8* %".1")' in ir_text
 
 
 def test_index_emits_gep():
     ir_text = compile_ir(
-        "#include <stdlib.h>\n"
+        "import \"libc/stdlib\";\n"
         "fn main() -> int32 { let p = malloc(4) as int32*; p[1] = 7; return p[1]; }"
     )
     assert "getelementptr" in ir_text
@@ -102,8 +101,12 @@ def test_pointer_errors(body, message):
 
 
 def test_codegen_rejects_unresolved_imports():
+    # CodeGen must be handed an already-merged program; driving it with a raw
+    # parse that still has imports is a programming error.
+    from mcc.codegen import CodeGen
     with pytest.raises(LangError, match="imports must be resolved"):
-        compile_ir('import "other";\nfn main() -> int32 { return 0; }')
+        CodeGen(parse('import "other";\nfn main() -> int32 { return 0; }'),
+                "test").generate()
 
 
 # ------------------------------------------------------------------ execution
@@ -111,8 +114,8 @@ def test_codegen_rejects_unresolved_imports():
 def test_heap_roundtrip(capfd):
     run(
         """
-        #include <stdio.h>
-        #include <stdlib.h>
+        import "libc/stdio";
+        import "libc/stdlib";
         fn main() -> int32 {
             let nums = malloc(10 * sizeof(int64)) as int64*;
             let i: int32 = 0;
@@ -132,7 +135,7 @@ def test_heap_roundtrip(capfd):
 def test_address_of_and_deref(capfd):
     run(
         """
-        #include <stdio.h>
+        import "libc/stdio";
         fn bump(p: int32*) {
             *p = *p + 1;
         }
@@ -169,7 +172,7 @@ def test_string_literals_are_uint8_pointers():
 # -------------------------------------------------------------------- imports
 
 LIB = """
-#include <stdlib.h>
+import "libc/stdlib";
 fn alloc<T>(n: uint64) -> T* {
     return malloc(n * sizeof(T)) as T*;
 }
@@ -185,7 +188,7 @@ def test_import_lib(tmp_path, capfd):
     main.write_text(
         """
         import "alloc";
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let p = alloc<int32>(3);
             p[0] = 7;
@@ -224,7 +227,7 @@ def test_import_resolves_through_stdlib_path(tmp_path, capfd):
     main.write_text(
         """
         import "memory";
-        #include <stdio.h>
+        import "libc/stdio";
         fn main() -> int32 {
             let p = alloc<int32>(1);
             *p = 7;

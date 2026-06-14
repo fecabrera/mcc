@@ -42,7 +42,7 @@ def murmur3_32(data: bytes, seed: int = 0) -> int:
 def run_program(tmp_path, body: str) -> None:
     main = tmp_path / "main.mc"
     main.write_text(
-        '#include <stdio.h>\n#include <string.h>\nimport "memory";\n' + body
+        'import "libc/stdio";\nimport "libc/string";\nimport "memory";\n' + body
     )
     assert run_path(main) == 0
 
