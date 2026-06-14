@@ -63,6 +63,36 @@ def test_libc_math_binding(tmp_path):
     assert out.stdout == "12\n"
 
 
+def test_libc_stdio_streams(tmp_path):
+    # FILE* streams: write a file then read it back, plus fprintf to stdout.
+    # This links against the platform's real stdout symbol (__stdoutp / stdout),
+    # so it exercises the @if/@symbol selection end to end.
+    data = tmp_path / "data.txt"
+    src = tmp_path / "s.mc"
+    src.write_text(
+        'import "libc/stdio";\n'
+        "fn main() -> int32 {\n"
+        f'    let path = "{data}";\n'
+        '    let f = fopen(path, "w");\n'
+        "    if (f == null) { return 1; }\n"
+        '    fprintf(f, "value=%d\\n", 7 as int32);\n'
+        "    fclose(f);\n"
+        '    let g = fopen(path, "r");\n'
+        "    if (g == null) { return 2; }\n"
+        "    let buf: uint8[64];\n"
+        "    fgets(&buf[0], 64 as int32, g);\n"
+        "    fclose(g);\n"
+        '    fprintf(stdout, "read %s", &buf[0]);\n'
+        "    return 0;\n"
+        "}"
+    )
+    exe = tmp_path / "s"
+    result = mcc(src, "-o", exe)
+    assert result.returncode == 0, result.stderr
+    out = subprocess.run([exe], capture_output=True, text=True)
+    assert out.stdout == "read value=7\n"
+
+
 def test_compile_error_exit_code(tmp_path):
     bad = tmp_path / "bad.mc"
     bad.write_text("fn main() -> int32 { return x; }")

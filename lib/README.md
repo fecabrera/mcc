@@ -40,7 +40,7 @@ Everything else is implemented in mcc.
 
 | Module | Import | Provides |
 |--------|--------|----------|
-| [libc/stdio.mc](libc/stdio.mc) | `import "libc/stdio";` | Formatted I/O without `FILE*`: `printf`/`vprintf`, `sprintf`/`snprintf`/`vsprintf`/`vsnprintf`, the `scanf` family, `getchar`/`putchar`/`puts`, `remove`/`rename`, `perror`, and `EOF`. |
+| [libc/stdio.mc](libc/stdio.mc) | `import "libc/stdio";` | Formatted I/O (`printf`/`sprintf`/`snprintf`/`scanf` families), `getchar`/`putchar`/`puts`, and `FILE*` streams: the `stdin`/`stdout`/`stderr` handles, `fopen`/`fclose`/`fflush`, `fread`/`fwrite`, `fseek`/`ftell`, `fgets`/`fputs`/`fgetc`/`fputc`, `fprintf`/`fscanf`, `feof`/`ferror`, plus `remove`/`rename`, `perror`, and `EOF`/`SEEK_*`. |
 | [libc/stdlib.mc](libc/stdlib.mc) | `import "libc/stdlib";` | `malloc`/`calloc`/`realloc`/`free`, `exit`/`abort`, `abs`, and string conversion (`atoi`/`atol`/`atoll`). |
 | [libc/string.mc](libc/string.mc) | `import "libc/string";` | `strcpy`/`strncpy`, `strlen`/`strnlen`, `strcmp`/`strncmp`, `memcmp`/`memset`/`memcpy`/`memmove`. |
 | [libc/ctype.mc](libc/ctype.mc) | `import "libc/ctype";` | Character classification (`isalpha`, `isdigit`, `isspace`, …) and `tolower`/`toupper`. |
@@ -52,16 +52,18 @@ Everything else is implemented in mcc.
 Where each C standard header stands. `size_t` is bound as `uint64`; single-precision
 (`float`) variants are omitted (mcc's only float type is `float64`).
 
-**stdio.h** — partial: no `FILE*` streams yet.
+**stdio.h** — near-complete.
 - [x] `printf` `vprintf` `sprintf` `snprintf` `vsprintf` `vsnprintf`
 - [x] `scanf` `sscanf` `vscanf` `vsscanf`
 - [x] `getchar` `putchar` `puts` · `remove` `rename` · `perror` · `EOF`
-- [ ] streams: `fopen` `freopen` `fclose` `fflush` · `fread` `fwrite` · `fseek` `ftell` `rewind` `fgetpos` `fsetpos`
-- [ ] stream chars/lines: `fgetc` `getc` `fputc` `putc` `ungetc` `fgets` `fputs`
-- [ ] stream formatted: `fprintf` `vfprintf` `fscanf` `vfscanf`
-- [ ] stream state: `setbuf` `setvbuf` `clearerr` `feof` `ferror` · `tmpfile` `tmpnam`
-- [ ] `stdin` `stdout` `stderr` (platform symbols — need `@if`/`@symbol`)
-- [ ] consts: `SEEK_SET` `SEEK_CUR` `SEEK_END` `BUFSIZ` `FOPEN_MAX` `FILENAME_MAX` `TMP_MAX` `L_tmpnam`
+- [x] `stdin` `stdout` `stderr` (platform symbols, via `@if`/`@symbol`)
+- [x] streams: `fopen` `freopen` `fclose` `fflush` · `fread` `fwrite` · `fseek` `ftell` `rewind`
+- [x] stream chars/lines: `fgetc` `getc` `fputc` `putc` `ungetc` `fgets` `fputs`
+- [x] stream formatted: `fprintf` `vfprintf` `fscanf` `vfscanf`
+- [x] stream state: `setbuf` `setvbuf` `clearerr` `feof` `ferror`
+- [x] consts: `SEEK_SET` `SEEK_CUR` `SEEK_END` `BUFSIZ` `_IOFBF` `_IOLBF` `_IONBF`
+- [ ] `fgetpos` `fsetpos` (need an opaque `fpos_t`) · `tmpfile` `tmpnam`
+- [ ] consts: `FOPEN_MAX` `FILENAME_MAX` `TMP_MAX` `L_tmpnam`
 
 **stdlib.h** — partial.
 - [x] `malloc` `calloc` `realloc` `free` · `exit` `abort` · `abs` · `atoi` `atol` `atoll`

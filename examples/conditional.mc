@@ -19,16 +19,11 @@ import "libc/stdio";
     const OS_NAME = "an unknown OS";
 }
 
-// The classic use pairs `@if` with @symbol to bind a name that is spelled
-// differently per platform -- e.g. libc's stdout is `__stdoutp` on macOS but
-// `stdout` on Linux -- behind one mcc name. The dead branch is parsed but
-// never compiled, so only the live spelling is linked.
-struct FILE {}
-@if (TARGET_OS == OS_DARWIN) {
-    @extern @symbol("__stdoutp") let out: struct FILE*;
-} @else {
-    @extern @symbol("stdout") let out: struct FILE*;
-}
+// The classic use pairs `@if` with @symbol to bind a name spelled differently
+// per platform behind one mcc name. lib/libc/stdio.mc does exactly this for the
+// standard streams -- libc's stdout is the symbol `__stdoutp` on macOS but
+// `stdout` on Linux -- so the `stdout` we use below is already the right one
+// for this target, with no per-platform code here.
 
 fn main() -> int32 {
     // As a statement, `@if` selects code inside a function. It does not open a
@@ -41,7 +36,6 @@ fn main() -> int32 {
         let word_bits = 0 as int32;      // unknown / 32-bit
     }
 
-    printf("built for %s, %d-bit words\n", OS_NAME, word_bits);
-    if (out == null) { return 1; }   // the platform's stdout resolved
+    fprintf(stdout, "built for %s, %d-bit words\n", OS_NAME, word_bits);
     return 0;
 }
