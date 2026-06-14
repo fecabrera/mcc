@@ -44,4 +44,5 @@ Everything else is implemented in mcc.
 | [libc/stdlib.mc](libc/stdlib.mc) | `import "libc/stdlib";` | `malloc`/`calloc`/`realloc`/`free`, `exit`/`abort`, `abs`, and string conversion (`atoi`/`atol`/`atoll`). |
 | [libc/string.mc](libc/string.mc) | `import "libc/string";` | `strcpy`/`strncpy`, `strlen`/`strnlen`, `strcmp`/`strncmp`, `memcmp`/`memset`/`memcpy`/`memmove`. |
 | [libc/ctype.mc](libc/ctype.mc) | `import "libc/ctype";` | Character classification (`isalpha`, `isdigit`, `isspace`, …) and `tolower`/`toupper`. |
+| [libc/math.mc](libc/math.mc) | `import "libc/math";` | Double-precision math: `sqrt`/`pow`/`hypot`, trig and hyperbolic, `exp`/`log` family, rounding (`floor`/`ceil`/`round`/`trunc`), `fmod`, `fabs`, gamma/erf, `fma`. |
 | [libc/limits.mc](libc/limits.mc) | `import "libc/limits";` | Integer limit constants: `INT_MAX`, `LONG_MIN`, `UCHAR_MAX`, … |

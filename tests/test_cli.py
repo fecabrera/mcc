@@ -45,6 +45,24 @@ def test_native_build_links_libm(tmp_path):
     assert out.stdout == "4\n"
 
 
+def test_libc_math_binding(tmp_path):
+    # The lib/libc/math.mc bindings, linked the same way as the #include shim.
+    src = tmp_path / "m.mc"
+    src.write_text(
+        'import "libc/stdio";\n'
+        'import "libc/math";\n'
+        'fn main() -> int32 {\n'
+        '    printf("%d\\n", (sqrt(16.0) + pow(2.0, 3.0)) as int32);  // 4 + 8\n'
+        '    return 0;\n'
+        '}'
+    )
+    exe = tmp_path / "m"
+    result = mcc(src, "-o", exe)
+    assert result.returncode == 0, result.stderr
+    out = subprocess.run([exe], capture_output=True, text=True)
+    assert out.stdout == "12\n"
+
+
 def test_compile_error_exit_code(tmp_path):
     bad = tmp_path / "bad.mc"
     bad.write_text("fn main() -> int32 { return x; }")
