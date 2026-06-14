@@ -58,8 +58,15 @@ fn main() -> int32 {
 ### Homebrew
 
 ```bash
-brew install fecabrera/mcc/mcc
+brew tap fecabrera/mcc
+brew install mcc
+mcc program.mc --run
 ```
+
+Or in one shot: `brew install fecabrera/mcc/mcc`.
+
+If you have `HOMEBREW_REQUIRE_TAP_TRUST` set, run `brew trust fecabrera/mcc`
+once after tapping.
 
 ### pip
 
