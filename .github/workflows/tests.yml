@@ -27,8 +27,17 @@ jobs:
         run: pipenv sync --dev
 
       - name: Run tests with coverage
+        # COVERAGE_PROCESS_START + the sitecustomize hook on PYTHONPATH make every
+        # process record coverage -- the pytest run and the `python -m mcc`
+        # subprocesses it spawns (test_cli.py) -- so the driver's CLI/link paths
+        # count too. Settings (source, branch, parallel, fail_under) live in
+        # .coveragerc; combine merges the per-process data before reporting.
+        env:
+          COVERAGE_PROCESS_START: ${{ github.workspace }}/.coveragerc
+          PYTHONPATH: ${{ github.workspace }}/.github/coverage
         run: |
-          pipenv run python -m coverage run --source=mcc -m pytest -v
+          pipenv run python -m pytest -v
+          pipenv run python -m coverage combine
           echo "# Coverage Report (${{ matrix.os }})" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           pipenv run python -m coverage report --format=markdown >> "$GITHUB_STEP_SUMMARY"
