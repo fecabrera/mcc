@@ -133,6 +133,11 @@ class Continue:
     line: int
 
 @dataclass
+class Defer:  # defer { ... } -- run body when the enclosing block exits
+    body: list  # statements to run at scope exit, in LIFO order across defers
+    line: int
+
+@dataclass
 class Case:  # case (subject) { when v: ... else: ... } -- no fall-through
     subject: object
     arms: list  # (value expr, body statements) for each `when`

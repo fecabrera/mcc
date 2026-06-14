@@ -8,8 +8,8 @@ from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
     ArrayLit, Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast,
-    CharLit, Const, Continue, ExprStmt, FloatLit, Func, GlobalVar, If, Index,
-    IntLit, Len, Let, Logical, Member, NullLit, Program, Return, SizeOf,
+    CharLit, Const, Continue, Defer, ExprStmt, FloatLit, Func, GlobalVar, If,
+    Index, IntLit, Len, Let, Logical, Member, NullLit, Program, Return, SizeOf,
     StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary,
     Var, While,
 )
@@ -348,6 +348,10 @@ class Parser:
             self.advance()
             self.expect(";")
             return Continue(tok.line)
+        if tok.kind == "defer":
+            self.advance()
+            # `defer stmt;` or `defer { ... }` -- parse_body handles both.
+            return Defer(self.parse_body(), tok.line)
         expr = self.parse_expr()
         if self.accept("="):
             value = self.parse_expr()

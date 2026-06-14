@@ -19,9 +19,9 @@ from llvmlite import ir
 from mcc.errors import LangError
 from mcc.nodes import (
     ArrayLit, Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast,
-    CharLit, Continue, ExprStmt, FloatLit, Func, If, Index, IntLit, Let, Logical,
-    Len, Member, NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex,
-    StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
+    CharLit, Continue, Defer, ExprStmt, FloatLit, Func, If, Index, IntLit, Let,
+    Logical, Len, Member, NullLit, Program, Return, SizeOf, StoreDeref,
+    StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
 
 
@@ -339,6 +339,9 @@ class CodeGen:
         self.builder: ir.IRBuilder | None = None
         self.locals: dict[str, tuple[ir.AllocaInstr, LangType]] = {}
         self.scope_names: set[str] = set()  # names declared in the current block
+        # One list of deferred action bodies per active block scope (innermost
+        # last); each runs in LIFO order when its block exits.
+        self.defer_stack: list[list[list]] = []
         self.ret_type: LangType = VOID
         # Enclosing loops, innermost last: (continue target, break target).
         self.loops: list[tuple[ir.Block, ir.Block]] = []
@@ -739,6 +742,7 @@ class CodeGen:
         self.builder = ir.IRBuilder(fn.append_basic_block("entry"))
         self.locals = {}
         self.scope_names = set()  # the body block resets this, but be explicit
+        self.defer_stack = []
         self.loops = []  # break/continue cannot escape into a caller's loop
         for (pname, _), ptype, arg in zip(func.params, params, fn.args):
             arg.name = pname
@@ -763,13 +767,38 @@ class CodeGen:
         # whole function regardless, so this only governs name visibility.
         outer_locals, outer_names = dict(self.locals), self.scope_names
         self.scope_names = set()
+        self.defer_stack.append([])
         try:
             for stmt in statements:
                 if self.builder.block.is_terminated:
-                    break  # unreachable code after return
+                    break  # unreachable code after return/break/continue
                 self.gen_statement(stmt)
+            # Reached the end without diverging: run this block's defers (LIFO).
+            # An early return/break/continue already ran them on its own path.
+            if not self.builder.block.is_terminated:
+                self.run_deferred_scope(self.defer_stack[-1])
         finally:
+            self.defer_stack.pop()
             self.locals, self.scope_names = outer_locals, outer_names
+
+    def run_deferred_scope(self, scope: list):
+        """Emit one block's deferred actions, last-registered first. Each body
+        runs while the block's locals are still in scope, so it can refer to
+        them."""
+        for body in reversed(scope):
+            if self.builder.block.is_terminated:
+                break
+            self.gen_block(body)
+
+    def run_defers_through(self, depth: int):
+        """Unwind the deferred scopes from the innermost down to `depth`,
+        emitting each in LIFO order -- used when control jumps out of several
+        blocks at once (a return unwinds all; break/continue to the loop body).
+        The stack is snapshotted first, since emitting a body pushes scopes."""
+        for scope in reversed([list(s) for s in self.defer_stack[depth:]]):
+            if self.builder.block.is_terminated:
+                break
+            self.run_deferred_scope(scope)
 
     def bind_local(self, name: str, slot, lang_type: LangType):
         """Record a local in the current scope. The name shadows any outer one
@@ -835,10 +864,16 @@ class CodeGen:
             if stmt.value is None:
                 if self.ret_type is not VOID:
                     raise LangError(f"return needs a {self.ret_type} value", stmt.line)
-                self.builder.ret_void()
+                self.run_defers_through(0)  # all enclosing blocks
+                if not self.builder.block.is_terminated:
+                    self.builder.ret_void()
             else:
+                # Evaluate the result before the defers run, so a defer that
+                # frees a buffer cannot clobber what is being returned.
                 tv = self.coerce(self.gen_expr(stmt.value), self.ret_type, stmt.line, "return value")
-                self.builder.ret(tv.value)
+                self.run_defers_through(0)
+                if not self.builder.block.is_terminated:
+                    self.builder.ret(tv.value)
         elif isinstance(stmt, Let):
             if stmt.name in self.scope_names:
                 raise LangError(
@@ -921,7 +956,8 @@ class CodeGen:
             else:
                 self.builder.cbranch(cond, body_bb, end_bb)
             self.builder.position_at_end(body_bb)
-            self.loops.append((cond_bb, end_bb))
+            # Record the defer depth so break/continue unwind the body's defers.
+            self.loops.append((cond_bb, end_bb, len(self.defer_stack)))
             try:
                 self.gen_block(stmt.body)
             finally:
@@ -929,14 +965,21 @@ class CodeGen:
             if not self.builder.block.is_terminated:
                 self.builder.branch(cond_bb)
             self.builder.position_at_end(end_bb)
+        elif isinstance(stmt, Defer):
+            # Register only; the body runs when the enclosing block exits.
+            self.defer_stack[-1].append(stmt.body)
         elif isinstance(stmt, Break):
             if not self.loops:
                 raise LangError("'break' outside a loop", stmt.line)
-            self.builder.branch(self.loops[-1][1])
+            self.run_defers_through(self.loops[-1][2])  # the loop body and inner
+            if not self.builder.block.is_terminated:
+                self.builder.branch(self.loops[-1][1])
         elif isinstance(stmt, Continue):
             if not self.loops:
                 raise LangError("'continue' outside a loop", stmt.line)
-            self.builder.branch(self.loops[-1][0])
+            self.run_defers_through(self.loops[-1][2])
+            if not self.builder.block.is_terminated:
+                self.builder.branch(self.loops[-1][0])
         elif isinstance(stmt, Case):
             subject = self.gen_expr(stmt.subject)
             if is_struct(subject.type) or subject.type is VOID:
@@ -1807,7 +1850,7 @@ class CodeGen:
         outer_bindings = self.type_bindings
         outer_source = self.current_source
         saved = (self.builder, self.locals, self.ret_type, self.loops,
-                 self.current_variadic, self.scope_names)
+                 self.current_variadic, self.scope_names, self.defer_stack)
         self.type_bindings = bindings
         self.current_source = func.source  # the signature may name private structs
         try:
@@ -1825,7 +1868,7 @@ class CodeGen:
             self.gen_function(func, fn, ret, params)
         finally:
             (self.builder, self.locals, self.ret_type, self.loops,
-             self.current_variadic, self.scope_names) = saved
+             self.current_variadic, self.scope_names, self.defer_stack) = saved
             self.type_bindings = outer_bindings
             self.current_source = outer_source
         return fn, ret, params

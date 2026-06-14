@@ -28,6 +28,7 @@ fn main() -> int32 {
   - [Variables](#variables)
   - [Constants](#constants)
   - [Control flow](#control-flow)
+  - [Defer](#defer)
   - [Types](#types)
   - [Operators](#operators)
   - [Casts](#casts)
@@ -323,6 +324,49 @@ constants adapt to it), and the subject can be any type comparable with
 `break` and `continue` inside an arm act on the enclosing loop, not the
 `case`; the no-fall-through semantics mean `break` is never needed to end
 an arm.
+
+### Defer
+
+`defer` schedules a statement (or a `{ }` block) to run when the enclosing
+block exits — by *any* path: falling off the end, a `return`, or a
+`break`/`continue` out of a loop. It keeps a resource's release next to its
+acquisition, so cleanup can't be forgotten on an early exit:
+
+```c
+fn process() -> int32 {
+    let buffer: uint8* = alloc<uint8>(4096);
+    defer dealloc(buffer);          // freed however this function returns
+
+    if (bad()) {
+        return -1;                  // buffer is still freed
+    }
+    use(buffer);
+    return 0;                       // and here too
+}
+```
+
+Multiple defers run in **reverse order** (last deferred, first to run), so
+resources unwind in the opposite order they were acquired. The block form
+groups several actions:
+
+```c
+let a = open(...);
+defer close(a);
+let b = open(...);
+defer close(b);
+defer {                            // runs first: close(b), then close(a)
+    flush();
+    sync();
+}
+```
+
+A defer is tied to the block it appears in, so one inside an `if` or a loop
+body fires at the end of that block — each loop iteration runs its own. The
+deferred code is evaluated when it runs, not when it is scheduled, so it sees
+the latest values of the variables it names (unlike Go, which snapshots the
+arguments). A returned value is computed *before* the defers run, so freeing a
+buffer in a defer can't clobber what you return. See
+[examples/defer.mc](examples/defer.mc).
 
 ### Types
 
