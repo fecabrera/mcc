@@ -111,3 +111,50 @@ fn array_grow<T>(self: struct array<T>*) {
     self->data = new_data;
     self->capacity = new_capacity;
 }
+
+/***************************************
+ * Iteration
+ ***************************************/
+
+/**
+ * A forward cursor over an array's elements, produced by `iter`. It borrows
+ * the array (does not copy it), so the array must outlive the iterator and
+ * must not be resized while iterating.
+ */
+struct array_iter<T> {
+    obj: struct array<T>*;   // the array being walked
+    idx: uint64;             // index of the next element to yield
+}
+
+/**
+ * Begins an iteration over an array, from the first element to the last. Part
+ * of the `iter`/`next` protocol; pair it with `next`.
+ *
+ * @param self: array to iterate
+ *
+ * @return an iterator positioned at the first element
+ */
+fn iter<T>(self: struct array<T>*) -> struct array_iter<T> {
+    let it: struct array_iter<T>;
+    it.obj = self;
+    it.idx = 0;
+    return it;
+}
+
+/**
+ * Advances the iterator and writes the next element into out.
+ *
+ * @param it:  iterator to advance
+ * @param out: location the next element is written to; untouched when the
+ *             array is exhausted
+ *
+ * @return true if an element was produced, false once iteration is complete
+ */
+fn next<T>(it: struct array_iter<T>*, out: T*) -> bool {
+    if (it->idx >= it->obj->length)
+        return false;
+
+    *out = it->obj->data[it->idx];
+    it->idx = it->idx + 1;
+    return true;
+}

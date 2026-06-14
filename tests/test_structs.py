@@ -258,3 +258,36 @@ def test_array_lib(tmp_path, capfd):
     )
     assert run_path(main) == 0
     assert capfd.readouterr().out == "1.500000 5\n"
+
+
+def test_array_iterator(tmp_path, capfd):
+    from pathlib import Path
+    lib_dir = Path(__file__).resolve().parents[1] / "lib"
+    main = tmp_path / "main.mc"
+    main.write_text(
+        f'import "{lib_dir / "array"}";\n'
+        """
+        #include <stdio.h>
+        fn main() -> int32 {
+            let xs: struct array<int32>;
+            array_init(&xs, 2);
+            array_append(&xs, 10);
+            array_append(&xs, 20);
+            array_append(&xs, 30);          // grows past the initial capacity
+            defer array_destroy(&xs);
+
+            let sum: int32 = 0;
+            {
+                let it = iter(&xs);             // iter/next protocol
+                let x: int32;
+                while (next(&it, &x)) {
+                    sum = sum + x;
+                }
+            }
+            printf("%d\\n", sum);          // 60
+            return 0;
+        }
+        """
+    )
+    assert run_path(main) == 0
+    assert capfd.readouterr().out == "60\n"

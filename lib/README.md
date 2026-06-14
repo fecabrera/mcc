@@ -21,7 +21,7 @@ Everything else is implemented in mcc.
 
 | Module | Import | Provides |
 |--------|--------|----------|
-| [array.mc](array.mc) | `import "array";` | Growable generic `array<T>`: `array_init`/`array_destroy`/`array_reset`, `array_get`/`array_set`, `array_append` (auto-grows at 70% load). |
+| [array.mc](array.mc) | `import "array";` | Growable generic `array<T>`: `array_init`/`array_destroy`/`array_reset`, `array_get`/`array_set`, `array_append` (doubles when full), and `iter`/`next` iteration. |
 | [set.mc](set.mc) | `import "set";` | Open-addressing hash map `set<K, V>` keyed by value/identity: `set_init`/`set_destroy`, `set_set`/`set_get`/`set_remove`. |
 | [dict.mc](dict.mc) | `import "dict";` | String-keyed `dict<V>` that owns content-hashed copies of its keys: `dict_init`/`dict_destroy`, `dict_set`/`dict_get`/`dict_remove`. |
 
