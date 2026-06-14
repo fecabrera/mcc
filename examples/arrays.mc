@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 
 // `@static` makes a file-scoped variable with its own zero-initialized
 // storage that persists for the whole program -- here, a histogram buffer.

@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 @extern fn malloc(size: uint64) -> uint8*;
 @extern fn free(ptr: uint8*);
 

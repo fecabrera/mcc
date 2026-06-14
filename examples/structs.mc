@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 import "array";
 
 // A plain struct. Fields are declared `name: type;`.

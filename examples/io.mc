@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 
 fn main() -> int32 {
     // printf supports the usual C format specifiers.

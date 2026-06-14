@@ -1,5 +1,5 @@
-#include <stdio.h>
-#include <stdlib.h>
+import "libc/stdio";
+import "libc/stdlib";
 
 fn main() -> int32 {
     let a: int32 = 17;

@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 
 fn is_prime(n: int32) -> bool {
     if (n < 2) {

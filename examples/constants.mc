@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 
 // `const` declares a named compile-time constant -- mcc's typed answer to
 // C's `#define`. It has no storage; every use is folded in when compiling.

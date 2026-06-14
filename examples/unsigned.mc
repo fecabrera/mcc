@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 
 fn main() -> int32 {
     // Values above int32's range fit in unsigned types, and division,

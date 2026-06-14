@@ -7,7 +7,7 @@ the [mcc/](mcc/) package, with one module per stage: lexer, parser, code
 generator, and driver.
 
 ```c
-#include <stdio.h>
+import "libc/stdio";
 
 fn main() -> int32 {
     printf("hello, world\n");
@@ -705,8 +705,8 @@ default so the [standard library](lib/README.md) is importable by bare name.
 Pass `--naked` to leave `lib/` off the path.
 
 ```c
-import "memory";   // found in lib/ via the search path
-#include <stdio.h>
+import "memory";       // found in lib/ via the search path
+import "libc/stdio";   // libc bindings, also in lib/
 
 fn main() -> int32 {
     let p = alloc<int32>(3);   // defined in lib/memory.mc
@@ -823,8 +823,15 @@ fn digit_value(c: uint8) -> uint8 {
 
 ### Includes
 
-`#include <header>` at the top of a file makes the corresponding libc
-functions callable (use `import` for `.mc` files):
+The standard way to reach libc is to import a binding module from
+[lib/libc/](lib/libc/) — `import "libc/stdio";`, `import "libc/string";`, and
+so on. These are ordinary [`@extern` declarations](#extern-declarations)
+covering far more than the shim below (`sprintf`, the `scanf` family, `strcmp`,
+`abs`, character classification, …); see the
+[standard library index](lib/README.md).
+
+`#include <header>` is a small built-in convenience that predeclares a handful
+of the most common functions without an import:
 
 | Header     | Functions                                            |
 | ---------- | ---------------------------------------------------- |
@@ -833,8 +840,11 @@ functions callable (use `import` for `.mc` files):
 | `string.h` | `memcpy`, `memset`, `strlen`                         |
 | `math.h`   | `sin`, `cos`, `sqrt`, `pow`, `floor`, `ceil`, `fabs` |
 
-Variadic arguments to `printf` follow C promotion rules (small integers are
-widened to `int32`).
+The two declare the same symbols the same way, so they can be mixed freely (a
+function declared by both just collapses). The `#include` shim is **slated for
+removal** in favor of the `libc/` bindings — new code should prefer the
+imports, as the examples do. Variadic arguments to `printf` follow C promotion
+rules (small integers are widened to `int32`).
 
 ### Comments
 

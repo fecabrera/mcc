@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 
 // `case` matches a value against a series of `when` arms, with an optional
 // `else:` default. There is no fall-through: a matching arm runs only its

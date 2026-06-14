@@ -292,6 +292,8 @@ class CodeGen:
         self.va_list_type: "LangType | None" = None
         self.va_list_passed_ir = None  # IR type a va_list takes as an argument
         self.va_list_align = 8
+        self.va_list_supported = True  # False on a target with no known layout
+        self.va_list_arch = ""
         self.current_variadic = False  # is the function being generated variadic?
         # The entry file's resolved path. Definitions from it are this
         # translation unit's own (external linkage); everything reached through
@@ -380,32 +382,48 @@ class CodeGen:
         Records both the storage layout (`.ir`, what `let ap: va_list;`
         allocates) and the form it takes when passed to a function
         (`va_list_passed_ir`); these differ on every ABI -- see the table in
-        the README's Variadic functions section."""
+        the README's Variadic functions section.
+
+        An architecture without a known layout gets a harmless i8* placeholder
+        and `va_list_supported = False`: that lets a binding merely *declare* an
+        extern with a va_list parameter (e.g. importing libc/stdio) on any
+        target, while actually *using* va_list -- a local, va_start/va_end, or
+        passing one -- is rejected by require_valist()."""
         if self.va_list_type is not None:
             return self.va_list_type
         triple = (self.target or _host_triple()).lower()
-        arch = triple.split("-")[0]
+        self.va_list_arch = triple.split("-")[0]
         apple = any(s in triple for s in ("apple", "darwin", "macos", "ios"))
         i8p = ir.IntType(8).as_pointer()
         ctx = self.module.context
-        if arch in ("arm64", "aarch64") and apple:
+        self.va_list_supported = True
+        if self.va_list_arch in ("arm64", "aarch64") and apple:
             storage, passed, align = i8p, i8p, 8           # va_list is char*
-        elif arch in ("arm64", "aarch64"):                 # AAPCS __va_list
+        elif self.va_list_arch in ("arm64", "aarch64"):    # AAPCS __va_list
             st = ctx.get_identified_type("struct.__va_list")
             st.set_body(i8p, i8p, i8p, ir.IntType(32), ir.IntType(32))
             storage, passed, align = st, st.as_pointer(), 8
-        elif arch in ("x86_64", "amd64"):                  # SysV __va_list_tag[1]
+        elif self.va_list_arch in ("x86_64", "amd64"):     # SysV __va_list_tag[1]
             tag = ctx.get_identified_type("struct.__va_list_tag")
             tag.set_body(ir.IntType(32), ir.IntType(32), i8p, i8p)
             storage, passed, align = ir.ArrayType(tag, 1), tag.as_pointer(), 16
-        else:
-            raise LangError(
-                f"va_list is not supported for target architecture {arch!r}", line
-            )
+        else:                                              # unknown: declare-only
+            storage, passed, align = i8p, i8p, 8
+            self.va_list_supported = False
         self.va_list_type = LangType("va_list", storage, signed=False)
         self.va_list_passed_ir = passed
         self.va_list_align = align
         return self.va_list_type
+
+    def require_valist(self, line: int):
+        """Reject actually using a va_list on a target with no known layout
+        (declaring an extern that takes one is still allowed)."""
+        self.valist(line)
+        if not self.va_list_supported:
+            raise LangError(
+                f"va_list is not supported for target architecture "
+                f"{self.va_list_arch!r}", line
+            )
 
     def param_irs(self, params) -> list:
         """LLVM types for a function's parameters: a va_list lowers to the form
@@ -887,6 +905,7 @@ class CodeGen:
                 if over_aligned(declared):
                     slot.align = type_align(declared)
                 elif is_valist(declared):
+                    self.require_valist(stmt.line)
                     slot.align = self.va_list_align  # ABI alignment for va_start
                 self.bind_local(stmt.name, slot, declared)
                 return
@@ -1663,6 +1682,7 @@ class CodeGen:
         addr, t, _, _ = self.gen_addr(expr, line)
         if not is_valist(t):
             raise LangError(f"expected a va_list argument, got {t}", line)
+        self.require_valist(line)
         storage = t.ir
         if isinstance(storage, ir.ArrayType):
             return self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
@@ -1683,6 +1703,7 @@ class CodeGen:
         addr, t, _, _ = self.gen_addr(expr.args[0], expr.line)
         if not is_valist(t):
             raise LangError(f"{expr.name} requires a va_list, got {t}", expr.line)
+        self.require_valist(expr.line)
         i8ptr = self.builder.bitcast(addr, RAWPTR.ir)
         return TypedValue(self.builder.call(self.va_intrinsic(expr.name), [i8ptr]), VOID)
 

@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 
 fn main() -> int32 {
     let i: int32 = 1;

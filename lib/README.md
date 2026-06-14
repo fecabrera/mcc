@@ -41,7 +41,7 @@ Everything else is implemented in mcc.
 | Module | Import | Provides |
 |--------|--------|----------|
 | [libc/stdio.mc](libc/stdio.mc) | `import "libc/stdio";` | Formatted I/O without `FILE*`: `printf`/`vprintf`, `sprintf`/`snprintf`/`vsprintf`/`vsnprintf`, the `scanf` family, `getchar`/`putchar`/`puts`, `remove`/`rename`, `perror`, and `EOF`. |
-| [libc/stdlib.mc](libc/stdlib.mc) | `import "libc/stdlib";` | `atoi`, `atol`, `atoll`. |
+| [libc/stdlib.mc](libc/stdlib.mc) | `import "libc/stdlib";` | `malloc`/`calloc`/`realloc`/`free`, `exit`/`abort`, `abs`, and string conversion (`atoi`/`atol`/`atoll`). |
 | [libc/string.mc](libc/string.mc) | `import "libc/string";` | `strcpy`/`strncpy`, `strlen`/`strnlen`, `strcmp`/`strncmp`, `memcmp`/`memset`/`memcpy`/`memmove`. |
 | [libc/ctype.mc](libc/ctype.mc) | `import "libc/ctype";` | Character classification (`isalpha`, `isdigit`, `isspace`, …) and `tolower`/`toupper`. |
 | [libc/limits.mc](libc/limits.mc) | `import "libc/limits";` | Integer limit constants: `INT_MAX`, `LONG_MIN`, `UCHAR_MAX`, … |

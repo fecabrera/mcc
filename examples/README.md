@@ -8,7 +8,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 
 | Example | Shows |
 |---------|-------|
-| [helloworld.mc](helloworld.mc) | the smallest program: `#include`, `fn main`, `printf` |
+| [helloworld.mc](helloworld.mc) | the smallest program: `import "libc/stdio"`, `fn main`, `printf` |
 | [variables.mc](variables.mc) | `let`, type inference, annotations, every integer width, mutation, uninitialized `let x: T;` |
 | [constants.mc](constants.mc) | `const` compile-time constants, constant expressions, sizing arrays, string consts |
 | [literals.mc](literals.mc) | hexadecimal integer literals, `uint8` character literals and escapes |

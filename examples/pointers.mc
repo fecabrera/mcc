@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 import "memory";
 
 fn fill_squares(nums: int32*, n: int32) {

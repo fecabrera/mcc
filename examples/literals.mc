@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 
 fn main() -> int32 {
     // Hexadecimal integer literals: 0x / 0X, behaving exactly like decimal

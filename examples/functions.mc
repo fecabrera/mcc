@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 
 // Functions may be defined in any order: all signatures are collected in a
 // first pass, so main can call everything below it.

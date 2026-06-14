@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 
 fn main() -> int32 {
     // `let` declares a variable. A bare integer constant has no definite

@@ -1,5 +1,4 @@
-#include <stdio.h>
-import "libc/stdio";   // @extern fn vsnprintf(..., args: va_list) -> int32;
+import "libc/stdio";   // printf/puts and @extern fn vsnprintf(..., args: va_list)
 
 // A trailing `...` makes a function variadic. mcc can't read the extra
 // arguments directly (there is no va_arg), but it can FORWARD them to a C

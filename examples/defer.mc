@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 import "memory";
 
 // `defer` schedules an action to run when the enclosing block exits -- however

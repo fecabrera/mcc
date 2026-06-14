@@ -1,4 +1,4 @@
-#include <stdio.h>
+import "libc/stdio";
 import "array";
 
 // `for x in obj` walks anything that provides the iter/next protocol -- here
