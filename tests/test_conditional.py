@@ -151,10 +151,11 @@ def test_statement_if_picks_a_branch():
 
 def test_statement_if_inlines_into_current_scope():
     # A binding declared in the live branch is visible afterwards: @if does not
-    # open a runtime scope, it just selects statements inline.
+    # open a runtime scope, it just selects statements inline. The condition is
+    # true on any real target, so the result does not depend on the host arch.
     src = """
     fn main() -> int32 {
-        @if (TARGET_ARCH == ARCH_AARCH64) { let x = 5 as int32; } @else { let x = 9 as int32; }
+        @if (TARGET_ARCH != ARCH_UNKNOWN) { let x = 5 as int32; } @else { let x = 9 as int32; }
         return x;
     }
     """
