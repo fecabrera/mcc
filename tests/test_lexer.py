@@ -55,6 +55,14 @@ def test_float_and_int_literals():
     assert kinds("1.5 2")[:-1] == ["FLOAT", "INT"]
 
 
+def test_float_literals_with_exponents():
+    tokens = tokenize("1.5e10 2.0E-3 1e9 1.7976931348623157e+308")
+    assert [(t.kind, t.text) for t in tokens[:-1]] == [
+        ("FLOAT", "1.5e10"), ("FLOAT", "2.0E-3"),
+        ("FLOAT", "1e9"), ("FLOAT", "1.7976931348623157e+308"),
+    ]
+
+
 def test_hex_literal_is_one_token():
     tokens = tokenize("0x1F 0XdeadBEEF")
     assert [(t.kind, t.text) for t in tokens[:-1]] == [

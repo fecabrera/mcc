@@ -124,6 +124,32 @@ def test_libc_stdlib_string_bindings(tmp_path):
     assert out.stdout == "1234 42 abcd 1\n"
 
 
+def test_libc_errno_and_time(tmp_path):
+    # errno (the __error / __errno_location split, via @if) read after a failed
+    # open, plus time.h's gmtime/strftime on the epoch -- both deterministic.
+    src = tmp_path / "et.mc"
+    src.write_text(
+        'import "libc/stdio";\n'
+        'import "libc/errno";\n'
+        'import "libc/time";\n'
+        'import "libc/float";\n'
+        "fn main() -> int32 {\n"
+        "    set_errno(0 as int32);\n"
+        '    fopen("/no/such/file", "r");\n'
+        "    let t = 0 as int64;\n"
+        "    let buf: uint8[32];\n"
+        '    strftime(&buf[0], 32 as uint64, "%Y-%m-%d", gmtime(&t));\n'
+        '    printf("%d %s %d\\n", (errno() != 0) as int32, &buf[0], DBL_DIG);\n'
+        "    return 0;\n"
+        "}"
+    )
+    exe = tmp_path / "et"
+    result = mcc(src, "-o", exe)
+    assert result.returncode == 0, result.stderr
+    out = subprocess.run([exe], capture_output=True, text=True)
+    assert out.stdout == "1 1970-01-01 15\n"
+
+
 def test_compile_error_exit_code(tmp_path):
     bad = tmp_path / "bad.mc"
     bad.write_text("fn main() -> int32 { return x; }")

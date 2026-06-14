@@ -46,6 +46,9 @@ Everything else is implemented in mcc.
 | [libc/ctype.mc](libc/ctype.mc) | `import "libc/ctype";` | Character classification (`isalpha`, `isdigit`, `isspace`, …) and `tolower`/`toupper`. |
 | [libc/math.mc](libc/math.mc) | `import "libc/math";` | Double-precision math: `sqrt`/`pow`/`hypot`, trig and hyperbolic, `exp`/`log` family, rounding (`floor`/`ceil`/`round`/`trunc`), `fmod`, `fabs`, gamma/erf, `fma`. |
 | [libc/limits.mc](libc/limits.mc) | `import "libc/limits";` | Integer limit constants: `INT_MAX`, `LONG_MIN`, `UCHAR_MAX`, … |
+| [libc/float.mc](libc/float.mc) | `import "libc/float";` | `double` characteristics: `DBL_MAX`/`DBL_MIN`/`DBL_EPSILON`, `DBL_DIG`, exponent ranges, `FLT_RADIX`, `DECIMAL_DIG`. |
+| [libc/time.mc](libc/time.mc) | `import "libc/time";` | `struct tm`, `time`/`clock`/`difftime`, `mktime`/`localtime`/`gmtime`, `asctime`/`ctime`/`strftime`, `CLOCKS_PER_SEC`. |
+| [libc/errno.mc](libc/errno.mc) | `import "libc/errno";` | `errno`/`set_errno` (over the platform-specific location function) and the `EDOM`/`ERANGE`/`EILSEQ` codes. |
 
 ### Coverage & roadmap
 
@@ -88,10 +91,17 @@ Where each C standard header stands. `size_t` is bound as `uint64`; single-preci
 
 **limits.h** — ✅ complete (missing only the niche `MB_LEN_MAX`).
 
-**Not yet started (whole headers):**
-- [ ] **time.h** — `time` `clock` `difftime` `mktime` `localtime` `gmtime` `strftime`; `struct tm`, `time_t`, `clock_t`, `CLOCKS_PER_SEC`
-- [ ] **errno.h** — `errno` (a macro: `*__error()` / `*__errno_location()`, needs `@if` + wrapper), `strerror`, `EDOM` `ERANGE` `EILSEQ`
-- [ ] **float.h** — constants only: `DBL_MAX` `DBL_MIN` `DBL_EPSILON`, …
+**time.h** — ✅ complete.
+- [x] `time` `clock` `difftime` `mktime` · `localtime` `gmtime` `asctime` `ctime` `strftime`
+- [x] `struct tm` (ABI-matching layout) · `CLOCKS_PER_SEC` · `time_t`/`clock_t` are `int64`
+
+**errno.h** — ✅ complete.
+- [x] `errno`/`set_errno` over the platform location fn (`__error` / `__errno_location`, via `@if`)
+- [x] `EDOM` `ERANGE` `EILSEQ` (`strerror` lives in string.h)
+
+**float.h** — ✅ complete for `double`.
+- [x] `DBL_MAX` `DBL_MIN` `DBL_TRUE_MIN` `DBL_EPSILON` · `DBL_DIG` `DBL_MANT_DIG` · exponent ranges · `FLT_RADIX` `DECIMAL_DIG`
+- _out of scope:_ `FLT_*`/`LDBL_*` (no `float32` or long double)
 
 **Deliberately out of scope** (macro-shaped, platform-opaque, or niche):
 `assert.h` (macro with file/line), `setjmp.h` (`setjmp` is a macro; `jmp_buf` is

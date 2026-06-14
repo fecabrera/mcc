@@ -20,7 +20,7 @@ TOKEN_SPEC = [
     ("ELLIPSIS", r"\.\.\."),
     ("OP2", r"==|!=|<=|>=|<<|>>"),
     ("ANNOT", r"@[A-Za-z_]\w*"),
-    ("FLOAT", r"\d+\.\d+"),
+    ("FLOAT", r"\d+\.\d+(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+"),
     ("INT", r"0[xX][0-9a-fA-F]+|\d+"),
     ("IDENT", r"[A-Za-z_]\w*"),
     ("STRING", r'"(\\.|[^"\\\n])*"'),
