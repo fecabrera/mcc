@@ -622,8 +622,8 @@ several routes (or cyclically) is only loaded once.
 Imports resolve relative to the importing file first, then through the
 import search path: directories added with `-I`/`--import-path` (in order),
 and finally the project's [lib/](lib/) directory, which is on the path by
-default so the standard library is importable by bare name. Pass `--naked`
-to leave `lib/` off the path.
+default so the [standard library](lib/README.md) is importable by bare name.
+Pass `--naked` to leave `lib/` off the path.
 
 ```c
 import "memory";   // found in lib/ via the search path
@@ -774,7 +774,8 @@ widened to `int32`).
  */
 ```
 
-See [lib/](lib/) for documented code.
+See the [standard library index](lib/README.md) for the modules under `lib/`,
+all written in this style.
 
 ## Tests
 
