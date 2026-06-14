@@ -285,6 +285,33 @@ file-scoped names are shared across the program, and `@private` keeps one to
 its file. Assigning to a const, or using a non-constant initializer, is a
 compile error.
 
+#### Target facts
+
+The compiler predefines two integer constants describing the target it is
+building for, derived from the [target triple](#usage) (the host triple when
+no `--target` is given):
+
+| Constant      | Values |
+| ------------- | ------ |
+| `TARGET_OS`   | `OS_DARWIN`, `OS_LINUX`, `OS_WINDOWS`, `OS_NONE`, `OS_UNKNOWN` |
+| `TARGET_ARCH` | `ARCH_X86_64`, `ARCH_AARCH64`, `ARCH_RISCV64`, `ARCH_UNKNOWN` |
+
+The `OS_*`/`ARCH_*` names are constants too, so code can branch on them to pick
+platform-specific bindings — for instance, the linker symbol behind a libc
+stream (see [`@symbol`](#extern-declarations)):
+
+```c
+@extern @symbol("__stdoutp") let macos_stdout: struct FILE*;   // when TARGET_OS == OS_DARWIN
+@extern @symbol("stdout")    let linux_stdout: struct FILE*;   // when TARGET_OS == OS_LINUX
+```
+
+`OS_NONE` is a freestanding target with no operating system: a bare-metal
+triple like `aarch64-unknown-none-elf` reports `TARGET_OS == OS_NONE` and
+`TARGET_ARCH == ARCH_AARCH64`. Such code uses no libc, so it never needs the
+stream symbols above — but `TARGET_ARCH` still lets a kernel select
+architecture-specific code (MMIO addresses, register layouts). These names are
+reserved: a user `const` may read them but not redefine them.
+
 ### Control flow
 
 ```c

@@ -109,6 +109,51 @@ NULLT = LangType("null", RAWPTR.ir, signed=False, pointee=TYPES["uint8"])
 
 POINTER_SIZE = 8  # bytes; native codegen targets 64-bit platforms
 
+# Compile-time facts about the target, exposed to source as the built-in
+# integer constants TARGET_OS and TARGET_ARCH (see seed_target_consts). The
+# OS_*/ARCH_* names below are also defined as constants, so code can compare
+# `TARGET_OS == OS_DARWIN` to select platform-specific bindings. The numeric
+# values are an ABI between the compiler and library code -- keep them stable.
+TARGET_OS_VALUES = {
+    "OS_UNKNOWN": 0,
+    "OS_DARWIN": 1,
+    "OS_LINUX": 2,
+    "OS_WINDOWS": 3,
+    "OS_NONE": 4,  # freestanding: bare metal, no operating system
+}
+TARGET_ARCH_VALUES = {
+    "ARCH_UNKNOWN": 0,
+    "ARCH_X86_64": 1,
+    "ARCH_AARCH64": 2,
+    "ARCH_RISCV64": 3,
+}
+
+
+def classify_os(triple: str) -> str:
+    """The OS_* name for an LLVM triple's operating-system component. A triple
+    with no OS (e.g. aarch64-unknown-none-elf for bare metal) reports OS_NONE."""
+    if any(s in triple for s in ("darwin", "macos", "ios", "apple")):
+        return "OS_DARWIN"
+    if "linux" in triple:
+        return "OS_LINUX"
+    if any(s in triple for s in ("windows", "win32", "mingw", "msvc")):
+        return "OS_WINDOWS"
+    if "none" in triple:
+        return "OS_NONE"
+    return "OS_UNKNOWN"
+
+
+def classify_arch(triple: str) -> str:
+    """The ARCH_* name for an LLVM triple's architecture component."""
+    arch = triple.split("-", 1)[0]
+    if arch in ("x86_64", "amd64"):
+        return "ARCH_X86_64"
+    if arch in ("aarch64", "arm64"):
+        return "ARCH_AARCH64"
+    if arch == "riscv64":
+        return "ARCH_RISCV64"
+    return "ARCH_UNKNOWN"
+
 I32_ZERO = ir.Constant(ir.IntType(32), 0)
 
 
@@ -425,6 +470,23 @@ class CodeGen:
                 f"{self.va_list_arch!r}", line
             )
 
+    def seed_target_consts(self):
+        """Define the built-in target facts as compile-time constants before any
+        user const is folded: TARGET_OS and TARGET_ARCH (the current target's
+        values), plus every OS_*/ARCH_* enum name. These reserve their names and
+        let library code select platform-specific bindings -- e.g. stdout's
+        linker symbol -- at compile time. A bare-metal triple such as
+        aarch64-unknown-none-elf reports OS_NONE / ARCH_AARCH64."""
+        triple = (self.target or _host_triple()).lower()
+        values = {**TARGET_OS_VALUES, **TARGET_ARCH_VALUES}
+        values["TARGET_OS"] = TARGET_OS_VALUES[classify_os(triple)]
+        values["TARGET_ARCH"] = TARGET_ARCH_VALUES[classify_arch(triple)]
+        for name, value in values.items():
+            self.consts[name] = TypedValue(
+                ir.Constant(INT32.ir, value), INT32, adaptable=True
+            )
+            self.const_privacy[name] = (False, None)  # public, compiler-owned
+
     def param_irs(self, params) -> list:
         """LLVM types for a function's parameters: a va_list lowers to the form
         it is passed in (a pointer on every ABI), not its storage layout."""
@@ -625,7 +687,10 @@ class CodeGen:
                 self.extern_decls.add(name)  # header funcs are extern declarations
         # Constants are folded before globals, so a global's type (or a later
         # const) may use one as an array size. They are evaluated in source
-        # order, so a const may reference any declared earlier (as in C).
+        # order, so a const may reference any declared earlier (as in C). The
+        # built-in target facts are seeded first, so user consts may use them
+        # (and may not shadow them).
+        self.seed_target_consts()
         for const in self.program.consts:
             self.current_source = const.source
             if const.name in self.consts:
