@@ -93,6 +93,37 @@ def test_libc_stdio_streams(tmp_path):
     assert out.stdout == "read value=7\n"
 
 
+def test_libc_stdlib_string_bindings(tmp_path):
+    # qsort (function-pointer arg), strtol with a base/endptr, and string
+    # search/concat bindings, linked against the real libc.
+    src = tmp_path / "fill.mc"
+    src.write_text(
+        'import "libc/stdio";\n'
+        'import "libc/stdlib";\n'
+        'import "libc/string";\n'
+        "fn cmp(a: uint8*, b: uint8*) -> int32 {\n"
+        "    return *(a as int32*) - *(b as int32*);\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let xs: int32[4];\n"
+        "    xs[0] = 4; xs[1] = 2; xs[2] = 3; xs[3] = 1;\n"
+        "    qsort(&xs[0] as uint8*, 4 as uint64, 4 as uint64, cmp);\n"
+        '    let v = strtol("2a", null, 16 as int32);\n'
+        "    let buf: uint8[16];\n"
+        '    strcpy(&buf[0], "ab");\n'
+        '    strcat(&buf[0], "cd");\n'
+        '    printf("%d%d%d%d %lld %s %d\\n", xs[0], xs[1], xs[2], xs[3], v,\n'
+        '           &buf[0], (strstr(&buf[0], "cd") != null) as int32);\n'
+        "    return EXIT_SUCCESS;\n"
+        "}"
+    )
+    exe = tmp_path / "fill"
+    result = mcc(src, "-o", exe)
+    assert result.returncode == 0, result.stderr
+    out = subprocess.run([exe], capture_output=True, text=True)
+    assert out.stdout == "1234 42 abcd 1\n"
+
+
 def test_compile_error_exit_code(tmp_path):
     bad = tmp_path / "bad.mc"
     bad.write_text("fn main() -> int32 { return x; }")

@@ -1,4 +1,12 @@
 /***************************************
+ * Constants
+ ***************************************/
+
+const EXIT_SUCCESS = 0;   // successful termination status for exit()
+const EXIT_FAILURE = 1;   // unsuccessful termination status for exit()
+const RAND_MAX = 2147483647;   // the largest value rand() can return
+
+/***************************************
  * Memory management
  ***************************************/
 
@@ -33,6 +41,17 @@
 @extern fn realloc(ptr: uint8*, size: uint64) -> uint8*;
 
 /**
+ * Allocates size bytes aligned to alignment, which must be a power of two and a
+ * multiple of which size is. The result must be released with free.
+ *
+ * @param alignment: required alignment in bytes (a power of two)
+ * @param size:      number of bytes to allocate (a multiple of alignment)
+ *
+ * @return pointer to the aligned storage, or null on failure
+ */
+@extern fn aligned_alloc(alignment: uint64, size: uint64) -> uint8*;
+
+/**
  * Releases storage previously returned by malloc/calloc/realloc. Passing null
  * does nothing.
  *
@@ -59,6 +78,24 @@
  */
 @extern fn abort();
 
+/**
+ * Terminates the program immediately with the given status, without running
+ * atexit handlers; streams are not flushed.
+ *
+ * @param status: exit status reported to the environment
+ */
+@extern fn _Exit(status: int32);
+
+/**
+ * Registers a function to be called, in reverse order of registration, when the
+ * program terminates normally (via exit or returning from main).
+ *
+ * @param func: handler taking no arguments and returning nothing
+ *
+ * @return 0 on success, non-zero if the handler could not be registered
+ */
+@extern fn atexit(func: fn()) -> int32;
+
 /***************************************
  * Integer arithmetic
  ***************************************/
@@ -71,6 +108,24 @@
  * @return |n|; the result is undefined when n is INT_MIN
  */
 @extern fn abs(n: int32) -> int32;
+
+/**
+ * Returns the absolute value of a long.
+ *
+ * @param n: value whose magnitude is taken
+ *
+ * @return |n|; the result is undefined when n is LONG_MIN
+ */
+@extern fn labs(n: int64) -> int64;
+
+/**
+ * Returns the absolute value of a long long.
+ *
+ * @param n: value whose magnitude is taken
+ *
+ * @return |n|; the result is undefined when n is LLONG_MIN
+ */
+@extern fn llabs(n: int64) -> int64;
 
 /***************************************
  * String conversion
@@ -103,3 +158,143 @@
  * @return parsed value; 0 if no digits are found
  */
 @extern fn atoll(str: uint8*) -> int64;
+
+/**
+ * Converts the initial portion of str to a double, skipping leading whitespace.
+ *
+ * @param str: null-terminated string to parse
+ *
+ * @return parsed value; 0.0 if no conversion can be performed
+ */
+@extern fn atof(str: uint8*) -> float64;
+
+/**
+ * Converts the initial portion of str to a long, in the given base (2..36, or 0
+ * to auto-detect a 0x/0 prefix). Unlike atoi, it reports where parsing stopped
+ * and can detect overflow (via errno).
+ *
+ * @param str:    null-terminated string to parse
+ * @param endptr: if non-null, receives a pointer to the first unparsed character
+ * @param base:   numeric base 2..36, or 0 to auto-detect
+ *
+ * @return parsed value; 0 if no conversion can be performed
+ */
+@extern fn strtol(str: uint8*, endptr: uint8**, base: int32) -> int64;
+
+/**
+ * Like strtol, but returns long long.
+ *
+ * @param str:    null-terminated string to parse
+ * @param endptr: if non-null, receives a pointer to the first unparsed character
+ * @param base:   numeric base 2..36, or 0 to auto-detect
+ *
+ * @return parsed value; 0 if no conversion can be performed
+ */
+@extern fn strtoll(str: uint8*, endptr: uint8**, base: int32) -> int64;
+
+/**
+ * Like strtol, but returns unsigned long.
+ *
+ * @param str:    null-terminated string to parse
+ * @param endptr: if non-null, receives a pointer to the first unparsed character
+ * @param base:   numeric base 2..36, or 0 to auto-detect
+ *
+ * @return parsed value; 0 if no conversion can be performed
+ */
+@extern fn strtoul(str: uint8*, endptr: uint8**, base: int32) -> uint64;
+
+/**
+ * Like strtol, but returns unsigned long long.
+ *
+ * @param str:    null-terminated string to parse
+ * @param endptr: if non-null, receives a pointer to the first unparsed character
+ * @param base:   numeric base 2..36, or 0 to auto-detect
+ *
+ * @return parsed value; 0 if no conversion can be performed
+ */
+@extern fn strtoull(str: uint8*, endptr: uint8**, base: int32) -> uint64;
+
+/**
+ * Converts the initial portion of str to a double, reporting where parsing
+ * stopped.
+ *
+ * @param str:    null-terminated string to parse
+ * @param endptr: if non-null, receives a pointer to the first unparsed character
+ *
+ * @return parsed value; 0.0 if no conversion can be performed
+ */
+@extern fn strtod(str: uint8*, endptr: uint8**) -> float64;
+
+/***************************************
+ * Pseudo-random numbers
+ ***************************************/
+
+/**
+ * Returns the next pseudo-random integer in the range 0..RAND_MAX.
+ *
+ * @return a pseudo-random value in [0, RAND_MAX]
+ */
+@extern fn rand() -> int32;
+
+/**
+ * Seeds the pseudo-random number generator used by rand. The same seed yields
+ * the same sequence.
+ *
+ * @param seed: seed value
+ */
+@extern fn srand(seed: uint32);
+
+/***************************************
+ * Searching and sorting
+ ***************************************/
+
+/**
+ * Sorts an array in place using a comparison function. The array has count
+ * elements of size bytes each, starting at base.
+ *
+ * @param base:  pointer to the first element
+ * @param count: number of elements
+ * @param size:  size of each element in bytes
+ * @param cmp:   compares two elements; returns <0, 0, or >0 (a < b, a == b, a > b)
+ */
+@extern fn qsort(base: uint8*, count: uint64, size: uint64,
+                 cmp: fn(uint8*, uint8*) -> int32);
+
+/**
+ * Binary-searches a sorted array for key. The array has count elements of size
+ * bytes each, starting at base, ordered consistently with cmp.
+ *
+ * @param key:   pointer to the value to find
+ * @param base:  pointer to the first element
+ * @param count: number of elements
+ * @param size:  size of each element in bytes
+ * @param cmp:   compares key against an element; returns <0, 0, or >0
+ *
+ * @return pointer to a matching element, or null if none is found
+ */
+@extern fn bsearch(key: uint8*, base: uint8*, count: uint64, size: uint64,
+                   cmp: fn(uint8*, uint8*) -> int32) -> uint8*;
+
+/***************************************
+ * Environment
+ ***************************************/
+
+/**
+ * Looks up an environment variable by name.
+ *
+ * @param name: null-terminated variable name
+ *
+ * @return pointer to its value, or null if the variable is not set
+ */
+@extern fn getenv(name: uint8*) -> uint8*;
+
+/**
+ * Passes command to the host command processor (a shell). A null command tests
+ * whether a command processor is available.
+ *
+ * @param command: null-terminated command line, or null to probe availability
+ *
+ * @return the command's termination status, or (for a null command) non-zero
+ *         if a processor is available
+ */
+@extern fn system(command: uint8*) -> int32;

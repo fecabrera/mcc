@@ -41,8 +41,8 @@ Everything else is implemented in mcc.
 | Module | Import | Provides |
 |--------|--------|----------|
 | [libc/stdio.mc](libc/stdio.mc) | `import "libc/stdio";` | Formatted I/O (`printf`/`sprintf`/`snprintf`/`scanf` families), `getchar`/`putchar`/`puts`, and `FILE*` streams: the `stdin`/`stdout`/`stderr` handles, `fopen`/`fclose`/`fflush`, `fread`/`fwrite`, `fseek`/`ftell`, `fgets`/`fputs`/`fgetc`/`fputc`, `fprintf`/`fscanf`, `feof`/`ferror`, plus `remove`/`rename`, `perror`, and `EOF`/`SEEK_*`. |
-| [libc/stdlib.mc](libc/stdlib.mc) | `import "libc/stdlib";` | `malloc`/`calloc`/`realloc`/`free`, `exit`/`abort`, `abs`, and string conversion (`atoi`/`atol`/`atoll`). |
-| [libc/string.mc](libc/string.mc) | `import "libc/string";` | `strcpy`/`strncpy`, `strlen`/`strnlen`, `strcmp`/`strncmp`, `memcmp`/`memset`/`memcpy`/`memmove`. |
+| [libc/stdlib.mc](libc/stdlib.mc) | `import "libc/stdlib";` | Memory (`malloc`/`calloc`/`realloc`/`aligned_alloc`/`free`), termination (`exit`/`_Exit`/`abort`/`atexit`), conversion (`atoi`/`atof`/`strtol` family/`strtod`), `rand`/`srand`, `qsort`/`bsearch`, `getenv`/`system`, `abs`/`labs`/`llabs`, and `EXIT_SUCCESS`/`EXIT_FAILURE`/`RAND_MAX`. |
+| [libc/string.mc](libc/string.mc) | `import "libc/string";` | Copy/concat (`strcpy`/`strncpy`/`strcat`/`strncat`), examine (`strlen`/`strnlen`/`strcmp`/`strncmp`/`strcoll`/`strxfrm`), search (`strchr`/`strrchr`/`strstr`/`strspn`/`strcspn`/`strpbrk`/`strtok`), memory (`memcmp`/`memset`/`memcpy`/`memmove`/`memchr`), and `strerror`. |
 | [libc/ctype.mc](libc/ctype.mc) | `import "libc/ctype";` | Character classification (`isalpha`, `isdigit`, `isspace`, …) and `tolower`/`toupper`. |
 | [libc/math.mc](libc/math.mc) | `import "libc/math";` | Double-precision math: `sqrt`/`pow`/`hypot`, trig and hyperbolic, `exp`/`log` family, rounding (`floor`/`ceil`/`round`/`trunc`), `fmod`, `fabs`, gamma/erf, `fma`. |
 | [libc/limits.mc](libc/limits.mc) | `import "libc/limits";` | Integer limit constants: `INT_MAX`, `LONG_MIN`, `UCHAR_MAX`, … |
@@ -65,19 +65,21 @@ Where each C standard header stands. `size_t` is bound as `uint64`; single-preci
 - [ ] `fgetpos` `fsetpos` (need an opaque `fpos_t`) · `tmpfile` `tmpnam`
 - [ ] consts: `FOPEN_MAX` `FILENAME_MAX` `TMP_MAX` `L_tmpnam`
 
-**stdlib.h** — partial.
-- [x] `malloc` `calloc` `realloc` `free` · `exit` `abort` · `abs` · `atoi` `atol` `atoll`
-- [ ] `atof` · `strtol` `strtoll` `strtoul` `strtoull` `strtod` `strtof`
-- [ ] `rand` `srand` (`RAND_MAX`) · `qsort` `bsearch`
-- [ ] `getenv` `system` · `labs` `llabs` · `div` `ldiv` `lldiv` (+ result structs)
-- [ ] `_Exit` `atexit` `at_quick_exit` `quick_exit` · `aligned_alloc`
-- [ ] consts: `EXIT_SUCCESS` `EXIT_FAILURE`
+**stdlib.h** — near-complete.
+- [x] `malloc` `calloc` `realloc` `aligned_alloc` `free`
+- [x] `exit` `_Exit` `abort` `atexit` · consts `EXIT_SUCCESS` `EXIT_FAILURE`
+- [x] `atoi` `atol` `atoll` `atof` · `strtol` `strtoll` `strtoul` `strtoull` `strtod`
+- [x] `rand` `srand` (`RAND_MAX`) · `qsort` `bsearch`
+- [x] `getenv` `system` · `abs` `labs` `llabs`
+- [ ] `strtof` (no single-precision `float`) · `div` `ldiv` `lldiv` (need struct-return ABI)
+- [ ] `quick_exit` `at_quick_exit` (absent on macOS libc)
 - _out of scope:_ multibyte (`mblen`/`mbtowc`/`wctomb`/…)
 
-**string.h** — partial.
-- [x] `strcpy` `strncpy` · `strlen` `strnlen` · `strcmp` `strncmp` · `memcmp` `memset` `memcpy` `memmove`
-- [ ] `strcat` `strncat` · `strchr` `strrchr` `strstr` `memchr`
-- [ ] `strspn` `strcspn` `strpbrk` `strtok` · `strerror` `strcoll` `strxfrm`
+**string.h** — ✅ complete.
+- [x] `strcpy` `strncpy` `strcat` `strncat`
+- [x] `strlen` `strnlen` `strcmp` `strncmp` `strcoll` `strxfrm`
+- [x] `strchr` `strrchr` `strstr` `strspn` `strcspn` `strpbrk` `strtok`
+- [x] `memcmp` `memset` `memcpy` `memmove` `memchr` · `strerror`
 
 **ctype.h** — ✅ complete (`is*` classification + `tolower`/`toupper`).
 

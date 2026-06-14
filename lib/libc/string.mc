@@ -26,6 +26,30 @@
  */
 @extern fn strncpy(dest: uint8*, src: uint8*, count: uint64) -> uint8*;
 
+/**
+ * Appends the null-terminated string src to the end of dest, overwriting dest's
+ * null terminator and adding a new one. The objects must not overlap and dest
+ * must be large enough.
+ *
+ * @param dest: null-terminated destination string to append to
+ * @param src:  null-terminated string to append
+ *
+ * @return dest
+ */
+@extern fn strcat(dest: uint8*, src: uint8*) -> uint8*;
+
+/**
+ * Appends at most count characters from src to the end of dest, then adds a
+ * null terminator. The objects must not overlap and dest must be large enough.
+ *
+ * @param dest:  null-terminated destination string to append to
+ * @param src:   string to append
+ * @param count: maximum number of characters to copy from src
+ *
+ * @return dest
+ */
+@extern fn strncat(dest: uint8*, src: uint8*, count: uint64) -> uint8*;
+
 /***************************************
  * String examination
  ***************************************/
@@ -71,9 +95,127 @@
  */
 @extern fn strncmp(lhs: uint8*, rhs: uint8*, count: uint64) -> int32;
 
+/**
+ * Compares two null-terminated strings according to the current locale's
+ * collation order.
+ *
+ * @param lhs: pointer to the first null-terminated string
+ * @param rhs: pointer to the second null-terminated string
+ *
+ * @return Negative if lhs < rhs, zero if equal, positive if lhs > rhs.
+ */
+@extern fn strcoll(lhs: uint8*, rhs: uint8*) -> int32;
+
+/**
+ * Transforms src into a form such that comparing two transformed strings with
+ * strcmp matches comparing the originals with strcoll. Writes up to count bytes
+ * (including the null terminator) into dest.
+ *
+ * @param dest:  destination buffer (may be null if count is 0)
+ * @param src:   null-terminated source string
+ * @param count: capacity of dest in bytes
+ *
+ * @return the length of the transformed string, excluding the null terminator;
+ *         if it is >= count, the contents of dest are indeterminate
+ */
+@extern fn strxfrm(dest: uint8*, src: uint8*, count: uint64) -> uint64;
+
+/***************************************
+ * String searching
+ ***************************************/
+
+/**
+ * Finds the first occurrence of ch (as an unsigned char) in the null-terminated
+ * string str. The null terminator is considered part of the string.
+ *
+ * @param str: null-terminated string to search
+ * @param ch:  character to find (converted to unsigned char)
+ *
+ * @return pointer to the first match, or null if ch does not occur
+ */
+@extern fn strchr(str: uint8*, ch: int32) -> uint8*;
+
+/**
+ * Finds the last occurrence of ch (as an unsigned char) in the null-terminated
+ * string str. The null terminator is considered part of the string.
+ *
+ * @param str: null-terminated string to search
+ * @param ch:  character to find (converted to unsigned char)
+ *
+ * @return pointer to the last match, or null if ch does not occur
+ */
+@extern fn strrchr(str: uint8*, ch: int32) -> uint8*;
+
+/**
+ * Finds the first occurrence of the substring needle in haystack. An empty
+ * needle matches at the start.
+ *
+ * @param haystack: null-terminated string to search
+ * @param needle:   null-terminated substring to find
+ *
+ * @return pointer to the start of the first match, or null if not found
+ */
+@extern fn strstr(haystack: uint8*, needle: uint8*) -> uint8*;
+
+/**
+ * Returns the length of the initial run of str made up entirely of characters
+ * in accept.
+ *
+ * @param str:    null-terminated string to scan
+ * @param accept: null-terminated set of accepted characters
+ *
+ * @return number of leading characters that are all in accept
+ */
+@extern fn strspn(str: uint8*, accept: uint8*) -> uint64;
+
+/**
+ * Returns the length of the initial run of str made up entirely of characters
+ * NOT in reject.
+ *
+ * @param str:    null-terminated string to scan
+ * @param reject: null-terminated set of rejected characters
+ *
+ * @return number of leading characters before the first one in reject
+ */
+@extern fn strcspn(str: uint8*, reject: uint8*) -> uint64;
+
+/**
+ * Finds the first character in str that is also in accept.
+ *
+ * @param str:    null-terminated string to search
+ * @param accept: null-terminated set of characters to look for
+ *
+ * @return pointer to the first matching character, or null if none match
+ */
+@extern fn strpbrk(str: uint8*, accept: uint8*) -> uint8*;
+
+/**
+ * Splits a string into tokens separated by any character in delim. The first
+ * call passes the string; subsequent calls pass null to continue. Modifies the
+ * string in place and keeps static state, so it is not reentrant or thread-safe.
+ *
+ * @param str:   string to tokenize on the first call, null to continue
+ * @param delim: null-terminated set of delimiter characters
+ *
+ * @return pointer to the next token, or null when there are no more
+ */
+@extern fn strtok(str: uint8*, delim: uint8*) -> uint8*;
+
 /***************************************
  * Character array manipulation
  ***************************************/
+
+/**
+ * Finds the first occurrence of byte ch in the first count bytes of the object
+ * pointed to by ptr.
+ *
+ * @param ptr:   pointer to the object to search
+ * @param ch:    byte value to find (converted to unsigned char)
+ * @param count: number of bytes to search
+ *
+ * @return pointer to the matching byte, or null if it does not occur
+ */
+@extern fn memchr(ptr: uint8*, ch: int32, count: uint64) -> uint8*;
 
 /**
  * Compares the first count bytes of the objects pointed to by lhs and rhs lexicographically.
@@ -120,3 +262,18 @@
  * @return dest
  */
 @extern fn memmove(dest: uint8*, src: uint8*, count: uint64) -> uint8*;
+
+/***************************************
+ * Error messages
+ ***************************************/
+
+/**
+ * Returns a textual description of an error code such as one found in errno.
+ * The returned string must not be modified, and may be overwritten by a later
+ * call.
+ *
+ * @param errnum: an error code (e.g. an errno value)
+ *
+ * @return pointer to a static, null-terminated description string
+ */
+@extern fn strerror(errnum: int32) -> uint8*;
