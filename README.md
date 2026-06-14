@@ -240,6 +240,18 @@ while (i < n) {
 }
 ```
 
+A bare `{ }` is a statement too, so you can open a scope anywhere — handy for a
+short-lived local (and its `defer`) without leaking it into the rest of the
+function:
+
+```c
+{
+    let tmp = alloc<uint8>(64);
+    defer dealloc(tmp);
+    fill(tmp);
+}   // tmp is freed and out of scope here
+```
+
 ### Constants
 
 `const` declares a named compile-time constant — mcc's answer to C's
@@ -304,6 +316,29 @@ Conditions accept `bool` or any integer (compared against zero, as in C).
 A body that is a single statement does not need braces:
 `if (x > 10) return x;`
 `break` and `continue` apply to the innermost enclosing loop.
+
+`for x in obj` iterates anything that supplies the **iter/next protocol** — a
+pair of overloads the compiler resolves by type:
+
+```c
+fn iter<T>(self: struct array<T>*) -> struct array_iter<T>;   // make a cursor
+fn next<T>(it: struct array_iter<T>*, out: T*) -> bool;        // false when done
+```
+
+```c
+for v in &nums {            // nums: array<int32>; v is int32, inferred from next
+    if (v < 0) { continue; }
+    if (v > 99) { break; }
+    use(v);
+}
+```
+
+The element type of `x` is inferred from `next`'s out-parameter; `x` is scoped
+to the loop and `break`/`continue` work as usual. It lowers to
+`{ let it = iter(obj); while (next(&it, &x)) { ... } }` with the iterator held
+as a hidden, collision-proof temporary. Define `iter`/`next` overloads for your
+own types to make them iterable — [lib/array.mc](lib/array.mc) does this; see
+[examples/iteration.mc](examples/iteration.mc).
 
 `case` matches a value against a series of `when` arms, with an optional
 `else:` default. The subject is evaluated once, and there is **no

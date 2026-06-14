@@ -18,9 +18,9 @@ from llvmlite import ir
 
 from mcc.errors import LangError
 from mcc.nodes import (
-    ArrayLit, Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast,
-    CharLit, Continue, Defer, ExprStmt, FloatLit, Func, If, Index, IntLit, Let,
-    Logical, Len, Member, NullLit, Program, Return, SizeOf, StoreDeref,
+    ArrayLit, Assign, Binary, Block, BoolLit, Break, Call, CallExpr, Case, Cast,
+    CharLit, Continue, Defer, ExprStmt, FloatLit, For, Func, If, Index, IntLit,
+    Let, Logical, Len, Member, NullLit, Program, Return, SizeOf, StoreDeref,
     StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
 
@@ -965,6 +965,10 @@ class CodeGen:
             if not self.builder.block.is_terminated:
                 self.builder.branch(cond_bb)
             self.builder.position_at_end(end_bb)
+        elif isinstance(stmt, Block):
+            self.gen_block(stmt.body)  # a bare { } -- its own scope
+        elif isinstance(stmt, For):
+            self.gen_for(stmt)
         elif isinstance(stmt, Defer):
             # Register only; the body runs when the enclosing block exits.
             self.defer_stack[-1].append(stmt.body)
@@ -1023,6 +1027,103 @@ class CodeGen:
             self.gen_expr(stmt.expr)
         else:
             raise LangError(f"cannot compile statement {stmt!r}", stmt.line)
+
+    def gen_for(self, stmt: For):
+        """Lower `for x in obj { body }` to the iter/next protocol:
+
+            { let _it = iter(obj); let x: T; while (next(&_it, &x)) { body } }
+
+        The iterator is a compiler-held temporary -- never a named local -- so
+        it cannot collide with user code, and the element variable lives in a
+        fresh block scope, gone once the loop ends. The element type T is read
+        from the resolved `next` overload's out-parameter."""
+        # iter(obj) -- resolves and instantiates iter for obj's type.
+        if not self.callable_exists("iter"):
+            raise LangError(
+                "'for ... in' needs an 'iter' function for the iterable; "
+                "none is in scope", stmt.line
+            )
+        iterator = self.gen_call(Call("iter", [], [stmt.iterable], stmt.line))
+        it_slot = self.builder.alloca(iterator.type.ir, name="for.iter")
+        self.builder.store(iterator.value, it_slot)
+
+        next_fn, element = self.resolve_protocol_next(iterator.type, stmt.line)
+
+        # A fresh scope for the element variable and the loop's defers.
+        outer_locals, outer_names = dict(self.locals), self.scope_names
+        self.scope_names = set()
+        self.defer_stack.append([])
+        try:
+            x_slot = self.builder.alloca(element.ir, name=stmt.var)
+            if over_aligned(element):
+                x_slot.align = type_align(element)
+            self.bind_local(stmt.var, x_slot, element)
+
+            cond_bb = self.builder.append_basic_block("for.cond")
+            body_bb = self.builder.append_basic_block("for.body")
+            end_bb = self.builder.append_basic_block("for.end")
+            self.builder.branch(cond_bb)
+            self.builder.position_at_end(cond_bb)
+            more = self.builder.call(next_fn, [it_slot, x_slot])  # next(&_it, &x)
+            self.builder.cbranch(more, body_bb, end_bb)
+            self.builder.position_at_end(body_bb)
+            self.loops.append((cond_bb, end_bb, len(self.defer_stack)))
+            try:
+                self.gen_block(stmt.body)
+            finally:
+                self.loops.pop()
+            if not self.builder.block.is_terminated:
+                self.builder.branch(cond_bb)
+            self.builder.position_at_end(end_bb)
+        finally:
+            self.defer_stack.pop()
+            self.locals, self.scope_names = outer_locals, outer_names
+
+    def callable_exists(self, name: str) -> bool:
+        key = (self.current_source, name)
+        return (name in self.templates or name in self.funcs
+                or key in self.static_templates or key in self.static_funcs)
+
+    def resolve_protocol_next(self, iter_type: LangType, line: int):
+        """Find the `next` overload that consumes `iter_type` and return its
+        instantiated function plus the element type it yields (its out-param's
+        pointee). `next` is dispatched on the iterator alone, so the element
+        type can be learned before the loop variable is declared."""
+        want = pointer_to(iter_type)
+        candidates = list(self.templates.get("next", []))
+        static = self.static_templates.get((self.current_source, "next"))
+        if static is not None:
+            candidates.append(static)
+        viable = []
+        for func in candidates:
+            if len(func.params) != 2:
+                continue
+            bindings: dict[str, LangType] = {}
+            try:
+                self.unify(func.params[0][1], want, func.type_params, bindings,
+                           True, "for-loop 'next'", line)
+            except LangError:
+                continue
+            if any(t not in bindings for t in func.type_params):
+                continue
+            if not self.shape_matches(func.params[0][1], want, False,
+                                      func.type_params, line):
+                continue
+            viable.append((self.specificity(func), func, bindings))
+        if not viable:
+            raise LangError(
+                f"no 'next' overload iterates a {iter_type} (for ... in)", line
+            )
+        viable.sort(key=lambda entry: entry[0], reverse=True)
+        if len(viable) > 1 and viable[0][0] == viable[1][0]:
+            raise LangError(f"ambiguous 'next' for {iter_type}", line)
+        _, func, bindings = viable[0]
+        fn, ret, params = self.instantiate(func, bindings)
+        if ret is not BOOL:
+            raise LangError("'next' must return bool", line)
+        if not is_pointer(params[1]):
+            raise LangError("'next' second parameter must be an out-pointer", line)
+        return fn, params[1].pointee
 
     def gen_cond(self, expr) -> ir.Value:
         tv = self.gen_expr(expr)

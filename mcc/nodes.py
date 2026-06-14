@@ -138,6 +138,18 @@ class Defer:  # defer { ... } -- run body when the enclosing block exits
     line: int
 
 @dataclass
+class For:  # for var in iterable { ... } -- iterate via the iter/next protocol
+    var: str
+    iterable: object
+    body: list
+    line: int
+
+@dataclass
+class Block:  # a bare { ... } statement -- its own scope
+    body: list
+    line: int
+
+@dataclass
 class Case:  # case (subject) { when v: ... else: ... } -- no fall-through
     subject: object
     arms: list  # (value expr, body statements) for each `when`

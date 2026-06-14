@@ -291,3 +291,33 @@ def test_array_iterator(tmp_path, capfd):
     )
     assert run_path(main) == 0
     assert capfd.readouterr().out == "60\n"
+
+
+def test_for_in_loop(tmp_path, capfd):
+    from pathlib import Path
+    lib_dir = Path(__file__).resolve().parents[1] / "lib"
+    main = tmp_path / "main.mc"
+    main.write_text(
+        f'import "{lib_dir / "array"}";\n'
+        """
+        #include <stdio.h>
+        fn main() -> int32 {
+            let xs: struct array<int32>;
+            array_init(&xs, 2);
+            array_append(&xs, 10);
+            array_append(&xs, 20);
+            array_append(&xs, 30);
+            defer array_destroy(&xs);
+
+            let sum: int32 = 0;
+            for v in &xs {               // element type inferred from next
+                if (v == 30) { break; }  // break/continue work in a for
+                sum = sum + v;
+            }
+            printf("%d\\n", sum);       // 10 + 20 = 30
+            return 0;
+        }
+        """
+    )
+    assert run_path(main) == 0
+    assert capfd.readouterr().out == "30\n"

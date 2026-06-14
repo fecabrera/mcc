@@ -16,6 +16,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [control_flow.mc](control_flow.mc) | `if` / `else if` / `else`, integer conditions, `and` / `or`, `while`, `until`, nested loops, `break` / `continue` |
 | [case_when.mc](case_when.mc) | `case` / `when` / `else:` with no fall-through, integer and character subjects |
 | [defer.mc](defer.mc) | `defer` cleanup at scope exit (return/break included), LIFO order, the block form |
+| [iteration.mc](iteration.mc) | `for x in` over the array's iter/next protocol, `break`/`continue`, bare `{ }` block scopes |
 | [functions.mc](functions.mc) | void functions, any-order definitions, recursion, mutual recursion |
 | [variadic.mc](variadic.mc) | variadic `...` definitions, `va_list`, `va_start`/`va_end`, forwarding to `vsnprintf` |
 | [function_pointers.mc](function_pointers.mc) | `fn(...) -> R` types, callbacks in structs, dispatch tables, `null` callbacks |

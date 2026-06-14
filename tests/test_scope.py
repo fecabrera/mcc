@@ -90,6 +90,23 @@ def test_redeclaration_in_the_same_block_is_an_error():
         compile_ir("fn main() -> int32 { let x: int32 = 1; let x: int32 = 2; return x; }")
 
 
+def test_bare_block_is_its_own_scope():
+    source = """
+    fn main() -> int32 {
+        let x: int32 = 1;
+        { let x: int32 = 2; }     // a bare block; inner x is independent
+        { let x: int32 = 3; }     // sibling block reuses the name
+        return x;                 // outer x, still 1
+    }
+    """
+    assert run(source) == 1
+
+
+def test_bare_block_local_does_not_leak():
+    with pytest.raises(LangError, match="undefined variable 'y'"):
+        compile_ir("fn main() -> int32 { { let y: int32 = 5; } return y; }")
+
+
 def test_case_arms_are_separate_scopes():
     # Each when/else arm is its own block, so they may reuse a name.
     source = """

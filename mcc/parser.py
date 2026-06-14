@@ -7,11 +7,11 @@ import re
 from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
-    ArrayLit, Assign, Binary, BoolLit, Break, Call, CallExpr, Case, Cast,
-    CharLit, Const, Continue, Defer, ExprStmt, FloatLit, Func, GlobalVar, If,
-    Index, IntLit, Len, Let, Logical, Member, NullLit, Program, Return, SizeOf,
-    StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary,
-    Var, While,
+    ArrayLit, Assign, Binary, Block, BoolLit, Break, Call, CallExpr, Case, Cast,
+    CharLit, Const, Continue, Defer, ExprStmt, FloatLit, For, Func, GlobalVar,
+    If, Index, IntLit, Len, Let, Logical, Member, NullLit, Program, Return,
+    SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef,
+    Unary, Var, While,
 )
 
 # C's simple escape sequences, plus \e for ESC (a GCC/Clang extension, handy
@@ -298,6 +298,8 @@ class Parser:
 
     def parse_statement(self):
         tok = self.cur
+        if tok.kind == "{":
+            return Block(self.parse_block(), tok.line)
         if tok.kind == "return":
             self.advance()
             value = None if self.cur.kind == ";" else self.parse_expr()
@@ -352,6 +354,12 @@ class Parser:
             self.advance()
             # `defer stmt;` or `defer { ... }` -- parse_body handles both.
             return Defer(self.parse_body(), tok.line)
+        if tok.kind == "for":
+            self.advance()
+            var = self.expect("IDENT").text
+            self.expect("in")
+            iterable = self.parse_expr()
+            return For(var, iterable, self.parse_body(), tok.line)
         expr = self.parse_expr()
         if self.accept("="):
             value = self.parse_expr()
