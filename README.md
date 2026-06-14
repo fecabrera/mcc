@@ -688,10 +688,10 @@ kernel's `printk`; extra arguments follow the same promotion rules as the
 fn printk(fmt: uint8*, ...);
 ```
 
-Extern functions cannot be generic, and `...` is only allowed in extern
-declarations (functions defined in the language cannot read variadic
-arguments). Identical extern
-declarations may appear in any number of imported files — they all name the
+Extern functions cannot be generic. (A `...` is also allowed on functions you
+define, which can forward their extra arguments through a `va_list` but not
+read them directly — see [Variadic functions](#variadic-functions).) Identical
+extern declarations may appear in any number of imported files — they all name the
 same symbol — but declarations that disagree about the signature are a
 compile error. `@private` applies to extern declarations as usual, and
 `@volatile` marks an extern variable whose accesses must not be optimized
