@@ -1,5 +1,7 @@
 import "std";
 import "array";
+import "set";
+import "dict";
 
 // `for x in obj` walks anything that provides the iter/next protocol -- here
 // the growable array from lib/array.mc. The element type is inferred from
@@ -37,6 +39,36 @@ fn main() -> int32 {
         scratch[2] = 0;
         println("%s", scratch);
     }   // scratch is freed and out of scope here
+
+    // The other lib containers implement the same protocol. Iterating a set
+    // yields a `pair<K, V>` per entry, in unspecified (hash-table) order; read
+    // its fields as x.key and x.value.
+    let table: set<uint64, uint64>;
+    set_init(&table, 2);
+    defer set_destroy(&table);
+
+    set_set(&table, 1, 10);
+    set_set(&table, 2, 11);
+    set_set(&table, 3, 12);
+
+    for x in &table {
+        println("%llu: %llu", x.key, x.value);
+    }
+
+    // A dict iterates the same way: a string key and the value, per entry.
+    // Each x.key borrows the dict's own copy of the key, valid until the dict
+    // changes.
+    let cmds: dict<uint8*>;
+    dict_init(&cmds, 2);
+    defer dict_destroy(&cmds);
+
+    dict_set(&cmds, "help", "show this help");
+    dict_set(&cmds, "quit", "exit the program");
+    dict_set(&cmds, "nuke", "nuke something or idk");
+
+    for x in &cmds {
+        println("%s: %s", x.key, x.value);
+    }
 
     return 0;
 }

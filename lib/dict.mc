@@ -1,6 +1,7 @@
 import "memory";
 import "hash";
 import "libc/string";
+import "iteration/pair";
 
 // Slot states
 @private const DICT_ENTRY_STATE_EMPTY = 0;
@@ -235,4 +236,60 @@ fn dict_grow<V>(self: struct dict<V>*) {
     dealloc(old_entries);
     self->entries = new_entries;
     self->capacity = new_capacity;
+}
+
+/***************************************
+ * Iteration
+ ***************************************/
+
+/**
+ * A forward cursor over a dict's occupied entries, produced by `iter`. It
+ * borrows the dict (does not copy it), so the dict must outlive the iterator
+ * and must not be modified or resized while iterating.
+ */
+struct dict_iter<V> {
+    obj: struct dict<V>*;   // the dict being walked
+    idx: uint64;            // index of the next slot to examine
+}
+
+/**
+ * Begins an iteration over a dict's string-keyed entries, in unspecified
+ * (hash-table slot) order. Part of the `iter`/`next` protocol; pair it with
+ * `next`.
+ *
+ * @param self: dict to iterate
+ *
+ * @return an iterator positioned before the first occupied entry
+ */
+fn iter<V>(self: struct dict<V>*) -> struct dict_iter<V> {
+    let it: struct dict_iter<V>;
+    it.obj = self;
+    it.idx = 0;
+    return it;
+}
+
+/**
+ * Advances to the next occupied entry and writes its key/value into out. The
+ * written `key` borrows the dict's own storage and stays valid only while the
+ * dict is unmodified.
+ *
+ * @param it:  iterator to advance
+ * @param out: pair the next entry is written to; untouched when the dict is
+ *             exhausted
+ *
+ * @return true if a pair was produced, false once iteration is complete
+ */
+fn next<V>(it: struct dict_iter<V>*, out: struct pair<uint8*, V>*) -> bool {
+    while (it->idx < it->obj->capacity) {
+        let entry = it->obj->entries[it->idx];
+        defer it->idx = it->idx + 1;
+
+        if (entry.state == DICT_ENTRY_STATE_OCCUPIED) {
+            out->key = entry.key;
+            out->value = entry.value;
+            return true;
+        }
+    }
+
+    return false;
 }
