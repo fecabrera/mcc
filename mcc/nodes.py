@@ -44,6 +44,7 @@ class Program:
     functions: list["Func"]
     globals: list["GlobalVar"]
     consts: list["Const"] = field(default_factory=list)
+    conditionals: list["Conditional"] = field(default_factory=list)  # top-level @if
 
 @dataclass
 class StructDecl:
@@ -149,6 +150,13 @@ class For:  # for var in iterable { ... } -- iterate via the iter/next protocol
 @dataclass
 class Block:  # a bare { ... } statement -- its own scope
     body: list
+    line: int
+
+@dataclass
+class Conditional:  # @if (cond) { ... } @else { ... } -- compile-time selection
+    cond: object       # a constant expression over the target facts
+    then: list         # items kept when cond holds: declarations or statements
+    otherwise: list    # the @else items, empty if absent; same shape as `then`
     line: int
 
 @dataclass

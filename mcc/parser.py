@@ -8,8 +8,8 @@ from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
     ArrayLit, Assign, Binary, Block, BoolLit, Break, Call, CallExpr, Case, Cast,
-    CharLit, Const, Continue, Defer, ExprStmt, FloatLit, For, Func, GlobalVar,
-    If, Index, IntLit, Len, Let, Logical, Member, NullLit, Program, Return,
+    CharLit, Conditional, Const, Continue, Defer, ExprStmt, FloatLit, For, Func,
+    GlobalVar, If, Index, IntLit, Len, Let, Logical, Member, NullLit, Program, Return,
     SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef,
     Unary, Var, While,
 )
@@ -53,7 +53,8 @@ class Parser:
         return self.advance()
 
     def parse_program(self) -> Program:
-        imports, includes, structs, functions, globals_, consts = [], [], [], [], [], []
+        imports, includes = [], []
+        structs, functions, globals_, consts, conditionals = [], [], [], [], []
         while self.cur.kind in ("INCLUDE", "import"):
             if self.cur.kind == "INCLUDE":
                 header = re.search(r"<([^>]+)>", self.advance().text).group(1)
@@ -64,89 +65,137 @@ class Parser:
                 self.expect(";")
                 imports.append((path, line))
         while self.cur.kind != "EOF":
-            private = static = extern = packed = volatile = False
-            align = None
-            symbol = None
-            while self.cur.kind == "ANNOT":
-                annot = self.advance()
-                if annot.text == "@private":
-                    private = True
-                elif annot.text == "@static":
-                    static = True
-                elif annot.text == "@extern":
-                    extern = True
-                elif annot.text == "@packed":
-                    packed = True
-                elif annot.text == "@volatile":
-                    volatile = True
-                elif annot.text == "@align":
-                    self.expect("(")
-                    align = int_value(self.expect("INT").text)
-                    self.expect(")")
-                    if align == 0 or align & (align - 1):
-                        raise LangError(
-                            f"@align needs a power of two, not {align}", annot.line
-                        )
-                elif annot.text == "@symbol":
-                    self.expect("(")
-                    symbol = self.expect("STRING").text[1:-1]
-                    self.expect(")")
-                    if not symbol:
-                        raise LangError("@symbol needs a non-empty name", annot.line)
-                else:
-                    raise LangError(f"unknown annotation {annot.text!r}", annot.line)
-            if extern and static:
-                raise LangError("@extern and @static cannot be combined", self.cur.line)
-            if symbol is not None and not extern:
-                raise LangError(
-                    "@symbol only applies to @extern functions and variables",
-                    self.cur.line,
-                )
-            if align is not None and self.cur.kind != "struct":
-                raise LangError("@align only applies to structs", self.cur.line)
-            if packed and self.cur.kind != "struct":
-                raise LangError("@packed only applies to structs", self.cur.line)
-            if self.cur.kind == "struct":
-                if extern:
-                    raise LangError("@extern does not apply to structs", self.cur.line)
-                structs.append(self.parse_struct(private, static, align, packed, volatile))
-            elif self.cur.kind == "let":
-                line = self.advance().line
-                if not extern and not static:
-                    raise LangError("top-level variables must be @extern or @static", line)
-                name = self.expect("IDENT").text
-                self.expect(":")
-                type_name = self.parse_type_ref()
-                init = None
-                if self.accept("="):
-                    if extern:
-                        raise LangError("an @extern variable cannot have an initializer", line)
-                    init = self.parse_expr()
-                self.expect(";")
-                globals_.append(GlobalVar(name, type_name, line, private=private,
-                                          volatile=volatile, static=static, init=init,
-                                          symbol=symbol))
-            elif self.cur.kind == "const":
-                line = self.advance().line
-                if static or extern or volatile:
-                    raise LangError(
-                        "a const is already compile-time; @static/@extern/@volatile "
-                        "do not apply", line
-                    )
-                name = self.expect("IDENT").text
-                type_name = self.parse_type_ref() if self.accept(":") else None
-                self.expect("=")
-                value = self.parse_expr()
-                self.expect(";")
-                consts.append(Const(name, type_name, value, line, private=private))
+            item = self.parse_toplevel_item()
+            target = {StructDecl: structs, Func: functions, GlobalVar: globals_,
+                      Const: consts, Conditional: conditionals}[type(item)]
+            target.append(item)
+        return Program(imports, includes, structs, functions, globals_, consts,
+                       conditionals)
+
+    def parse_toplevel_block(self) -> list:
+        """A brace-delimited group of top-level declarations -- a branch of a
+        top-level @if. Imports must precede all declarations, so they are not
+        allowed here."""
+        self.expect("{")
+        items = []
+        while self.cur.kind != "}":
+            if self.cur.kind in ("INCLUDE", "import"):
+                raise LangError("import is not allowed inside @if", self.cur.line)
+            items.append(self.parse_toplevel_item())
+        self.expect("}")
+        return items
+
+    def parse_conditional(self, parse_block):
+        """@if (cond) { ... } [@else @if (...) { ... }] [@else { ... }] --
+        compile-time conditional compilation. `parse_block` parses one branch
+        body: top-level declarations or statements, depending on the context.
+        The dead branch is parsed but never compiled."""
+        line = self.advance().line  # @if
+        self.expect("(")
+        cond = self.parse_expr()
+        self.expect(")")
+        then = parse_block()
+        otherwise = []
+        if self.cur.kind == "ANNOT" and self.cur.text == "@else":
+            self.advance()
+            if self.cur.kind == "ANNOT" and self.cur.text == "@if":
+                otherwise = [self.parse_conditional(parse_block)]  # @else @if chain
             else:
-                if volatile:
+                otherwise = parse_block()
+        return Conditional(cond, then, otherwise, line)
+
+    def parse_toplevel_item(self):
+        """One top-level item: a struct, global, const, function, or @if."""
+        if self.cur.kind == "ANNOT" and self.cur.text == "@if":
+            return self.parse_conditional(self.parse_toplevel_block)
+        if self.cur.kind == "ANNOT" and self.cur.text == "@else":
+            raise LangError("@else without a matching @if", self.cur.line)
+        private = static = extern = packed = volatile = False
+        align = None
+        symbol = None
+        while self.cur.kind == "ANNOT":
+            annot = self.advance()
+            if annot.text in ("@if", "@else"):
+                raise LangError(
+                    f"{annot.text} cannot be combined with other annotations",
+                    annot.line,
+                )
+            if annot.text == "@private":
+                private = True
+            elif annot.text == "@static":
+                static = True
+            elif annot.text == "@extern":
+                extern = True
+            elif annot.text == "@packed":
+                packed = True
+            elif annot.text == "@volatile":
+                volatile = True
+            elif annot.text == "@align":
+                self.expect("(")
+                align = int_value(self.expect("INT").text)
+                self.expect(")")
+                if align == 0 or align & (align - 1):
                     raise LangError(
-                        "@volatile only applies to structs and extern variables",
-                        self.cur.line,
+                        f"@align needs a power of two, not {align}", annot.line
                     )
-                functions.append(self.parse_function(private, static, extern, symbol))
-        return Program(imports, includes, structs, functions, globals_, consts)
+            elif annot.text == "@symbol":
+                self.expect("(")
+                symbol = self.expect("STRING").text[1:-1]
+                self.expect(")")
+                if not symbol:
+                    raise LangError("@symbol needs a non-empty name", annot.line)
+            else:
+                raise LangError(f"unknown annotation {annot.text!r}", annot.line)
+        if extern and static:
+            raise LangError("@extern and @static cannot be combined", self.cur.line)
+        if symbol is not None and not extern:
+            raise LangError(
+                "@symbol only applies to @extern functions and variables",
+                self.cur.line,
+            )
+        if align is not None and self.cur.kind != "struct":
+            raise LangError("@align only applies to structs", self.cur.line)
+        if packed and self.cur.kind != "struct":
+            raise LangError("@packed only applies to structs", self.cur.line)
+        if self.cur.kind == "struct":
+            if extern:
+                raise LangError("@extern does not apply to structs", self.cur.line)
+            return self.parse_struct(private, static, align, packed, volatile)
+        if self.cur.kind == "let":
+            line = self.advance().line
+            if not extern and not static:
+                raise LangError("top-level variables must be @extern or @static", line)
+            name = self.expect("IDENT").text
+            self.expect(":")
+            type_name = self.parse_type_ref()
+            init = None
+            if self.accept("="):
+                if extern:
+                    raise LangError("an @extern variable cannot have an initializer", line)
+                init = self.parse_expr()
+            self.expect(";")
+            return GlobalVar(name, type_name, line, private=private,
+                             volatile=volatile, static=static, init=init,
+                             symbol=symbol)
+        if self.cur.kind == "const":
+            line = self.advance().line
+            if static or extern or volatile:
+                raise LangError(
+                    "a const is already compile-time; @static/@extern/@volatile "
+                    "do not apply", line
+                )
+            name = self.expect("IDENT").text
+            type_name = self.parse_type_ref() if self.accept(":") else None
+            self.expect("=")
+            value = self.parse_expr()
+            self.expect(";")
+            return Const(name, type_name, value, line, private=private)
+        if volatile:
+            raise LangError(
+                "@volatile only applies to structs and extern variables",
+                self.cur.line,
+            )
+        return self.parse_function(private, static, extern, symbol)
 
     # Tokens that can begin an expression; used to settle the `as T * x`
     # ambiguity (multiplication, not a pointer type).
@@ -311,6 +360,10 @@ class Parser:
 
     def parse_statement(self):
         tok = self.cur
+        if tok.kind == "ANNOT" and tok.text == "@if":
+            return self.parse_conditional(self.parse_body)
+        if tok.kind == "ANNOT" and tok.text == "@else":
+            raise LangError("@else without a matching @if", tok.line)
         if tok.kind == "{":
             return Block(self.parse_block(), tok.line)
         if tok.kind == "return":

@@ -19,7 +19,8 @@ from llvmlite import ir
 from mcc.errors import LangError
 from mcc.nodes import (
     ArrayLit, Assign, Binary, Block, BoolLit, Break, Call, CallExpr, Case, Cast,
-    CharLit, Continue, Defer, ExprStmt, FloatLit, For, Func, If, Index, IntLit,
+    CharLit, Conditional, Const, Continue, Defer, ExprStmt, FloatLit, For, Func,
+    GlobalVar, If, Index, IntLit,
     Let, Logical, Len, Member, NullLit, Program, Return, SizeOf, StoreDeref,
     StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
@@ -486,6 +487,86 @@ class CodeGen:
                 ir.Constant(INT32.ir, value), INT32, adaptable=True
             )
             self.const_privacy[name] = (False, None)  # public, compiler-owned
+        # The same facts as plain ints, for evaluating @if conditions.
+        self.target_facts = values
+
+    def eval_static_cond(self, expr) -> bool:
+        """Whether a compile-time @if branch is taken. The condition is a
+        constant expression over the target facts (TARGET_OS, TARGET_ARCH, and
+        the OS_*/ARCH_* names); a nonzero result is true, as in C's #if."""
+        return self.eval_static_value(expr) != 0
+
+    def eval_static_value(self, expr) -> int:
+        """Evaluate an @if condition to an integer. Only the target facts,
+        integer/bool literals, comparisons, logical and/or/not, and integer
+        arithmetic are allowed -- nothing that needs the runtime."""
+        if isinstance(expr, IntLit) or isinstance(expr, CharLit):
+            return expr.value
+        if isinstance(expr, BoolLit):
+            return int(expr.value)
+        if isinstance(expr, Var):
+            if expr.name not in self.target_facts:
+                raise LangError(
+                    f"{expr.name!r} is not allowed in an @if condition; use the "
+                    "target facts TARGET_OS, TARGET_ARCH, and the OS_*/ARCH_* "
+                    "constants", expr.line
+                )
+            return self.target_facts[expr.name]
+        if isinstance(expr, Unary):
+            v = self.eval_static_value(expr.operand)
+            if expr.op == "!":
+                return int(not v)
+            if expr.op == "-":
+                return -v
+            raise LangError(
+                f"operator {expr.op!r} is not allowed in an @if condition", expr.line
+            )
+        if isinstance(expr, Logical):
+            if expr.op == "and":
+                return int(bool(self.eval_static_value(expr.lhs))
+                           and bool(self.eval_static_value(expr.rhs)))
+            return int(bool(self.eval_static_value(expr.lhs))
+                       or bool(self.eval_static_value(expr.rhs)))
+        if isinstance(expr, Binary):
+            a, b = self.eval_static_value(expr.lhs), self.eval_static_value(expr.rhs)
+            if expr.op in COMPARISON_OPS:
+                return int({"==": a == b, "!=": a != b, "<": a < b, "<=": a <= b,
+                            ">": a > b, ">=": a >= b}[expr.op])
+            if expr.op in ("/", "%") and b == 0:
+                raise LangError("division by zero in an @if condition", expr.line)
+            ops = {"+": lambda: a + b, "-": lambda: a - b, "*": lambda: a * b,
+                   "/": lambda: int(a / b) if (a < 0) != (b < 0) else a // b,
+                   "%": lambda: a - b * (int(a / b) if (a < 0) != (b < 0) else a // b),
+                   "&": lambda: a & b, "|": lambda: a | b, "^": lambda: a ^ b,
+                   "<<": lambda: a << b, ">>": lambda: a >> b}
+            if expr.op in ops:
+                return ops[expr.op]()
+        raise LangError(
+            "an @if condition must be a constant expression over the target facts",
+            getattr(expr, "line", 0),
+        )
+
+    def flatten_conditionals(self):
+        """Resolve top-level @if blocks before anything is emitted: evaluate
+        each condition over the target facts and splice the live branch's
+        declarations into the program, in source order, dropping the dead
+        branch entirely (it is parsed but never type-checked). Branches may
+        nest, so newly spliced conditionals are resolved in turn."""
+        pending = list(self.program.conditionals)
+        while pending:
+            cond = pending.pop(0)
+            taken = cond.then if self.eval_static_cond(cond.cond) else cond.otherwise
+            for item in taken:
+                if isinstance(item, Conditional):
+                    pending.append(item)
+                elif isinstance(item, StructDecl):
+                    self.program.structs.append(item)
+                elif isinstance(item, GlobalVar):
+                    self.program.globals.append(item)
+                elif isinstance(item, Const):
+                    self.program.consts.append(item)
+                else:
+                    self.program.functions.append(item)
 
     def param_irs(self, params) -> list:
         """LLVM types for a function's parameters: a va_list lowers to the form
@@ -663,6 +744,11 @@ class CodeGen:
                 "imports must be resolved before code generation (compile via the driver)",
                 self.program.imports[0][1],
             )
+        # Resolve compile-time @if first: seed the target facts its conditions
+        # read, then splice each live branch's declarations into the program so
+        # the loops below see a flat, target-specific set of declarations.
+        self.seed_target_consts()
+        self.flatten_conditionals()
         for decl in self.program.structs:
             self.current_source = decl.source
             if decl.name in TYPES:
@@ -688,9 +774,8 @@ class CodeGen:
         # Constants are folded before globals, so a global's type (or a later
         # const) may use one as an array size. They are evaluated in source
         # order, so a const may reference any declared earlier (as in C). The
-        # built-in target facts are seeded first, so user consts may use them
+        # built-in target facts were seeded above, so user consts may use them
         # (and may not shadow them).
-        self.seed_target_consts()
         for const in self.program.consts:
             self.current_source = const.source
             if const.name in self.consts:
@@ -1053,6 +1138,14 @@ class CodeGen:
             if not self.builder.block.is_terminated:
                 self.builder.branch(cond_bb)
             self.builder.position_at_end(end_bb)
+        elif isinstance(stmt, Conditional):
+            # Compile-time @if: emit only the live branch's statements, inline
+            # in the current scope. The dead branch is never type-checked.
+            taken = stmt.then if self.eval_static_cond(stmt.cond) else stmt.otherwise
+            for inner in taken:
+                if self.builder.block.is_terminated:
+                    break
+                self.gen_statement(inner)
         elif isinstance(stmt, Block):
             self.gen_block(stmt.body)  # a bare { } -- its own scope
         elif isinstance(stmt, For):

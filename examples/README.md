@@ -11,6 +11,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [helloworld.mc](helloworld.mc) | the smallest program: `import "libc/stdio"`, `fn main`, `printf` |
 | [variables.mc](variables.mc) | `let`, type inference, annotations, every integer width, mutation, uninitialized `let x: T;` |
 | [constants.mc](constants.mc) | `const` compile-time constants, constant expressions, sizing arrays, string consts |
+| [conditional.mc](conditional.mc) | `@if` / `@else` compile-time selection over `TARGET_OS` / `TARGET_ARCH`, `@symbol` per platform |
 | [literals.mc](literals.mc) | hexadecimal integer literals, `uint8` character literals and escapes |
 | [arithmetic.mc](arithmetic.mc) | operators, precedence, comparisons, `!`, float math, `abs` |
 | [control_flow.mc](control_flow.mc) | `if` / `else if` / `else`, integer conditions, `and` / `or`, `while`, `until`, nested loops, `break` / `continue` |

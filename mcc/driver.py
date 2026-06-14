@@ -14,13 +14,24 @@ from llvmlite import ir
 from mcc.codegen import CodeGen
 from mcc.errors import LangError
 from mcc.lexer import tokenize
-from mcc.nodes import Program
+from mcc.nodes import Conditional, Program
 from mcc.parser import Parser
 
 
 # The project's lib/ directory, importable by bare name (the "standard
 # library") unless --naked is passed.
 STDLIB_DIR = Path(__file__).resolve().parent.parent / "lib"
+
+
+def _stamp_conditionals(conditionals, source: str) -> None:
+    """Stamp `source` onto every declaration inside a top-level @if, recursing
+    through nested conditionals in both branches."""
+    for cond in conditionals:
+        for item in (*cond.then, *cond.otherwise):
+            if isinstance(item, Conditional):
+                _stamp_conditionals([item], source)
+            else:
+                item.source = source
 
 
 def load_program(path: Path, search_paths: tuple[Path, ...] = (),
@@ -34,7 +45,7 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
     resolved = path.resolve()
     visited = _visited if _visited is not None else set()
     if resolved in visited:
-        return Program([], [], [], [], [], [])
+        return Program([], [], [], [], [], [], [])
     visited.add(resolved)
     try:
         program = Parser(tokenize(resolved.read_text())).parse_program()
@@ -50,7 +61,11 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
         var.source = str(resolved)
     for const in program.consts:
         const.source = str(resolved)
-    includes, structs, functions, globals_, consts = [], [], [], [], []
+    # A top-level @if's branches hold declarations too; stamp them so their
+    # source (for @private/linkage) survives flattening in codegen.
+    _stamp_conditionals(program.conditionals, str(resolved))
+    includes, structs, functions = [], [], []
+    globals_, consts, conditionals = [], [], []
     for import_path, line in program.imports:
         candidates = []
         for base in (resolved.parent, *search_paths):
@@ -69,13 +84,15 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
         functions += imported.functions
         globals_ += imported.globals
         consts += imported.consts
+        conditionals += imported.conditionals
     includes += program.includes
     structs += program.structs
     functions += program.functions
     globals_ += program.globals
     consts += program.consts
+    conditionals += program.conditionals
     return Program([], list(dict.fromkeys(includes)), structs, functions,
-                   globals_, consts)
+                   globals_, consts, conditionals)
 
 
 def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,

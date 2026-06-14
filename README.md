@@ -27,6 +27,7 @@ fn main() -> int32 {
   - [Generics](#generics)
   - [Variables](#variables)
   - [Constants](#constants)
+  - [Conditional compilation](#conditional-compilation)
   - [Control flow](#control-flow)
   - [Defer](#defer)
   - [Types](#types)
@@ -311,6 +312,52 @@ triple like `aarch64-unknown-none-elf` reports `TARGET_OS == OS_NONE` and
 stream symbols above — but `TARGET_ARCH` still lets a kernel select
 architecture-specific code (MMIO addresses, register layouts). These names are
 reserved: a user `const` may read them but not redefine them.
+
+### Conditional compilation
+
+`@if` selects code at compile time, the way C's `#if` does — but it is
+*structured*, not textual: each branch is a real brace-delimited block of the
+surrounding grammar, not an arbitrary span of tokens. Only the live branch is
+compiled; the dead branch is parsed (so it must be syntactically valid) but
+never type-checked or emitted.
+
+The condition is a constant expression over the [target facts](#target-facts) —
+`TARGET_OS`, `TARGET_ARCH`, and the `OS_*`/`ARCH_*` constants — with
+comparisons, `and`/`or`/`!`, and integer arithmetic. A nonzero result is true.
+
+It works at the top level, to select whole declarations — the intended use is
+binding a symbol that differs by platform (see [`@symbol`](#extern-declarations)):
+
+```c
+struct FILE {}
+
+@if (TARGET_OS == OS_DARWIN) {
+    @extern @symbol("__stdoutp") let stdout: struct FILE*;
+} @else @if (TARGET_OS == OS_LINUX) {
+    @extern @symbol("stdout")    let stdout: struct FILE*;
+} @else {
+    @extern let stdout: struct FILE*;
+}
+```
+
+and as a statement, to select code inside a function. As a statement it does
+*not* open a scope — the chosen statements are spliced in inline, so a binding
+they declare is visible afterwards:
+
+```c
+fn page_size() -> uint64 {
+    @if (TARGET_ARCH == ARCH_AARCH64) {
+        let size = 16384 as uint64;     // Apple silicon
+    } @else {
+        let size = 4096 as uint64;
+    }
+    return size;
+}
+```
+
+`@else @if` chains, and blocks may nest. `import` is not allowed inside an `@if`
+(imports must precede all declarations). Note `@if`/`@else` are compile-time and
+distinct from the runtime `if`/`else`.
 
 ### Control flow
 
