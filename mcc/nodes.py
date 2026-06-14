@@ -70,6 +70,7 @@ class Func:
     static: bool = False  # @static: file-scoped name; other files may reuse it
     extern: bool = False  # @extern: declaration only; defined elsewhere
     variadic: bool = False  # extern only: trailing `...`, C-style varargs
+    symbol: str | None = None  # @symbol("..."): the linker name, if not `name`
     source: str | None = None  # defining file; stamped by the driver
 
 @dataclass
@@ -81,6 +82,7 @@ class GlobalVar:  # a top-level variable: @extern (defined elsewhere) or @static
     volatile: bool = False  # @volatile: accesses cannot be optimized away
     static: bool = False  # @static: file-scoped storage, zero-initialized
     init: object | None = None  # @static initializer (a constant expression)
+    symbol: str | None = None  # @symbol("..."): the linker name, if not `name`
     source: str | None = None  # declaring/defining file; stamped by the driver
 
 @dataclass

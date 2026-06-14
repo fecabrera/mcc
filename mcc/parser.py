@@ -66,6 +66,7 @@ class Parser:
         while self.cur.kind != "EOF":
             private = static = extern = packed = volatile = False
             align = None
+            symbol = None
             while self.cur.kind == "ANNOT":
                 annot = self.advance()
                 if annot.text == "@private":
@@ -86,10 +87,21 @@ class Parser:
                         raise LangError(
                             f"@align needs a power of two, not {align}", annot.line
                         )
+                elif annot.text == "@symbol":
+                    self.expect("(")
+                    symbol = self.expect("STRING").text[1:-1]
+                    self.expect(")")
+                    if not symbol:
+                        raise LangError("@symbol needs a non-empty name", annot.line)
                 else:
                     raise LangError(f"unknown annotation {annot.text!r}", annot.line)
             if extern and static:
                 raise LangError("@extern and @static cannot be combined", self.cur.line)
+            if symbol is not None and not extern:
+                raise LangError(
+                    "@symbol only applies to @extern functions and variables",
+                    self.cur.line,
+                )
             if align is not None and self.cur.kind != "struct":
                 raise LangError("@align only applies to structs", self.cur.line)
             if packed and self.cur.kind != "struct":
@@ -112,7 +124,8 @@ class Parser:
                     init = self.parse_expr()
                 self.expect(";")
                 globals_.append(GlobalVar(name, type_name, line, private=private,
-                                          volatile=volatile, static=static, init=init))
+                                          volatile=volatile, static=static, init=init,
+                                          symbol=symbol))
             elif self.cur.kind == "const":
                 line = self.advance().line
                 if static or extern or volatile:
@@ -132,7 +145,7 @@ class Parser:
                         "@volatile only applies to structs and extern variables",
                         self.cur.line,
                     )
-                functions.append(self.parse_function(private, static, extern))
+                functions.append(self.parse_function(private, static, extern, symbol))
         return Program(imports, includes, structs, functions, globals_, consts)
 
     # Tokens that can begin an expression; used to settle the `as T * x`
@@ -243,7 +256,7 @@ class Parser:
                           static=static, align=align, packed=packed, volatile=volatile)
 
     def parse_function(self, private: bool = False, static: bool = False,
-                       extern: bool = False) -> Func:
+                       extern: bool = False, symbol: str | None = None) -> Func:
         line = self.expect("fn").line
         name = self.expect("IDENT").text
         type_params = self.parse_type_params()
@@ -278,7 +291,7 @@ class Parser:
         if extern:  # a declaration: signature only, no body
             self.expect(";")
             return Func(name, type_params, params, ret_type, [], line,
-                        private=private, extern=True, variadic=variadic)
+                        private=private, extern=True, variadic=variadic, symbol=symbol)
         return Func(name, type_params, params, ret_type, self.parse_block(), line,
                     private=private, static=static, variadic=variadic)
 

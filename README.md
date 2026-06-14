@@ -799,6 +799,18 @@ away; `@static` cannot be combined with `@extern`, since an external
 symbol's name is fixed. (The [`#include` headers](#includes) are exactly
 this: predeclared extern functions.)
 
+`@symbol("name")` binds an extern to a linker symbol that differs from its mcc
+name — for symbols that aren't valid identifiers, are versioned, or vary by
+platform:
+
+```c
+@extern @symbol("__stdoutp") let stdout: struct FILE*;   // macOS spelling
+@extern @symbol("strlen") fn length(s: uint8*) -> uint64;
+```
+
+Code still refers to the declaration by its mcc name (`stdout`, `length`); only
+the emitted symbol changes.
+
 ### Strings
 
 String literals compile to constant C strings and have type `uint8*`, so a

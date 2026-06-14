@@ -667,7 +667,9 @@ class CodeGen:
                 continue
             if var.name in self.funcs:
                 raise LangError(f"variable {var.name!r} already defined", var.line)
-            glob = ir.GlobalVariable(self.module, var_type.ir, name=var.name)
+            # @symbol overrides the linker name; mcc still refers to it by var.name.
+            glob = ir.GlobalVariable(self.module, var_type.ir,
+                                     name=var.symbol or var.name)
             self.globals[var.name] = (glob, var_type, var.volatile)
             self.global_privacy[var.name] = (var.private, var.source)
             self.used_symbols.add(var.name)
@@ -688,7 +690,9 @@ class CodeGen:
                     raise LangError(f"function {func.name!r} already defined", func.line)
                 fnty = ir.FunctionType(ret.ir, self.param_irs(params),
                                        var_arg=func.variadic)
-                self.funcs[func.name] = ir.Function(self.module, fnty, name=func.name)
+                # @symbol overrides the linker name; mcc still calls it by func.name.
+                self.funcs[func.name] = ir.Function(
+                    self.module, fnty, name=func.symbol or func.name)
                 self.signatures[func.name] = (ret, params, func.variadic)
                 self.func_privacy[func.name] = (func.private, func.source)
                 self.extern_decls.add(func.name)

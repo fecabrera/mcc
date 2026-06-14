@@ -180,3 +180,47 @@ def test_top_level_let_requires_extern():
 def test_extern_does_not_apply_to_structs():
     with pytest.raises(LangError, match="does not apply to structs"):
         parse("@extern\nstruct s { x: int32; }")
+
+
+# --- @symbol: bind to a differently-named linker symbol ---
+
+def test_symbol_aliases_an_extern_function():
+    # mcc calls it `puts2`, but it links against the C symbol `puts`.
+    ir_text = compile_ir(
+        '@extern @symbol("puts") fn puts2(s: uint8*) -> int32;\n'
+        'fn main() -> int32 { return puts2("hi"); }'
+    )
+    assert 'declare i32 @"puts"(' in ir_text
+    assert '@"puts2"' not in ir_text
+    assert 'call i32 @"puts"' in ir_text
+
+
+def test_symbol_aliases_an_extern_global():
+    # The motivating case: stdout's symbol differs by platform (__stdoutp here).
+    ir_text = compile_ir(
+        "struct FILE {}\n"
+        '@extern @symbol("__stdoutp") let stdout: struct FILE*;\n'
+        "fn main() -> int32 { if (stdout == null) { return 1; } return 0; }"
+    )
+    assert '@"__stdoutp" = external global' in ir_text
+    assert '@"stdout" = external global' not in ir_text
+    assert 'load %"FILE"*, %"FILE"** @"__stdoutp"' in ir_text
+
+
+def test_symbol_requires_extern():
+    with pytest.raises(LangError, match="@symbol only applies to @extern"):
+        parse('@symbol("x") fn f() {}')
+
+
+def test_symbol_must_be_non_empty():
+    with pytest.raises(LangError, match="@symbol needs a non-empty name"):
+        parse('@extern @symbol("") fn f();')
+
+
+def test_symbol_aliased_function_runs():
+    # End to end: link `strlen` under a different mcc name and call it.
+    source = """
+    @extern @symbol("strlen") fn length(s: uint8*) -> uint64;
+    fn main() -> int32 { return length("hello") as int32; }
+    """
+    assert run(source) == 5
