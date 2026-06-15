@@ -268,6 +268,7 @@ def build_native_module(module: ir.Module, opt_level: int, triple: str | None = 
         A tuple ``(native, target_machine)`` of the parsed, verified, optimized
         module and the target machine it was built for.
     """
+    cross = triple is not None
     if triple is None:
         llvm.initialize_native_target()
         llvm.initialize_native_asmprinter()
@@ -275,7 +276,16 @@ def build_native_module(module: ir.Module, opt_level: int, triple: str | None = 
     else:
         llvm.initialize_all_targets()
         llvm.initialize_all_asmprinters()
-    target_machine = llvm.Target.from_triple(triple).create_target_machine(opt=opt_level)
+    if cross:
+        # Cross targets are freestanding objects linked at a fixed address (e.g.
+        # a bare-metal kernel). The small code model + static relocations give
+        # plain ADRP+ADD/LDR addressing -- what aarch64-elf-gcc emits -- instead
+        # of the JIT default (large code model: absolute movz/movk for locals,
+        # GOT indirection for externs), which a no-loader image cannot satisfy.
+        target_machine = llvm.Target.from_triple(triple).create_target_machine(
+            opt=opt_level, reloc="static", codemodel="small")
+    else:
+        target_machine = llvm.Target.from_triple(triple).create_target_machine(opt=opt_level)
     module.triple = triple
     module.data_layout = str(target_machine.target_data)
     if general_regs_only:
