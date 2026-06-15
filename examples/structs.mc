@@ -1,5 +1,6 @@
 import "std";
 import "array";
+import "stack";
 
 // A plain struct. Fields are declared `name: type;`.
 struct point {
@@ -61,6 +62,20 @@ fn main() -> int32 {
         println("nums[6] = %d", value);
     array_destroy(nums);
     dealloc(nums);
+
+    // The growable LIFO stack<T> from lib/stack.mc.
+    let chars: struct stack<uint8>;
+    stack_init(&chars, 2);
+    stack_push(&chars, 'a');
+    stack_push(&chars, 'b');
+    stack_push(&chars, 'c');             // grows past the initial capacity of 2
+    println("stack: len %llu, top %c", stack_len(&chars), stack_peek(&chars));
+    print("popping: ");
+    until (stack_is_empty(&chars)) {
+        print("%c ", stack_pop(&chars)); // LIFO: c b a
+    }
+    println("");
+    stack_destroy(&chars);
 
     return 0;
 }

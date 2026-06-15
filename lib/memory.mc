@@ -1,4 +1,5 @@
 @extern fn malloc(size: uint64) -> uint8*;
+@extern fn realloc(ptr: uint8*, size: uint64) -> uint8*;
 @extern fn free(ptr: uint8*);
 @extern fn memcpy(dest: uint8*, source: uint8*, count: uint64) -> uint8*;
 @extern fn memset(dest: uint8*, ch: int32, count: uint64) -> uint8*;
@@ -12,6 +13,21 @@
  */
 fn alloc<T>(n: uint64) -> T* {
     return malloc(n * sizeof(T)) as T*;
+}
+
+/**
+ * Resizes a block previously returned by alloc<T> to hold n elements of type
+ * T, preserving its contents up to the smaller of the old and new sizes.
+ * Returns the (possibly relocated) pointer; the old pointer must not be used
+ * afterward. Passing null allocates a fresh block.
+ *
+ * @param p: pointer returned by alloc<T>, or null
+ * @param n: new number of elements
+ *
+ * @return pointer to the resized block
+ */
+fn resize<T>(p: T*, n: uint64) -> T* {
+    return realloc(p, n * sizeof(T)) as T*;
 }
 
 /**

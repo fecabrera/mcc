@@ -103,12 +103,7 @@ fn array_grow<T>(self: struct array<T>*) {
     let new_capacity: uint64 = self->capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;
-    let new_data = alloc<T>(new_capacity);
-
-    copy_bytes(new_data, self->data, self->length);
-    dealloc(self->data);
-
-    self->data = new_data;
+    self->data = resize(self->data, new_capacity);
     self->capacity = new_capacity;
 }
 

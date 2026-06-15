@@ -14,7 +14,7 @@ in mcc.
 
 | Module | Import | Provides |
 |--------|--------|----------|
-| [memory.mc](memory.mc) | `import "memory";` | Typed heap allocation over `malloc`/`free`: `alloc<T>`, `dealloc<T>`, `copy_bytes<T>`, `set_bytes<T>`, `copy_items<T>`, `set_items<T>` (and the raw `malloc`/`free`/`memcpy`/`memset`). |
+| [memory.mc](memory.mc) | `import "memory";` | Typed heap allocation over `malloc`/`realloc`/`free`: `alloc<T>`, `resize<T>`, `dealloc<T>`, `copy_bytes<T>`, `set_bytes<T>`, `copy_items<T>`, `set_items<T>` (and the raw `malloc`/`realloc`/`free`/`memcpy`/`memset`). |
 | [std.mc](std.mc) | `import "std";` | Variadic `print` and `println` — printf-style output, forwarding through a `va_list`. |
 
 ## Data structures
@@ -22,6 +22,7 @@ in mcc.
 | Module | Import | Provides |
 |--------|--------|----------|
 | [array.mc](array.mc) | `import "array";` | Growable generic `array<T>`: `array_init`/`array_destroy`/`array_reset`, `array_get`/`array_set`, `array_append` (doubles when full), and `iter`/`next` iteration. |
+| [stack.mc](stack.mc) | `import "stack";` | Growable generic LIFO `stack<T>`: `stack_init`/`stack_destroy`, `stack_push`/`stack_pop`/`stack_peek`, `stack_len`/`stack_is_empty` (doubles when full). |
 | [set.mc](set.mc) | `import "set";` | Open-addressing hash map `set<K, V>` keyed by value/identity: `set_init`/`set_destroy`, `set_set`/`set_get`/`set_remove`, and `iter`/`next` iteration (yielding `pair<K, V>`). |
 | [dict.mc](dict.mc) | `import "dict";` | String-keyed `dict<V>` that owns content-hashed copies of its keys: `dict_init`/`dict_destroy`, `dict_set`/`dict_get`/`dict_remove`, and `iter`/`next` iteration (yielding `pair<uint8*, V>`). |
 | [iteration/pair.mc](iteration/pair.mc) | `import "iteration/pair";` | `pair<K, V>` — the key/value element type the keyed containers yield from `next`. |
