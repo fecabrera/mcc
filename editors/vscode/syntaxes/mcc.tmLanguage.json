@@ -42,7 +42,8 @@
       "begin": "\"",
       "end": "\"",
       "patterns": [
-        { "include": "#escape" }
+        { "include": "#escape" },
+        { "include": "#format" }
       ]
     },
     "characters": {
@@ -56,6 +57,10 @@
     "escape": {
       "name": "constant.character.escape.mcc",
       "match": "\\\\[abefnrtv0'\"?\\\\]"
+    },
+    "format": {
+      "name": "constant.other.placeholder.mcc",
+      "match": "%[-+ #0]*[0-9]*(?:\\.[0-9]+)?(?:hh|h|ll|l|L|z|j|t)?[diouxXeEfFgGaAcspn%]"
     },
     "numbers": {
       "patterns": [
