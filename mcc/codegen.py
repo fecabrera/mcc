@@ -621,6 +621,23 @@ class CodeGen:
         if self.root_source is not None and source != self.root_source:
             fn.linkage = "linkonce_odr"
 
+    def shared_linkage(self, source: str | None) -> str:
+        """The linkage for a file-scoped definition (a @static global).
+
+        In a single-module build (the JIT/tests, no ``root_source``) there is
+        nothing to link against, so it stays ``internal`` -- one private copy.
+
+        Under separate compilation the global is copied into the defining
+        object *and* every object that imports the module, so it must be
+        ``linkonce_odr`` in all of them: the mangled ``name@file`` symbol is
+        identical across objects, so the linker merges the copies into a single
+        instance. (``internal`` in any one object would leave that object with
+        its own private storage, splitting the variable's state -- the bug this
+        avoids.)"""
+        if self.root_source is None:
+            return "internal"
+        return "linkonce_odr"
+
     def static_base(self, name: str, source: str | None) -> str:
         """Mint a unique LLVM symbol for a file-scoped (``@static``) name.
 
@@ -1174,7 +1191,7 @@ class CodeGen:
                     raise LangError(f"variable {var.name!r} already defined", var.line)
                 symbol = self.static_base(var.name, var.source)
                 glob = ir.GlobalVariable(self.module, var_type.ir, name=symbol)
-                glob.linkage = "internal"
+                glob.linkage = self.shared_linkage(var.source)
                 glob.initializer = (self.const_initializer(var.init, var_type, var.line)
                                     if var.init is not None
                                     else ir.Constant(var_type.ir, None))

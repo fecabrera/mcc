@@ -59,3 +59,29 @@ def test_root_definitions_stay_external(tmp_path):
     )
     # Nothing here is imported, so every definition is this object's own.
     assert "linkonce_odr" not in ir_text
+
+
+def global_line(ir_text, symbol):
+    (line,) = [ln for ln in ir_text.splitlines()
+               if ln.startswith(f'@"{symbol}"') and "global" in ln]
+    return line
+
+
+def test_imported_static_global_is_linkonce(tmp_path):
+    # Regression: a @static global is copied into every object that imports its
+    # module (its functions are). It must get linkonce_odr so the identically
+    # mangled copies merge into a single instance -- `internal` would give each
+    # object its own private storage, silently splitting the variable's state.
+    (tmp_path / "lib.mc").write_text(
+        "@static let counter: int32;\n"
+        "fn bump() { counter = counter + 1; }\n"
+        "fn count() -> int32 { return counter; }\n"
+    )
+    ir_text = compile_file_ir(
+        tmp_path, "main.mc",
+        'import "lib";\n'
+        "fn main() -> int32 { bump(); return count(); }\n",
+        search_paths=(tmp_path,),
+    )
+    line = global_line(ir_text, "counter@lib")
+    assert "linkonce_odr" in line and "internal" not in line
