@@ -25,7 +25,8 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [io.mc](io.mc) | printf format specifiers, `puts`, `putchar`, string escapes |
 | [unsigned.mc](unsigned.mc) | unsigned division/comparison semantics, zero-extension |
 | [extern.mc](extern.mc) | `@extern` functions (including variadic `...`), interfacing with libc |
-| [structs.mc](structs.mc) | structs, generics structs, `->` / `.`, `null`, linked list, the array and stack libs |
+| [structs.mc](structs.mc) | structs, generic structs, `->` / `.`, `null`, a hand-built linked list |
+| [data_structures.mc](data_structures.mc) | the growable lib containers: `array<T>`, `stack<T>` (LIFO), `queue<T>` (FIFO ring buffer) |
 | [pointers.mc](pointers.mc) | `import`, heap allocation, `&` `*` `[]`, `sizeof`, `as` casts |
 | [generics.mc](generics.mc) | type inference, generic recursion, multiple type parameters |
 | [fizzbuzz.mc](fizzbuzz.mc) | the classic, with `%` and an `else if` chain |

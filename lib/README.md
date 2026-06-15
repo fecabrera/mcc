@@ -23,6 +23,7 @@ in mcc.
 |--------|--------|----------|
 | [array.mc](array.mc) | `import "array";` | Growable generic `array<T>`: `array_init`/`array_destroy`/`array_reset`, `array_get`/`array_set`, `array_append` (doubles when full), and `iter`/`next` iteration. |
 | [stack.mc](stack.mc) | `import "stack";` | Growable generic LIFO `stack<T>`: `stack_init`/`stack_destroy`, `stack_push`/`stack_pop`/`stack_peek`, `stack_len`/`stack_is_empty` (doubles when full). |
+| [queue.mc](queue.mc) | `import "queue";` | Growable generic FIFO `queue<T>`, a ring buffer: `queue_init`/`queue_destroy`, `queue_push`/`queue_pop`/`queue_peek`/`queue_at`, `queue_len`/`queue_is_empty` (doubles when full). |
 | [set.mc](set.mc) | `import "set";` | Open-addressing hash map `set<K, V>` keyed by value/identity: `set_init`/`set_destroy`, `set_set`/`set_get`/`set_remove`, and `iter`/`next` iteration (yielding `pair<K, V>`). |
 | [dict.mc](dict.mc) | `import "dict";` | String-keyed `dict<V>` that owns content-hashed copies of its keys: `dict_init`/`dict_destroy`, `dict_set`/`dict_get`/`dict_remove`, and `iter`/`next` iteration (yielding `pair<uint8*, V>`). |
 | [iteration/pair.mc](iteration/pair.mc) | `import "iteration/pair";` | `pair<K, V>` — the key/value element type the keyed containers yield from `next`. |

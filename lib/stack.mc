@@ -92,6 +92,12 @@ fn stack_is_empty<T>(self: struct stack<T>*) -> bool {
     return self->top == 0;
 }
 
+/**
+ * Doubles the backing buffer, preserving the elements. Internal; called by
+ * stack_push when the stack is full.
+ *
+ * @param self: stack whose buffer to grow
+ */
 @private
 fn stack_grow<T>(self: struct stack<T>*) {
     let new_capacity: uint64 = self->capacity * 2;

@@ -148,7 +148,7 @@ fn main() -> int32 { println("answer = %d", 42); return 0; }
 ```
 
 Alongside `std` are `memory` (typed `alloc`/`dealloc`), the
-`array`/`stack`/`set`/`dict` containers, and the `hashing/*` functions. The [`libc/`](lib/libc/) modules are
+`array`/`stack`/`queue`/`set`/`dict` containers, and the `hashing/*` functions. The [`libc/`](lib/libc/) modules are
 instead `@extern` bindings for the C library itself — `printf`, `malloc`, the
 `str*`/`mem*` functions, `FILE*` streams, and so on — which you reach for when
 you want C directly; see [Reaching libc](#reaching-libc). The
