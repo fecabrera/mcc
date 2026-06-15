@@ -1,0 +1,40 @@
+{
+  "name": "mcc-language",
+  "displayName": "mcc language",
+  "description": "Syntax highlighting for the mcc language (.mc files).",
+  "version": "0.1.0",
+  "publisher": "fecabrera",
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fecabrera/mcc"
+  },
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "mcc",
+        "aliases": [
+          "mcc",
+          "MC"
+        ],
+        "extensions": [
+          ".mc"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "mcc",
+        "scopeName": "source.mcc",
+        "path": "./syntaxes/mcc.tmLanguage.json"
+      }
+    ]
+  }
+}

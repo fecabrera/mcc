@@ -1,0 +1,118 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "mcc",
+  "scopeName": "source.mcc",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#annotations" },
+    { "include": "#strings" },
+    { "include": "#characters" },
+    { "include": "#numbers" },
+    { "include": "#function-definition" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#function-call" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.mcc",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.mcc",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "storage.modifier.annotation.mcc",
+          "match": "@[A-Za-z_]\\w*"
+        }
+      ]
+    },
+    "strings": {
+      "name": "string.quoted.double.mcc",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "include": "#escape" }
+      ]
+    },
+    "characters": {
+      "name": "string.quoted.single.mcc",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        { "include": "#escape" }
+      ]
+    },
+    "escape": {
+      "name": "constant.character.escape.mcc",
+      "match": "\\\\[abefnrtv0'\"?\\\\]"
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.mcc",
+          "match": "\\b0[xX][0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.mcc",
+          "match": "\\b[0-9]+\\.[0-9]+([eE][+-]?[0-9]+)?\\b|\\b[0-9]+[eE][+-]?[0-9]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.mcc",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "function-definition": {
+      "match": "\\b(fn)\\s+([A-Za-z_]\\w*)",
+      "captures": {
+        "1": { "name": "storage.type.function.mcc" },
+        "2": { "name": "entity.name.function.mcc" }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.mcc",
+          "match": "\\b(if|else|while|until|for|in|break|continue|return|defer|case|when|import)\\b"
+        },
+        {
+          "name": "keyword.operator.word.mcc",
+          "match": "\\b(and|or|as|sizeof|len)\\b"
+        },
+        {
+          "name": "storage.type.mcc",
+          "match": "\\b(fn|let|const|struct)\\b"
+        }
+      ]
+    },
+    "types": {
+      "name": "support.type.primitive.mcc",
+      "match": "\\b(int8|int16|int32|int64|uint8|uint16|uint32|uint64|bool|float64|void|va_list)\\b"
+    },
+    "constants": {
+      "name": "constant.language.mcc",
+      "match": "\\b(true|false|null)\\b"
+    },
+    "function-call": {
+      "match": "\\b([A-Za-z_]\\w*)\\s*(?=\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.call.mcc" }
+      }
+    },
+    "operators": {
+      "name": "keyword.operator.mcc",
+      "match": "->|\\.\\.\\.|==|!=|<=|>=|<<|>>|[-+*/%!&^|<>=]"
+    }
+  }
+}

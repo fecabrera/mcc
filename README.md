@@ -58,6 +58,7 @@ fn main() -> int32 {
   - [Strings](#strings)
   - [Reaching libc](#reaching-libc)
   - [Comments](#comments)
+- [Editor support](#editor-support)
 - [Tests](#tests)
 - [How it works](#how-it-works)
 
@@ -1016,6 +1017,19 @@ rules (small integers are widened to `int32`).
 
 See the [standard library index](lib/README.md) for the modules under `lib/`,
 all written in this style.
+
+## Editor support
+
+[editors/vscode/](editors/vscode/) is a VS Code extension that syntax-highlights
+`.mc` files — keywords, the `intN`/`uintN`/`float64` types, `@`-annotations, and
+string/char/number literals. Symlink it into your extensions folder and reload:
+
+```bash
+ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/mcc-language
+```
+
+See its [README](editors/vscode/README.md) for packaging and other install
+options.
 
 ## Tests
 
