@@ -1020,26 +1020,16 @@ class CodeGen:
     def resolve_base(self, decl: StructDecl) -> "LangType | None":
         """Resolve a struct's ``extends`` base to its struct type, or ``None``.
 
-        v1 limits ``extends`` to a single, non-generic base named as a plain
-        struct (the pointer/array/generic forms are rejected by the parser).
+        Called with the deriving struct's type bindings and source already in
+        scope, so a generic base (``extends pair<K, V>``) resolves its
+        arguments against the instance being built.
 
         Raises:
-            LangError: When the deriving struct is generic, or the base is not a
-                struct.
+            LangError: When the base is not a struct.
         """
         if decl.base is None:
             return None
-        if decl.type_params:
-            raise LangError(
-                "a generic struct cannot use 'extends' yet", decl.line,
-                source=decl.source,
-            )
-        outer_source = self.current_source
-        self.current_source = decl.source  # the base may be private/static
-        try:
-            base_type = self.lang_type(decl.base, decl.line)
-        finally:
-            self.current_source = outer_source
+        base_type = self.lang_type(decl.base, decl.line)
         if not is_struct(base_type):
             raise LangError(
                 f"{base_type} is not a struct; cannot extend it", decl.line,
@@ -1076,43 +1066,43 @@ class CodeGen:
                 f"struct {decl.name!r} cannot extend itself (cyclic 'extends')",
                 decl.line, source=decl.source,
             )
-        # Resolve an `extends` base up front: its fields are spliced in front of
-        # this struct's own (so a pointer to this struct is layout-compatible
-        # with a pointer to the base), and its @packed/@align/@volatile are
-        # inherited, so both must be known before the body is laid out.
-        self.resolving_bases.add(mangled)
-        try:
-            base_type = self.resolve_base(decl)
-        finally:
-            self.resolving_bases.discard(mangled)
-        align, packed, volatile = decl.align, decl.packed, decl.volatile
-        if base_type is not None:
-            volatile = volatile or base_type.volatile
-            aligns = [a for a in (decl.align, base_type.align) if a is not None]
-            align = max(aligns) if aligns else None
-            if base_type.packed:
-                packed = True  # packing changes offsets, so it must match the base
-            elif decl.packed:
-                raise LangError(
-                    "an extending struct cannot be @packed unless its base is",
-                    decl.line, source=decl.source,
-                )
-        identified = self.module.context.get_identified_type(mangled)
-        struct_type = LangType(mangled, identified, signed=False,
-                               template=decl.name, args=args, align=align,
-                               packed=packed, volatile=volatile)
-        # Register before resolving fields so self-referential structs
-        # (e.g. node<T> holding a node<T>*) can refer to themselves.
-        self.struct_types[mangled] = struct_type
         outer = self.type_bindings
         outer_source = self.current_source
         self.type_bindings = dict(zip(decl.type_params, args))
-        self.current_source = decl.source  # fields may name private structs
+        self.current_source = decl.source  # fields/base may name private structs
+        # Resolve an `extends` base up front (with the bindings above in scope,
+        # so a generic base like pair<K, V> binds against this instance): its
+        # fields are spliced in front of this struct's own (so a pointer to this
+        # struct is layout-compatible with a pointer to the base), and its
+        # @packed/@align/@volatile are inherited, so both must be known before
+        # the body is laid out.
+        self.resolving_bases.add(mangled)
         try:
+            base_type = self.resolve_base(decl)
+            align, packed, volatile = decl.align, decl.packed, decl.volatile
+            if base_type is not None:
+                volatile = volatile or base_type.volatile
+                aligns = [a for a in (decl.align, base_type.align) if a is not None]
+                align = max(aligns) if aligns else None
+                if base_type.packed:
+                    packed = True  # packing changes offsets, so it must match
+                elif decl.packed:
+                    raise LangError(
+                        "an extending struct cannot be @packed unless its base is",
+                        decl.line, source=decl.source,
+                    )
+            identified = self.module.context.get_identified_type(mangled)
+            struct_type = LangType(mangled, identified, signed=False,
+                                   template=decl.name, args=args, align=align,
+                                   packed=packed, volatile=volatile)
+            # Register before resolving fields so self-referential structs
+            # (e.g. node<T> holding a node<T>*) can refer to themselves.
+            self.struct_types[mangled] = struct_type
             fields = tuple(
                 (fname, self.lang_type(ftype, decl.line)) for fname, ftype in decl.fields
             )
         finally:
+            self.resolving_bases.discard(mangled)
             self.type_bindings = outer
             self.current_source = outer_source
         if base_type is not None:

@@ -36,7 +36,7 @@ def test_specialization_form_parses():
 
 
 def test_extends_pointer_base_rejected():
-    with pytest.raises(LangError, match="plain struct name"):
+    with pytest.raises(LangError, match="can only extend a struct name"):
         parse("struct a { x: int32; }\nstruct b extends a* { y: int32; }\n")
 
 
@@ -166,10 +166,46 @@ def test_extends_non_struct_rejected():
         run(use_b("struct b extends int32 { y: int32; }\n"))
 
 
-def test_generic_struct_extends_rejected():
-    with pytest.raises(LangError, match="generic struct cannot use"):
+# --------------------------------------------------------------------- generic
+
+PAIR = "struct pair<K, V> { key: K; value: V; }\n"
+ENTRY = PAIR + "struct entry<K, V> extends pair<K, V> { state: uint8; }\n"
+
+
+def test_generic_extends_inherited_fields():
+    assert run(
+        ENTRY +
+        "fn main() -> int32 {\n"
+        "    let e: struct entry<int32, int64>;\n"
+        "    e.key = 7; e.value = 100; e.state = 1;\n"
+        "    return e.key + (e.value as int32) + (e.state as int32);\n"
+        "}\n"
+    ) == 108
+
+
+def test_generic_extends_size():
+    # pair<int32, int64>: key@0, value@8 -> 16; entry adds state@16 -> 24 (align 8).
+    assert run(
+        ENTRY + "fn main() -> int32 { return sizeof(struct entry<int32, int64>) as int32; }"
+    ) == 24
+
+
+def test_generic_upcast_to_generic_base():
+    assert run(
+        ENTRY +
+        "fn main() -> int32 {\n"
+        "    let e: struct entry<int32, int32>;\n"
+        "    e.key = 11; e.value = 22; e.state = 0;\n"
+        "    let base = &e as struct pair<int32, int32>*;\n"
+        "    return base->key + base->value;\n"
+        "}\n"
+    ) == 33
+
+
+def test_generic_base_field_collision_rejected():
+    with pytest.raises(LangError, match="already defined in base"):
         run(
-            "struct a { x: int32; }\n"
-            "struct b<T> extends a { y: T; }\n"
-            "fn main() -> int32 { return sizeof(struct b<int32>) as int32; }\n"
+            "struct pair<K, V> { key: K; value: V; }\n"
+            "struct bad<K, V> extends pair<K, V> { key: K; }\n"
+            "fn main() -> int32 { return sizeof(struct bad<int32, int32>) as int32; }\n"
         )

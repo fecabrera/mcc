@@ -476,18 +476,19 @@ class Parser:
                           packed=packed, volatile=volatile)
 
     def parse_base_ref(self) -> TypeRef:
-        """Parse the base in ``extends Base``: a plain struct name.
+        """Parse the base in ``extends Base``: a struct name, optionally generic.
 
-        The ``struct`` keyword is optional, as elsewhere. A v1 base may not be
-        a pointer, an array, or a generic instance.
+        The ``struct`` keyword is optional, as elsewhere, and generic arguments
+        are allowed (``extends pair<K, V>``). The base may not be a pointer,
+        array, or function type.
 
         Raises:
-            LangError: When the base is a pointer, array, or generic type.
+            LangError: When the base is a pointer, array, or function type.
         """
         ref = self.parse_type_ref()
-        if ref.stars or ref.dims or ref.args or ref.params is not None:
+        if ref.stars or ref.dims or ref.params is not None:
             raise LangError(
-                "a struct can only extend a plain struct name", self.cur.line
+                "a struct can only extend a struct name", self.cur.line
             )
         return ref
 

@@ -884,8 +884,18 @@ The base's `@packed`, `@align`, and `@volatile` are **inherited**: an
 extending struct is volatile if its base is, takes at least the base's
 alignment, and is packed iff its base is (packing changes field offsets, so
 it can't differ from the base — `@packed` on a struct whose base is not
-packed is an error). v1 allows a single, non-generic base named as a plain
-struct.
+packed is an error).
+
+Generics work on both sides — a generic struct can extend a generic base,
+which is monomorphized together with it:
+
+```c
+struct pair<K, V>  { key: K; value: V; }
+struct entry<K, V> extends pair<K, V> { state: uint8; }   // key, value, state
+```
+
+A struct extends a single base, named as a struct (optionally generic); a
+pointer, array, or function type is not a valid base.
 
 `sizeof` understands struct layout (including padding), so
 `alloc<struct node<int32>>(n)` allocates correctly. Struct values can be
