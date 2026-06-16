@@ -195,14 +195,14 @@ struct set_iter<K, V> {
 
 /**
  * Begins an iteration over a set's key/value pairs, in unspecified
- * (hash-table slot) order. Part of the `iter`/`next` protocol; pair it with
- * `next`.
+ * (hash-table slot) order. Part of the `set_it`/`set_next` protocol (used by
+ * `for ... in`); pair it with `set_next`.
  *
  * @param self: set to iterate
  *
  * @return an iterator positioned before the first occupied entry
  */
-fn iter<K, V>(self: struct set<K, V>*) -> struct set_iter<K, V> {
+fn set_it<K, V>(self: struct set<K, V>*) -> struct set_iter<K, V> {
     let it: struct set_iter<K, V>;
     it.obj = self;
     it.idx = 0;
@@ -218,7 +218,7 @@ fn iter<K, V>(self: struct set<K, V>*) -> struct set_iter<K, V> {
  *
  * @return true if a pair was produced, false once iteration is complete
  */
-fn next<K, V>(it: struct set_iter<K, V>*, out: struct pair<K, V>*) -> bool {
+fn set_next<K, V>(it: struct set_iter<K, V>*, out: struct pair<K, V>*) -> bool {
     while (it->idx < it->obj->capacity) {
         let entry = it->obj->entries[it->idx];
         defer it->idx = it->idx + 1;

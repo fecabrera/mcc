@@ -16,10 +16,29 @@ def test_iteration_visits_all_entries():
             dict_set(d, "a", 10);
             dict_set(d, "b", 20);
             dict_set(d, "c", 30);
-            let it = iter<uint64>(d);
+            let it = dict_it<uint64>(d);
             let p: struct pair<uint8*, uint64>;
             let total: uint64 = 0;
-            while (next<uint64>(&it, &p)) { total = total + p.value; }
+            while (dict_next<uint64>(&it, &p)) { total = total + p.value; }
+            return total as int32;
+        }
+        """
+    ) == 60
+
+
+def test_for_in_iterates_dict():
+    # `for x in &d` dispatches to dict_it/dict_next by name.
+    assert run(
+        """
+        import "dict";
+        fn main() -> int32 {
+            let d = alloc<struct dict<uint64>>(1);
+            dict_init(d, 8);
+            dict_set(d, "a", 10);
+            dict_set(d, "b", 20);
+            dict_set(d, "c", 30);
+            let total: uint64 = 0;
+            for x in d { total = total + x.value; }
             return total as int32;
         }
         """

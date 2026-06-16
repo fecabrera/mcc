@@ -30,12 +30,31 @@ def test_iteration_visits_all_entries():
             set_set(s, 10, 100);
             set_set(s, 20, 200);
             set_set(s, 30, 300);
-            let it = iter<uint64, uint64>(s);
+            let it = set_it<uint64, uint64>(s);
             let p: struct pair<uint64, uint64>;
             let total: uint64 = 0;
-            while (next<uint64, uint64>(&it, &p)) {
+            while (set_next<uint64, uint64>(&it, &p)) {
                 total = total + p.key + p.value;
             }
+            return total as int32;
+        }
+        """
+    ) == 660
+
+
+def test_for_in_iterates_set():
+    # `for x in s` dispatches to set_it/set_next by name.
+    assert run(
+        """
+        import "set";
+        fn main() -> int32 {
+            let s = alloc<struct set<uint64, uint64>>(1);
+            set_init(s, 8);
+            set_set(s, 10, 100);
+            set_set(s, 20, 200);
+            set_set(s, 30, 300);
+            let total: uint64 = 0;
+            for x in s { total = total + x.key + x.value; }
             return total as int32;
         }
         """

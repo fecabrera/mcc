@@ -278,9 +278,9 @@ def test_array_iterator(tmp_path, capfd):
 
             let sum: int32 = 0;
             {
-                let it = iter(&xs);             // iter/next protocol
+                let it = array_it(&xs);        // array_it/array_next protocol
                 let x: int32;
-                while (next(&it, &x)) {
+                while (array_next(&it, &x)) {
                     sum = sum + x;
                 }
             }

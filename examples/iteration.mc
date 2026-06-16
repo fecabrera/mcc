@@ -3,10 +3,10 @@ import "array";
 import "set";
 import "dict";
 
-// `for x in obj` walks anything that provides the iter/next protocol -- here
-// the growable array from lib/array.mc. The element type is inferred from
-// `next`, the loop variable `x` is scoped to the loop, and break/continue
-// work as in any loop.
+// `for x in obj` walks anything that provides the `<struct>_it`/`<struct>_next`
+// protocol -- here the growable array from lib/array.mc (array_it/array_next).
+// The element type is inferred from `<struct>_next`, the loop variable `x` is
+// scoped to the loop, and break/continue work as in any loop.
 
 fn main() -> int32 {
     let nums: struct array<int32>;

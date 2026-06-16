@@ -1775,35 +1775,61 @@ class CodeGen:
             raise LangError(f"cannot compile statement {stmt!r}", stmt.line)
 
     def gen_for(self, stmt: For):
-        """Lower ``for x in obj { body }`` to the iter/next protocol.
+        """Lower ``for x in obj { body }`` to the per-struct it/next protocol.
 
-        Emits roughly::
+        With ``obj`` of struct type ``S`` (after stripping pointers), emits
+        roughly::
 
-            { let _it = iter(obj); let x: T;
-              while (next(&_it, &x)) { body } }
+            { let _it = S_it(obj); let x: T;
+              while (S_next(&_it, &x)) { body } }
 
-        The iterator is a compiler-held temporary -- never a named local -- so it
-        cannot collide with user code, and the element variable lives in a fresh
-        block scope, gone once the loop ends. The element type ``T`` is read from
-        the resolved ``next`` overload's out-parameter.
+        Dispatch is by name on the iterable's struct, so each container provides
+        ``S_it``/``S_next`` (which may be generic). The iterator is a
+        compiler-held temporary -- never a named local -- so it cannot collide
+        with user code, and the element variable lives in a fresh block scope,
+        gone once the loop ends. The element type ``T`` is read from the resolved
+        ``S_next``'s out-parameter.
 
         Args:
             stmt: The ``For`` node to lower.
 
         Raises:
-            LangError: When no ``iter`` (or matching ``next``) is in scope.
+            LangError: When the iterable is not a struct, or its ``S_it`` /
+                matching ``S_next`` is not in scope.
         """
-        # iter(obj) -- resolves and instantiates iter for obj's type.
-        if not self.callable_exists("iter"):
+        # Dispatch on the iterable's struct: `for x in obj` calls
+        # `<Struct>_it(obj)` then `<Struct>_next(&it, &x)`. Evaluate the iterable
+        # once (it may be effectful) and read its struct name off the type.
+        iterable = self.gen_expr(stmt.iterable)
+        struct_t = iterable.type
+        while is_pointer(struct_t):
+            struct_t = struct_t.pointee
+        if not is_struct(struct_t):
             raise LangError(
-                "'for ... in' needs an 'iter' function for the iterable; "
+                "'for ... in' needs a struct iterable with '<struct>_it' and "
+                f"'<struct>_next' functions, not {iterable.type}", stmt.line
+            )
+        base = struct_t.template or struct_t.name
+        it_name, next_name = f"{base}_it", f"{base}_next"
+        if not self.callable_exists(it_name):
+            raise LangError(
+                f"'for ... in' needs a {it_name!r} function for {struct_t}; "
                 "none is in scope", stmt.line
             )
-        iterator = self.gen_call(Call("iter", [], [stmt.iterable], stmt.line))
+        # Pass the already-evaluated iterable through a hidden local so the
+        # `_it` call (routed through normal overload/generic resolution) does not
+        # re-evaluate the expression. The name cannot be a real identifier.
+        src_slot = self.builder.alloca(iterable.type.ir, name="for.src")
+        self.builder.store(iterable.value, src_slot)
+        hidden = "0for.iterable"
+        self.bind_local(hidden, src_slot, iterable.type)
+        iterator = self.gen_call(Call(it_name, [], [Var(hidden, stmt.line)], stmt.line))
+        del self.locals[hidden]
+        self.scope_names.discard(hidden)
         it_slot = self.builder.alloca(iterator.type.ir, name="for.iter")
         self.builder.store(iterator.value, it_slot)
 
-        next_fn, element = self.resolve_protocol_next(iterator.type, stmt.line)
+        next_fn, element = self.resolve_protocol_next(iterator.type, next_name, stmt.line)
 
         # A fresh scope for the element variable and the loop's defers.
         outer_locals, outer_names = dict(self.locals), self.scope_names
@@ -1849,14 +1875,17 @@ class CodeGen:
         return (name in self.templates or name in self.funcs
                 or key in self.static_templates or key in self.static_funcs)
 
-    def resolve_protocol_next(self, iter_type: LangType, line: int):
-        """Resolve the ``next`` overload that consumes an iterator type.
+    def resolve_protocol_next(self, iter_type: LangType, next_name: str, line: int):
+        """Resolve the ``<struct>_next`` that consumes an iterator type.
 
         ``next`` is dispatched on the iterator alone, so the element type can be
-        learned before the loop variable is declared.
+        learned before the loop variable is declared. A non-generic
+        ``<struct>_next`` is matched by its resolved signature; generic ones are
+        matched by unifying the iterator-pointer parameter.
 
         Args:
-            iter_type: The iterator type returned by ``iter``.
+            iter_type: The iterator type returned by ``<struct>_it``.
+            next_name: The expected function name (``<struct>_next``).
             line: Source line for diagnostics.
 
         Returns:
@@ -1868,8 +1897,32 @@ class CodeGen:
                 or the chosen ``next`` has the wrong signature.
         """
         want = pointer_to(iter_type)
-        candidates = list(self.templates.get("next", []))
-        static = self.static_templates.get((self.current_source, "next"))
+        key = (self.current_source, next_name)
+        # A concrete (non-generic) <struct>_next: match its resolved signature.
+        if next_name not in self.templates and key not in self.static_templates:
+            symbol = self.static_funcs.get(key)
+            if symbol is None and next_name in self.funcs:
+                symbol = next_name
+            if symbol is None:
+                raise LangError(
+                    f"'for ... in' needs a {next_name!r} for {iter_type}; "
+                    "none is in scope", line
+                )
+            ret, params, _ = self.signatures[symbol]
+            if len(params) != 2 or params[0] != want:
+                raise LangError(
+                    f"{next_name!r} does not iterate a {iter_type} (for ... in)",
+                    line,
+                )
+            if ret is not BOOL:
+                raise LangError(f"{next_name!r} must return bool", line)
+            if not is_pointer(params[1]):
+                raise LangError(
+                    f"{next_name!r} second parameter must be an out-pointer", line
+                )
+            return self.funcs[symbol], params[1].pointee
+        candidates = list(self.templates.get(next_name, []))
+        static = self.static_templates.get(key)
         if static is not None:
             candidates.append(static)
         viable = []
@@ -1890,17 +1943,17 @@ class CodeGen:
             viable.append((self.specificity(func), func, bindings))
         if not viable:
             raise LangError(
-                f"no 'next' overload iterates a {iter_type} (for ... in)", line
+                f"no {next_name!r} overload iterates a {iter_type} (for ... in)", line
             )
         viable.sort(key=lambda entry: entry[0], reverse=True)
         if len(viable) > 1 and viable[0][0] == viable[1][0]:
-            raise LangError(f"ambiguous 'next' for {iter_type}", line)
+            raise LangError(f"ambiguous {next_name!r} for {iter_type}", line)
         _, func, bindings = viable[0]
         fn, ret, params = self.instantiate(func, bindings)
         if ret is not BOOL:
-            raise LangError("'next' must return bool", line)
+            raise LangError(f"{next_name!r} must return bool", line)
         if not is_pointer(params[1]):
-            raise LangError("'next' second parameter must be an out-pointer", line)
+            raise LangError(f"{next_name!r} second parameter must be an out-pointer", line)
         return fn, params[1].pointee
 
     def gen_cond(self, expr) -> ir.Value:

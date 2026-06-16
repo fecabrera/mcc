@@ -123,13 +123,14 @@ struct array_iter<T> {
 
 /**
  * Begins an iteration over an array, from the first element to the last. Part
- * of the `iter`/`next` protocol; pair it with `next`.
+ * of the `array_it`/`array_next` protocol (used by `for ... in`); pair it with
+ * `array_next`.
  *
  * @param self: array to iterate
  *
  * @return an iterator positioned at the first element
  */
-fn iter<T>(self: struct array<T>*) -> struct array_iter<T> {
+fn array_it<T>(self: struct array<T>*) -> struct array_iter<T> {
     let it: struct array_iter<T>;
     it.obj = self;
     it.idx = 0;
@@ -145,7 +146,7 @@ fn iter<T>(self: struct array<T>*) -> struct array_iter<T> {
  *
  * @return true if an element was produced, false once iteration is complete
  */
-fn next<T>(it: struct array_iter<T>*, out: T*) -> bool {
+fn array_next<T>(it: struct array_iter<T>*, out: T*) -> bool {
     if (it->idx >= it->obj->length)
         return false;
 

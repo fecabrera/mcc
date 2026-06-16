@@ -488,27 +488,33 @@ A body that is a single statement does not need braces:
 `if (x > 10) return x;`
 `break` and `continue` apply to the innermost enclosing loop.
 
-`for x in obj` iterates anything that supplies the **iter/next protocol** — a
-pair of overloads the compiler resolves by type:
+`for x in obj` iterates anything that supplies the **`_it`/`_next` protocol** —
+a pair of functions named after the iterable's struct, which the compiler
+dispatches by name. For an `obj` of type `struct array<T>` it calls `array_it`
+and `array_next`:
 
 ```c
-fn iter<T>(self: struct array<T>*) -> struct array_iter<T>;   // make a cursor
-fn next<T>(it: struct array_iter<T>*, out: T*) -> bool;        // false when done
+fn array_it<T>(self: struct array<T>*) -> struct array_iter<T>;   // make a cursor
+fn array_next<T>(it: struct array_iter<T>*, out: T*) -> bool;      // false when done
 ```
 
 ```c
-for v in &nums {            // nums: array<int32>; v is int32, inferred from next
+for v in &nums {            // nums: array<int32>; v is int32, inferred from array_next
     if (v < 0) { continue; }
     if (v > 99) { break; }
     use(v);
 }
 ```
 
-The element type of `x` is inferred from `next`'s out-parameter; `x` is scoped
-to the loop and `break`/`continue` work as usual. It lowers to
-`{ let it = iter(obj); while (next(&it, &x)) { ... } }` with the iterator held
-as a hidden, collision-proof temporary. Define `iter`/`next` overloads for your
-own types to make them iterable — [lib/array.mc](lib/array.mc) does this; see
+The element type of `x` is inferred from `<struct>_next`'s out-parameter; `x` is
+scoped to the loop and `break`/`continue` work as usual. It lowers to
+`{ let it = <struct>_it(obj); while (<struct>_next(&it, &x)) { ... } }` with the
+iterator held as a hidden, collision-proof temporary. Define `<struct>_it` and
+`<struct>_next` for your own types to make them iterable — name dispatch means
+no overloading is needed, and a struct built with [`extends`](#structs) can
+reuse its base's by forwarding through an upcast. [lib/array.mc](lib/array.mc),
+[lib/set.mc](lib/set.mc), [lib/dict.mc](lib/dict.mc), and
+[lib/string.mc](lib/string.mc) all do this; see
 [examples/iteration.mc](examples/iteration.mc).
 
 `case` matches a value against a series of `when` arms, with an optional

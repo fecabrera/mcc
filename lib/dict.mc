@@ -251,14 +251,14 @@ struct dict_iter<V> {
 
 /**
  * Begins an iteration over a dict's string-keyed entries, in unspecified
- * (hash-table slot) order. Part of the `iter`/`next` protocol; pair it with
- * `next`.
+ * (hash-table slot) order. Part of the `dict_it`/`dict_next` protocol (used by
+ * `for ... in`); pair it with `dict_next`.
  *
  * @param self: dict to iterate
  *
  * @return an iterator positioned before the first occupied entry
  */
-fn iter<V>(self: struct dict<V>*) -> struct dict_iter<V> {
+fn dict_it<V>(self: struct dict<V>*) -> struct dict_iter<V> {
     let it: struct dict_iter<V>;
     it.obj = self;
     it.idx = 0;
@@ -276,7 +276,7 @@ fn iter<V>(self: struct dict<V>*) -> struct dict_iter<V> {
  *
  * @return true if a pair was produced, false once iteration is complete
  */
-fn next<V>(it: struct dict_iter<V>*, out: struct pair<uint8*, V>*) -> bool {
+fn dict_next<V>(it: struct dict_iter<V>*, out: struct pair<uint8*, V>*) -> bool {
     while (it->idx < it->obj->capacity) {
         let entry = it->obj->entries[it->idx];
         defer it->idx = it->idx + 1;
