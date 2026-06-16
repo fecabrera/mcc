@@ -1,6 +1,29 @@
 """lib/dict.mc: the owning, content-keyed string map."""
 
-from helpers import run_path
+from helpers import run, run_path
+
+
+def test_iteration_visits_all_entries():
+    # Drives dict `next`, instantiating it -- which writes the entry to the out
+    # pair via a `dict_entry as pair` value upcast (see lib/dict.mc).
+    assert run(
+        """
+        import "dict";
+        import "iteration/pair";
+        fn main() -> int32 {
+            let d = alloc<struct dict<uint64>>(1);
+            dict_init(d, 8);
+            dict_set(d, "a", 10);
+            dict_set(d, "b", 20);
+            dict_set(d, "c", 30);
+            let it = iter<uint64>(d);
+            let p: struct pair<uint8*, uint64>;
+            let total: uint64 = 0;
+            while (next<uint64>(&it, &p)) { total = total + p.value; }
+            return total as int32;
+        }
+        """
+    ) == 60
 
 
 def test_lookup_by_content_not_address(tmp_path, capfd):

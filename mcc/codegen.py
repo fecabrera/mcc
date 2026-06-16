@@ -1149,6 +1149,20 @@ class CodeGen:
         object.__setattr__(struct_type, "elem_indices", tuple(indices))
         return struct_type
 
+    def is_struct_prefix(self, base: LangType, derived: LangType) -> bool:
+        """Whether ``base``'s fields are the leading prefix of ``derived``'s.
+
+        That is exactly how ``extends`` lays a struct out (base fields first), so
+        a ``derived`` value can be narrowed to ``base`` -- the prefix occupies
+        the same starting bytes. Compared by field name and type, so the check
+        also covers transitive ``extends`` chains and same-layout
+        specializations.
+        """
+        if base.fields is None or derived.fields is None:
+            return False
+        n = len(base.fields)
+        return n <= len(derived.fields) and derived.fields[:n] == base.fields
+
     def struct_field(self, owner: LangType, fname: str, line: int) -> tuple[int, LangType]:
         """Look up a struct field by name.
 
@@ -2314,6 +2328,15 @@ class CodeGen:
             return TypedValue(self.builder.ptrtoint(tv.value, target.ir), target)
         if is_integer(src) and target_addr:
             return TypedValue(self.builder.inttoptr(tv.value, target.ir), target)
+        if is_struct(src) and is_struct(target) and self.is_struct_prefix(target, src):
+            # Value upcast: `target` is the leading prefix of `src` (via
+            # `extends`), so it occupies the same starting bytes. Round-trip
+            # through memory -- store the derived value, reinterpret the slot as
+            # the base, load -- which keeps any @packed/@align padding identical.
+            slot = self.builder.alloca(src.ir)
+            self.builder.store(tv.value, slot)
+            base_ptr = self.builder.bitcast(slot, target.ir.as_pointer())
+            return TypedValue(self.builder.load(base_ptr), target)
         if is_struct(src) or is_struct(target):
             raise LangError(f"cannot cast {src} to {target}", expr.line)
         if isinstance(src.ir, ir.IntType) and target is BOOL:

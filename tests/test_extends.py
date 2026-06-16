@@ -88,6 +88,37 @@ def test_upcast_reads_base_fields_through_base_pointer():
     ) == 9
 
 
+def test_value_upcast_copies_base_prefix():
+    # `derived as Base` (a value cast) yields a copy of the base prefix.
+    assert run(
+        POINT3 +
+        "fn main() -> int32 {\n"
+        "    let p: struct point3;\n"
+        "    p.x = 2; p.y = 3; p.z = 99;\n"
+        "    let base = p as struct point;\n"
+        "    return base.x + base.y;\n"
+        "}\n"
+    ) == 5
+
+
+def test_value_downcast_rejected():
+    # The base lacks the derived's trailing fields, so widening by value would
+    # read past it -- only the upcast direction is allowed.
+    with pytest.raises(LangError, match="cannot cast"):
+        run(POINT3 + "fn main() -> int32 {\n"
+                     "    let p: struct point;\n"
+                     "    let q = p as struct point3;\n"
+                     "    return 0;\n"
+                     "}\n")
+
+
+def test_unrelated_struct_value_cast_rejected():
+    with pytest.raises(LangError, match="cannot cast"):
+        run("struct a { x: int32; }\n"
+            "struct b { y: int64; }\n"
+            "fn main() -> int32 { let v: struct a; let w = v as struct b; return 0; }\n")
+
+
 def test_function_over_base_accepts_upcast_derived():
     assert run(
         POINT3 +

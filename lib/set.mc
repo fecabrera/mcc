@@ -17,9 +17,7 @@ import "iteration/pair";
  * @field value: associated value; valid only when state == OCCUPIED
  * @field state: slot lifecycle — EMPTY (0), OCCUPIED (1), or TOMBSTONE (2)
  */
-struct set_entry<K, V> {
-    key: K;
-    value: V;
+struct set_entry<K, V> extends pair<K, V> {
     state: uint8;
 }
 
@@ -226,8 +224,7 @@ fn next<K, V>(it: struct set_iter<K, V>*, out: struct pair<K, V>*) -> bool {
         defer it->idx = it->idx + 1;
 
         if (entry.state == SET_ENTRY_STATE_OCCUPIED) {
-            out->key = entry.key;
-            out->value = entry.value;
+            *out = entry as struct pair<K, V>;
             return true;
         }
     }

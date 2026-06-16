@@ -1,5 +1,6 @@
 import "memory";
 import "hash";
+import "set";
 import "libc/string";
 import "iteration/pair";
 
@@ -16,11 +17,7 @@ import "iteration/pair";
  * @field value: associated value; valid only when state == OCCUPIED
  * @field state: slot lifecycle — EMPTY (0), OCCUPIED (1), or TOMBSTONE (2)
  */
-struct dict_entry<V> {
-    key: uint8*;
-    value: V;
-    state: uint8;
-}
+struct dict_entry<V> extends set_entry<uint8*, V>;
 
 /**
  * Open-addressing hash map from NUL-terminated string keys to V values.
@@ -285,8 +282,7 @@ fn next<V>(it: struct dict_iter<V>*, out: struct pair<uint8*, V>*) -> bool {
         defer it->idx = it->idx + 1;
 
         if (entry.state == DICT_ENTRY_STATE_OCCUPIED) {
-            out->key = entry.key;
-            out->value = entry.value;
+            *out = entry as struct pair<uint8*, V>;
             return true;
         }
     }

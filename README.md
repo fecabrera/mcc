@@ -871,14 +871,16 @@ fn main() -> int32 {
 }
 ```
 
-Because the base is a true prefix, `&p as struct point*` reads the same
-storage — that is the one sanctioned use of the cast. The conversion is
-*explicit*: there is no implicit upcast, so a `struct point3*` is a distinct
-type that won't silently pass where a `struct point*` is expected (and two
-structs that extend the same base never interconvert). With no body of its
-own, `struct meters extends int_wrapper;` is a **specialization** — a
-distinct type with the base's exact layout, useful for branding values so the
-compiler keeps them apart.
+Because the base is a true prefix, the upcast `&p as struct point*` reads the
+same storage; casting the value, `p as struct point`, copies just the base
+prefix. Both are *explicit* — there is no implicit upcast, so a
+`struct point3*` is a distinct type that won't silently pass where a
+`struct point*` is expected (and two structs that extend the same base never
+interconvert). Only the upcast direction is allowed: narrowing a base value
+back to a derived one would read past it. With no body of its own,
+`struct meters extends int_wrapper;` is a **specialization** — a distinct
+type with the base's exact layout, useful for branding values so the compiler
+keeps them apart.
 
 The base's `@packed`, `@align`, and `@volatile` are **inherited**: an
 extending struct is volatile if its base is, takes at least the base's

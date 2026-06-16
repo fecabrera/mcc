@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from helpers import parse, run_path
+from helpers import parse, run, run_path
 
 LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 
@@ -15,6 +15,31 @@ def splitmix64(key: int) -> int:
     key = (key * 0x94D049BB133111EB) & mask
     key ^= key >> 31
     return key
+
+
+def test_iteration_visits_all_entries():
+    # Drives set `next`, instantiating it -- which writes the entry to the out
+    # pair via a `set_entry as pair` value upcast (see lib/set.mc).
+    assert run(
+        """
+        import "set";
+        import "iteration/pair";
+        fn main() -> int32 {
+            let s = alloc<struct set<uint64, uint64>>(1);
+            set_init(s, 8);
+            set_set(s, 10, 100);
+            set_set(s, 20, 200);
+            set_set(s, 30, 300);
+            let it = iter<uint64, uint64>(s);
+            let p: struct pair<uint64, uint64>;
+            let total: uint64 = 0;
+            while (next<uint64, uint64>(&it, &p)) {
+                total = total + p.key + p.value;
+            }
+            return total as int32;
+        }
+        """
+    ) == 660
 
 
 def test_nested_generic_type_args_split_shift_token():
