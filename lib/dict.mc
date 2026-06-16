@@ -10,7 +10,9 @@ import "iteration/pair";
 @private const DICT_ENTRY_STATE_TOMBSTONE = 2;
 
 /**
- * One slot in a dict's backing array.
+ * One slot in a dict's backing array. A specialization of
+ * `set_entry<uint8*, V>` (string keys), so it inherits the pair's key/value and
+ * the slot state field.
  *
  * @field key:   owned, heap-allocated copy of the NUL-terminated key string;
  *               null when state != OCCUPIED

@@ -8,10 +8,9 @@ import "iteration/pair";
 @private const SET_ENTRY_STATE_TOMBSTONE = 2;
 
 /**
- * Open-addressing hash table with linear probing; maps K keys to V values.
- * Integer keys hash by value (splitmix64); pointer keys hash by content
- * as NUL-terminated buffers (fnv1a) but still compare by address. Grows
- * automatically when the load factor reaches 70%.
+ * One slot in a set's backing array. Extends `pair<K, V>` with a slot state,
+ * so it inherits the entry's key/value and upcasts to a `struct pair<K, V>*`
+ * when yielded during iteration.
  *
  * @field key:   the entry's key; valid only when state == OCCUPIED
  * @field value: associated value; valid only when state == OCCUPIED
@@ -21,6 +20,16 @@ struct set_entry<K, V> extends pair<K, V> {
     state: uint8;
 }
 
+/**
+ * Open-addressing hash table with linear probing; maps K keys to V values.
+ * Integer keys hash by value (splitmix64); pointer keys hash by content as
+ * NUL-terminated buffers (fnv1a) but still compare by address. Grows
+ * automatically when the load factor reaches 70%.
+ *
+ * @field entries:  heap-allocated slot array
+ * @field length:   number of live entries
+ * @field capacity: total allocated slots
+ */
 struct set<K, V> {
     entries: struct set_entry<K, V>*;  // heap-allocated slot array
     length: uint64;                    // number of live entries
@@ -184,7 +193,7 @@ fn set_grow<K, V>(self: struct set<K, V>*) {
  ***************************************/
 
 /**
- * A forward cursor over a set's occupied entries, produced by `iter`. It
+ * A forward cursor over a set's occupied entries, produced by `set_it`. It
  * borrows the set (does not copy it), so the set must outlive the iterator and
  * must not be modified or resized while iterating.
  */

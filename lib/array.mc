@@ -112,7 +112,7 @@ fn array_grow<T>(self: struct array<T>*) {
  ***************************************/
 
 /**
- * A forward cursor over an array's elements, produced by `iter`. It borrows
+ * A forward cursor over an array's elements, produced by `array_it`. It borrows
  * the array (does not copy it), so the array must outlive the iterator and
  * must not be resized while iterating.
  */

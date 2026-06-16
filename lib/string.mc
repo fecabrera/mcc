@@ -86,6 +86,29 @@ fn string_append(self: struct string*, value: uint8) {
     array_append(self as struct array<uint8>*, value);
 }
 
+/**
+ * Compares two strings for byte-for-byte equality. Strings of different lengths
+ * are never equal; empty strings compare equal.
+ *
+ * @param self: first string
+ * @param str:  second string
+ *
+ * @return true if both strings have the same length and bytes, false otherwise
+ */
+fn string_eq(self: struct string*, str: struct string*) -> bool {
+    if (self->length != str->length)
+        return false;
+    
+    let i: uint64 = 0;
+    while(i < self->length) {
+        if (self->data[i] != str->data[i])
+            return false;
+        i = i + 1;
+    }
+    
+    return true;
+}
+
 /***************************************
  * Iteration
  ***************************************/
