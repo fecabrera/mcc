@@ -83,5 +83,5 @@ def test_stdlib_internals_are_private(tmp_path):
 
 
 def test_unknown_annotation_is_an_error():
-    with pytest.raises(LangError, match="unknown annotation '@inline'"):
-        parse("@inline\nfn f() {}")
+    with pytest.raises(LangError, match="unknown annotation '@nonsense'"):
+        parse("@nonsense\nfn f() {}")

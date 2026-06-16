@@ -182,8 +182,8 @@ class Parser:
         """Parse one top-level item: a struct, global, const, function, or @if.
 
         Leading annotations (``@private``, ``@static``, ``@extern``,
-        ``@packed``, ``@volatile``, ``@align``, ``@symbol``) are collected and
-        validated against the declaration they precede.
+        ``@packed``, ``@volatile``, ``@inline``, ``@align``, ``@symbol``) are
+        collected and validated against the declaration they precede.
 
         Returns:
             The parsed ``StructDecl``, ``GlobalVar``, ``Const``, ``Func``, or
@@ -197,7 +197,7 @@ class Parser:
             return self.parse_conditional(self.parse_toplevel_block)
         if self.cur.kind == "ANNOT" and self.cur.text == "@else":
             raise LangError("@else without a matching @if", self.cur.line)
-        private = static = extern = packed = volatile = False
+        private = static = extern = packed = volatile = inline = False
         align = None
         symbol = None
         while self.cur.kind == "ANNOT":
@@ -217,6 +217,8 @@ class Parser:
                 packed = True
             elif annot.text == "@volatile":
                 volatile = True
+            elif annot.text == "@inline":
+                inline = True
             elif annot.text == "@align":
                 self.expect("(")
                 align = int_value(self.expect("INT").text)
@@ -244,6 +246,10 @@ class Parser:
             raise LangError("@align only applies to structs", self.cur.line)
         if packed and self.cur.kind != "struct":
             raise LangError("@packed only applies to structs", self.cur.line)
+        if inline and (extern or self.cur.kind in ("struct", "let", "const")):
+            raise LangError(
+                "@inline only applies to functions with a body", self.cur.line
+            )
         if self.cur.kind == "struct":
             if extern:
                 raise LangError("@extern does not apply to structs", self.cur.line)
@@ -282,7 +288,7 @@ class Parser:
                 "@volatile only applies to structs and extern variables",
                 self.cur.line,
             )
-        return self.parse_function(private, static, extern, symbol)
+        return self.parse_function(private, static, extern, symbol, inline)
 
     # Tokens that can begin an expression; used to settle the `as T * x`
     # ambiguity (multiplication, not a pointer type).
@@ -461,7 +467,8 @@ class Parser:
                           static=static, align=align, packed=packed, volatile=volatile)
 
     def parse_function(self, private: bool = False, static: bool = False,
-                       extern: bool = False, symbol: str | None = None) -> Func:
+                       extern: bool = False, symbol: str | None = None,
+                       inline: bool = False) -> Func:
         """Parse a function definition or an ``@extern`` declaration.
 
         Reads the (optionally generic) signature, an optional trailing ``...``
@@ -473,6 +480,7 @@ class Parser:
             static: Whether ``@static`` was applied.
             extern: Whether ``@extern`` was applied (declaration only).
             symbol: The ``@symbol("...")`` linker name, or ``None``.
+            inline: Whether ``@inline`` was applied (``alwaysinline``).
 
         Returns:
             The parsed ``Func``.
@@ -517,7 +525,7 @@ class Parser:
             return Func(name, type_params, params, ret_type, [], line,
                         private=private, extern=True, variadic=variadic, symbol=symbol)
         return Func(name, type_params, params, ret_type, self.parse_block(), line,
-                    private=private, static=static, variadic=variadic)
+                    private=private, static=static, variadic=variadic, inline=inline)
 
     def parse_block(self) -> list:
         """Parse a brace-delimited ``{ ... }`` block of statements.

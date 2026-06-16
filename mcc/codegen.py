@@ -621,6 +621,16 @@ class CodeGen:
         if self.root_source is not None and source != self.root_source:
             fn.linkage = "linkonce_odr"
 
+    def mark_inline(self, fn: ir.Function, func: Func):
+        """Apply ``@inline`` by attaching LLVM's ``alwaysinline`` attribute.
+
+        The attribute is a request honored by the always-inliner, which runs
+        only when optimizing (``-O0`` skips the pass pipeline), so an ``@inline``
+        function still emits a standalone body that may go uninlined at ``-O0``.
+        """
+        if func.inline:
+            fn.attributes.add("alwaysinline")
+
     def shared_linkage(self, source: str | None) -> str:
         """The linkage for a file-scoped definition (a @static global).
 
@@ -1256,6 +1266,7 @@ class CodeGen:
                                        var_arg=func.variadic)
                 fn = ir.Function(self.module, fnty, name=symbol)
                 self.link_shared(fn, func.source)
+                self.mark_inline(fn, func)
                 self.funcs[symbol] = fn
                 self.signatures[symbol] = (ret, params, func.variadic)
                 self.static_funcs[key] = symbol
@@ -1287,6 +1298,7 @@ class CodeGen:
                                    var_arg=func.variadic)
             fn = ir.Function(self.module, fnty, name=func.name)
             self.link_shared(fn, func.source)
+            self.mark_inline(fn, func)
             self.funcs[func.name] = fn
             self.signatures[func.name] = (ret, params, func.variadic)
         for func in self.program.functions:
@@ -3119,6 +3131,7 @@ class CodeGen:
             # A generic instance is emitted in every object that uses it, so it
             # merges like an imported definition rather than colliding.
             self.link_shared(fn, func.source)
+            self.mark_inline(fn, func)
             # Register before generating the body so recursive calls resolve.
             self.funcs[mangled] = fn
             self.signatures[mangled] = (ret, params, False)

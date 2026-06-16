@@ -119,6 +119,8 @@ class Func:
         static: ``@static`` -- file-scoped name other files may reuse.
         extern: ``@extern`` -- a declaration only; defined elsewhere.
         variadic: Extern only -- a trailing ``...`` for C-style varargs.
+        inline: ``@inline`` -- emit with LLVM's ``alwaysinline`` so the body is
+            inlined at every call site when optimizing.
         symbol: ``@symbol("...")`` -- the linker name, when not ``name``.
         source: Defining file, stamped by the driver.
     """
@@ -133,6 +135,7 @@ class Func:
     static: bool = False
     extern: bool = False
     variadic: bool = False
+    inline: bool = False
     symbol: str | None = None
     source: str | None = None
 

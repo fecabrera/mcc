@@ -184,6 +184,35 @@ fn fib(n: int32) -> int32 {
 }
 ```
 
+`@inline` asks for a function's body to be folded into each of its call
+sites (LLVM's `alwaysinline`). It is a small generic-friendly helper's best
+friend — the call overhead disappears and the optimizer sees through to the
+arguments:
+
+```c
+@inline fn min(a: int64, b: int64) -> int64 {
+    if (a < b) { return a; }
+    return b;
+}
+```
+
+The inliner runs as part of optimization, so the folding happens at `-O1`
+and above; at `-O0` an `@inline` function is emitted normally and called
+like any other. It works across separately compiled files too: an imported
+definition is copied into every object that uses it (the same mechanism that
+lets generics and `@static` cross files), so the body is present to inline
+wherever it is called. `@inline` needs a body, so it cannot combine with
+`@extern`.
+
+`@inline` on its own forces the inlining — unlike C, there is no need for the
+`static inline` idiom. That idiom works around C's `inline` linkage rules
+(a plain `inline` emits no out-of-line definition, so an un-inlined call
+becomes an "undefined reference"); mcc has no such rule, since imported
+bodies are copied into each object. `@static` is therefore orthogonal: it
+only makes the helper file-private (so it leaks no global symbol and its
+spare out-of-line copy can be dead-stripped), and has no bearing on whether
+the inlining happens. Combine them as `@static @inline` when you want both.
+
 ### Variadic functions
 
 A trailing `...` after at least one named parameter makes a function
@@ -889,6 +918,20 @@ Different files can each define their own `@static` function, struct,
 generic, or variable with the same name, and a file's `@static` definition
 shadows a public one imported from elsewhere. From any other file the name
 is simply undefined.
+
+The two differ in what they do to the *name*, not just who may use it. A
+`@private` definition keeps its real linker symbol (`helper`) and stays in
+the global namespace; `@private` only stops *other files* from referencing
+it. A `@static` definition is renamed to a file-scoped symbol (`helper@file`)
+and leaves the global namespace, so several files can each carry their own
+`helper` with no clash. So reach for `@private` to hide an internal helper
+that has a unique name, and for `@static` when you want a hidden helper with
+a *common* name (`init`, `dump`) that several files define independently —
+and because a `@static` symbol is file-local rather than global, an unused
+out-of-line copy of it can also be dead-stripped. Both compose freely with
+[`@inline`](#functions), which is orthogonal: it forces the inlining either
+way, and the choice of `@private` vs `@static` only governs the leftover
+symbol.
 
 `@static` on a top-level `let` makes a file-scoped variable with its own
 storage that persists for the life of the program — a static counter,
