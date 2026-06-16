@@ -455,16 +455,41 @@ class Parser:
         line = self.expect("struct").line
         name = self.expect("IDENT").text
         type_params = self.parse_type_params()
-        self.expect("{")
-        fields = []
-        while self.cur.kind != "}":
-            fname = self.expect("IDENT").text
-            self.expect(":")
-            fields.append((fname, self.parse_type_ref()))
-            self.expect(";")
-        self.expect("}")
-        return StructDecl(name, type_params, fields, line, private=private,
-                          static=static, align=align, packed=packed, volatile=volatile)
+        base = None
+        if self.accept("extends"):
+            base = self.parse_base_ref()
+        # The body is required, except `struct B extends A;` (a specialization
+        # that adds no fields of its own).
+        if base is not None and self.accept(";"):
+            fields = []
+        else:
+            self.expect("{")
+            fields = []
+            while self.cur.kind != "}":
+                fname = self.expect("IDENT").text
+                self.expect(":")
+                fields.append((fname, self.parse_type_ref()))
+                self.expect(";")
+            self.expect("}")
+        return StructDecl(name, type_params, fields, line, base=base,
+                          private=private, static=static, align=align,
+                          packed=packed, volatile=volatile)
+
+    def parse_base_ref(self) -> TypeRef:
+        """Parse the base in ``extends Base``: a plain struct name.
+
+        The ``struct`` keyword is optional, as elsewhere. A v1 base may not be
+        a pointer, an array, or a generic instance.
+
+        Raises:
+            LangError: When the base is a pointer, array, or generic type.
+        """
+        ref = self.parse_type_ref()
+        if ref.stars or ref.dims or ref.args or ref.params is not None:
+            raise LangError(
+                "a struct can only extend a plain struct name", self.cur.line
+            )
+        return ref
 
     def parse_function(self, private: bool = False, static: bool = False,
                        extern: bool = False, symbol: str | None = None,

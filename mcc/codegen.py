@@ -551,6 +551,9 @@ class CodeGen:
         self.instances: dict[tuple[int, tuple[str, ...]], str] = {}
         self.struct_templates: dict[str, StructDecl] = {}
         self.struct_types: dict[str, LangType] = {}  # mangled name -> instance
+        # Mangled names whose `extends` base is currently being resolved, so a
+        # cyclic `extends` (A extends B extends A) is caught instead of looping.
+        self.resolving_bases: set[str] = set()
         # @static declarations: file-scoped names, keyed by (source, name)
         self.static_funcs: dict[tuple[str | None, str], str] = {}  # -> symbol
         self.static_templates: dict[tuple[str | None, str], Func] = {}
@@ -1014,6 +1017,36 @@ class CodeGen:
             ref = dataclasses_replace(ref, dims=[len(value.elements), *ref.dims[1:]])
         return self.lang_type(ref, line)
 
+    def resolve_base(self, decl: StructDecl) -> "LangType | None":
+        """Resolve a struct's ``extends`` base to its struct type, or ``None``.
+
+        v1 limits ``extends`` to a single, non-generic base named as a plain
+        struct (the pointer/array/generic forms are rejected by the parser).
+
+        Raises:
+            LangError: When the deriving struct is generic, or the base is not a
+                struct.
+        """
+        if decl.base is None:
+            return None
+        if decl.type_params:
+            raise LangError(
+                "a generic struct cannot use 'extends' yet", decl.line,
+                source=decl.source,
+            )
+        outer_source = self.current_source
+        self.current_source = decl.source  # the base may be private/static
+        try:
+            base_type = self.lang_type(decl.base, decl.line)
+        finally:
+            self.current_source = outer_source
+        if not is_struct(base_type):
+            raise LangError(
+                f"{base_type} is not a struct; cannot extend it", decl.line,
+                source=decl.source,
+            )
+        return base_type
+
     def instantiate_struct(self, decl: StructDecl, args: tuple[LangType, ...]) -> LangType:
         """Return the struct instance for a set of type arguments.
 
@@ -1038,10 +1071,36 @@ class CodeGen:
             mangled += "<" + ", ".join(str(a) for a in args) + ">"
         if mangled in self.struct_types:
             return self.struct_types[mangled]
+        if mangled in self.resolving_bases:
+            raise LangError(
+                f"struct {decl.name!r} cannot extend itself (cyclic 'extends')",
+                decl.line, source=decl.source,
+            )
+        # Resolve an `extends` base up front: its fields are spliced in front of
+        # this struct's own (so a pointer to this struct is layout-compatible
+        # with a pointer to the base), and its @packed/@align/@volatile are
+        # inherited, so both must be known before the body is laid out.
+        self.resolving_bases.add(mangled)
+        try:
+            base_type = self.resolve_base(decl)
+        finally:
+            self.resolving_bases.discard(mangled)
+        align, packed, volatile = decl.align, decl.packed, decl.volatile
+        if base_type is not None:
+            volatile = volatile or base_type.volatile
+            aligns = [a for a in (decl.align, base_type.align) if a is not None]
+            align = max(aligns) if aligns else None
+            if base_type.packed:
+                packed = True  # packing changes offsets, so it must match the base
+            elif decl.packed:
+                raise LangError(
+                    "an extending struct cannot be @packed unless its base is",
+                    decl.line, source=decl.source,
+                )
         identified = self.module.context.get_identified_type(mangled)
         struct_type = LangType(mangled, identified, signed=False,
-                               template=decl.name, args=args, align=decl.align,
-                               packed=decl.packed, volatile=decl.volatile)
+                               template=decl.name, args=args, align=align,
+                               packed=packed, volatile=volatile)
         # Register before resolving fields so self-referential structs
         # (e.g. node<T> holding a node<T>*) can refer to themselves.
         self.struct_types[mangled] = struct_type
@@ -1056,25 +1115,34 @@ class CodeGen:
         finally:
             self.type_bindings = outer
             self.current_source = outer_source
-        natural = 1 if decl.packed \
+        if base_type is not None:
+            inherited = {fname for fname, _ in base_type.fields}
+            for fname, _ in fields:
+                if fname in inherited:
+                    raise LangError(
+                        f"field {fname!r} is already defined in base struct "
+                        f"{base_type.name!r}", decl.line, source=decl.source,
+                    )
+            fields = base_type.fields + fields  # base fields first: the prefix
+        natural = 1 if packed \
             else max((type_align(ftype) for _, ftype in fields), default=1)
-        if decl.align is not None and decl.align < natural:
+        if align is not None and align < natural:
             # current_source was restored to the instantiating file above,
             # but decl.line belongs to the declaring file.
             raise LangError(
-                f"@align({decl.align}) is below struct {decl.name!r}'s "
+                f"@align({align}) is below struct {decl.name!r}'s "
                 f"natural alignment of {natural}",
                 decl.line,
                 source=decl.source,
             )
         object.__setattr__(struct_type, "fields", fields)  # frozen; fields excluded from eq
-        if decl.packed or over_aligned(struct_type):
+        if packed or over_aligned(struct_type):
             # @packed and @align depart from LLVM's natural layout, so spell
             # the layout out: a packed body with explicit padding, keeping
             # field offsets and the LLVM size in agreement with type_size().
             elements, indices, offset = [], [], 0
             for _, ftype in fields:
-                pad = 0 if decl.packed else -offset % type_align(ftype)
+                pad = 0 if packed else -offset % type_align(ftype)
                 if pad:
                     elements.append(ir.ArrayType(ir.IntType(8), pad))
                 indices.append(len(elements))

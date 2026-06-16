@@ -84,6 +84,10 @@ class StructDecl:
             ``struct array<T>``.
         fields: ``(name, type)`` pairs in declaration order.
         line: Source line for diagnostics.
+        base: The ``extends Base`` struct this one specializes, or ``None``.
+            Its fields are spliced in front of ``fields`` (so a pointer to this
+            struct is layout-compatible with a pointer to the base), and its
+            ``@packed``/``@align``/``@volatile`` attributes are inherited.
         private: ``@private`` -- usable only within its source file.
         static: ``@static`` -- file-scoped name other files may reuse.
         align: ``@align(N)`` -- raised alignment, a power of two, or ``None``.
@@ -96,6 +100,7 @@ class StructDecl:
     type_params: list[str]
     fields: list[tuple[str, TypeRef]]
     line: int
+    base: TypeRef | None = None
     private: bool = False
     static: bool = False
     align: int | None = None

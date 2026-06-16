@@ -853,6 +853,40 @@ struct pl011 {       // a UART's register block; see examples/baremetal/
 }
 ```
 
+A struct can `extends` another to reuse its layout. The base's fields are
+placed **first**, followed by the new struct's own, so the base occupies the
+start of the derived struct and a pointer to the derived struct is
+layout-compatible with a pointer to the base:
+
+```c
+struct point  { x: int32; y: int32; }
+struct point3 extends point { z: int32; }   // laid out as x, y, z
+
+fn length2(p: struct point*) -> int32 { return p->x * p->x + p->y * p->y; }
+
+fn main() -> int32 {
+    let p: struct point3;
+    p.x = 3; p.y = 4; p.z = 5;        // inherited fields are reached directly
+    return length2(&p as struct point*);   // upcast is explicit
+}
+```
+
+Because the base is a true prefix, `&p as struct point*` reads the same
+storage — that is the one sanctioned use of the cast. The conversion is
+*explicit*: there is no implicit upcast, so a `struct point3*` is a distinct
+type that won't silently pass where a `struct point*` is expected (and two
+structs that extend the same base never interconvert). With no body of its
+own, `struct meters extends int_wrapper;` is a **specialization** — a
+distinct type with the base's exact layout, useful for branding values so the
+compiler keeps them apart.
+
+The base's `@packed`, `@align`, and `@volatile` are **inherited**: an
+extending struct is volatile if its base is, takes at least the base's
+alignment, and is packed iff its base is (packing changes field offsets, so
+it can't differ from the base — `@packed` on a struct whose base is not
+packed is an error). v1 allows a single, non-generic base named as a plain
+struct.
+
 `sizeof` understands struct layout (including padding), so
 `alloc<struct node<int32>>(n)` allocates correctly. Struct values can be
 passed to and returned from functions, but not to variadic functions like
