@@ -36,6 +36,7 @@ fn main() -> int32 {
 - [Usage](#usage)
 - [Examples](#examples)
 - [Standard library](#standard-library)
+- [Roadmap](#roadmap)
 - [Language reference](#language-reference)
   - [Functions](#functions)
   - [Variadic functions](#variadic-functions)
@@ -154,6 +155,72 @@ instead `@extern` bindings for the C library itself — `printf`, `malloc`, the
 `str*`/`mem*` functions, `FILE*` streams, and so on — which you reach for when
 you want C directly; see [Reaching libc](#reaching-libc). The
 [standard library index](lib/README.md) lists every module.
+
+## Roadmap
+
+What the compiler does today, and what is planned next. Checked items are
+implemented and covered by the [test suite](#tests); each links to its
+reference section.
+
+### Language
+
+- [x] [Functions](#functions) — typed params, `->` return type, recursion,
+      implicit `return 0` from `main`
+- [x] [`@inline` functions](#functions) — LLVM `alwaysinline`, across files
+- [x] [Variadic functions](#variadic-functions) — `...` and `va_list` forwarding
+- [x] [Generics](#generics) — monomorphized, on functions and structs
+- [x] [Variables](#variables) — `let` with type inference
+- [x] [Constants](#constants) — `const`, folded at compile time
+- [x] [Conditional compilation](#conditional-compilation) — structured `@if`
+- [x] [Control flow](#control-flow) — `if`/`else`, `while`, `until`,
+      `for … in`, `break`/`continue`, braceless bodies
+- [x] [`defer`](#defer) — statement and block forms, reverse order
+- [x] [Types](#types) — `int8`–`int64`, `uint8`–`uint64`, `bool`, `float64`,
+      `void`; untyped integer constants with range-checked adaptation
+- [x] [Operators](#operators) — arithmetic, comparison, logical
+      (`and`/`or`/`!`), bitwise (`&` `|` `^` `<<` `>>` `~`)
+- [x] [Casts](#casts) — explicit `as`
+- [x] [Pointers](#pointers) — address-of, deref, `null`
+- [x] [Function pointers](#function-pointers)
+- [x] [Arrays](#arrays) — fixed-size `T[N]`, indexing, `len`, `sizeof`
+- [x] [Structs](#structs) — `.`/`->` access, generics,
+      `@packed`/`@align`/`@volatile`, `extends` (prefix specialization),
+      struct value upcast
+- [x] [Imports](#imports) — bare-name resolution, search paths
+- [x] [Visibility](#visibility) — `@private`, `@static`
+- [x] [Extern declarations](#extern-declarations) — `@extern`, `@symbol`
+- [x] [Strings](#strings) — string and char literals with C escapes
+- [x] [Comments](#comments) — line, block, doc
+
+### Standard library
+
+- [x] Core — `memory` (typed `alloc`/`dealloc`), `std` (`print`/`println`)
+- [x] Containers — `array`, `stack`, `queue`, `set`, `dict`, `string`
+- [x] Hashing — `splitmix64`, `fnv1a`, `murmur3`, `crc32`, `md5`
+- [x] [libc bindings](#reaching-libc) — `stdio`, `stdlib`, `string`, `ctype`,
+      `math`, `limits`, `float`, `time`, `errno`
+
+### Tooling
+
+- [x] Native compilation and linking
+- [x] JIT execution (`--run`)
+- [x] LLVM IR output (`--emit-llvm`)
+- [x] Optimization levels `-O0`–`-O3`
+- [x] Cross-compilation (`--target`), `--general-regs-only`, `--naked`, `-I`
+- [x] Separate compilation across files
+- [x] [Editor support](#editor-support) — VS Code syntax highlighting
+
+### Planned
+
+- [ ] Methods / OOP — `<struct>::<method>` definitions (the `for … in`
+      protocol already dispatches by struct name to pave the way)
+- [ ] Constant-expression array sizes — `T[N]` where `N` is any constant
+      expression (today only a literal, a single `const` name, or `[]`)
+- [ ] Macro functions — compile-time expansion (`@inline` already covers the
+      call-overhead case)
+- [ ] Inline assembly — `asm` blocks for emitting raw instructions
+
+<!-- Add upcoming features here, e.g. - [ ] feature — short note -->
 
 ## Language reference
 
@@ -321,7 +388,7 @@ Variables are block-scoped, as in C: a `let` is visible only until the end of
 its enclosing `{ }` — including the body of an `if`/`else` branch or a
 `while`/`until` loop — so sibling and sequential blocks can reuse a name. An
 inner block may **shadow** a variable from an outer one; the outer binding
-returns when the block ends. Redeclaring a name in the *same* block is an
+returns when the block ends. Redeclaring a name in the _same_ block is an
 error.
 
 ```c
@@ -375,7 +442,7 @@ const CELLS  = WIDTH * HEIGHT;       // 1920, folded
 const ROW_BYTES = WIDTH * sizeof(int32);
 ```
 
-An untyped integer const stays *adaptable* like a literal, so it takes on
+An untyped integer const stays _adaptable_ like a literal, so it takes on
 whatever integer type the context needs (`uint64`, `int32`, …) without a
 cast. Add an annotation (`const N: uint8 = 4;`) to pin the type. Constants
 follow the same [visibility](#visibility) rules as other declarations:
@@ -389,10 +456,10 @@ The compiler predefines two integer constants describing the target it is
 building for, derived from the [target triple](#usage) (the host triple when
 no `--target` is given):
 
-| Constant      | Values |
-| ------------- | ------ |
+| Constant      | Values                                                         |
+| ------------- | -------------------------------------------------------------- |
 | `TARGET_OS`   | `OS_DARWIN`, `OS_LINUX`, `OS_WINDOWS`, `OS_NONE`, `OS_UNKNOWN` |
-| `TARGET_ARCH` | `ARCH_X86_64`, `ARCH_AARCH64`, `ARCH_RISCV64`, `ARCH_UNKNOWN` |
+| `TARGET_ARCH` | `ARCH_X86_64`, `ARCH_AARCH64`, `ARCH_RISCV64`, `ARCH_UNKNOWN`  |
 
 The `OS_*`/`ARCH_*` names are constants too, so code can branch on them to pick
 platform-specific bindings — for instance, the linker symbol behind a libc
@@ -413,7 +480,7 @@ reserved: a user `const` may read them but not redefine them.
 ### Conditional compilation
 
 `@if` selects code at compile time, the way C's `#if` does — but it is
-*structured*, not textual: each branch is a real brace-delimited block of the
+_structured_, not textual: each branch is a real brace-delimited block of the
 surrounding grammar, not an arbitrary span of tokens. Only the live branch is
 compiled; the dead branch is parsed (so it must be syntactically valid) but
 never type-checked or emitted.
@@ -438,7 +505,7 @@ struct FILE {}
 ```
 
 and as a statement, to select code inside a function. As a statement it does
-*not* open a scope — the chosen statements are spliced in inline, so a binding
+_not_ open a scope — the chosen statements are spliced in inline, so a binding
 they declare is visible afterwards:
 
 ```c
@@ -540,7 +607,7 @@ an arm.
 ### Defer
 
 `defer` schedules a statement (or a `{ }` block) to run when the enclosing
-block exits — by *any* path: falling off the end, a `return`, or a
+block exits — by _any_ path: falling off the end, a `return`, or a
 `break`/`continue` out of a loop. It keeps a resource's release next to its
 acquisition, so cleanup can't be forgotten on an early exit:
 
@@ -576,7 +643,7 @@ A defer is tied to the block it appears in, so one inside an `if` or a loop
 body fires at the end of that block — each loop iteration runs its own. The
 deferred code is evaluated when it runs, not when it is scheduled, so it sees
 the latest values of the variables it names (unlike Go, which snapshots the
-arguments). A returned value is computed *before* the defers run, so freeing a
+arguments). A returned value is computed _before_ the defers run, so freeing a
 buffer in a defer can't clobber what you return. See
 [examples/defer.mc](examples/defer.mc).
 
@@ -880,7 +947,7 @@ fn main() -> int32 {
 
 Because the base is a true prefix, the upcast `&p as struct point*` reads the
 same storage; casting the value, `p as struct point`, copies just the base
-prefix. Both are *explicit* — there is no implicit upcast, so a
+prefix. Both are _explicit_ — there is no implicit upcast, so a
 `struct point3*` is a distinct type that won't silently pass where a
 `struct point*` is expected (and two structs that extend the same base never
 interconvert). Only the upcast direction is allowed: narrowing a base value
@@ -972,14 +1039,14 @@ generic, or variable with the same name, and a file's `@static` definition
 shadows a public one imported from elsewhere. From any other file the name
 is simply undefined.
 
-The two differ in what they do to the *name*, not just who may use it. A
+The two differ in what they do to the _name_, not just who may use it. A
 `@private` definition keeps its real linker symbol (`helper`) and stays in
-the global namespace; `@private` only stops *other files* from referencing
+the global namespace; `@private` only stops _other files_ from referencing
 it. A `@static` definition is renamed to a file-scoped symbol (`helper@file`)
 and leaves the global namespace, so several files can each carry their own
 `helper` with no clash. So reach for `@private` to hide an internal helper
 that has a unique name, and for `@static` when you want a hidden helper with
-a *common* name (`init`, `dump`) that several files define independently —
+a _common_ name (`init`, `dump`) that several files define independently —
 and because a `@static` symbol is file-local rather than global, an unused
 out-of-line copy of it can also be dead-stripped. Both compose freely with
 [`@inline`](#functions), which is orthogonal: it forces the inlining either
