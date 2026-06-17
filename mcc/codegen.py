@@ -1519,12 +1519,11 @@ class CodeGen:
             LangError: When the value cannot match ``expected``, or an adaptable
                 constant is out of range.
         """
-        if tv.type == expected:
-            return tv
-        if tv.type is NULLT and (is_pointer(expected) or is_function(expected)):
-            return TypedValue(ir.Constant(expected.ir, None), expected)
-        if expected == RAWPTR and is_pointer(tv.type):
-            return TypedValue(self.builder.bitcast(tv.value, RAWPTR.ir), RAWPTR)
+        # Range-check adaptable integer constants first, before the
+        # same-type early return below. Their type is a placeholder (every
+        # literal is tagged int32), so a value too big for `expected` must be
+        # caught here -- even when `expected` is int32 too -- or it silently
+        # truncates at IR emission.
         if (
             tv.adaptable
             and isinstance(tv.value, ir.Constant)
@@ -1542,6 +1541,12 @@ class CodeGen:
             raise LangError(
                 f"constant {tv.value.constant} is out of range for {expected}", line
             )
+        if tv.type == expected:
+            return tv
+        if tv.type is NULLT and (is_pointer(expected) or is_function(expected)):
+            return TypedValue(ir.Constant(expected.ir, None), expected)
+        if expected == RAWPTR and is_pointer(tv.type):
+            return TypedValue(self.builder.bitcast(tv.value, RAWPTR.ir), RAWPTR)
         raise LangError(f"{context}: expected {expected}, got {tv.type}", line)
 
     def gen_load(self, addr, *, align: int | None = None,

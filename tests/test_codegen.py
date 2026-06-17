@@ -97,6 +97,22 @@ def test_bitwise_not_runtime_values():
     ) == 0
 
 
+@pytest.mark.parametrize(
+    "expr",
+    ["0xFFFFFFFF", "0xFFFFFFFFFF", "-0xFFFFFFFFFF", "~0xFFFFFFFFFF"],
+)
+def test_int32_constant_overflow_is_rejected(expr):
+    # An adaptable constant is tagged int32, so an int32 target used to skip
+    # the range check (tv.type == expected) and silently truncate. It must
+    # error like every other out-of-range target.
+    with pytest.raises(LangError, match="out of range for int32"):
+        main_ir(f"let x: int32 = {expr};")
+
+
+def test_in_range_int32_constants_still_compile():
+    main_ir("let a: int32 = 5; let b: int32 = 0x7FFFFFFF; let c: int32 = ~0;")
+
+
 def test_missing_return_in_main_is_implicit_zero():
     ir_text = compile_ir("fn main() -> int32 {}")
     assert "ret i32 0" in ir_text
