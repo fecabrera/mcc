@@ -65,6 +65,12 @@ def test_unary_minus():
     assert isinstance(expr.operand, Var)
 
 
+def test_unary_bitwise_not():
+    expr = first_expr("~x")
+    assert isinstance(expr, Unary) and expr.op == "~"
+    assert isinstance(expr.operand, Var)
+
+
 def test_hex_literals_decoded():
     assert first_expr("0xFF").value == 255
     assert first_expr("0X09000000").value == 150994944

@@ -2303,11 +2303,12 @@ class CodeGen:
         return addr, ftype, align, owner.volatile or base_volatile
 
     def gen_unary(self, expr: Unary) -> TypedValue:
-        """Emit a unary operation: ``-``, ``!``, ``*`` (deref), or ``&``.
+        """Emit a unary operation: ``-``, ``~``, ``!``, ``*`` (deref), or ``&``.
 
-        Negation on a literal folds so negative constants stay adaptable
-        constants; ``&`` yields a plain pointer (without any reduced packed
-        alignment -- unsafe to dereference elsewhere, exactly as in C).
+        Negation and bitwise complement on a literal fold so the resulting
+        constants stay adaptable; ``&`` yields a plain pointer (without any
+        reduced packed alignment -- unsafe to dereference elsewhere, exactly
+        as in C).
 
         Args:
             expr: The ``Unary`` node.
@@ -2316,13 +2317,15 @@ class CodeGen:
             The result as a ``TypedValue``.
 
         Raises:
-            LangError: On dereferencing a non-pointer, negating an unsupported
-                type, or ``!`` on a non-bool.
+            LangError: On dereferencing a non-pointer, negating or complementing
+                an unsupported type, or ``!`` on a non-bool.
         """
         # Fold minus on literals so negative constants stay constants (and can
         # still coerce to other integer types).
         if expr.op == "-" and isinstance(expr.operand, IntLit):
             return TypedValue(ir.Constant(INT32.ir, -expr.operand.value), INT32, adaptable=True)
+        if expr.op == "~" and isinstance(expr.operand, IntLit):
+            return TypedValue(ir.Constant(INT32.ir, ~expr.operand.value), INT32, adaptable=True)
         if expr.op == "-" and isinstance(expr.operand, FloatLit):
             return TypedValue(ir.Constant(FLOAT64.ir, -expr.operand.value), FLOAT64)
         if expr.op == "&":
@@ -2345,6 +2348,10 @@ class CodeGen:
             if tv.type is FLOAT64:
                 return TypedValue(self.builder.fneg(tv.value), tv.type)
             raise LangError(f"cannot negate a {tv.type}", expr.line)
+        if expr.op == "~":
+            if is_integer(tv.type):
+                return TypedValue(self.builder.not_(tv.value), tv.type)
+            raise LangError(f"cannot apply '~' to a {tv.type}", expr.line)
         if tv.type is not BOOL:
             raise LangError("'!' requires a bool operand", expr.line)
         return TypedValue(self.builder.not_(tv.value), BOOL)

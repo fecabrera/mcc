@@ -612,13 +612,14 @@ when promoted. Unary `-` is not allowed on unsigned values. See
 
 ### Operators
 
-By descending precedence: unary `-` `!` `*` `&`, `as` casts, then `*` `/`
+By descending precedence: unary `-` `~` `!` `*` `&`, `as` casts, then `*` `/`
 `%`, `+` `-`, shifts `<<` `>>`, bitwise `&`, `^`, `|`, comparisons
 `<` `<=` `>` `>=`, `==` `!=`, then `and`, and loosest of all `or`.
 Comparisons yield `bool`; `%` and the bitwise/shift operators are
 integer-only. `>>` is an arithmetic shift for signed types and logical for
-unsigned. Unlike C, bitwise operators bind tighter than comparisons, so
-`a & 4 == 4` means `(a & 4) == 4`. Integer constant expressions fold at
+unsigned. Unary `~` is bitwise complement (integer-only); `!` is logical
+NOT on a `bool`. Unlike C, bitwise operators bind tighter than comparisons,
+so `a & 4 == 4` means `(a & 4) == 4`. Integer constant expressions fold at
 compile time.
 
 `and` and `or` are the logical operators (there is no `&&` / `||`). They

@@ -1,7 +1,7 @@
 import pytest
 
 from mcc.errors import LangError
-from helpers import compile_ir
+from helpers import compile_ir, run
 
 MAIN = "fn main() -> int32 {{ {body} return 0; }}"
 
@@ -62,6 +62,39 @@ def test_bitwise_constants_fold_and_stay_untyped():
     assert "shl" not in ir_text  # folded away
     with pytest.raises(LangError, match="out of range for uint8"):
         main_ir("let x: uint8 = 1 << 8;")
+
+
+def test_bitwise_not_emits_xor():
+    # '~' lowers to xor with all-ones, on signed and unsigned alike.
+    assert "xor" in main_ir("let a: uint32 = 5; let b = ~a;")
+    assert "xor" in main_ir("let a: int64 = 5; let b = ~a;")
+
+
+def test_bitwise_not_literal_folds_and_stays_untyped():
+    # ~5 == -6 folds to a constant and still coerces to a wider type.
+    ir_text = main_ir("let x: int64 = ~5;")
+    assert "xor" not in ir_text  # folded away
+    # ~0 == 255 in uint8's range after wrapping.
+    assert "xor" not in main_ir("let x: uint8 = ~0 as uint8;")
+
+
+def test_bitwise_not_rejects_non_integer():
+    with pytest.raises(LangError, match="cannot apply '~' to a float64"):
+        main_ir("let a: float64 = 1.0; let b = ~a;")
+
+
+def test_bitwise_not_runtime_values():
+    assert run(
+        "fn main() -> int32 {\n"
+        "    let a: uint8 = 0x0F;\n"
+        "    if ((~a as uint8) != 240) { return 1; }\n"
+        "    let b: int32 = 5;\n"
+        "    if (~b != -6) { return 2; }\n"
+        "    let c: uint64 = 0;\n"
+        "    if (~c != 18446744073709551615) { return 3; }\n"
+        "    return 0;\n"
+        "}"
+    ) == 0
 
 
 def test_missing_return_in_main_is_implicit_zero():

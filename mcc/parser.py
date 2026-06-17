@@ -293,7 +293,7 @@ class Parser:
     # Tokens that can begin an expression; used to settle the `as T * x`
     # ambiguity (multiplication, not a pointer type).
     EXPR_START = {"INT", "FLOAT", "STRING", "CHAR", "IDENT", "true", "false",
-                  "null", "sizeof", "len", "(", "[", "-", "!", "&"}
+                  "null", "sizeof", "len", "(", "[", "-", "!", "&", "~"}
 
     def parse_type_ref(self, greedy_stars: bool = True) -> TypeRef:
         """Parse a type reference.
@@ -786,7 +786,7 @@ class Parser:
             A ``Unary`` node, or a postfix expression when no prefix operator
             appears.
         """
-        if self.cur.kind in ("-", "!", "*", "&"):
+        if self.cur.kind in ("-", "!", "*", "&", "~"):
             op = self.advance()
             return Unary(op.kind, self.parse_unary(), op.line)
         return self.parse_postfix()
