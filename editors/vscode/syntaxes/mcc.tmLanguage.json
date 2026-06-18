@@ -89,7 +89,7 @@
       "patterns": [
         {
           "name": "keyword.control.mcc",
-          "match": "\\b(if|else|while|until|for|in|break|continue|return|defer|case|when|import|extends)\\b"
+          "match": "\\b(if|else|while|until|for|in|break|continue|return|emit|defer|case|when|import|extends)\\b"
         },
         {
           "name": "keyword.operator.word.mcc",

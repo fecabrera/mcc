@@ -18,9 +18,9 @@ from llvmlite import ir
 
 from mcc.errors import LangError
 from mcc.nodes import (
-    ArrayLit, Assign, Binary, Block, BoolLit, Break, Call, CallExpr, Case, Cast,
-    CharLit, Conditional, Const, Continue, Defer, ExprStmt, FloatLit, For, Func,
-    GlobalVar, If, Index, IntLit,
+    ArrayLit, Assign, Binary, Block, BlockExpr, BoolLit, Break, Call, CallExpr,
+    Case, Cast, CharLit, Conditional, Const, Continue, Defer, Emit, ExprStmt,
+    FloatLit, For, Func, GlobalVar, If, Index, IntLit,
     Let, Logical, Len, Member, NullLit, Program, Return, SizeOf, StoreDeref,
     StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
 )
@@ -95,6 +95,30 @@ class TypedValue:
     value: ir.Value
     type: LangType
     adaptable: bool = False
+
+
+@dataclass
+class BlockExprCtx:
+    """The state an ``emit`` needs to fill in its block-expression's value.
+
+    A block-expression is lowered like an inlined function: a result slot in
+    the entry block, written by each ``emit`` and read once at the end, plus a
+    continuation block every ``emit`` branches to. The slot and its type are
+    created lazily on the first ``emit`` (the block's type is its emit type);
+    later emits coerce to it.
+
+    Attributes:
+        cont_bb: The continuation block; every ``emit`` branches here.
+        defer_depth: The ``defer_stack`` depth on entry, so an ``emit`` unwinds
+            exactly the block's own deferred scopes.
+        slot: The result alloca, or ``None`` until the first ``emit``.
+        type: The block's value type, or ``None`` until the first ``emit``.
+    """
+
+    cont_bb: ir.Block
+    defer_depth: int
+    slot: object = None
+    type: "LangType | None" = None
 
 
 def pointer_to(lang_type: LangType) -> LangType:
@@ -587,6 +611,9 @@ class CodeGen:
         self.ret_type: LangType = VOID
         # Enclosing loops, innermost last: (continue target, break target).
         self.loops: list[tuple[ir.Block, ir.Block]] = []
+        # Enclosing block-expressions, innermost last; each `emit` targets the
+        # last. See BlockExprCtx.
+        self.block_exprs: list[BlockExprCtx] = []
         self.str_count = 0
 
     def check_access(self, private: bool, source: str | None, what: str, line: int):
@@ -1413,6 +1440,7 @@ class CodeGen:
         self.scope_names = set()  # the body block resets this, but be explicit
         self.defer_stack = []
         self.loops = []  # break/continue cannot escape into a caller's loop
+        self.block_exprs = []  # emit cannot escape into a caller's block-expr
         for (pname, _), ptype, arg in zip(func.params, params, fn.args):
             arg.name = pname
             slot = self.builder.alloca(arg.type, name=pname)
@@ -1490,6 +1518,67 @@ class CodeGen:
             if self.builder.block.is_terminated:
                 break
             self.run_deferred_scope(scope)
+
+    def entry_alloca(self, ir_type, name: str = ""):
+        """Allocate a slot in the function's entry block.
+
+        Unlike an ordinary local -- declared and used in source order, so its
+        alloca naturally dominates its uses -- a block-expression's result slot
+        is written in branch arms and read at the block's end. Putting it in the
+        entry block guarantees it dominates every such use.
+
+        Args:
+            ir_type: The LLVM type to allocate.
+            name: An optional name for the slot.
+
+        Returns:
+            The alloca instruction.
+        """
+        # goto_entry_block restores the current insertion point on exit, so the
+        # in-progress block being generated is left undisturbed.
+        with self.builder.goto_entry_block():
+            return self.builder.alloca(ir_type, name=name)
+
+    def gen_block_expr(self, expr: BlockExpr) -> TypedValue:
+        """Lower a block-expression ``{ ...; emit v; }`` to a value.
+
+        The trivial ``{ emit E; }`` is just ``E`` -- evaluated directly so an
+        untyped constant stays adaptable (``let n: uint64 = { emit 1; };``). A
+        larger block runs its statements in a fresh scope and yields the value an
+        ``emit`` hands out, lowered through a result slot and a continuation
+        block (see :class:`BlockExprCtx`). Like a function, it must ``emit`` on
+        the path that reaches its end; a branch-only ``emit`` needs a trailing
+        one, since (as with ``if``/``else`` and ``return``) the two arms are not
+        treated as a guaranteed value.
+
+        Args:
+            expr: The ``BlockExpr`` node.
+
+        Returns:
+            The block's value as a ``TypedValue``.
+
+        Raises:
+            LangError: When the block may fall off its end without emitting, or
+                never emits at all.
+        """
+        body = expr.body
+        if len(body) == 1 and isinstance(body[0], Emit):
+            return self.gen_expr(body[0].value)
+        cont_bb = self.builder.append_basic_block("blockexpr.end")
+        ctx = BlockExprCtx(cont_bb=cont_bb, defer_depth=len(self.defer_stack))
+        self.block_exprs.append(ctx)
+        try:
+            self.gen_block(body)
+        finally:
+            self.block_exprs.pop()
+        if not self.builder.block.is_terminated:
+            raise LangError("block expression may end without an emit", expr.line)
+        self.builder.position_at_end(cont_bb)
+        if ctx.type is None:
+            # Every path diverged (e.g. via return) without an emit, so the
+            # block has no value and its continuation is unreachable.
+            raise LangError("block expression never emits a value", expr.line)
+        return TypedValue(self.gen_load(ctx.slot), ctx.type)
 
     def bind_local(self, name: str, slot, lang_type: LangType):
         """Record a local in the current scope.
@@ -1625,6 +1714,32 @@ class CodeGen:
                 self.run_defers_through(0)
                 if not self.builder.block.is_terminated:
                     self.builder.ret(tv.value)
+        elif isinstance(stmt, Emit):
+            if not self.block_exprs:
+                raise LangError(
+                    "emit outside a block expression; did you mean return?", stmt.line
+                )
+            ctx = self.block_exprs[-1]
+            # Evaluate the value before the defers run, so a defer cannot clobber
+            # what is being emitted (as with a return value).
+            tv = self.gen_expr(stmt.value)
+            if ctx.type is None:
+                # The first emit fixes the block's type and result slot. An
+                # untyped constant resolves to its own type (int32/float64);
+                # `null` has no inferable type, so it must be cast.
+                if tv.type is NULLT:
+                    raise LangError(
+                        "cannot infer the type of `emit null`; cast it, "
+                        "e.g. emit null as uint8*", stmt.line
+                    )
+                ctx.type = tv.type
+                ctx.slot = self.entry_alloca(ctx.type.ir)
+            else:
+                tv = self.coerce(tv, ctx.type, stmt.line, "emit")
+            self.gen_store(tv.value, ctx.slot)
+            self.run_defers_through(ctx.defer_depth)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(ctx.cont_bb)
         elif isinstance(stmt, Let):
             if stmt.name in self.scope_names:
                 raise LangError(
@@ -2087,6 +2202,8 @@ class CodeGen:
             raise LangError(
                 "an array literal is only allowed as a variable initializer", expr.line
             )
+        if isinstance(expr, BlockExpr):
+            return self.gen_block_expr(expr)
         if isinstance(expr, Var):
             # A name that is not a variable may be a constant or a function used
             # as a value.
@@ -3302,7 +3419,8 @@ class CodeGen:
         outer_bindings = self.type_bindings
         outer_source = self.current_source
         saved = (self.builder, self.locals, self.ret_type, self.loops,
-                 self.current_variadic, self.scope_names, self.defer_stack)
+                 self.current_variadic, self.scope_names, self.defer_stack,
+                 self.block_exprs)
         self.type_bindings = bindings
         self.current_source = func.source  # the signature may name private structs
         try:
@@ -3321,7 +3439,8 @@ class CodeGen:
             self.gen_function(func, fn, ret, params)
         finally:
             (self.builder, self.locals, self.ret_type, self.loops,
-             self.current_variadic, self.scope_names, self.defer_stack) = saved
+             self.current_variadic, self.scope_names, self.defer_stack,
+             self.block_exprs) = saved
             self.type_bindings = outer_bindings
             self.current_source = outer_source
         return fn, ret, params

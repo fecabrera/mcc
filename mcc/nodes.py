@@ -342,6 +342,42 @@ class Block:
 
 
 @dataclass
+class BlockExpr:
+    """A block used in expression position: ``{ ...; emit value; }``.
+
+    Runs its statements in their own scope and yields the value handed to
+    ``emit``, like an inlined, single-use, anonymous function -- temporaries
+    declared inside do not leak to the enclosing scope. A block must ``emit``
+    on the path that reaches its end (branch-only ``emit``\\ s need a trailing
+    one, exactly as a function needs a trailing ``return``).
+
+    Attributes:
+        body: The block's statements, ending in an ``emit``.
+        line: Source line for diagnostics.
+    """
+
+    body: list
+    line: int
+
+
+@dataclass
+class Emit:
+    """An ``emit value;`` -- the value of the nearest enclosing block-expression.
+
+    Plays the role ``return`` plays for a function: it fills in the block's
+    value and transfers control to the block's end. It is an error outside a
+    block-expression.
+
+    Attributes:
+        value: The expression yielded as the block's value.
+        line: Source line for diagnostics.
+    """
+
+    value: object
+    line: int
+
+
+@dataclass
 class Conditional:
     """An ``@if (cond) { ... } @else { ... }`` compile-time selection.
 

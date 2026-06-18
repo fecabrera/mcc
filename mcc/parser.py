@@ -7,11 +7,11 @@ import re
 from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
-    ArrayLit, Assign, Binary, Block, BoolLit, Break, Call, CallExpr, Case, Cast,
-    CharLit, Conditional, Const, Continue, Defer, ExprStmt, FloatLit, For, Func,
-    GlobalVar, If, Index, IntLit, Len, Let, Logical, Member, NullLit, Program, Return,
-    SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit, StructDecl, TypeRef,
-    Unary, Var, While,
+    ArrayLit, Assign, Binary, Block, BlockExpr, BoolLit, Break, Call, CallExpr,
+    Case, Cast, CharLit, Conditional, Const, Continue, Defer, Emit, ExprStmt,
+    FloatLit, For, Func, GlobalVar, If, Index, IntLit, Len, Let, Logical, Member,
+    NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit,
+    StructDecl, TypeRef, Unary, Var, While,
 )
 
 # C's simple escape sequences, plus \e for ESC (a GCC/Clang extension, handy
@@ -582,10 +582,10 @@ class Parser:
     def parse_statement(self):
         """Parse one statement inside a function body.
 
-        Covers ``@if``, blocks, ``return``, ``let``, ``if``/``else``, ``case``,
-        ``while``/``until``, ``break``, ``continue``, ``defer``, ``for``, and
-        expression statements -- including assignments, recognized by their
-        target form (a variable, ``*ptr``, ``base[i]``, or a member).
+        Covers ``@if``, blocks, ``return``, ``emit``, ``let``, ``if``/``else``,
+        ``case``, ``while``/``until``, ``break``, ``continue``, ``defer``,
+        ``for``, and expression statements -- including assignments, recognized
+        by their target form (a variable, ``*ptr``, ``base[i]``, or a member).
 
         Returns:
             The parsed statement node.
@@ -605,6 +605,11 @@ class Parser:
             value = None if self.cur.kind == ";" else self.parse_expr()
             self.expect(";")
             return Return(value, tok.line)
+        if tok.kind == "emit":
+            self.advance()
+            value = self.parse_expr()
+            self.expect(";")
+            return Emit(value, tok.line)
         if tok.kind == "let":
             self.advance()
             name = self.expect("IDENT").text
@@ -846,9 +851,10 @@ class Parser:
         """Parse a primary expression.
 
         Covers literals (int, float, bool, ``null``, string, char), a
-        parenthesized expression, an array literal, ``sizeof`` / ``len``, and an
-        identifier -- which becomes a ``Var`` or, with ``(...)``, a ``Call``
-        (optionally carrying generic type arguments).
+        parenthesized expression, a block-expression ``{ ...; emit v; }``, an
+        array literal, ``sizeof`` / ``len``, and an identifier -- which becomes a
+        ``Var`` or, with ``(...)``, a ``Call`` (optionally carrying generic type
+        arguments).
 
         Returns:
             The parsed expression node.
@@ -881,6 +887,15 @@ class Parser:
             expr = self.parse_expr()
             self.expect(")")
             return expr
+        if tok.kind == "{":
+            # A block-expression: { stmts; emit value; }. A `{` only reaches
+            # here in expression position; in statement position parse_statement
+            # claims it first as a block statement.
+            body = []
+            while self.cur.kind != "}":
+                body.append(self.parse_statement())
+            self.expect("}")
+            return BlockExpr(body, tok.line)
         if tok.kind == "[":
             elements = []
             while self.cur.kind != "]":

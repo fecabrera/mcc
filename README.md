@@ -46,6 +46,7 @@ fn main() -> int32 {
   - [Conditional compilation](#conditional-compilation)
   - [Control flow](#control-flow)
   - [Defer](#defer)
+  - [Block expressions](#block-expressions)
   - [Types](#types)
   - [Operators](#operators)
   - [Casts](#casts)
@@ -188,6 +189,8 @@ reference section.
 - [x] [Control flow](#control-flow) — `if`/`else`, `while`, `until`,
       `for … in`, `break`/`continue`, braceless bodies
 - [x] [`defer`](#defer) — statement and block forms, reverse order
+- [x] [Block expressions](#block-expressions) — `{ ...; emit v; }` as a
+      value, with contained temporaries
 - [x] [Types](#types) — `int8`–`int64`, `uint8`–`uint64`, `bool`, `float64`,
       `void`; untyped integer constants with range-checked adaptation
 - [x] [Operators](#operators) — arithmetic, comparison, logical
@@ -668,6 +671,48 @@ the latest values of the variables it names (unlike Go, which snapshots the
 arguments). A returned value is computed _before_ the defers run, so freeing a
 buffer in a defer can't clobber what you return. See
 [examples/defer.mc](examples/defer.mc).
+
+### Block expressions
+
+A `{ ... }` in expression position is a **block expression**: it runs its
+statements in their own scope and yields a value with `emit`. Think of it as
+an inlined, single-use, anonymous function — temporaries declared inside stay
+inside, and only the `emit`ted value escapes:
+
+```c
+let value: uint64 = {
+    let hi = read_hi() as uint64;
+    let lo = read_lo() as uint64;
+    emit (hi << 32) | lo;
+};
+// hi and lo don't exist out here; only `value` does
+```
+
+`emit` is to a block expression what `return` is to a function — it fills in
+the block's value and jumps to the block's end. The two are orthogonal:
+`emit` targets the nearest enclosing block expression, `return` always leaves
+the whole function, and `break`/`continue` still act on the enclosing loop. So
+a `return` inside a block expression exits the function, not just the block.
+
+A block expression's type is the type of what it emits, and — like a function
+that must `return` on every path — it must `emit` on the path that reaches its
+end. Branch-only emits need a trailing one, since (as with `if`/`else` and
+`return`) the compiler doesn't treat both arms as a guaranteed value:
+
+```c
+let label: uint8* = {
+    if (n == 0) { emit "zero"; }
+    if (n < 0)  { emit "negative"; }
+    emit "positive";        // required: the fall-through value
+};
+```
+
+`emit` is only valid inside a block expression; using it in a plain block
+statement or at a function's top level is an error (use `return` there). The
+trivial `{ emit e; }` is just `e`, so an untyped constant still adapts to its
+context (`let n: uint64 = { emit 1; };`). Any `defer` inside runs when the
+block yields, before the value leaves — exactly as a function's defers run
+before its `return`.
 
 ### Types
 
