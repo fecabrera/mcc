@@ -142,3 +142,26 @@ def test_static_global_invisible_to_other_files(tmp_path):
 def test_top_level_let_requires_extern_or_static():
     with pytest.raises(LangError, match="must be @extern or @static"):
         compile_ir("let loose: int32;\nfn main() -> int32 { return 0; }")
+
+
+def test_static_initializer_takes_a_const_reference():
+    # A @static initializer is a full constant expression, like a const's.
+    assert run(
+        "const N: int32 = 42;\n"
+        "@static let n: int32 = N;\n"
+        "fn main() -> int32 { return n; }"
+    ) == 42
+
+
+def test_static_pointer_initialized_from_const_cast():
+    source = (
+        "struct reg {}\n"
+        "const BASE: uint64 = 0x40001000;\n"
+        "@static let r: struct reg* = BASE as struct reg*;\n"
+    )
+    # The integer->pointer cast folds to an inttoptr constant expression.
+    assert "inttoptr" in compile_ir(source + "fn main() -> int32 { return 0; }")
+    # And the address round-trips at runtime.
+    assert run(
+        source + "fn main() -> int32 { if ((r as uint64) == BASE) return 1; return 0; }"
+    ) == 1

@@ -205,7 +205,7 @@ def test_element_type_is_checked():
 
 
 def test_static_initializer_must_be_constant():
-    with pytest.raises(LangError, match="@static initializer must be a constant"):
+    with pytest.raises(LangError, match="must be a compile-time constant"):
         compile_ir(
             "fn side() -> int32 { return 1; }\n"
             "@static let a: int32[2] = [side(), 1];\n"

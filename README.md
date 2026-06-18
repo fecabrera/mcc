@@ -823,9 +823,9 @@ let primes: int32[] = [2, 3, 5, 7, 11];          // length inferred as 5
 let grid: int32[2][2] = [[1, 2], [3, 4]];        // nested
 ```
 
-A local literal's elements may be any expressions; a `@static` one must be
-constant (numbers, characters, string literals, or `null`), so a lookup
-table lives in read-only data:
+A local literal's elements may be any expressions; a `@static` one must be a
+constant expression — literals, `const` references, `sizeof`, `as` casts, or
+arithmetic — so a lookup table lives in read-only data:
 
 ```c
 @static let cmds: uint8*[][2] = [
@@ -1055,12 +1055,16 @@ symbol.
 
 `@static` on a top-level `let` makes a file-scoped variable with its own
 storage that persists for the life of the program — a static counter,
-buffer, or lookup table. It is zero-initialized unless given a constant
-initializer (see [Arrays](#arrays) for a static table):
+buffer, or lookup table. It is zero-initialized unless given an initializer,
+which may be any constant expression (a `const`, an `as` cast, `sizeof`,
+arithmetic), folded at compile time like a [`const`](#constants) — so a fixed
+pointer such as a memory-mapped register address works (see
+[Arrays](#arrays) for a static table):
 
 ```c
 @static let calls: int32;            // starts at 0, kept across calls
 @static let lookup: uint8[256];      // a static buffer
+@static let uart: struct pl011* = 0x9000000 as struct pl011*;   // fixed MMIO address
 
 fn next_id() -> int32 { calls = calls + 1; return calls; }
 ```

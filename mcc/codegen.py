@@ -2506,8 +2506,9 @@ class CodeGen:
     def const_initializer(self, expr, expected: LangType, line: int) -> ir.Constant:
         """Build a constant of a given type for a ``@static`` initializer.
 
-        Arrays use nested literals; scalars must be compile-time constants (a
-        number, char, or string literal, or ``null``).
+        Arrays use nested literals; scalars may be any compile-time constant
+        expression -- a literal, a ``const`` reference, an ``as`` cast,
+        ``sizeof``, or arithmetic -- folded via :meth:`eval_const`.
 
         Args:
             expr: The initializer expression.
@@ -2540,9 +2541,11 @@ class CodeGen:
                                "initializer").value
         if isinstance(expr, FloatLit) and expected is FLOAT64:
             return ir.Constant(FLOAT64.ir, expr.value)
-        raise LangError(
-            f"a @static initializer must be a constant of type {expected}", line
-        )
+        # Any other constant expression -- a const reference, an `as` cast,
+        # `sizeof`, or arithmetic -- is folded like a `const` initializer and
+        # coerced to the declared type.
+        return self.const_coerce(self.eval_const(expr, line), expected, line,
+                                 "@static initializer").value
 
     def gen_const_scalar(self, expr) -> TypedValue:
         """Build an adaptable constant for an integer or char literal.
@@ -2675,7 +2678,10 @@ class CodeGen:
         )
 
     def eval_const_cast(self, expr: Cast) -> TypedValue:
-        """Fold a numeric ``as`` cast on a constant operand.
+        """Fold an ``as`` cast on a constant operand.
+
+        Handles the numeric conversions and the pointer conversions that LLVM
+        permits as constant expressions (integer <-> pointer, pointer bitcasts).
 
         Args:
             expr: The ``Cast`` node.
@@ -2684,7 +2690,8 @@ class CodeGen:
             The converted constant ``TypedValue``.
 
         Raises:
-            LangError: On a cast not allowed in a constant (e.g. a pointer cast).
+            LangError: On a cast not allowed in a constant (e.g. involving a
+                struct or float-to-pointer).
         """
         tv = self.eval_const(expr.value, expr.line)
         target = self.lang_type(expr.type_name, expr.line)
@@ -2699,6 +2706,17 @@ class CodeGen:
             return TypedValue(ir.Constant(FLOAT64.ir, float(tv.value.constant)), FLOAT64)
         if src is FLOAT64 and is_integer(target):
             return TypedValue(ir.Constant(target.ir, wrap_int(int(tv.value.constant), target)), target)
+        # Pointer conversions fold to LLVM constant expressions (legal in a
+        # global initializer): integer -> pointer, pointer <-> pointer, and
+        # pointer -> 64-bit integer -- the same rules as gen_cast.
+        src_addr = is_pointer(src) or is_function(src)
+        target_addr = is_pointer(target) or is_function(target)
+        if is_integer(src) and target_addr:
+            return TypedValue(tv.value.inttoptr(target.ir), target)
+        if src_addr and target_addr:
+            return TypedValue(tv.value.bitcast(target.ir), target)
+        if src_addr and is_integer(target) and target.ir.width == 64:
+            return TypedValue(tv.value.ptrtoint(target.ir), target)
         raise LangError(f"cannot cast {src} to {target} in a constant", expr.line)
 
     def eval_const_binary(self, expr: Binary) -> TypedValue:
