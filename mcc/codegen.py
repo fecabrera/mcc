@@ -1805,8 +1805,15 @@ class CodeGen:
                 with self.builder.if_else(cond) as (then, otherwise):
                     with then:
                         self.gen_block(stmt.then)
+                        then_diverged = self.builder.block.is_terminated
                     with otherwise:
                         self.gen_block(stmt.otherwise)
+                        else_diverged = self.builder.block.is_terminated
+                # When both arms diverge (return/emit/break), the merge block
+                # the builder now sits in is unreachable; terminate it so the
+                # statement counts as diverging too -- no trailing return needed.
+                if then_diverged and else_diverged:
+                    self.builder.unreachable()
             else:
                 with self.builder.if_then(cond):
                     self.gen_block(stmt.then)
@@ -1864,6 +1871,7 @@ class CodeGen:
             if is_struct(subject.type) or subject.type is VOID:
                 raise LangError(f"cannot match a {subject.type} in a case", stmt.line)
             end_bb = self.builder.append_basic_block("case.end")
+            reaches_end = False
             for value_exprs, body in stmt.arms:
                 # An arm matches if the subject equals any of its values.
                 cond = None
@@ -1878,11 +1886,19 @@ class CodeGen:
                 self.gen_block(body)  # no fall-through: each arm exits to the end
                 if not self.builder.block.is_terminated:
                     self.builder.branch(end_bb)
+                    reaches_end = True
                 self.builder.position_at_end(next_bb)
             self.gen_block(stmt.otherwise)  # the else arm, or empty
             if not self.builder.block.is_terminated:
+                # An empty otherwise falls through here, so a case without an
+                # exhaustive else always reaches the end.
                 self.builder.branch(end_bb)
+                reaches_end = True
             self.builder.position_at_end(end_bb)
+            # Every arm and the else diverged: the end is unreachable, so the
+            # case counts as diverging (no trailing return/emit needed).
+            if not reaches_end:
+                self.builder.unreachable()
         elif isinstance(stmt, StoreDeref):
             ptr = self.gen_expr(stmt.ptr)
             if not is_pointer(ptr.type):

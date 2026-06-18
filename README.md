@@ -695,15 +695,15 @@ the whole function, and `break`/`continue` still act on the enclosing loop. So
 a `return` inside a block expression exits the function, not just the block.
 
 A block expression's type is the type of what it emits, and — like a function
-that must `return` on every path — it must `emit` on the path that reaches its
-end. Branch-only emits need a trailing one, since (as with `if`/`else` and
-`return`) the compiler doesn't treat both arms as a guaranteed value:
+that must `return` on every path — it must `emit` on every path that can reach
+its end. An exhaustive `if`/`else` (or a `case` with an `else`) where every arm
+emits is enough; otherwise a trailing `emit` supplies the fall-through value:
 
 ```c
 let label: uint8* = {
-    if (n == 0) { emit "zero"; }
-    if (n < 0)  { emit "negative"; }
-    emit "positive";        // required: the fall-through value
+    if (n < 0) emit "negative";
+    else if (n == 0) emit "zero";
+    else emit "positive";          // every path emits -- no trailing one needed
 };
 ```
 

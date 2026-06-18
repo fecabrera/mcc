@@ -11,9 +11,8 @@ fn apply(op: fn(int32, int32) -> int32, x: int32, y: int32) -> int32 {
     return op(x, y);
 }
 
-// A function pointer can be returned, too. (A case where every arm returns
-// is not treated as a guaranteed return -- as with if/else -- so pick into a
-// variable and return that.)
+// A function pointer can be returned, too. Here a default is picked and a
+// case overrides it for specific inputs.
 fn op_for(symbol: uint8) -> fn(int32, int32) -> int32 {
     let op: fn(int32, int32) -> int32 = add;
     case (symbol) {

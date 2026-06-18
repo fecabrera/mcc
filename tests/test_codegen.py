@@ -211,3 +211,43 @@ def test_untyped_let_accepts_typed_values():
         }
         """
     )
+
+
+# --- exhaustive divergence counts as a return (no trailing return needed) ---
+
+def test_if_else_both_return_is_exhaustive():
+    # Both arms return, so the function needs no trailing return.
+    assert run(
+        "fn pick(c: bool) -> int32 { if (c) return 0; else return -1; }\n"
+        "fn main() -> int32 { return pick(true) - pick(false); }"  # 0 - (-1)
+    ) == 1
+
+
+def test_nested_if_else_both_return_is_exhaustive():
+    assert run(
+        "fn f(a: int32) -> int32 {\n"
+        "    if (a > 0) { if (a > 10) return 2; else return 1; }\n"
+        "    else return 0;\n"
+        "}\n"
+        "fn main() -> int32 { return f(20) * 100 + f(5) * 10 + f(-1); }"
+    ) == 210
+
+
+def test_case_with_else_all_arms_return_is_exhaustive():
+    assert run(
+        "fn name(d: int32) -> int32 {\n"
+        "    case (d) { when 0: return 100; when 1: return 200; else: return 300; }\n"
+        "}\n"
+        "fn main() -> int32 { return name(0) + name(1) + name(9); }"
+    ) == 600
+
+
+def test_case_without_else_still_needs_a_trailing_return():
+    # A case without an else can fall through, so it is not exhaustive.
+    with pytest.raises(LangError, match="may end without a return"):
+        compile_ir("fn f(d: int32) -> int32 { case (d) { when 0: return 1; } }")
+
+
+def test_if_without_else_still_needs_a_trailing_return():
+    with pytest.raises(LangError, match="may end without a return"):
+        compile_ir("fn f(c: bool) -> int32 { if (c) return 1; }")

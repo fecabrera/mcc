@@ -93,15 +93,22 @@ def test_braceless_if_else_emit_with_a_trailing_emit():
     assert run(source) == 12
 
 
-def test_braceless_if_else_both_emit_still_needs_a_trailing_emit():
-    # Both arms emitting is not a guaranteed value -- the same rule a function's
-    # `return` follows (if/else both-return also needs a trailing return).
-    with pytest.raises(LangError, match="may end without an emit"):
-        compile_ir(
-            "fn pick(c: bool) -> int32 {\n"
-            "    return { if (c) emit 1; else emit 2; };\n"
-            "}"
-        )
+def test_if_else_both_emit_needs_no_trailing_emit():
+    # An if/else where both arms emit is exhaustive, so no trailing emit is
+    # needed -- the same guarantee a function's if/else both-return gives.
+    assert run(
+        "fn pick(c: bool) -> int32 { return { if (c) emit 1; else emit 2; }; }\n"
+        "fn main() -> int32 { return pick(true) * 10 + pick(false); }"
+    ) == 12
+
+
+def test_case_all_arms_and_else_emit_needs_no_trailing_emit():
+    assert run(
+        "fn classify(n: int32) -> int32 {\n"
+        "    return { case (n) { when 0: emit 5; else: emit 9; } };\n"
+        "}\n"
+        "fn main() -> int32 { return classify(0) * 10 + classify(7); }"
+    ) == 59
 
 
 def test_usable_in_expression_positions():
