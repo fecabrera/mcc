@@ -219,6 +219,8 @@ reference section.
 - [ ] Macro functions — compile-time expansion (`@inline` already covers the
       call-overhead case)
 - [ ] Inline assembly — `asm` blocks for emitting raw instructions
+- [ ] Full variadic support — `va_arg` to read individual arguments in mcc
+      (today a `va_list` can only be forwarded to a C `v*` function)
 
 <!-- Add upcoming features here, e.g. - [ ] feature — short note -->
 
