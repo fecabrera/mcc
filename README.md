@@ -121,17 +121,17 @@ mcc main.mc --target aarch64-unknown-none-elf   # cross-compile to an object fil
 mcc main.mc --general-regs-only         # never use FP/SIMD registers
 ```
 
-| Option | Description |
-| --- | --- |
-| `source` | The `.mc` file to compile (required). Its imports are resolved and compiled with it. |
-| `-o`, `--output FILE` | Name of the generated file. Defaults to the source name without its extension (a native executable), or with a `.o` suffix when `--target` is given. |
-| `-O 0`–`3` | Optimization level, from `0` (none) to `3` (most aggressive). Default `2`. |
-| `--run` | JIT-compile and run the program immediately instead of writing a file; its exit code becomes mcc's. Cannot be combined with `--target`. |
-| `--emit-llvm` | Print the generated LLVM IR to stdout and exit, without compiling or linking. |
-| `-I`, `--import-path DIR` | Add a directory to the import search path. Repeatable; later paths are searched after earlier ones. |
-| `--naked` | Do not put the bundled `lib/` directory on the import path, dropping the standard library (for freestanding builds that supply their own). |
-| `--target TRIPLE` | Cross-compile for the given LLVM target triple, emitting an object file instead of a host executable. |
-| `--general-regs-only` | Generate code that uses only general-purpose registers, never the floating-point/SIMD ones. |
+| Option                    | Description                                                                                                                                          |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`                  | The `.mc` file to compile (required). Its imports are resolved and compiled with it.                                                                 |
+| `-o`, `--output FILE`     | Name of the generated file. Defaults to the source name without its extension (a native executable), or with a `.o` suffix when `--target` is given. |
+| `-O 0`–`3`                | Optimization level, from `0` (none) to `3` (most aggressive). Default `2`.                                                                           |
+| `--run`                   | JIT-compile and run the program immediately instead of writing a file; its exit code becomes mcc's. Cannot be combined with `--target`.              |
+| `--emit-llvm`             | Print the generated LLVM IR to stdout and exit, without compiling or linking.                                                                        |
+| `-I`, `--import-path DIR` | Add a directory to the import search path. Repeatable; later paths are searched after earlier ones.                                                  |
+| `--naked`                 | Do not put the bundled `lib/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).           |
+| `--target TRIPLE`         | Cross-compile for the given LLVM target triple, emitting an object file instead of a host executable.                                                |
+| `--general-regs-only`     | Generate code that uses only general-purpose registers, never the floating-point/SIMD ones.                                                          |
 
 `--target` accepts any LLVM triple and emits an object file instead of a
 host executable; link it with that target's toolchain (e.g.
@@ -234,6 +234,8 @@ reference section.
       expression (today only a literal, a single `const` name, or `[]`)
 - [ ] Macro functions — compile-time expansion (`@inline` already covers the
       call-overhead case)
+- [ ] Bit-twiddling builtins — `byte_swap<T>` (`llvm.bswap`) and
+      `bit_reverse<T>` (`llvm.bitreverse`) over the integer types
 - [ ] Inline assembly — `asm` blocks for emitting raw instructions
 - [ ] Full C-style variadic support — C's `va_arg` to read individual arguments in mcc
       (today a `va_list` can only be forwarded to a C `v*` function)
