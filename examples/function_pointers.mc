@@ -30,6 +30,12 @@ struct button {
 
 fn loud(x: int32) -> int32 { return x * 100; }
 
+// A fixed-size dispatch table as a @static global. A function name folds to
+// a constant address, so the table can be initialized at compile time. The
+// grouped (fn(...) -> ...)[] is an array of function pointers, with the row
+// count inferred from the initializer.
+@static let binops: (fn(int32, int32) -> int32)[] = [add, sub];
+
 fn main() -> int32 {
     // In a variable, reassignable.
     let op: fn(int32, int32) -> int32 = add;
@@ -49,9 +55,20 @@ fn main() -> int32 {
     b.on_press = loud;
     println("%s -> %d", b.label, b.on_press(7));
 
-    // A dispatch table: alloc<T> returns a typed T*, here a pointer to
-    // function pointers -- no sizeof or cast needed. The element type is the
-    // grouped (fn(...) -> ...) so the * from T* binds outside it.
+    // The @static dispatch table, indexed and called in place.
+    println("binops[0](2, 3) = %d, binops[1](2, 3) = %d",
+            binops[0](2, 3), binops[1](2, 3));
+
+    // A fixed-size table on the stack: (fn(...) -> ...)[N] is an array of N
+    // function pointers, assigned element by element.
+    let local: (fn(int32, int32) -> int32)[2];
+    local[0] = add;
+    local[1] = sub;
+    println("local[0](7, 4) = %d, local[1](7, 4) = %d", local[0](7, 4), local[1](7, 4));
+
+    // A heap table: alloc<T> returns a typed T*, here a pointer to function
+    // pointers -- no sizeof or cast needed. The element type is the grouped
+    // (fn(...) -> ...) so the * from T* binds outside it.
     let table = alloc<fn(int32, int32) -> int32>(2);
     table[0] = add;
     table[1] = sub;

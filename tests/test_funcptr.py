@@ -268,3 +268,64 @@ def test_function_pointer_bitcasts_to_a_data_pointer():
     }
     """
     assert run(source) == 9
+
+
+# --- arrays of function pointers ---
+
+def test_array_of_function_pointers_parses():
+    (func,) = parse(
+        "fn main() { let t: (fn(int32, int32) -> int32)[4]; }"
+    ).functions
+    t = func.body[0].type_name
+    assert t.params is not None and t.dims == [4]
+
+
+def test_dispatch_table_indexed_and_called():
+    source = """
+    fn add(a: int32, b: int32) -> int32 { return a + b; }
+    fn sub(a: int32, b: int32) -> int32 { return a - b; }
+    fn mul(a: int32, b: int32) -> int32 { return a * b; }
+    fn main() -> int32 {
+        let ops: (fn(int32, int32) -> int32)[3];
+        ops[0] = add; ops[1] = sub; ops[2] = mul;
+        let total: int32 = 0;
+        let i: int32 = 0;
+        while (i < 3) { total = total + ops[i](10, 3); i = i + 1; }
+        return total;     // 13 + 7 + 30
+    }
+    """
+    assert run(source) == 50
+
+
+def test_function_pointer_array_literal():
+    source = """
+    fn add(a: int32, b: int32) -> int32 { return a + b; }
+    fn mul(a: int32, b: int32) -> int32 { return a * b; }
+    fn main() -> int32 {
+        let ops: (fn(int32, int32) -> int32)[] = [add, mul];
+        return ops[0](4, 5) + ops[1](4, 5);     // 9 + 20
+    }
+    """
+    assert run(source) == 29
+
+
+def test_static_function_pointer_table():
+    # A @static table folds each function name to its address at compile time.
+    source = """
+    fn add(a: int32, b: int32) -> int32 { return a + b; }
+    fn mul(a: int32, b: int32) -> int32 { return a * b; }
+    @static let ops: (fn(int32, int32) -> int32)[] = [add, mul];
+    fn main() -> int32 { return ops[0](4, 5) + ops[1](4, 5); }
+    """
+    assert run(source) == 29
+    ir_text = compile_ir(source)
+    assert "[2 x i32 (i32, i32)*]" in ir_text
+
+
+def test_array_of_function_pointer_pointers():
+    # The group lets `*` and `[N]` both bind outside the function type.
+    (func,) = parse(
+        "fn main() { let t: (fn(int32) -> int32)*[2]; }"
+    ).functions
+    t = func.body[0].type_name
+    assert t.params is not None and t.stars == 1 and t.dims == [2]

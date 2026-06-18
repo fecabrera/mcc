@@ -790,9 +790,25 @@ table[i](x);           // an entry in a dispatch table
 chooser()(x);          // the function a call returned
 ```
 
-In a type, `*` binds to the return type, so `fn(int32) -> int32*` is a
-function returning `int32*`. Group with parentheses for a pointer to a
-function pointer: `(fn(int32) -> int32)*`, e.g. an array of callbacks.
+In a type, `*` and `[N]` bind to the return type, so `fn(int32) -> int32*`
+is a function returning `int32*`. Group with parentheses to bind them
+outside the function type instead — `(fn(int32) -> int32)*` is a pointer to
+a function pointer, and `(fn(int32) -> int32)[N]` is an array of `N`
+function pointers (a dispatch table):
+
+```c
+fn add(a: int32, b: int32) -> int32 { return a + b; }
+fn mul(a: int32, b: int32) -> int32 { return a * b; }
+
+@static let ops: (fn(int32, int32) -> int32)[] = [add, mul];
+
+fn main() -> int32 {
+    return ops[0](2, 3) + ops[1](2, 3);   // 5 + 6
+}
+```
+
+A function name folds to a constant address, so a `@static` table can be
+initialized with one at compile time.
 
 A function value is a pointer underneath, so it casts like one: `add as
 uint64` is the function's address as an integer, `addr as fn(...) -> R`

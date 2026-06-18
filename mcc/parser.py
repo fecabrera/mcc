@@ -319,8 +319,9 @@ class Parser:
         if self.cur.kind == "fn":
             return self.parse_fn_type(greedy_stars)
         if self.cur.kind == "(":
-            # A grouped type, so the pointer binds outside a function type:
-            # (fn(int32) -> int32)* is a pointer to a function pointer.
+            # A grouped type, so a `*` or `[N]` binds outside a function type:
+            # (fn(int32) -> int32)* is a pointer to a function pointer, and
+            # (fn(int32) -> int32)[8] is an array of eight function pointers.
             self.advance()
             inner = self.parse_type_ref()
             self.expect(")")
@@ -328,6 +329,8 @@ class Parser:
             if extra and inner.dims:
                 raise LangError("pointer to an array type is not supported", self.cur.line)
             inner.stars += extra
+            # Dimensions on the group are the outermost, so they come first.
+            inner.dims = self.parse_dims() + inner.dims
             return inner
         self.accept("struct")
         name = self.expect("IDENT").text

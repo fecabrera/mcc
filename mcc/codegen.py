@@ -1258,6 +1258,9 @@ class CodeGen:
                                           f"const {const.name}")
             self.consts[const.name] = value
             self.const_privacy[const.name] = (const.private, const.source)
+        # An @static initializer may name a function (a constant function
+        # pointer), so its evaluation waits until functions are declared below.
+        deferred_static_inits = []
         for var in self.program.globals:
             self.current_source = var.source  # the type may name private structs
             # An initializer can supply an inferred outermost [] dimension.
@@ -1274,9 +1277,10 @@ class CodeGen:
                 symbol = self.static_base(var.name, var.source)
                 glob = ir.GlobalVariable(self.module, var_type.ir, name=symbol)
                 glob.linkage = self.shared_linkage(var.source)
-                glob.initializer = (self.const_initializer(var.init, var_type, var.line)
-                                    if var.init is not None
-                                    else ir.Constant(var_type.ir, None))
+                if var.init is not None:
+                    deferred_static_inits.append((glob, var, var_type))
+                else:
+                    glob.initializer = ir.Constant(var_type.ir, None)
                 self.static_globals[key] = (glob, var_type, var.volatile)
                 self.global_privacy[var.name] = (var.private, var.source)
                 continue
@@ -1373,6 +1377,11 @@ class CodeGen:
             self.mark_inline(fn, func)
             self.funcs[func.name] = fn
             self.signatures[func.name] = (ret, params, func.variadic)
+        # Functions are declared now, so @static initializers that reference one
+        # can be folded to its address.
+        for glob, var, var_type in deferred_static_inits:
+            self.current_source = var.source
+            glob.initializer = self.const_initializer(var.init, var_type, var.line)
         for func in self.program.functions:
             if not func.type_params and not func.extern:
                 symbol = self.static_funcs.get((func.source, func.name), func.name)
@@ -2602,14 +2611,19 @@ class CodeGen:
             return TypedValue(ir.Constant(UINT64.ir, size), UINT64)
         if isinstance(expr, Var):
             const = self.consts.get(expr.name)
-            if const is None:
-                raise LangError(
-                    f"{expr.name!r} is not a constant; a const initializer must be "
-                    "a compile-time constant", expr.line
-                )
-            self.check_access(*self.const_privacy[expr.name],
-                              f"constant {expr.name!r}", expr.line)
-            return const
+            if const is not None:
+                self.check_access(*self.const_privacy[expr.name],
+                                  f"constant {expr.name!r}", expr.line)
+                return const
+            # A bare function name folds to its address (a constant function
+            # pointer), so a @static table of functions can be initialized.
+            fv = self.func_value(expr.name, expr.line)
+            if fv is not None:
+                return fv
+            raise LangError(
+                f"{expr.name!r} is not a constant; a const initializer must be "
+                "a compile-time constant", expr.line
+            )
         if isinstance(expr, Unary):
             return self.eval_const_unary(expr)
         if isinstance(expr, Cast):
