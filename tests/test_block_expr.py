@@ -66,6 +66,44 @@ def test_conditional_emit_with_a_trailing_emit():
     assert run(source) == 1  # (-1 + 1)*10 + 1 + 0
 
 
+def test_braceless_if_emit_with_a_trailing_emit():
+    # An `emit` as a braceless if-body (not wrapped in a { } block statement).
+    source = """
+    fn sign(x: int32) -> int32 {
+        return {
+            if (x > 0) emit 1;
+            if (x < 0) emit -1;
+            emit 0;
+        };
+    }
+    fn main() -> int32 {
+        return (sign(-9) + 2) * 100 + (sign(5) + 2) * 10 + (sign(0) + 2);
+    }
+    """
+    assert run(source) == 132  # (1)(3)(2)
+
+
+def test_braceless_if_else_emit_with_a_trailing_emit():
+    source = """
+    fn pick(c: bool) -> int32 {
+        return { if (c) emit 1; else emit 2; emit 9; };
+    }
+    fn main() -> int32 { return pick(true) * 10 + pick(false); }
+    """
+    assert run(source) == 12
+
+
+def test_braceless_if_else_both_emit_still_needs_a_trailing_emit():
+    # Both arms emitting is not a guaranteed value -- the same rule a function's
+    # `return` follows (if/else both-return also needs a trailing return).
+    with pytest.raises(LangError, match="may end without an emit"):
+        compile_ir(
+            "fn pick(c: bool) -> int32 {\n"
+            "    return { if (c) emit 1; else emit 2; };\n"
+            "}"
+        )
+
+
 def test_usable_in_expression_positions():
     # As a binary operand, a call argument, and a return value.
     assert run("fn main() -> int32 { return { emit 20; } + { emit 22; }; }") == 42
