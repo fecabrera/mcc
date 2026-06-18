@@ -733,11 +733,23 @@ _untyped constants_: they adapt to the integer type
 they are used with as long as the value fits (so `let x: uint64 = 5;` and
 `x % 7` both work; `let y: uint8 = 300;` is a compile error). Where no
 context provides a type -- most notably `let` without an annotation -- an
-untyped constant is a compile error rather than silently becoming `int32`.
-Constant integer arithmetic folds at compile time and stays untyped
-(`10 * sizeof(int64)` is a `uint64` because `sizeof` is typed; `2 + 3` is
+untyped constant is a compile error rather than silently picking one.
+Where one _is_ needed but unconstrained (a variadic argument, constant
+arithmetic), the default is the narrowest of `int32`, `int64`, `uint64`
+that holds the value: `7` is `int32` — so `printf("%d", 7)` matches C's
+`int` — while `5000000000` is `int64` and a 64-bit mask is `uint64`, with
+no silent truncation. Constant integer arithmetic folds at compile time and
+stays untyped, widening as needed (`1 + 5000000000` is `int64`;
+`10 * sizeof(int64)` is `uint64` because `sizeof` is typed; `2 + 3` is
 still untyped). There are no other implicit conversions: operands of a
 binary operator must have the same type.
+
+The guiding principle: **untyped integer constants adapt to fit, but a typed
+value keeps its type** — to use it at a different width or signedness, convert
+it explicitly with `as`. So `let x: uint64 = 1 << 40;` just works (the untyped
+`1` widens), but a `uint32` value shifted that far needs `(v as uint64) << 40`.
+That keeps numeric code type-safe — no implicit promotions, C's classic source
+of sign and width bugs — while leaving untyped constants ergonomic.
 
 Signedness changes behavior, not representation: unsigned types use unsigned
 division, remainder, and comparisons, and zero-extend instead of sign-extend

@@ -181,6 +181,7 @@ for _width in (8, 16, 32, 64):
     TYPES[f"uint{_width}"] = LangType(f"uint{_width}", ir.IntType(_width), signed=False)
 
 INT32 = TYPES["int32"]
+INT64 = TYPES["int64"]
 UINT8 = TYPES["uint8"]
 UINT64 = TYPES["uint64"]
 # uint8* doubles as the "raw memory" pointer (C's void*/char*); string
@@ -519,6 +520,105 @@ def wrap_int(value: int, lang_type: LangType) -> int:
         half = 1 << (width - 1)
         return (value + half) % (1 << width) - half
     return value % (1 << width)
+
+
+def int_literal_type(value: int) -> LangType:
+    """The default type of an untyped integer constant: the smallest that fits.
+
+    An untyped integer literal (and constant arithmetic on such literals) takes
+    the narrowest of ``int32``, ``int64``, ``uint64`` that holds its value, so a
+    small literal like ``7`` stays ``int32`` -- matching C's ``int`` for varargs
+    such as ``printf("%d", 7)`` -- while a value past ``int32`` widens instead of
+    silently truncating. It remains adaptable, so it still coerces to any integer
+    type its value fits.
+
+    Args:
+        value: The constant's value (already negated for a leading ``-``).
+
+    Returns:
+        ``INT32``, ``INT64``, or ``UINT64``.
+    """
+    if -(1 << 31) <= value < (1 << 31):
+        return INT32
+    if -(1 << 63) <= value < (1 << 63):
+        return INT64
+    return UINT64  # a top-bit-set 64-bit value (a mask, a high address)
+
+
+def wider_int_type(a: LangType, b: LangType) -> LangType:
+    """The integer type two adaptable operands widen to before combining.
+
+    Picks the greater width; at equal width (``int64`` vs ``uint64``) it picks
+    the unsigned one, which represents every value either side can hold.
+
+    Args:
+        a: One operand's type.
+        b: The other operand's type.
+
+    Returns:
+        The wider of the two integer types.
+    """
+    if a.ir.width != b.ir.width:
+        return a if a.ir.width > b.ir.width else b
+    return a if not a.signed else b
+
+
+def adaptable_int(value: int) -> "TypedValue":
+    """An untyped integer constant tagged with its default type.
+
+    See :func:`int_literal_type` for how the default width is chosen.
+
+    Args:
+        value: The constant's value.
+
+    Returns:
+        An adaptable ``TypedValue`` wrapping the value.
+    """
+    lang_type = int_literal_type(value)
+    return TypedValue(ir.Constant(lang_type.ir, value), lang_type, adaptable=True)
+
+
+def widen_to(tv: "TypedValue", target: LangType) -> "TypedValue":
+    """Re-tag an adaptable integer constant with a wider type, staying adaptable.
+
+    Used to bring two untyped operands of different default widths to a common
+    type before folding, so neither narrows (which could overflow). The value is
+    wrapped to ``target`` for the rare negative-into-unsigned case, matching a
+    cast's two's-complement reinterpretation.
+
+    Args:
+        tv: The adaptable integer constant to widen.
+        target: The wider type to re-tag it with.
+
+    Returns:
+        The same value as an adaptable constant of ``target``.
+    """
+    return TypedValue(ir.Constant(target.ir, wrap_int(tv.value.constant, target)),
+                      target, adaptable=True)
+
+
+def fold_untyped_shift(a: int, b: int) -> "TypedValue | None":
+    """Fold ``a << b`` for an untyped-constant left operand as exact integer math.
+
+    An untyped constant has no real width to overflow, so the shift is computed
+    in full precision and the result picks its narrowest fitting type -- ``1 <<
+    40`` is ``int64``, ``1 << 63`` is ``uint64``. This is why ``let x: uint64 =
+    1 << 40;`` needs no cast.
+
+    Args:
+        a: The left operand's value.
+        b: The shift amount.
+
+    Returns:
+        The widened constant, or ``None`` when ``b`` is negative or the result
+        exceeds 64 bits (left to the normal shift handling, which errors).
+    """
+    if b < 0:
+        return None
+    shifted = a << b
+    if -(1 << 63) <= shifted < (1 << 64):
+        return adaptable_int(shifted)
+    return None
 
 
 class CodeGen:
@@ -1636,10 +1736,10 @@ class CodeGen:
                 constant is out of range.
         """
         # Range-check adaptable integer constants first, before the
-        # same-type early return below. Their type is a placeholder (every
-        # literal is tagged int32), so a value too big for `expected` must be
-        # caught here -- even when `expected` is int32 too -- or it silently
-        # truncates at IR emission.
+        # same-type early return below. Their type is only a default placeholder
+        # (the narrowest of int32/int64/uint64 that fits the value), so a value
+        # too big for `expected` must be caught here -- even when the types match
+        # -- or it silently truncates at IR emission.
         if (
             tv.adaptable
             and isinstance(tv.value, ir.Constant)
@@ -2221,7 +2321,7 @@ class CodeGen:
             LangError: On an ill-typed or unsupported expression.
         """
         if isinstance(expr, IntLit):
-            return TypedValue(ir.Constant(INT32.ir, expr.value), INT32, adaptable=True)
+            return adaptable_int(expr.value)
         if isinstance(expr, CharLit):
             return TypedValue(ir.Constant(UINT8.ir, expr.value), UINT8)
         if isinstance(expr, FloatLit):
@@ -2492,9 +2592,9 @@ class CodeGen:
         # Fold minus on literals so negative constants stay constants (and can
         # still coerce to other integer types).
         if expr.op == "-" and isinstance(expr.operand, IntLit):
-            return TypedValue(ir.Constant(INT32.ir, -expr.operand.value), INT32, adaptable=True)
+            return adaptable_int(-expr.operand.value)
         if expr.op == "~" and isinstance(expr.operand, IntLit):
-            return TypedValue(ir.Constant(INT32.ir, ~expr.operand.value), INT32, adaptable=True)
+            return adaptable_int(~expr.operand.value)
         if expr.op == "-" and isinstance(expr.operand, FloatLit):
             return TypedValue(ir.Constant(FLOAT64.ir, -expr.operand.value), FLOAT64)
         if expr.op == "&":
@@ -2725,7 +2825,7 @@ class CodeGen:
         """
         if isinstance(expr, CharLit):
             return TypedValue(ir.Constant(UINT8.ir, expr.value), UINT8)
-        return TypedValue(ir.Constant(INT32.ir, expr.value), INT32, adaptable=True)
+        return adaptable_int(expr.value)
 
     def eval_const(self, expr, line: int) -> TypedValue:
         """Fold a ``const`` initializer to a constant ``TypedValue``.
@@ -2746,7 +2846,7 @@ class CodeGen:
             LangError: When the expression is not a compile-time constant.
         """
         if isinstance(expr, IntLit):
-            return TypedValue(ir.Constant(INT32.ir, expr.value), INT32, adaptable=True)
+            return adaptable_int(expr.value)
         if isinstance(expr, CharLit):
             return TypedValue(ir.Constant(UINT8.ir, expr.value), UINT8)
         if isinstance(expr, FloatLit):
@@ -2908,7 +3008,13 @@ class CodeGen:
         lhs = self.eval_const(expr.lhs, expr.line)
         rhs = self.eval_const(expr.rhs, expr.line)
         if lhs.type != rhs.type:
-            if rhs.adaptable:
+            if (lhs.adaptable and rhs.adaptable
+                    and is_integer(lhs.type) and is_integer(rhs.type)):
+                # Two untyped constants of different default widths: widen both
+                # to the larger so neither narrows (e.g. 1 + 5000000000).
+                wide = wider_int_type(lhs.type, rhs.type)
+                lhs, rhs = widen_to(lhs, wide), widen_to(rhs, wide)
+            elif rhs.adaptable:
                 rhs = self.const_coerce(rhs, lhs.type, expr.line, f"operand of {expr.op!r}")
             elif lhs.adaptable:
                 lhs = self.const_coerce(lhs, rhs.type, expr.line, f"operand of {expr.op!r}")
@@ -2924,6 +3030,10 @@ class CodeGen:
                       ">": a > b, ">=": a >= b}[expr.op]
             return TypedValue(ir.Constant(BOOL.ir, int(result)), BOOL)
         if is_integer(op_type):
+            if expr.op == "<<" and lhs.adaptable:
+                widened = fold_untyped_shift(a, b)
+                if widened is not None:
+                    return widened
             folded = fold_int_arithmetic(expr.op, a, b, op_type)
             if folded is None:
                 raise LangError(
@@ -3499,8 +3609,13 @@ class CodeGen:
         lhs = self.gen_expr(expr.lhs)
         rhs = self.gen_expr(expr.rhs)
         if lhs.type != rhs.type:
-            # An untyped constant operand may adapt to the other side's type.
-            if rhs.adaptable:
+            # An untyped constant operand may adapt to the other side's type;
+            # two untyped constants widen to the larger so neither narrows.
+            if (lhs.adaptable and rhs.adaptable
+                    and is_integer(lhs.type) and is_integer(rhs.type)):
+                wide = wider_int_type(lhs.type, rhs.type)
+                lhs, rhs = widen_to(lhs, wide), widen_to(rhs, wide)
+            elif rhs.adaptable:
                 rhs = self.coerce(rhs, lhs.type, expr.line, f"operand of {expr.op!r}")
             else:
                 lhs = self.coerce(lhs, rhs.type, expr.line, f"operand of {expr.op!r}")
@@ -3521,6 +3636,10 @@ class CodeGen:
             # Fold constant operands so expressions like 10 * sizeof(int64)
             # remain constants (and can still adapt to other integer types).
             if isinstance(lhs.value, ir.Constant) and isinstance(rhs.value, ir.Constant):
+                if expr.op == "<<" and lhs.adaptable:
+                    widened = fold_untyped_shift(lhs.value.constant, rhs.value.constant)
+                    if widened is not None:
+                        return widened
                 folded = fold_int_arithmetic(
                     expr.op, lhs.value.constant, rhs.value.constant, op_type
                 )
