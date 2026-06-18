@@ -1290,8 +1290,26 @@ class CodeGen:
         deferred_static_inits = []
         for var in self.program.globals:
             self.current_source = var.source  # the type may name private structs
-            # An initializer can supply an inferred outermost [] dimension.
-            var_type = self.array_type_for(var.type_name, var.init, var.line)
+            if var.type_name is not None:
+                # An initializer can supply an inferred outermost [] dimension.
+                var_type = self.array_type_for(var.type_name, var.init, var.line)
+            else:
+                # An @static let with no annotation infers its type from the
+                # initializer, like a local `let`. (The parser guarantees one is
+                # present.) Functions are not declared yet, so an initializer
+                # naming a function must be annotated instead.
+                if isinstance(var.init, ArrayLit):
+                    raise LangError(
+                        "an array literal needs a type annotation, e.g. "
+                        f"@static let {var.name}: int32[3] = [...]", var.line)
+                inferred = self.eval_const(var.init, var.line)
+                if inferred.adaptable:
+                    raise LangError(
+                        f"type of {var.name!r} is ambiguous: the initializer is an "
+                        f"untyped constant; annotate it "
+                        f"(@static let {var.name}: int32 = ...) or cast the value",
+                        var.line)
+                var_type = inferred.type
             if var_type is VOID:
                 raise LangError(f"cannot declare a void variable {var.name!r}", var.line)
             if var.static:

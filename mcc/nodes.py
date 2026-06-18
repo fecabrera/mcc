@@ -151,7 +151,8 @@ class GlobalVar:
 
     Attributes:
         name: The variable's name.
-        type_name: The declared type.
+        type_name: The declared type, or ``None`` for an ``@static`` variable
+            whose type is inferred from its initializer.
         line: Source line for diagnostics.
         private: ``@private`` -- usable only within its source file.
         volatile: ``@volatile`` -- accesses cannot be optimized away.
@@ -162,7 +163,7 @@ class GlobalVar:
     """
 
     name: str
-    type_name: TypeRef
+    type_name: TypeRef | None
     line: int
     private: bool = False
     volatile: bool = False

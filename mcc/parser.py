@@ -259,14 +259,19 @@ class Parser:
             if not extern and not static:
                 raise LangError("top-level variables must be @extern or @static", line)
             name = self.expect("IDENT").text
-            self.expect(":")
-            type_name = self.parse_type_ref()
+            # The type may be omitted for an @static variable with an
+            # initializer, which infers it (like a local `let`).
+            type_name = self.parse_type_ref() if self.accept(":") else None
             init = None
             if self.accept("="):
                 if extern:
                     raise LangError("an @extern variable cannot have an initializer", line)
                 init = self.parse_expr()
             self.expect(";")
+            if type_name is None and init is None:
+                raise LangError(
+                    f"a top-level variable without an initializer needs a type: "
+                    f"@static let {name}: int32;", line)
             return GlobalVar(name, type_name, line, private=private,
                              volatile=volatile, static=static, init=init,
                              symbol=symbol)

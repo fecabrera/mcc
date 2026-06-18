@@ -1142,12 +1142,15 @@ buffer, or lookup table. It is zero-initialized unless given an initializer,
 which may be any constant expression (a `const`, an `as` cast, `sizeof`,
 arithmetic), folded at compile time like a [`const`](#constants) — so a fixed
 pointer such as a memory-mapped register address works (see
-[Arrays](#arrays) for a static table):
+[Arrays](#arrays) for a static table). With an initializer the type may be
+omitted and is inferred from it, like a local `let`; without one (or for
+`@extern`) the type is required:
 
 ```c
 @static let calls: int32;            // starts at 0, kept across calls
 @static let lookup: uint8[256];      // a static buffer
-@static let uart: struct pl011* = 0x9000000 as struct pl011*;   // fixed MMIO address
+const UART_BASE: uint64 = 0x9000000;
+@static let uart = UART_BASE as struct pl011*;   // type inferred: struct pl011*
 
 fn next_id() -> int32 { calls = calls + 1; return calls; }
 ```

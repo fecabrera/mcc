@@ -165,3 +165,41 @@ def test_static_pointer_initialized_from_const_cast():
     assert run(
         source + "fn main() -> int32 { if ((r as uint64) == BASE) return 1; return 0; }"
     ) == 1
+
+
+def test_static_initializer_type_is_inferred():
+    # An @static let with an initializer needs no type annotation; it infers
+    # from the initializer, like a local `let`.
+    assert run(
+        "@static let answer = 6 as int64 * 7 as int64;\n"
+        "fn main() -> int32 { return answer as int32; }"
+    ) == 42
+
+
+def test_inferred_static_pointer_from_a_const_cast():
+    # The motivating case: a memory-mapped register base, no annotation.
+    source = (
+        "struct reg { ctlr: uint32; }\n"
+        "const BASE: uint64 = 0x09000000;\n"
+        "@static let dev = BASE as struct reg*;\n"
+    )
+    assert "inttoptr" in compile_ir(source + "fn main() -> int32 { return 0; }")
+    assert run(
+        source + "fn main() -> int32 { if ((dev as uint64) == BASE) return 1; return 0; }"
+    ) == 1
+
+
+def test_inferred_static_of_an_untyped_constant_is_ambiguous():
+    # Like `let x = 5;`, an untyped constant has no inferable type.
+    with pytest.raises(LangError, match="ambiguous"):
+        compile_ir("@static let x = 5;\nfn main() -> int32 { return 0; }")
+
+
+def test_inferred_static_array_literal_needs_an_annotation():
+    with pytest.raises(LangError, match="array literal needs a type annotation"):
+        compile_ir("@static let xs = [1, 2, 3];\nfn main() -> int32 { return 0; }")
+
+
+def test_uninitialized_static_still_needs_a_type():
+    with pytest.raises(LangError, match="needs a type"):
+        compile_ir("@static let x;\nfn main() -> int32 { return 0; }")
