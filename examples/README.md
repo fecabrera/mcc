@@ -15,7 +15,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [literals.mc](literals.mc) | hexadecimal integer literals, `uint8` character literals and escapes |
 | [arithmetic.mc](arithmetic.mc) | operators, precedence, comparisons, `!`, float math, `abs` |
 | [control_flow.mc](control_flow.mc) | `if` / `else if` / `else`, integer conditions, `and` / `or`, `while`, `until`, nested loops, `break` / `continue` |
-| [case_when.mc](case_when.mc) | `case` / `when` / `else:` with no fall-through, integer and character subjects |
+| [case_when.mc](case_when.mc) | `case` / `when` / `else:` with no fall-through, integer and character subjects, multi-value arms |
 | [defer.mc](defer.mc) | `defer` cleanup at scope exit (return/break included), LIFO order, the block form |
 | [iteration.mc](iteration.mc) | `for x in` over the iter/next protocol (array, set, dict), `break`/`continue`, bare `{ }` block scopes |
 | [functions.mc](functions.mc) | void functions, any-order definitions, recursion, mutual recursion |

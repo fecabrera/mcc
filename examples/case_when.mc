@@ -25,6 +25,19 @@ fn kind_of(c: uint8) -> uint8* {
     return label;
 }
 
+// A `when` arm may list several comma-separated values and matches if the
+// subject equals any of them -- handy for grouping cases that share a body.
+fn classify(c: uint8) -> uint8* {
+    let label: uint8* = "consonant";
+    case (c) {
+        when 'a', 'e', 'i', 'o', 'u':      label = "vowel";
+        when '0', '1', '2', '3', '4',
+             '5', '6', '7', '8', '9':      label = "digit";
+        when ' ', '\t', '\n':              label = "space";
+    }
+    return label;
+}
+
 fn main() -> int32 {
     let i: int32 = 0;
     while (i < 4) {
@@ -46,5 +59,13 @@ fn main() -> int32 {
     println("");
 
     println("'0' -> %s, ' ' -> %s", kind_of('0'), kind_of(' '));
+
+    // One arm per group, each covering several characters at once.
+    let text: uint8* = "i9 x";
+    let j: uint64 = 0;
+    while (text[j] != '\0') {
+        println("'%c' is a %s", text[j], classify(text[j]));
+        j = j + 1;
+    }
     return 0;
 }

@@ -591,15 +591,18 @@ fall-through** — a matching arm runs only its own statements and then the
 
 ```c
 case (c) {
-    when 'a': handle_a();
-    when 'b': handle_b();        // arms hold any number of statements
-    else:     handle_other();
+    when 'a':           handle_a();
+    when 'b':           handle_b();   // arms hold any number of statements
+    when '0', '1', '2': handle_digit();   // an arm matches any listed value
+    else:               handle_other();
 }
 ```
 
-A `when` value may be any expression of the subject's type (untyped
-constants adapt to it), and the subject can be any type comparable with
-`==` — integers, `uint8` characters, pointers, `bool`, or `float64`.
+A `when` arm may list several comma-separated values and matches if the
+subject equals **any** of them. Each value may be any expression of the
+subject's type (untyped constants adapt to it), and the subject can be any
+type comparable with `==` — integers, `uint8` characters, pointers, `bool`,
+or `float64`.
 `break` and `continue` inside an arm act on the enclosing loop, not the
 `case`; the no-fall-through semantics mean `break` is never needed to end
 an arm.

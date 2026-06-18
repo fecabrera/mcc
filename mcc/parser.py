@@ -676,8 +676,10 @@ class Parser:
     def parse_case(self):
         """Parse a ``case (subject) { when v: ... else: ... }`` statement.
 
-        Each ``when`` arm runs only its own statements -- there is no
-        fall-through -- and the optional ``else:`` is the default.
+        A ``when`` arm may list several comma-separated values (``when a, b:``)
+        and matches if the subject equals any of them. Each arm runs only its
+        own statements -- there is no fall-through -- and the optional ``else:``
+        is the default.
 
         Returns:
             The parsed ``Case`` node.
@@ -690,12 +692,14 @@ class Parser:
         arms = []
         while self.cur.kind == "when":
             self.advance()
-            value = self.parse_expr()
+            values = [self.parse_expr()]
+            while self.accept(","):  # `when a, b, c:` matches any of them
+                values.append(self.parse_expr())
             self.expect(":")
             body = []
             while self.cur.kind not in ("when", "else", "}"):
                 body.append(self.parse_statement())
-            arms.append((value, body))
+            arms.append((values, body))
         otherwise = []
         if self.accept("else"):
             self.expect(":")

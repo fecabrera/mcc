@@ -1740,9 +1740,13 @@ class CodeGen:
             if is_struct(subject.type) or subject.type is VOID:
                 raise LangError(f"cannot match a {subject.type} in a case", stmt.line)
             end_bb = self.builder.append_basic_block("case.end")
-            for value_expr, body in stmt.arms:
-                value = self.gen_expr(value_expr)
-                cond = self.gen_equals(subject, value, value_expr.line)
+            for value_exprs, body in stmt.arms:
+                # An arm matches if the subject equals any of its values.
+                cond = None
+                for value_expr in value_exprs:
+                    value = self.gen_expr(value_expr)
+                    eq = self.gen_equals(subject, value, value_expr.line)
+                    cond = eq if cond is None else self.builder.or_(cond, eq)
                 arm_bb = self.builder.append_basic_block("case.arm")
                 next_bb = self.builder.append_basic_block("case.next")
                 self.builder.cbranch(cond, arm_bb, next_bb)

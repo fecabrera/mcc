@@ -136,3 +136,50 @@ def test_arm_value_adapts_to_a_typed_subject():
         "let out: int32 = 0; case (b) { when 200: out = 1; else: out = 2; } "
         "return out; }"
     ) == 1
+
+
+def test_arm_parses_a_list_of_values():
+    (func,) = parse("fn main() { case (x) { when 1, 2, 3: f(); else: g(); } }").functions
+    (node,) = func.body
+    values, _body = node.arms[0]
+    assert len(values) == 3
+
+
+def test_arm_matches_any_of_several_values(capfd):
+    # One arm covers '0'..'2'; the subject equals the second listed value.
+    run(
+        r"""
+        import "libc/stdio";
+        fn main() -> int32 {
+            let s: uint8* = "1a3";
+            let i: uint64 = 0;
+            while (s[i] != '\0') {
+                case (s[i]) {
+                    when '0', '1', '2': printf("digit ");
+                    else:               printf("other ");
+                }
+                i = i + 1;
+            }
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "digit other other "
+
+
+def test_each_listed_value_is_checked():
+    # Both the first and a later value in the same arm must match.
+    src = (
+        "fn classify(n: int32) -> int32 {"
+        " let out: int32 = 0;"
+        " case (n) { when 1, 4, 9: out = 1; else: out = 0; }"
+        " return out; }"
+    )
+    assert run(src + "fn main() -> int32 { return classify(1); }") == 1
+    assert run(src + "fn main() -> int32 { return classify(9); }") == 1
+    assert run(src + "fn main() -> int32 { return classify(5); }") == 0
+
+
+def test_listed_value_must_match_the_subject_type():
+    with pytest.raises(LangError, match="when value: expected int32, got uint8\\*"):
+        compile_ir('fn main() { let n: int32 = 1; case (n) { when 1, "x": f(); } }')

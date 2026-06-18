@@ -365,7 +365,8 @@ class Case:
 
     Attributes:
         subject: The value matched against each arm.
-        arms: ``(value expression, body statements)`` for each ``when``.
+        arms: ``(value expressions, body statements)`` for each ``when``; an
+            arm matches if the subject equals any of its comma-separated values.
         otherwise: The ``else:`` body, empty when absent.
         line: Source line for diagnostics.
     """
