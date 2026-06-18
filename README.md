@@ -179,7 +179,8 @@ reference section.
 - [x] [Functions](#functions) — typed params, `->` return type, recursion,
       implicit `return 0` from `main`
 - [x] [`@inline` functions](#functions) — LLVM `alwaysinline`, across files
-- [x] [Variadic functions](#variadic-functions) — `...` and `va_list` forwarding
+- [x] [Variadic functions](#variadic-functions) — C's variadic arguments: `...`
+      and `va_list` forwarding
 - [x] [Generics](#generics) — monomorphized, on functions and structs
 - [x] [Variables](#variables) — `let` with type inference
 - [x] [Constants](#constants) — `const`, folded at compile time
@@ -231,8 +232,10 @@ reference section.
 - [ ] Macro functions — compile-time expansion (`@inline` already covers the
       call-overhead case)
 - [ ] Inline assembly — `asm` blocks for emitting raw instructions
-- [ ] Full variadic support — `va_arg` to read individual arguments in mcc
+- [ ] Full C-style variadic support — C's `va_arg` to read individual arguments in mcc
       (today a `va_list` can only be forwarded to a C `v*` function)
+- [ ] mcc-native variadic arguments — a type-safe, mcc-specific variadic
+      mechanism, distinct from C's ABI-compatible `...`
 
 <!-- Add upcoming features here, e.g. - [ ] feature — short note -->
 
@@ -297,8 +300,10 @@ the inlining happens. Combine them as `@static @inline` when you want both.
 ### Variadic functions
 
 A trailing `...` after at least one named parameter makes a function
-variadic, both in [`@extern` declarations](#extern-declarations) (C's
-`printf`) and in functions you define. A defined variadic function can
+variadic. These are **C's variadic arguments** — the same ABI-compatible
+mechanism C uses — so the form works both in
+[`@extern` declarations](#extern-declarations) (C's `printf`) and in
+functions you define. A defined variadic function can
 **forward** its extra arguments to a C `v*` function (`vsnprintf`,
 `vfprintf`, …) through a `va_list`:
 
