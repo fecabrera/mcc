@@ -262,12 +262,14 @@ reference section.
       builtin `any` element `{ value, type }` (heterogeneous, type-erased);
       `typeid`-tagged, consumed with a `case type (x) { when int32 n: … }`
       type-switch. Allocation-free (caller-stack). Depends on typeof/typeid.
-- [ ] Formatted `print`/`println` — Rust/Python-style `{}` placeholders with
-      format specs and positional args (`{.8f}`, `{0:.8f}`), written in mcc
-      over native varargs. Type-driven (no `%`-letters); enables compile-time
-      format checking and per-struct `format` methods later:
-  - [ ] formatting over a `uint8*` format string first (`println(fmt: uint8*,
-        args...)`), parsed at runtime
+- [ ] Formatted `print`/`println` — Rust/Python-style `{}` placeholders,
+      type-driven (no `%`-letters), written in mcc over native varargs; enables
+      compile-time format checking and per-struct `format` methods later:
+  - [ ] formatting over a `uint8*` format string with bare/sequential and
+        positional placeholders (`"{d} {f} {x} {s}"`, `"{0:d} {1:f} {2:x} {3:s}"`),
+        parsed at runtime
+  - [ ] format modifiers — precision and zero-padded width (`.Nf`, `Nx`, `0Nx`,
+        `0x0Nx`, `Ns`, and `sN`), e.g. `{.8f}`, `{08x}`, `{0x08x}`, `{20s}`, `{s20}`
   - [ ] switch the parameter to `const fmt: struct string` once `const`
         parameters land, so a string literal promotes to it at the call site
         and the format can be parsed at compile time
