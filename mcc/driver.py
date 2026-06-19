@@ -272,11 +272,15 @@ def build_native_module(module: ir.Module, opt_level: int, triple: str | None = 
     if triple is None:
         llvm.initialize_native_target()
         llvm.initialize_native_asmprinter()
-        llvm.initialize_native_asmparser()  # parse inline asm for the host target
         triple = llvm.get_default_triple()
     else:
         llvm.initialize_all_targets()
         llvm.initialize_all_asmprinters()
+    # The integrated assembler needs an asm parser to lower inline asm. llvmlite
+    # only exposes the native one, so inline asm works for the host arch -- which
+    # also covers a cross --target of the same architecture (e.g. an aarch64 host
+    # building an aarch64 bare-metal object), but not a foreign arch.
+    llvm.initialize_native_asmparser()
     if cross:
         # Cross targets are freestanding objects linked at a fixed address (e.g.
         # a bare-metal kernel). The small code model + static relocations give

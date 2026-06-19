@@ -245,14 +245,14 @@ reference section.
       `TARGET_ARCH`), preferring intrinsics where they exist:
   - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an
         operand model (`$out`/`$N` operands, `=r`/`r` register class, `${N:w}`
-        modifiers); output-less asm is implicitly volatile. Host target only
-        for now
+        modifiers); output-less asm is implicitly volatile. Works on the host
+        arch, including a same-arch cross `--target` (e.g. bare metal)
   - [x] `@asm fn` — sugar for a function whose body is one `@asm(...)`
         expression over its parameters: operands, register-allocated, no
         `ret` (the function's epilogue returns)
   - [ ] explicit clobber lists and pinning an operand to a fixed physical
-        register (for syscalls/fixed-register instructions); cross-`--target`
-        support
+        register (for syscalls/fixed-register instructions); foreign-arch
+        cross-`--target` support
   - [ ] `@naked` — separate opt-in for no-prologue/epilogue functions
         (`_start`, interrupt entry, trampolines): args arrive in the ABI
         registers and the body writes its own `ret`
@@ -1329,9 +1329,12 @@ Following GCC, an asm with an output is assumed pure (it may be reordered or
 removed if unused), while one with no output is treated as having side effects.
 Inline asm is inherently target-specific, so it pairs with
 [`@if`](#conditional-compilation) on `TARGET_ARCH` to select per-architecture
-code. It is emitted for the host target; using it with a cross `--target` is
-not supported yet. Explicit clobber lists, pinning an operand to a fixed
-physical register, and `@naked` functions are on the [roadmap](#roadmap).
+code. It is lowered by the host architecture's assembler, so it works on the
+host and on a cross `--target` of that same architecture — for instance an
+aarch64 host cross-compiling an aarch64 bare-metal object (see
+[examples/baremetal/](examples/baremetal/)) — but not a foreign architecture.
+Explicit clobber lists, pinning an operand to a fixed physical register, and
+`@naked` functions are on the [roadmap](#roadmap).
 
 ### Comments
 

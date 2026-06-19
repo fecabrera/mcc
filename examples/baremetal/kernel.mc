@@ -23,8 +23,20 @@ fn uart() -> struct pl011* {
     return 0x09000000 as struct pl011*;
 }
 
+/**
+ * Wait for an event (`wfe`) -- a low-power hint to idle until something
+ * happens. An `@asm fn` is sugar for a function whose body is a single
+ * inline-asm instruction; with no operands and no return it is just `wfe`
+ * followed by the compiler's `ret`. Inline asm uses the host architecture's
+ * assembler, so it works in this same-arch cross build (aarch64 host,
+ * aarch64 target).
+ */
+@asm fn cpu_relax() { "wfe" }
+
 fn put_char(c: uint8) {
-    until ((uart()->fr & 0x20) == 0) {}  // wait for room in the FIFO
+    until ((uart()->fr & 0x20) == 0) {   // wait for room in the FIFO
+        cpu_relax();
+    }
     uart()->dr = c as uint32;
 }
 
