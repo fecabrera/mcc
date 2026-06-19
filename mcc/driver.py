@@ -12,7 +12,7 @@ from pathlib import Path
 import llvmlite.binding as llvm
 from llvmlite import ir
 
-from mcc.codegen import CodeGen
+from mcc.codegen import CodeGen, TARGET_ARCH_VALUES, TARGET_OS_VALUES
 from mcc.errors import LangError
 from mcc.lexer import tokenize
 from mcc.nodes import Conditional, Program
@@ -183,7 +183,8 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
 
 
 def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
-                  target: str | None = None) -> ir.Module:
+                  target: str | None = None,
+                  defines: dict[str, int] | None = None) -> ir.Module:
     """Load a source file and lower it to an LLVM IR module.
 
     Args:
@@ -191,6 +192,8 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
         search_paths: Import search-path directories; defaults to just the
             bundled standard library when ``None``.
         target: An LLVM target triple to build for, or ``None`` for the host.
+        defines: Command-line ``-D`` names mapped to integer values, made
+            available to ``@if`` conditions.
 
     Returns:
         The generated, unverified LLVM IR module.
@@ -199,7 +202,7 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
         search_paths = (STDLIB_DIR,)
     program = load_program(path, tuple(search_paths))
     return CodeGen(program, path.name, root_source=str(path.resolve()),
-                   target=target).generate()
+                   target=target, defines=defines).generate()
 
 
 # For each architecture, the LLVM subtarget features that -- when turned off
@@ -304,6 +307,44 @@ def build_native_module(module: ir.Module, opt_level: int, triple: str | None = 
     return native, target_machine
 
 
+# Names owned by the compiler as @if target facts; -D may not redefine them.
+RESERVED_DEFINES = (set(TARGET_OS_VALUES) | set(TARGET_ARCH_VALUES)
+                    | {"TARGET_OS", "TARGET_ARCH"})
+
+
+def parse_defines(items: list[str]) -> dict[str, int]:
+    """Parse ``-D NAME[=VALUE]`` options into a name-to-integer mapping.
+
+    A bare ``NAME`` defines it as 1; ``NAME=VALUE`` parses VALUE as an integer
+    (C-style ``0x``/``0o``/``0b`` prefixes allowed).
+
+    Args:
+        items: The raw ``-D`` argument strings.
+
+    Returns:
+        Each defined name mapped to its integer value.
+
+    Raises:
+        ValueError: On a malformed name, a value that is not an integer, or a
+            name that collides with a built-in target fact.
+    """
+    defines: dict[str, int] = {}
+    for item in items:
+        name, sep, value = item.partition("=")
+        if not name.isidentifier():
+            raise ValueError(f"invalid -D name {name!r}")
+        if name in RESERVED_DEFINES:
+            raise ValueError(f"-D{name} would redefine a built-in target fact")
+        if sep:
+            try:
+                defines[name] = int(value, 0)
+            except ValueError:
+                raise ValueError(f"-D{name}: {value!r} is not an integer")
+        else:
+            defines[name] = 1
+    return defines
+
+
 def main() -> int:
     """Run the ``mcc`` command-line interface.
 
@@ -333,10 +374,19 @@ def main() -> int:
     cli.add_argument("--general-regs-only", action="store_true",
                      help="generate code that uses only general-purpose registers, never "
                           "the floating-point/SIMD ones (like gcc's -mgeneral-regs-only)")
+    cli.add_argument("-D", "--define", action="append", default=[], metavar="NAME[=VALUE]",
+                     help="define a name for @if conditions; NAME alone is 1, NAME=VALUE "
+                          "sets an integer (repeatable). An @if name with no -D reads as 0")
     args = cli.parse_args()
 
     if args.target and args.run:
         print("mcc: error: --run cannot execute cross-compiled code", file=sys.stderr)
+        return 1
+
+    try:
+        defines = parse_defines(args.define)
+    except ValueError as err:
+        print(f"mcc: error: {err}", file=sys.stderr)
         return 1
 
     search_paths = list(args.import_path)
@@ -344,7 +394,7 @@ def main() -> int:
         search_paths.append(STDLIB_DIR)
 
     try:
-        module = compile_to_ir(args.source, search_paths, args.target)
+        module = compile_to_ir(args.source, search_paths, args.target, defines)
     except OSError as err:
         print(f"mcc: error: cannot read {args.source}: {err.strerror}", file=sys.stderr)
         return 1

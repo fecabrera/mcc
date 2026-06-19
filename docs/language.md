@@ -259,8 +259,27 @@ compiled; the dead branch is parsed (so it must be syntactically valid) but
 never type-checked or emitted.
 
 The condition is a constant expression over the [target facts](#target-facts) —
-`TARGET_OS`, `TARGET_ARCH`, and the `OS_*`/`ARCH_*` constants — with
-comparisons, `and`/`or`/`!`, and integer arithmetic. A nonzero result is true.
+`TARGET_OS`, `TARGET_ARCH`, and the `OS_*`/`ARCH_*` constants — plus any names
+defined on the command line with `-D` (see below), with comparisons,
+`and`/`or`/`!`, and integer arithmetic. A nonzero result is true.
+
+Pass `-DNAME` on the command line to define `NAME` as `1`, or `-DNAME=VALUE` to
+give it an integer value; the name is then usable in `@if` conditions. As in
+C's `#if`, a name with no `-D` reads as `0`, so a feature flag takes its `@else`
+branch when left undefined:
+
+```c
+@if (DEBUG) {            // mcc app.mc -DDEBUG    -> compiled in
+    log("tracing on");
+}
+
+@if (LOG_LEVEL >= 2) {   // mcc app.mc -DLOG_LEVEL=3
+    log("verbose");
+}
+```
+
+These `-D` names live only in `@if` conditions — unlike the target facts, they
+are not ordinary constants, so they cannot be read from running code.
 
 It works at the top level, to select whole declarations — the intended use is
 binding a symbol that differs by platform (see [`@symbol`](#extern-declarations)):

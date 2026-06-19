@@ -111,6 +111,7 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 | `--nostdlib`              | Do not put the bundled `lib/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).           |
 | `--target TRIPLE`         | Cross-compile for the given LLVM target triple, emitting an object file instead of a host executable.                                                |
 | `--general-regs-only`     | Generate code that uses only general-purpose registers, never the floating-point/SIMD ones.                                                          |
+| `-D NAME[=VALUE]`         | Define a name for [`@if`](docs/language.md#conditional-compilation) conditions: `NAME` alone is `1`, `NAME=VALUE` sets an integer. Repeatable; a name with no `-D` reads as `0`. |
 
 `--target` accepts any LLVM triple and emits an object file instead of a
 host executable; link it with that target's toolchain (e.g.

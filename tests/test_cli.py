@@ -286,3 +286,46 @@ def test_target_bad_triple_is_clean_error():
     assert result.returncode == 1
     assert "mcc: error:" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+DEFINE_SRC = """
+import "libc/stdio";
+fn main() -> int32 {
+    @if (FEATURE) { puts("on"); } @else { puts("off"); }
+    @if (LEVEL >= 2) { puts("hi"); }
+    return 0;
+}
+"""
+
+
+def test_define_selects_branches(tmp_path):
+    src = tmp_path / "d.mc"
+    src.write_text(DEFINE_SRC)
+    assert mcc(src, "--run").stdout == "off\n"                       # no defines
+    assert mcc(src, "-DFEATURE", "--run").stdout == "on\n"           # bare = 1
+    assert mcc(src, "-DFEATURE", "-DLEVEL=2", "--run").stdout == "on\nhi\n"
+    assert mcc(src, "-DLEVEL=0x3", "--run").stdout == "off\nhi\n"    # hex value
+
+
+def test_define_bad_name_is_clean_error(tmp_path):
+    src = tmp_path / "d.mc"
+    src.write_text(DEFINE_SRC)
+    result = mcc(src, "-D2bad", "--run")
+    assert result.returncode == 1
+    assert "mcc: error:" in result.stderr and "Traceback" not in result.stderr
+
+
+def test_define_non_integer_value_is_clean_error(tmp_path):
+    src = tmp_path / "d.mc"
+    src.write_text(DEFINE_SRC)
+    result = mcc(src, "-DLEVEL=high", "--run")
+    assert result.returncode == 1
+    assert "not an integer" in result.stderr
+
+
+def test_define_cannot_redefine_a_target_fact(tmp_path):
+    src = tmp_path / "d.mc"
+    src.write_text(DEFINE_SRC)
+    result = mcc(src, "-DTARGET_ARCH=9", "--run")
+    assert result.returncode == 1
+    assert "built-in target fact" in result.stderr

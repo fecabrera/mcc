@@ -636,7 +636,7 @@ class CodeGen:
     """
 
     def __init__(self, program: Program, name: str, root_source: str | None = None,
-                 target: str | None = None):
+                 target: str | None = None, defines: dict[str, int] | None = None):
         """Initialize the code generator.
 
         Args:
@@ -647,10 +647,14 @@ class CodeGen:
                 ``None`` for a single-module JIT or the test helpers.
             target: The LLVM target triple, or ``None`` for the host; fixes the
                 ``va_list`` layout.
+            defines: Command-line ``-D`` names mapped to integer values, made
+                available to ``@if`` conditions alongside the target facts.
         """
         self.program = program
         # Target triple (None = host); fixes the platform va_list layout.
         self.target = target
+        # -D NAME[=VALUE] command-line defines, visible only in @if conditions.
+        self.defines = defines or {}
         # va_list is platform-specific, so it is built lazily on first use.
         self.va_list_type: "LangType | None" = None
         self.va_list_passed_ir = None  # IR type a va_list takes as an argument
@@ -883,15 +887,19 @@ class CodeGen:
                 ir.Constant(INT32.ir, value), INT32, adaptable=True
             )
             self.const_privacy[name] = (False, None)  # public, compiler-owned
-        # The same facts as plain ints, for evaluating @if conditions.
-        self.target_facts = values
+        # The same facts as plain ints, for evaluating @if conditions, plus the
+        # command-line -D defines. Unlike the target facts, -D names are not
+        # seeded as ordinary constants: they exist only for @if (an @if name
+        # with no definition is simply false, as in C's #if).
+        self.target_facts = {**values, **self.defines}
 
     def eval_static_cond(self, expr) -> bool:
         """Evaluate whether a compile-time ``@if`` branch is taken.
 
         The condition is a constant expression over the target facts
-        (``TARGET_OS``, ``TARGET_ARCH``, and the ``OS_*``/``ARCH_*`` names); a
-        nonzero result is true, as in C's ``#if``.
+        (``TARGET_OS``, ``TARGET_ARCH``, and the ``OS_*``/``ARCH_*`` names) and
+        the command-line ``-D`` defines; a nonzero result is true, as in C's
+        ``#if``. A name with no definition reads as 0.
 
         Args:
             expr: The condition expression.
@@ -904,9 +912,9 @@ class CodeGen:
     def eval_static_value(self, expr) -> int:
         """Evaluate an ``@if`` condition to an integer.
 
-        Only the target facts, integer/bool literals, comparisons, logical
-        ``and``/``or``/``not``, and integer arithmetic are allowed -- nothing
-        that needs the runtime.
+        Only the target facts and ``-D`` defines (an undefined name reads as
+        0), integer/bool literals, comparisons, logical ``and``/``or``/``not``,
+        and integer arithmetic are allowed -- nothing that needs the runtime.
 
         Args:
             expr: The constant expression to evaluate.
@@ -915,7 +923,7 @@ class CodeGen:
             The integer value of the expression.
 
         Raises:
-            LangError: On a disallowed name or operator, division by zero, or a
+            LangError: On a disallowed operator, division by zero, or a
                 non-constant expression.
         """
         if isinstance(expr, IntLit) or isinstance(expr, CharLit):
@@ -923,13 +931,10 @@ class CodeGen:
         if isinstance(expr, BoolLit):
             return int(expr.value)
         if isinstance(expr, Var):
-            if expr.name not in self.target_facts:
-                raise LangError(
-                    f"{expr.name!r} is not allowed in an @if condition; use the "
-                    "target facts TARGET_OS, TARGET_ARCH, and the OS_*/ARCH_* "
-                    "constants", expr.line
-                )
-            return self.target_facts[expr.name]
+            # A target fact or -D define resolves to its value; any other name
+            # is false, as in C's #if -- so @if(FEATURE) with no -DFEATURE in
+            # effect takes the @else branch instead of erroring.
+            return self.target_facts.get(expr.name, 0)
         if isinstance(expr, Unary):
             v = self.eval_static_value(expr.operand)
             if expr.op == "!":

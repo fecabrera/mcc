@@ -12,6 +12,11 @@ def run_for(source: str, target: str) -> str:
     return str(CodeGen(parse(source), "test", target=target).generate())
 
 
+def ir_with_defines(source: str, defines: dict[str, int]) -> str:
+    """Compile to IR text with the given `-D` defines in effect."""
+    return str(CodeGen(parse(source), "test", defines=defines).generate())
+
+
 # --- top-level @if selects declarations ---
 
 def test_toplevel_if_selects_a_function():
@@ -217,9 +222,48 @@ def test_arithmetic_and_truthiness_in_conditions():
 
 # --- errors ---
 
-def test_user_const_is_rejected_in_a_condition():
-    with pytest.raises(LangError, match="not allowed in an @if condition"):
-        run("const X = 1;\n@if (X) { fn f() {} }\nfn main() -> int32 { return 0; }")
+def test_user_const_in_a_condition_reads_as_zero():
+    # A user const is not an @if fact; like any name without a -D it reads as 0
+    # (as in C's #if), so the @else branch is taken rather than erroring.
+    src = ("const X = 1;\n"
+           "@if (X) { fn f() -> int32 { return 1; } }\n"
+           "@else { fn f() -> int32 { return 2; } }\n"
+           "fn main() -> int32 { return f(); }")
+    assert run(src) == 2
+
+
+# --- command-line -D defines ---
+
+def test_define_makes_a_condition_true():
+    src = """
+    @if (DEBUG) {
+        fn build() -> int32 { return 1; }
+    } @else {
+        fn build() -> int32 { return 2; }
+    }
+    fn main() -> int32 { return build(); }
+    """
+    assert "ret i32 1" in ir_with_defines(src, {"DEBUG": 1})
+    assert "ret i32 2" in ir_with_defines(src, {})  # absent: falsy, takes @else
+
+
+def test_define_with_an_integer_value():
+    src = """
+    @if (LEVEL >= 2) {
+        fn lvl() -> int32 { return 1; }
+    } @else {
+        fn lvl() -> int32 { return 0; }
+    }
+    fn main() -> int32 { return lvl(); }
+    """
+    assert "ret i32 1" in ir_with_defines(src, {"LEVEL": 3})
+    assert "ret i32 0" in ir_with_defines(src, {"LEVEL": 1})
+
+
+def test_define_is_not_an_ordinary_constant():
+    # -D names exist only for @if; using one as a value is still undefined.
+    with pytest.raises(LangError, match="undefined variable 'WIDTH'"):
+        ir_with_defines("fn main() -> int32 { return WIDTH; }", {"WIDTH": 4})
 
 
 def test_stray_else_at_top_level():
