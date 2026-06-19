@@ -241,10 +241,16 @@ reference section.
 - [ ] Bit-twiddling builtins — `byte_swap<T>` (`llvm.bswap`) and
       `bit_reverse<T>` (`llvm.bitreverse`) over the integer types
 - [ ] Inline assembly — `asm` blocks for emitting raw instructions
-- [ ] Full C-style variadic support — C's `va_arg` to read individual arguments in mcc
-      (today a `va_list` can only be forwarded to a C `v*` function)
-- [ ] mcc-native variadic arguments — a type-safe, mcc-specific variadic
-      mechanism, distinct from C's ABI-compatible `...`
+- [ ] C `va_arg` interop — read individual arguments from a C-ABI `va_list`
+      in mcc (today a `va_list` can only be forwarded to a C `v*` function)
+- [ ] Native variadic arguments — `fn f(args...)`, a named binding over a
+      builtin `any` element `{ value, type }` (heterogeneous, type-erased);
+      `typeid`-tagged, consumed with a `case type (x) { when int32 n: … }`
+      type-switch. Allocation-free (caller-stack). Depends on typeof/typeid.
+- [ ] Formatted `print`/`println` — Rust/Python-style `{}` placeholders with
+      format specs and positional args (`{.8f}`, `{0:.8f}`), written in mcc
+      over native varargs. Type-driven (no `%`-letters); enables compile-time
+      format checking and per-struct `format` methods later.
 
 <!-- Add upcoming features here, e.g. - [ ] feature — short note -->
 
