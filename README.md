@@ -230,6 +230,10 @@ reference section.
 
 - [ ] Methods / OOP — `<struct>::<method>` definitions (the `for … in`
       protocol already dispatches by struct name to pave the way)
+- [ ] Type aliases — TS-style `type <name> = <type>;`, e.g.
+      `type callback = fn(int32, uint8**) -> int32;`
+- [ ] `typeof(expr)` — use an expression's static type in a type position,
+      including in an alias: `type t = typeof(var);`
 - [ ] Constant-expression array sizes — `T[N]` where `N` is any constant
       expression (today only a literal, a single `const` name, or `[]`)
 - [ ] Macro functions — compile-time expansion (`@inline` already covers the
