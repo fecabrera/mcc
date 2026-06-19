@@ -3183,10 +3183,12 @@ class CodeGen:
     def valist_arg(self, expr, line: int) -> ir.Value:
         """Lower a ``va_list`` argument to the value passed on this ABI.
 
-        Derived from the ``va_list``'s storage address: load the cursor (scalar
-        ``va_list``, e.g. Apple arm64), decay to the first tag (array
-        ``va_list``, x86-64 SysV), or pass the address itself (struct
-        ``va_list``, AArch64 AAPCS) -- a pointer on every ABI.
+        A ``va_list`` parameter already holds the passed form, so it is simply
+        reloaded. A local or global names its storage, from which the passed
+        form is derived: load the cursor (scalar ``va_list``, e.g. Apple arm64),
+        decay to the first tag (array ``va_list``, x86-64 SysV), or pass the
+        address itself (struct ``va_list``, AArch64 AAPCS) -- a pointer on every
+        ABI.
 
         Args:
             expr: The argument expression, which must have ``va_list`` type.
@@ -3203,12 +3205,18 @@ class CodeGen:
         if not is_valist(t):
             raise LangError(f"expected a va_list argument, got {t}", line)
         self.require_valist(line)
+        # A va_list parameter already arrives in its passed form (a pointer to
+        # the caller's storage) and is spilled to a slot holding that pointer,
+        # so forwarding it is a plain reload of the slot. A local or global
+        # instead names its own storage, from which the passed form is derived
+        # below. (A scalar cursor is itself a pointer, so its slot also matches
+        # the passed form and is reloaded here -- the same result either way.)
+        if addr.type.pointee == self.va_list_passed_ir:
+            return self.gen_load(addr)
         storage = t.ir
         if isinstance(storage, ir.ArrayType):
             return self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
-        if isinstance(storage, ir.PointerType):
-            return self.gen_load(addr)
-        return addr  # struct: pass its address
+        return addr  # struct storage: pass its address
 
     def gen_va_builtin(self, expr: Call) -> TypedValue:
         """Emit ``va_start(ap, last)`` or ``va_end(ap)`` via the LLVM intrinsics.

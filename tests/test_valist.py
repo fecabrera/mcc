@@ -27,6 +27,30 @@ fn logf(fmt: uint8*, ...) -> int32 {
 }
 """
 
+# Forwarding a va_list *parameter* on, rather than a local: the parameter
+# already arrives in its passed form, so the receiver must reload its slot
+# instead of treating it as storage. Struct (AArch64) and array (x86-64)
+# va_lists once mistyped this by a pointer level.
+PARAM_WRAPPER = r"""
+import "libc/stdio";
+@extern fn vsnprintf(str: uint8*, size: uint64, format: uint8*, args: va_list) -> int32;
+
+fn vlogf(fmt: uint8*, ap: va_list) -> int32 {
+    let buf: uint8[256];
+    let n = vsnprintf(&buf[0], 256, fmt, ap);
+    puts(&buf[0]);
+    return n;
+}
+
+fn logf(fmt: uint8*, ...) -> int32 {
+    let ap: va_list;
+    va_start(ap, fmt);
+    let n = vlogf(fmt, ap);
+    va_end(ap);
+    return n;
+}
+"""
+
 
 def compile_for(source, target):
     import tempfile, pathlib
@@ -59,6 +83,29 @@ def test_forwarding_through_vsnprintf(capfd):
     """
     run(source)
     assert capfd.readouterr().out == "answer = 42 (0xFF)\n[18]\n"
+
+
+def test_forwarding_a_va_list_parameter(capfd):
+    # The middle function receives the va_list as a parameter and forwards it
+    # again, so the passed-form slot must be reloaded, not taken by address.
+    source = PARAM_WRAPPER + r"""
+    fn main() -> int32 {
+        logf("%s = %d (0x%X)", "answer", 42, 255);
+        return 0;
+    }
+    """
+    run(source)
+    assert capfd.readouterr().out == "answer = 42 (0xFF)\n"
+
+
+@pytest.mark.parametrize("target", [
+    "aarch64-unknown-none-elf",   # struct va_list (passed by address)
+    "x86_64-unknown-linux-gnu",   # array va_list (decays to a tag pointer)
+])
+def test_forwarding_a_va_list_parameter_cross_abi(target):
+    # Regression: forwarding a va_list parameter once mistyped the argument by
+    # a pointer level on the struct and array ABIs. It must now type-check.
+    compile_for(PARAM_WRAPPER, target)
 
 
 # --- platform va_list layout ---
