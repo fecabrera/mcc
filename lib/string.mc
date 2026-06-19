@@ -87,6 +87,22 @@ fn string_append(self: struct string*, value: uint8) {
 }
 
 /**
+ * Appends n bytes from a raw buffer to the end of the string, growing as needed.
+ *
+ * @param self: string to append to
+ * @param str:  source bytes to copy from
+ * @param n:    number of bytes to append from str
+ */
+@inline
+fn string_append_string(self: struct string*, str: uint8*, n: uint64) {
+    let i: uint64 = 0;
+    while(i < n) {
+        string_append(self, str[i]);
+        i = i + 1;
+    }
+}
+
+/**
  * Compares two strings for byte-for-byte equality. Strings of different lengths
  * are never equal; empty strings compare equal.
  *
