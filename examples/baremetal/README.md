@@ -35,12 +35,12 @@ hello from bare-metal mcc
   declare your own runtime's functions instead.
 - **[start.S](start.S)** — a five-instruction boot stub. qemu starts the
   CPU with no stack pointer, so it sets one and calls `kmain`. Assembled
-  and linked by `aarch64-elf-gcc` in the same command. The kernel itself does
-  use mcc [inline assembly](../../README.md#inline-assembly) (`cpu_relax`'s
-  `wfe`), which works here because this is a same-arch cross build. But `_start`
-  stays hand-written: a no-prologue entry that sets `sp` and writes its own
-  control flow needs the `@naked` form, which is on the
-  [roadmap](../../README.md#roadmap).
+  and linked by `aarch64-elf-gcc` in the same command. (mcc's
+  [inline assembly](../../README.md#inline-assembly) is *not* used here: it is
+  lowered by the host's assembler, so it only works when cross-compiling from a
+  host of the same architecture — and this object is built from any host. A
+  no-prologue `_start` would also need the `@naked` form. Both are noted on the
+  [roadmap](../../README.md#roadmap).)
 - **`--target aarch64-unknown-none-elf`** — makes `mcc` emit an ELF object
   for the bare-metal triple instead of linking a host executable.
 - **`-Ttext=0x40100000`** — the `virt` board's RAM starts at `0x40000000`

@@ -246,7 +246,7 @@ reference section.
   - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an
         operand model (`$out`/`$N` operands, `=r`/`r` register class, `${N:w}`
         modifiers); output-less asm is implicitly volatile. Works on the host
-        arch, including a same-arch cross `--target` (e.g. bare metal)
+        arch, including a same-arch cross `--target`
   - [x] `@asm fn` — sugar for a function whose body is one `@asm(...)`
         expression over its parameters: operands, register-allocated, no
         `ret` (the function's epilogue returns)
