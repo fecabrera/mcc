@@ -26,6 +26,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [io.mc](io.mc) | printf format specifiers, `puts`, `putchar`, string escapes |
 | [unsigned.mc](unsigned.mc) | unsigned division/comparison semantics, zero-extension |
 | [extern.mc](extern.mc) | `@extern` functions (including variadic `...`), interfacing with libc |
+| [inline_asm.mc](inline_asm.mc) | `@asm fn` and the `@asm(...)` expression, `$out`/`$N` operands and `:w` register modifiers, gated by `@if` on `TARGET_ARCH` |
 | [structs.mc](structs.mc) | structs, generic structs, `->` / `.`, `null`, a hand-built linked list |
 | [data_structures.mc](data_structures.mc) | the growable lib containers: `array<T>`, `stack<T>` (LIFO), `queue<T>` (FIFO ring buffer) |
 | [pointers.mc](pointers.mc) | `import`, heap allocation, `&` `*` `[]`, `sizeof`, `as` casts |
