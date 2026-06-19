@@ -23,7 +23,7 @@ def _find_stdlib() -> Path:
     """Locate the bundled lib/ standard-library directory.
 
     The directory is importable by bare name (the "standard library") unless
-    ``--naked`` is passed. It lives beside the package when installed as a
+    ``--nostdlib`` is passed. It lives beside the package when installed as a
     wheel (mcc/lib) and at the repo root in a source checkout (../lib); the
     ``$MCC_STDLIB`` environment variable overrides both.
 
@@ -325,7 +325,7 @@ def main() -> int:
     cli.add_argument("--emit-llvm", action="store_true", help="print LLVM IR and exit")
     cli.add_argument("-I", "--import-path", action="append", type=Path, default=[],
                      metavar="DIR", help="add a directory to the import search path (repeatable)")
-    cli.add_argument("--naked", action="store_true",
+    cli.add_argument("--nostdlib", action="store_true",
                      help="do not add the standard lib/ directory to the import search path")
     cli.add_argument("--target", metavar="TRIPLE",
                      help="cross-compile for this LLVM target triple, emitting an object "
@@ -340,7 +340,7 @@ def main() -> int:
         return 1
 
     search_paths = list(args.import_path)
-    if not args.naked:
+    if not args.nostdlib:
         search_paths.append(STDLIB_DIR)
 
     try:

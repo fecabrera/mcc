@@ -117,7 +117,7 @@ mcc examples/helloworld.mc --run        # JIT-compile and run immediately
 mcc examples/helloworld.mc --emit-llvm  # print the LLVM IR instead of compiling
 mcc examples/helloworld.mc -O3          # optimization level (0-3, default 2)
 mcc main.mc -I vendor -I deps           # extra import search paths
-mcc main.mc --naked                     # don't put lib/ on the import path
+mcc main.mc --nostdlib                  # don't put lib/ on the import path
 mcc main.mc --target aarch64-unknown-none-elf   # cross-compile to an object file
 mcc main.mc --general-regs-only         # never use FP/SIMD registers
 ```
@@ -130,7 +130,7 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 | `--run`                   | JIT-compile and run the program immediately instead of writing a file; its exit code becomes mcc's. Cannot be combined with `--target`.              |
 | `--emit-llvm`             | Print the generated LLVM IR to stdout and exit, without compiling or linking.                                                                        |
 | `-I`, `--import-path DIR` | Add a directory to the import search path. Repeatable; later paths are searched after earlier ones.                                                  |
-| `--naked`                 | Do not put the bundled `lib/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).           |
+| `--nostdlib`              | Do not put the bundled `lib/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).           |
 | `--target TRIPLE`         | Cross-compile for the given LLVM target triple, emitting an object file instead of a host executable.                                                |
 | `--general-regs-only`     | Generate code that uses only general-purpose registers, never the floating-point/SIMD ones.                                                          |
 
@@ -223,7 +223,7 @@ reference section.
 - [x] JIT execution (`--run`)
 - [x] LLVM IR output (`--emit-llvm`)
 - [x] Optimization levels `-O0`–`-O3`
-- [x] Cross-compilation (`--target`), `--general-regs-only`, `--naked`, `-I`
+- [x] Cross-compilation (`--target`), `--general-regs-only`, `--nostdlib`, `-I`
 - [x] Separate compilation across files
 - [x] [Editor support](#editor-support) — VS Code syntax highlighting
 
@@ -1115,7 +1115,7 @@ Imports resolve relative to the importing file first, then through the
 import search path: directories added with `-I`/`--import-path` (in order),
 and finally the project's [lib/](lib/) directory, which is on the path by
 default so the [standard library](lib/README.md) is importable by bare name.
-Pass `--naked` to leave `lib/` off the path.
+Pass `--nostdlib` to leave `lib/` off the path.
 
 ```c
 import "memory";       // found in lib/ via the search path

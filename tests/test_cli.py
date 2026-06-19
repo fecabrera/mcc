@@ -225,10 +225,10 @@ def test_stdlib_import_by_default(tmp_path):
     assert result.stdout == "ok\n"
 
 
-def test_naked_drops_stdlib_path(tmp_path):
+def test_nostdlib_drops_stdlib_path(tmp_path):
     main = tmp_path / "main.mc"
     main.write_text(STDLIB_IMPORT)
-    result = mcc(main, "--naked")
+    result = mcc(main, "--nostdlib")
     assert result.returncode == 1
     assert "cannot import 'memory'" in result.stderr
 
@@ -239,8 +239,8 @@ def test_import_path_flag(tmp_path):
     (libs / "helper.mc").write_text("fn seven() -> int32 { return 7; }")
     main = tmp_path / "main.mc"
     main.write_text('import "helper";\nfn main() -> int32 { return seven(); }')
-    assert mcc(main, "--naked").returncode == 1  # not found without -I
-    result = mcc(main, "--naked", "-I", libs, "--run")
+    assert mcc(main, "--nostdlib").returncode == 1  # not found without -I
+    result = mcc(main, "--nostdlib", "-I", libs, "--run")
     assert result.returncode == 7
 
 
