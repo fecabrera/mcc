@@ -240,15 +240,18 @@ reference section.
       call-overhead case)
 - [ ] Bit-twiddling builtins — `byte_swap<T>` (`llvm.bswap`) and
       `bit_reverse<T>` (`llvm.bitreverse`) over the integer types
-- [ ] Inline assembly — two forms, both arch-specific (pair with `@if` on
-      `TARGET_ARCH`), preferring intrinsics where they exist:
-  - [ ] `@asm(...)` expression/block — an LLVM inline-asm call with an
-        operand/constraint model (`$0`/`%name` operands, `=r` outputs,
+- [ ] Inline assembly — arch-specific (pair with `@if` on `TARGET_ARCH`),
+      preferring intrinsics where they exist:
+  - [ ] `@asm(...)` expression/block — the primitive: an LLVM inline-asm call
+        with an operand/constraint model (`$0`/`%name` operands, `=r` outputs,
         clobber list, `volatile`), with optional pinning to a physical
         register for syscalls/fixed-register instructions
-  - [ ] `@asm fn` — a naked function (no prologue/epilogue): args arrive in
-        the ABI registers, the result is left in the return register, and the
-        body writes `ret` itself
+  - [ ] `@asm fn` — sugar for a function whose body is one `@asm(...)`
+        expression over its parameters: operands, register-allocated, no
+        `ret` (the function's epilogue returns)
+  - [ ] `@naked` — separate opt-in for no-prologue/epilogue functions
+        (`_start`, interrupt entry, trampolines): args arrive in the ABI
+        registers and the body writes its own `ret`
 - [ ] C `va_arg` interop — read individual arguments from a C-ABI `va_list`
       in mcc (today a `va_list` can only be forwarded to a C `v*` function)
 - [ ] Native variadic arguments — `fn f(args...)`, a named binding over a
