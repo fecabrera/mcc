@@ -59,6 +59,7 @@ fn main() -> int32 {
   - [Extern declarations](#extern-declarations)
   - [Strings](#strings)
   - [Reaching libc](#reaching-libc)
+  - [Inline assembly](#inline-assembly)
   - [Comments](#comments)
 - [Editor support](#editor-support)
 - [Tests](#tests)
@@ -240,15 +241,18 @@ reference section.
       call-overhead case)
 - [ ] Bit-twiddling builtins — `byte_swap<T>` (`llvm.bswap`) and
       `bit_reverse<T>` (`llvm.bitreverse`) over the integer types
-- [ ] Inline assembly — arch-specific (pair with `@if` on `TARGET_ARCH`),
-      preferring intrinsics where they exist:
-  - [ ] `@asm(...)` expression/block — the primitive: an LLVM inline-asm call
-        with an operand/constraint model (`$0`/`%name` operands, `=r` outputs,
-        clobber list, `volatile`), with optional pinning to a physical
-        register for syscalls/fixed-register instructions
-  - [ ] `@asm fn` — sugar for a function whose body is one `@asm(...)`
+- [~] [Inline assembly](#inline-assembly) — arch-specific (pair with `@if` on
+      `TARGET_ARCH`), preferring intrinsics where they exist:
+  - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an
+        operand model (`$out`/`$N` operands, `=r`/`r` register class, `${N:w}`
+        modifiers); output-less asm is implicitly volatile. Host target only
+        for now
+  - [x] `@asm fn` — sugar for a function whose body is one `@asm(...)`
         expression over its parameters: operands, register-allocated, no
         `ret` (the function's epilogue returns)
+  - [ ] explicit clobber lists and pinning an operand to a fixed physical
+        register (for syscalls/fixed-register instructions); cross-`--target`
+        support
   - [ ] `@naked` — separate opt-in for no-prologue/epilogue functions
         (`_start`, interrupt entry, trampolines): args arrive in the ABI
         registers and the body writes its own `ret`
@@ -1285,6 +1289,49 @@ reaching the rest of the C library.
 Anything the bindings do not cover, you can [declare yourself](#extern-declarations)
 with `@extern`. Variadic arguments to functions like `printf` follow C promotion
 rules (small integers are widened to `int32`).
+
+### Inline assembly
+
+`@asm` drops to the underlying machine when no instruction is reachable from
+the language — there is nothing higher-level for it. It comes in two forms.
+
+An **`@asm(...)` expression** is an inline-assembly call. The parenthesized
+values are the input operands and an optional `-> type` declares the output;
+the body is one string literal per instruction (joined with newlines). Inside
+the template, `$out` is the output and `$0`, `$1`, … are the inputs in order:
+
+```c
+fn add(x: int64, y: int64) -> int64 {
+    return @asm(x, y) -> int64 {
+        "add $out, $0, $1"
+    };
+}
+```
+
+With no `-> type` it is a void statement (e.g. `@asm() { "nop" };`). Operands
+and the output use the general-register class (`r`) and must be integers or
+pointers. A register-name modifier may follow in braces and is passed straight
+to LLVM — on aarch64 a bare operand is the 64-bit `x` register and `:w` selects
+the 32-bit `w` name, exactly as `%w` does in C inline asm:
+
+```c
+@asm fn rev32(value: uint32) -> uint32 {
+    "rev ${out:w}, ${0:w}"          // w registers; bare $out/$0 would be x
+}
+```
+
+That second form, **`@asm fn`**, is sugar for a function whose body is a single
+`@asm(...)` expression over its parameters: the parameters are the inputs and
+the return type is the output. You do *not* write `ret` — the function's normal
+epilogue returns the value.
+
+Following GCC, an asm with an output is assumed pure (it may be reordered or
+removed if unused), while one with no output is treated as having side effects.
+Inline asm is inherently target-specific, so it pairs with
+[`@if`](#conditional-compilation) on `TARGET_ARCH` to select per-architecture
+code. It is emitted for the host target; using it with a cross `--target` is
+not supported yet. Explicit clobber lists, pinning an operand to a fixed
+physical register, and `@naked` functions are on the [roadmap](#roadmap).
 
 ### Comments
 

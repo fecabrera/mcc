@@ -12,13 +12,15 @@ arguments, exactly like generic functions monomorphize.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field, replace as dataclasses_replace
 
 from llvmlite import ir
 
 from mcc.errors import LangError
 from mcc.nodes import (
-    ArrayLit, Assign, Binary, Block, BlockExpr, BoolLit, Break, Call, CallExpr,
+    ArrayLit, Asm, Assign, Binary, Block, BlockExpr, BoolLit, Break, Call,
+    CallExpr,
     Case, Cast, CharLit, Conditional, Const, Continue, Defer, Emit, ExprStmt,
     FloatLit, For, Func, GlobalVar, If, Index, IntLit,
     Let, Logical, Len, Member, NullLit, Program, Return, SizeOf, StoreDeref,
@@ -2366,6 +2368,8 @@ class CodeGen:
             return self.gen_binary(expr)
         if isinstance(expr, Cast):
             return self.gen_cast(expr)
+        if isinstance(expr, Asm):
+            return self.gen_asm(expr)
         if isinstance(expr, SizeOf):
             size = type_size(self.lang_type(expr.type_name, expr.line))
             return TypedValue(ir.Constant(UINT64.ir, size), UINT64)
@@ -2624,6 +2628,84 @@ class CodeGen:
         if tv.type is not BOOL:
             raise LangError("'!' requires a bool operand", expr.line)
         return TypedValue(self.builder.not_(tv.value), BOOL)
+
+    def gen_asm(self, expr: Asm) -> TypedValue:
+        """Emit an inline-assembly call from an ``@asm(...)`` expression.
+
+        Builds an LLVM ``InlineAsm`` with an ``=r`` output (when a return type
+        is given) and an ``r`` input per operand, then rewrites the template's
+        friendly operand names to LLVM's numbering: ``$out`` is the output and
+        ``$0``, ``$1``, ... are the inputs. A register modifier may follow in
+        braces -- ``${out:w}``, ``${0:w}`` -- and is passed through to LLVM
+        (e.g. on aarch64 a bare operand is the 64-bit ``x`` register and ``:w``
+        selects the 32-bit ``w`` name, exactly as in C inline asm). Following
+        GCC, an asm with no output is treated as having side effects (implicitly
+        volatile) so it is not reordered or removed; one with an output is
+        assumed pure.
+
+        Operands and the output must be integers or pointers (the ``r``
+        register class); floats and structs are rejected.
+
+        Args:
+            expr: The ``Asm`` node.
+
+        Returns:
+            The output as a ``TypedValue``, or ``void`` for an output-less asm.
+
+        Raises:
+            LangError: On a non-register operand/output type, or a template
+                operand reference that names a missing input or ``$out``.
+        """
+        out = None
+        if expr.out_type is not None:
+            out = self.lang_type(expr.out_type, expr.line)
+            if out is VOID:
+                out = None
+            elif not (is_integer(out) or is_pointer(out)):
+                raise LangError(
+                    f"an @asm output must be an integer or pointer, not {out}",
+                    expr.line,
+                )
+
+        inputs = [self.gen_expr(a) for a in expr.inputs]
+        for tv in inputs:
+            if not (is_integer(tv.type) or is_pointer(tv.type)):
+                raise LangError(
+                    f"an @asm operand must be an integer or pointer, not {tv.type}",
+                    expr.line,
+                )
+
+        constraints = (["=r"] if out else []) + ["r"] * len(inputs)
+        offset = 1 if out else 0
+
+        def rewrite(m: re.Match) -> str:
+            ref = m.group(1) or m.group(2)  # bare $0 / $out, or braced ${0:w}
+            modifier = m.group(3) or ""     # the ":w" etc., if braced
+            if ref == "out":
+                if not out:
+                    raise LangError(
+                        "@asm uses '$out' but has no output (add '-> type')",
+                        expr.line,
+                    )
+                llvm_index = 0
+            else:
+                index = int(ref)
+                if index >= len(inputs):
+                    raise LangError(
+                        f"@asm references operand ${index} but only "
+                        f"{len(inputs)} were given", expr.line,
+                    )
+                llvm_index = index + offset
+            return f"${{{llvm_index}{modifier}}}" if modifier else f"${llvm_index}"
+
+        template = re.sub(r"\$(?:(out|\d+)|\{(out|\d+)(:[A-Za-z]+)?\})",
+                          rewrite, expr.template)
+        ret_ir = out.ir if out else ir.VoidType()
+        fnty = ir.FunctionType(ret_ir, [tv.type.ir for tv in inputs])
+        inline = ir.InlineAsm(fnty, template, ",".join(constraints),
+                              side_effect=out is None)
+        result = self.builder.call(inline, [tv.value for tv in inputs])
+        return TypedValue(result, out) if out else TypedValue(result, VOID)
 
     def gen_cast(self, expr: Cast) -> TypedValue:
         """Emit an explicit ``value as type`` conversion.

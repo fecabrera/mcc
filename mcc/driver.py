@@ -272,6 +272,7 @@ def build_native_module(module: ir.Module, opt_level: int, triple: str | None = 
     if triple is None:
         llvm.initialize_native_target()
         llvm.initialize_native_asmprinter()
+        llvm.initialize_native_asmparser()  # parse inline asm for the host target
         triple = llvm.get_default_triple()
     else:
         llvm.initialize_all_targets()

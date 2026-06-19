@@ -7,7 +7,8 @@ import re
 from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
-    ArrayLit, Assign, Binary, Block, BlockExpr, BoolLit, Break, Call, CallExpr,
+    ArrayLit, Asm, Assign, Binary, Block, BlockExpr, BoolLit, Break, Call,
+    CallExpr,
     Case, Cast, CharLit, Conditional, Const, Continue, Defer, Emit, ExprStmt,
     FloatLit, For, Func, GlobalVar, If, Index, IntLit, Len, Let, Logical, Member,
     NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit,
@@ -197,7 +198,7 @@ class Parser:
             return self.parse_conditional(self.parse_toplevel_block)
         if self.cur.kind == "ANNOT" and self.cur.text == "@else":
             raise LangError("@else without a matching @if", self.cur.line)
-        private = static = extern = packed = volatile = inline = False
+        private = static = extern = packed = volatile = inline = asm = False
         align = None
         symbol = None
         while self.cur.kind == "ANNOT":
@@ -219,6 +220,8 @@ class Parser:
                 volatile = True
             elif annot.text == "@inline":
                 inline = True
+            elif annot.text == "@asm":
+                asm = True
             elif annot.text == "@align":
                 self.expect("(")
                 align = int_value(self.expect("INT").text)
@@ -249,6 +252,10 @@ class Parser:
         if inline and (extern or self.cur.kind in ("struct", "let", "const")):
             raise LangError(
                 "@inline only applies to functions with a body", self.cur.line
+            )
+        if asm and (extern or self.cur.kind != "fn"):
+            raise LangError(
+                "@asm only applies to functions with a body", self.cur.line
             )
         if self.cur.kind == "struct":
             if extern:
@@ -293,7 +300,7 @@ class Parser:
                 "@volatile only applies to structs and extern variables",
                 self.cur.line,
             )
-        return self.parse_function(private, static, extern, symbol, inline)
+        return self.parse_function(private, static, extern, symbol, inline, asm)
 
     # Tokens that can begin an expression; used to settle the `as T * x`
     # ambiguity (multiplication, not a pointer type).
@@ -502,7 +509,7 @@ class Parser:
 
     def parse_function(self, private: bool = False, static: bool = False,
                        extern: bool = False, symbol: str | None = None,
-                       inline: bool = False) -> Func:
+                       inline: bool = False, asm: bool = False) -> Func:
         """Parse a function definition or an ``@extern`` declaration.
 
         Reads the (optionally generic) signature, an optional trailing ``...``
@@ -558,8 +565,69 @@ class Parser:
             self.expect(";")
             return Func(name, type_params, params, ret_type, [], line,
                         private=private, extern=True, variadic=variadic, symbol=symbol)
+        if asm:
+            # `@asm fn` is sugar for a function whose body is one @asm(...)
+            # expression over its parameters: the params are the inputs, the
+            # return type is the output. No `ret` -- the epilogue returns.
+            if variadic:
+                raise LangError("an @asm function cannot be variadic", line)
+            template = self.parse_asm_body(line)
+            inputs = [Var(pname, line) for pname, _ in params]
+            is_void = ret_type.name == "void" and not ret_type.stars and not ret_type.dims
+            out_type = None if is_void else ret_type
+            node = Asm(template, inputs, out_type, line)
+            body = [ExprStmt(node, line) if is_void else Return(node, line)]
+            return Func(name, type_params, params, ret_type, body, line,
+                        private=private, static=static, inline=inline)
         return Func(name, type_params, params, ret_type, self.parse_block(), line,
                     private=private, static=static, variadic=variadic, inline=inline)
+
+    def parse_asm(self):
+        """Parse an inline-assembly expression.
+
+        ``@asm(in0, in1, ...) [-> type] { "line" "line" ... }`` -- the
+        parenthesized operands become the inputs (``$0``, ``$1``, ...), the
+        optional ``-> type`` is the output (``$out``), and the braced body is
+        one bare string literal per instruction.
+
+        Returns:
+            The parsed ``Asm`` node.
+        """
+        line = self.expect("ANNOT").line  # @asm
+        self.expect("(")
+        inputs = []
+        while self.cur.kind != ")":
+            if inputs:
+                self.expect(",")
+            inputs.append(self.parse_expr())
+        self.expect(")")
+        out_type = self.parse_type_ref() if self.accept("->") else None
+        return Asm(self.parse_asm_body(line), inputs, out_type, line)
+
+    def parse_asm_body(self, line: int) -> str:
+        """Parse an ``@asm`` body: bare string literals joined with newlines.
+
+        Args:
+            line: Source line of the ``@asm``, for diagnostics.
+
+        Returns:
+            The instruction lines joined with ``\\n``.
+
+        Raises:
+            LangError: When the body has no instruction line.
+        """
+        self.expect("{")
+        lines = []
+        while self.cur.kind != "}":
+            tok = self.expect("STRING")
+            raw = tok.text[1:-1]
+            lines.append(
+                re.sub(r"\\(.)", lambda m: STRING_ESCAPES.get(m.group(1), m.group(1)), raw)
+            )
+        self.expect("}")
+        if not lines:
+            raise LangError("an @asm block needs at least one instruction line", line)
+        return "\n".join(lines)
 
     def parse_block(self) -> list:
         """Parse a brace-delimited ``{ ... }`` block of statements.
@@ -867,6 +935,8 @@ class Parser:
         Raises:
             LangError: On an unexpected token or an out-of-range char literal.
         """
+        if self.cur.kind == "ANNOT" and self.cur.text == "@asm":
+            return self.parse_asm()
         tok = self.advance()
         if tok.kind == "INT":
             return IntLit(int_value(tok.text), tok.line)

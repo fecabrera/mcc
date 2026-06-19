@@ -661,6 +661,29 @@ class Cast:
 
 
 @dataclass
+class Asm:
+    """An inline-assembly expression: ``@asm(in0, ...) [-> type] { "line"... }``.
+
+    The body is one or more bare string literals -- one instruction each --
+    joined with newlines into ``template``. Operands are written ``$out`` for
+    the single output (present iff ``out_type`` is set) and ``$0``, ``$1``, ...
+    for the inputs in order; the compiler rewrites them to LLVM's operand
+    numbering and builds the constraint string.
+
+    Attributes:
+        template: The asm template, body lines joined with ``\\n``.
+        inputs: The input operand expressions, in order.
+        out_type: The output/return type, or ``None`` for a void asm statement.
+        line: Source line for diagnostics.
+    """
+
+    template: str
+    inputs: list
+    out_type: TypeRef | None
+    line: int
+
+
+@dataclass
 class SizeOf:
     """A ``sizeof(type)`` expression -- a compile-time ``uint64``.
 
