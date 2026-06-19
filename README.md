@@ -164,11 +164,13 @@ fn main() -> int32 { println("answer = %d", 42); return 0; }
 ```
 
 Alongside `std` are `memory` (typed `alloc`/`dealloc`), the
-`array`/`stack`/`queue`/`set`/`dict` containers, and the `hashing/*` functions. The [`libc/`](lib/libc/) modules are
-instead `@extern` bindings for the C library itself — `printf`, `malloc`, the
-`str*`/`mem*` functions, `FILE*` streams, and so on — which you reach for when
-you want C directly; see [Reaching libc](#reaching-libc). The
-[standard library index](lib/README.md) lists every module.
+`array`/`stack`/`queue`/`set`/`dict` containers, and the `hashing/*` functions.
+
+The [`libc/`](lib/libc/) modules are instead `@extern` bindings for the C
+library itself — `printf`, `malloc`, the `str*`/`mem*` functions, `FILE*`
+streams, and so on — for when you want C directly; see
+[Reaching libc](#reaching-libc). The [standard library index](lib/README.md)
+lists every module.
 
 ## Roadmap
 
@@ -315,9 +317,9 @@ fn fib(n: int32) -> int32 {
 ```
 
 `@inline` asks for a function's body to be folded into each of its call
-sites (LLVM's `alwaysinline`). It is a small generic-friendly helper's best
-friend — the call overhead disappears and the optimizer sees through to the
-arguments:
+sites (LLVM's `alwaysinline`). It is ideal for small helpers, especially
+generic ones — the call overhead disappears and the optimizer sees through to
+the arguments:
 
 ```c
 @inline fn min(a: int64, b: int64) -> int64 {
@@ -334,14 +336,11 @@ lets generics and `@static` cross files), so the body is present to inline
 wherever it is called. `@inline` needs a body, so it cannot combine with
 `@extern`.
 
-`@inline` on its own forces the inlining — unlike C, there is no need for the
-`static inline` idiom. That idiom works around C's `inline` linkage rules
-(a plain `inline` emits no out-of-line definition, so an un-inlined call
-becomes an "undefined reference"); mcc has no such rule, since imported
-bodies are copied into each object. `@static` is therefore orthogonal: it
-only makes the helper file-private (so it leaks no global symbol and its
-spare out-of-line copy can be dead-stripped), and has no bearing on whether
-the inlining happens. Combine them as `@static @inline` when you want both.
+Unlike C, `@inline` alone forces inlining — there is no need for the
+`static inline` idiom (which only exists to work around C's `inline` linkage
+rules). `@static` is orthogonal: it just makes the helper file-private, so its
+unused out-of-line copy can be dead-stripped. Combine as `@static @inline` for
+both.
 
 ### Variadic functions
 
@@ -371,10 +370,9 @@ logf("%s = %d (0x%X)", "answer", 42, 255);   // answer = 42 (0xFF)
 
 `va_list` is the C argument-cursor type; `va_start(ap, last)` initializes it
 (naming the parameter just before the `...`), and `va_end(ap)` releases it.
-Its layout is platform-specific, so `va_list` is opaque — you can hand it to
-a function but not read individual arguments from it in mcc (there is no
-`va_arg`); let a C `v*` function consume it. The right layout is chosen for
-the target (it works for x86-64, arm64/aarch64, and Apple arm64).
+It is **opaque**: you can pass it to a C `v*` function but not read arguments
+from it in mcc (there is no `va_arg`). The target's ABI layout is chosen
+automatically (x86-64, arm64/aarch64, and Apple arm64).
 
 ### Generics
 
@@ -420,10 +418,9 @@ specific viable variants make the call ambiguous — a compile error.
 
 ### Variables
 
-`let` declares a variable; the type is inferred from the initializer when
-the initializer already has a definite type. A bare integer constant does
-not -- it must be given a type with an annotation or a cast, so declarations
-are never ambiguous. Assignment uses plain `=`.
+`let` declares a variable, inferring the type from the initializer. A bare
+integer constant has no definite type, so it needs an annotation or a cast —
+declarations are never ambiguous. Assignment uses plain `=`.
 
 ```c
 let x: int64 = 0;       // annotated
@@ -535,12 +532,12 @@ stream (see [`@symbol`](#extern-declarations)):
 @extern @symbol("stdout")    let linux_stdout: struct FILE*;   // when TARGET_OS == OS_LINUX
 ```
 
-`OS_NONE` is a freestanding target with no operating system: a bare-metal
-triple like `aarch64-unknown-none-elf` reports `TARGET_OS == OS_NONE` and
-`TARGET_ARCH == ARCH_AARCH64`. Such code uses no libc, so it never needs the
-stream symbols above — but `TARGET_ARCH` still lets a kernel select
-architecture-specific code (MMIO addresses, register layouts). These names are
-reserved: a user `const` may read them but not redefine them.
+`OS_NONE` is a freestanding target with no operating system — a bare-metal
+triple like `aarch64-unknown-none-elf` reports `OS_NONE` and `ARCH_AARCH64`.
+Such code uses no libc (so none of the stream symbols above), but `TARGET_ARCH`
+still lets a kernel pick architecture-specific code like MMIO addresses and
+register layouts. These names are reserved: a `const` may read them, not
+redefine them.
 
 ### Conditional compilation
 
@@ -639,15 +636,14 @@ for v in &nums {            // nums: array<int32>; v is int32, inferred from arr
 ```
 
 The element type of `x` is inferred from `<struct>_next`'s out-parameter; `x` is
-scoped to the loop and `break`/`continue` work as usual. It lowers to
-`{ let it = <struct>_it(obj); while (<struct>_next(&it, &x)) { ... } }` with the
-iterator held as a hidden, collision-proof temporary. Define `<struct>_it` and
-`<struct>_next` for your own types to make them iterable — name dispatch means
-no overloading is needed, and a struct built with [`extends`](#structs) can
-reuse its base's by forwarding through an upcast. [lib/array.mc](lib/array.mc),
-[lib/set.mc](lib/set.mc), [lib/dict.mc](lib/dict.mc), and
-[lib/string.mc](lib/string.mc) all do this; see
-[examples/iteration.mc](examples/iteration.mc).
+scoped to the loop, and `break`/`continue` work as usual. It lowers to
+`{ let it = <struct>_it(obj); while (<struct>_next(&it, &x)) { ... } }`, with the
+iterator held as a hidden, collision-proof temporary.
+
+Define `<struct>_it` and `<struct>_next` to make your own types iterable; a
+struct built with [`extends`](#structs) can reuse its base's by forwarding
+through an upcast. The `array`, `set`, `dict`, and `string` libraries all do
+this — see [examples/iteration.mc](examples/iteration.mc).
 
 `case` matches a value against a series of `when` arms, with an optional
 `else:` default. The subject is evaluated once, and there is **no
@@ -983,12 +979,16 @@ let i: int32 = 0;
 while (i < len(cmds)) { use(cmds[i]); i = i + 1; }
 ```
 
-Like C, an array decays to a pointer to its first element wherever a value
-is used — so it passes to a `T*` parameter and `&arr[i]` gives an element
-address — and there is no whole-array assignment or copy. Arrays work as
-struct fields. In a type, `*` binds to the element, so `int32*[8]` is an
-array of eight pointers; group for the other order. Each `N` must be a
-positive integer literal (`[]` only as the inferred outermost dimension).
+Like C, an array decays to a pointer to its first element wherever a value is
+used: it passes to a `T*` parameter, and `&arr[i]` gives an element address. A
+few more rules:
+
+- No whole-array assignment or copy.
+- Arrays can be struct fields.
+- In a type, `*` binds to the element — `int32*[8]` is an array of eight
+  pointers; parenthesize for the other order.
+- Each `N` is a positive integer literal (`[]` only as the inferred outermost
+  dimension).
 
 ### Structs
 
