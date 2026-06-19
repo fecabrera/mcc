@@ -36,7 +36,7 @@ hello from bare-metal mcc
 - **[start.S](start.S)** — a five-instruction boot stub. qemu starts the
   CPU with no stack pointer, so it sets one and calls `kmain`. Assembled
   and linked by `aarch64-elf-gcc` in the same command. (mcc's
-  [inline assembly](../../README.md#inline-assembly) is *not* used here: it is
+  [inline assembly](../../docs/language.md#inline-assembly) is *not* used here: it is
   lowered by the host's assembler, so it only works when cross-compiling from a
   host of the same architecture — and this object is built from any host. A
   no-prologue `_start` would also need the `@naked` form. Both are noted on the

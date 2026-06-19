@@ -7,7 +7,7 @@ function carries a doc comment; this page is the index.
 
 The `libc/` modules are `@extern` declarations for functions provided by the C
 library you link against (or your own freestanding implementation); see
-[Reaching libc](../README.md#reaching-libc). Everything else is implemented
+[Reaching libc](../docs/language.md#reaching-libc). Everything else is implemented
 in mcc.
 
 ## Core
@@ -111,5 +111,5 @@ Where each C standard header stands. `size_t` is bound as `uint64`; single-preci
 `assert.h` (macro with file/line), `setjmp.h` (`setjmp` is a macro; `jmp_buf` is
 platform-sized), `signal.h`, `locale.h`, `wchar.h`/`wctype.h`/`uchar.h`,
 `complex.h`, `fenv.h`, `threads.h`/`stdatomic.h`, `tgmath.h`, `inttypes.h`.
-`stdarg.h` is handled in the language ([`va_list`](../README.md#variadic-functions));
+`stdarg.h` is handled in the language ([`va_list`](../docs/language.md#variadic-functions));
 `stddef.h`/`stdbool.h` are mostly built in (`null`, `bool`, the sized integer types).
