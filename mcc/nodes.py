@@ -675,12 +675,15 @@ class Asm:
         inputs: The input operand expressions, in order.
         out_type: The output/return type, or ``None`` for a void asm statement.
         line: Source line for diagnostics.
+        clobbers: Registers and flags clobbered by the asm (e.g. ``"memory"``,
+            ``"cc"``, ``"x0"``), from an optional ``@clobbers(...)`` clause.
     """
 
     template: str
     inputs: list
     out_type: TypeRef | None
     line: int
+    clobbers: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -57,6 +57,25 @@ def test_empty_asm_body_is_rejected():
         parse('@asm fn f(a: int64) -> int64 { }')
 
 
+def test_clobbers_clause_parses_onto_the_node():
+    (fn,) = parse(
+        'fn f(p: int64*) -> int64 {\n'
+        '    return @asm @clobbers("memory", "cc") (p) -> int64 { "ldr $out, [$0]" };\n'
+        '}'
+    ).functions
+    assert fn.body[0].value.clobbers == ["memory", "cc"]
+
+
+def test_clobbers_clause_parses_on_asm_fn():
+    (fn,) = parse('@asm @clobbers("memory") fn sp() -> uint64 { "mov $out, sp" }').functions
+    assert fn.body[0].value.clobbers == ["memory"]
+
+
+def test_absent_clobbers_is_empty():
+    (fn,) = parse('@asm fn pause() { "yield" }').functions
+    assert fn.body[0].expr.clobbers == []
+
+
 # -------------------------------------------------------------------- codegen
 
 ADD = 'fn f(x: int64, y: int64) -> int64 { return @asm(x, y) -> int64 { "add $out, $0, $1" }; }'
@@ -80,6 +99,21 @@ def test_void_asm_is_sideeffect():
 def test_width_modifier_is_passed_through():
     ir = compile_ir('@asm fn rev(a: uint32) -> uint32 { "rev ${out:w}, ${0:w}" }')
     assert "rev ${0:w}, ${1:w}" in ir
+
+
+def test_clobbers_append_to_the_constraint_string():
+    # An output asm: clobbers follow the =r output and r inputs, as ~{name}.
+    ir = compile_ir(
+        'fn f(p: int64*) -> int64 {\n'
+        '    return @asm @clobbers("memory", "cc") (p) -> int64 { "ldr $out, [$0]" };\n'
+        '}'
+    )
+    assert '"=r,r,~{memory},~{cc}"' in ir
+
+
+def test_void_asm_with_clobbers():
+    ir = compile_ir('fn g() { @asm @clobbers("memory") () { "dmb sy" }; }')
+    assert 'asm sideeffect "dmb sy", "~{memory}"' in ir
 
 
 @pytest.mark.parametrize(
@@ -106,6 +140,10 @@ def test_asm_codegen_errors(source, message):
         ('@asm @extern fn f(a: int64) -> int64;', "@asm only applies to functions"),
         ('@asm struct S { x: int32; }', "@asm only applies to functions"),
         ('@asm fn f(a: int64, ...) -> int64 { "nop" }', "cannot be variadic"),
+        ('fn f() { @asm @clobbers() () { "nop" }; }',
+         "@clobbers needs at least one register"),
+        ('@clobbers("x0") fn f() -> int32 { return 0; }',
+         "@clobbers only applies to @asm"),
     ],
 )
 def test_asm_parser_errors(source, message):
@@ -139,3 +177,18 @@ def test_asm_expression_runs():
 @aarch64_only
 def test_void_asm_runs():
     assert run('fn main() -> int32 { @asm() { "nop" }; return 0; }') == 0
+
+
+@aarch64_only
+def test_asm_with_clobbers_runs():
+    # x1 is used inside the asm and declared clobbered, so the backend won't
+    # keep a live value there across it.
+    assert run(
+        'fn main() -> int32 {\n'
+        '    let x: int64 = 20;\n'
+        '    return @asm @clobbers("x1") (x) -> int64 {\n'
+        '        "mov x1, #22"\n'
+        '        "add $out, $0, x1"\n'
+        '    } as int32;\n'
+        '}'
+    ) == 42

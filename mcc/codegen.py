@@ -2643,10 +2643,11 @@ class CodeGen:
         ``$0``, ``$1``, ... are the inputs. A register modifier may follow in
         braces -- ``${out:w}``, ``${0:w}`` -- and is passed through to LLVM
         (e.g. on aarch64 a bare operand is the 64-bit ``x`` register and ``:w``
-        selects the 32-bit ``w`` name, exactly as in C inline asm). Following
-        GCC, an asm with no output is treated as having side effects (implicitly
-        volatile) so it is not reordered or removed; one with an output is
-        assumed pure.
+        selects the 32-bit ``w`` name, exactly as in C inline asm). Any
+        ``@clobbers(...)`` names are appended to the constraint string as
+        ``~{name}`` entries. Following GCC, an asm with no output is treated as
+        having side effects (implicitly volatile) so it is not reordered or
+        removed; one with an output is assumed pure.
 
         Operands and the output must be integers or pointers (the ``r``
         register class); floats and structs are rejected.
@@ -2680,7 +2681,8 @@ class CodeGen:
                     expr.line,
                 )
 
-        constraints = (["=r"] if out else []) + ["r"] * len(inputs)
+        constraints = ((["=r"] if out else []) + ["r"] * len(inputs)
+                       + [f"~{{{c}}}" for c in expr.clobbers])
         offset = 1 if out else 0
 
         def rewrite(m: re.Match) -> str:

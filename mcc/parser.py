@@ -201,6 +201,7 @@ class Parser:
         private = static = extern = packed = volatile = inline = asm = False
         align = None
         symbol = None
+        clobbers = []
         while self.cur.kind == "ANNOT":
             annot = self.advance()
             if annot.text in ("@if", "@else"):
@@ -222,6 +223,8 @@ class Parser:
                 inline = True
             elif annot.text == "@asm":
                 asm = True
+            elif annot.text == "@clobbers":
+                clobbers = self.parse_clobber_list(annot.line)
             elif annot.text == "@align":
                 self.expect("(")
                 align = int_value(self.expect("INT").text)
@@ -257,6 +260,8 @@ class Parser:
             raise LangError(
                 "@asm only applies to functions with a body", self.cur.line
             )
+        if clobbers and not asm:
+            raise LangError("@clobbers only applies to @asm", self.cur.line)
         if self.cur.kind == "struct":
             if extern:
                 raise LangError("@extern does not apply to structs", self.cur.line)
@@ -300,7 +305,7 @@ class Parser:
                 "@volatile only applies to structs and extern variables",
                 self.cur.line,
             )
-        return self.parse_function(private, static, extern, symbol, inline, asm)
+        return self.parse_function(private, static, extern, symbol, inline, asm, clobbers)
 
     # Tokens that can begin an expression; used to settle the `as T * x`
     # ambiguity (multiplication, not a pointer type).
@@ -509,7 +514,8 @@ class Parser:
 
     def parse_function(self, private: bool = False, static: bool = False,
                        extern: bool = False, symbol: str | None = None,
-                       inline: bool = False, asm: bool = False) -> Func:
+                       inline: bool = False, asm: bool = False,
+                       clobbers: list[str] | None = None) -> Func:
         """Parse a function definition or an ``@extern`` declaration.
 
         Reads the (optionally generic) signature, an optional trailing ``...``
@@ -522,6 +528,8 @@ class Parser:
             extern: Whether ``@extern`` was applied (declaration only).
             symbol: The ``@symbol("...")`` linker name, or ``None``.
             inline: Whether ``@inline`` was applied (``alwaysinline``).
+            asm: Whether ``@asm`` was applied (the body is one asm expression).
+            clobbers: Registers clobbered by an ``@asm fn`` body, or ``None``.
 
         Returns:
             The parsed ``Func``.
@@ -575,7 +583,7 @@ class Parser:
             inputs = [Var(pname, line) for pname, _ in params]
             is_void = ret_type.name == "void" and not ret_type.stars and not ret_type.dims
             out_type = None if is_void else ret_type
-            node = Asm(template, inputs, out_type, line)
+            node = Asm(template, inputs, out_type, line, clobbers or [])
             body = [ExprStmt(node, line) if is_void else Return(node, line)]
             return Func(name, type_params, params, ret_type, body, line,
                         private=private, static=static, inline=inline)
@@ -585,7 +593,8 @@ class Parser:
     def parse_asm(self):
         """Parse an inline-assembly expression.
 
-        ``@asm(in0, in1, ...) [-> type] { "line" "line" ... }`` -- the
+        ``@asm [@clobbers(...)] (in0, in1, ...) [-> type] { "line"... }`` -- the
+        optional ``@clobbers`` clause comes right after ``@asm``, the
         parenthesized operands become the inputs (``$0``, ``$1``, ...), the
         optional ``-> type`` is the output (``$out``), and the braced body is
         one bare string literal per instruction.
@@ -594,6 +603,9 @@ class Parser:
             The parsed ``Asm`` node.
         """
         line = self.expect("ANNOT").line  # @asm
+        clobbers = []
+        if self.cur.kind == "ANNOT" and self.cur.text == "@clobbers":
+            clobbers = self.parse_clobber_list(self.advance().line)
         self.expect("(")
         inputs = []
         while self.cur.kind != ")":
@@ -602,7 +614,33 @@ class Parser:
             inputs.append(self.parse_expr())
         self.expect(")")
         out_type = self.parse_type_ref() if self.accept("->") else None
-        return Asm(self.parse_asm_body(line), inputs, out_type, line)
+        return Asm(self.parse_asm_body(line), inputs, out_type, line, clobbers)
+
+    def parse_clobber_list(self, line: int) -> list[str]:
+        """Parse a ``@clobbers("reg", ...)`` list, the ``@clobbers`` already eaten.
+
+        Lists the registers and flags the asm clobbers (e.g. ``"memory"``,
+        ``"cc"``, or a register name like ``"x0"``) as string literals.
+
+        Args:
+            line: Source line of the ``@clobbers``, for diagnostics.
+
+        Returns:
+            The clobber names in order.
+
+        Raises:
+            LangError: When the list is empty.
+        """
+        self.expect("(")
+        clobbers = []
+        while self.cur.kind != ")":
+            if clobbers:
+                self.expect(",")
+            clobbers.append(self.expect("STRING").text[1:-1])
+        self.expect(")")
+        if not clobbers:
+            raise LangError("@clobbers needs at least one register", line)
+        return clobbers
 
     def parse_asm_body(self, line: int) -> str:
         """Parse an ``@asm`` body: bare string literals joined with newlines.

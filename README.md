@@ -269,9 +269,11 @@ reference section.
   - [x] `@asm fn` — sugar for a function whose body is one `@asm(...)`
         expression over its parameters: operands, register-allocated, no
         `ret` (the function's epilogue returns)
-  - [ ] explicit clobber lists and pinning an operand to a fixed physical
-        register (for syscalls/fixed-register instructions); foreign-arch
-        cross-`--target` support
+  - [x] `@clobbers("memory", "cc", "x0", ...)` — declare registers/flags the
+        asm touches beyond its operands, right after `@asm`
+  - [ ] pinning an operand to a fixed physical register (for
+        syscalls/fixed-register instructions); foreign-arch cross-`--target`
+        support
   - [ ] `@naked` — separate opt-in for no-prologue/epilogue functions
         (`_start`, interrupt entry, trampolines): args arrive in the ABI
         registers and the body writes its own `ret`

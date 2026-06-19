@@ -1071,16 +1071,36 @@ That second form, **`@asm fn`**, is sugar for a function whose body is a single
 the return type is the output. You do *not* write `ret` — the function's normal
 epilogue returns the value.
 
+A **`@clobbers(...)`** clause declares the registers and flags the asm touches
+beyond its operands, so the compiler keeps no live values there across it. It
+follows `@asm` directly — before the operand list in the expression form, and in
+the annotation stack in the `@asm fn` form — and lists `"memory"`, `"cc"`, or
+register names (e.g. `"x0"`) as string literals:
+
+```c
+// reads through a pointer and orders memory, so it clobbers "memory"
+fn load_acquire(addr: int64*) -> int64 {
+    return @asm @clobbers("memory") (addr) -> int64 {
+        "ldar $out, [$0]"
+    };
+}
+
+@asm @clobbers("memory") fn barrier() {
+    "dmb sy"
+}
+```
+
 Following GCC, an asm with an output is assumed pure (it may be reordered or
 removed if unused), while one with no output is treated as having side effects.
-Inline asm is inherently target-specific, so it pairs with
-[`@if`](#conditional-compilation) on `TARGET_ARCH` to select per-architecture
-code. It is lowered by the host architecture's assembler, so it works on the
-host and on a cross `--target` of that same architecture — for instance an
-aarch64 host cross-compiling an aarch64 bare-metal object (see
+A `@clobbers` list constrains register allocation and ordering but does not by
+itself make an asm volatile. Inline asm is inherently target-specific, so it
+pairs with [`@if`](#conditional-compilation) on `TARGET_ARCH` to select
+per-architecture code. It is lowered by the host architecture's assembler, so it
+works on the host and on a cross `--target` of that same architecture — for
+instance an aarch64 host cross-compiling an aarch64 bare-metal object (see
 [examples/baremetal/](examples/baremetal/)) — but not a foreign architecture.
-Explicit clobber lists, pinning an operand to a fixed physical register, and
-`@naked` functions are on the [roadmap](../README.md#roadmap).
+Pinning an operand to a fixed physical register and `@naked` functions are on
+the [roadmap](../README.md#roadmap).
 
 ## Comments
 
