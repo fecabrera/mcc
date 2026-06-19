@@ -265,7 +265,21 @@ reference section.
 - [ ] Formatted `print`/`println` — Rust/Python-style `{}` placeholders with
       format specs and positional args (`{.8f}`, `{0:.8f}`), written in mcc
       over native varargs. Type-driven (no `%`-letters); enables compile-time
-      format checking and per-struct `format` methods later.
+      format checking and per-struct `format` methods later:
+  - [ ] formatting over a `uint8*` format string first (`println(fmt: uint8*,
+        args...)`), parsed at runtime
+  - [ ] switch the parameter to `const fmt: struct string` once `const`
+        parameters land, so a string literal promotes to it at the call site
+        and the format can be parsed at compile time
+- [ ] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
+      the callee promises not to mutate:
+  - [ ] pass by hidden reference: a large value (a struct) is passed by a hidden
+        pointer instead of copied, so you get value semantics without
+        hand-writing a pointer
+  - [ ] literal promotion: because the parameter is read-only, a literal
+        argument is promoted to its type at compile time — a string literal to a
+        `struct string`, say — so `fn println(const fmt: struct string, args...)`
+        accepts `println("{}", a)` directly
 
 <!-- Add upcoming features here, e.g. - [ ] feature — short note -->
 
