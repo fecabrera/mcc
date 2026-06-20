@@ -53,6 +53,38 @@ rules). `@static` is orthogonal: it just makes the helper file-private, so its
 unused out-of-line copy can be dead-stripped. Combine as `@static @inline` for
 both.
 
+### const parameters
+
+A parameter marked `const` is read-only: the body may not assign to it, to one
+of its fields, or to one of its array elements, and may not take its address
+with `&`. For a **struct** parameter, `const` also changes how it is passed —
+by a hidden pointer to the caller's storage instead of a by-value copy. You get
+value semantics (the callee sees the struct, never mutates the caller's) without
+hand-writing a pointer or paying for the copy:
+
+```c
+struct matrix { m: float64[16]; }
+
+fn trace(const a: struct matrix) -> float64 {   // passed by hidden reference
+    return a.m[0] + a.m[5] + a.m[10] + a.m[15];
+}
+```
+
+The hidden reference shares the argument's storage when it has an address (a
+variable, a field); a temporary argument (a struct returned by value, say) is
+spilled to a stack slot first. `const` works on generic parameters too.
+
+`const` on a **pointer** parameter freezes the pointer itself, not what it
+points at — `const p: struct node*` means `p = ...` is rejected but `p->next =
+...` is fine, the same distinction as C's `node* const` versus `const node*`.
+On a scalar it simply makes the parameter read-only.
+
+`const` is not allowed on `@extern` parameters (the hidden-reference ABI would
+not match the C function). A function with a `const` struct parameter also
+cannot be used as a function value (`let f = trace;`), because a plain
+`fn(struct matrix) -> ...` pointer type cannot express the hidden-reference
+calling convention.
+
 ## Variadic functions
 
 A trailing `...` after at least one named parameter makes a function

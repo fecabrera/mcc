@@ -306,9 +306,9 @@ reference section.
         and the format can be parsed at compile time
 - [ ] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
       the callee promises not to mutate:
-  - [ ] pass by hidden reference: a large value (a struct) is passed by a hidden
+  - [x] pass by hidden reference: a large value (a struct) is passed by a hidden
         pointer instead of copied, so you get value semantics without
-        hand-writing a pointer
+        hand-writing a pointer (see [const parameters](docs/language.md#const-parameters))
   - [ ] literal promotion: because the parameter is read-only, a literal
         argument is promoted to its type at compile time — a string literal to a
         `struct string`, say — so `fn println(const fmt: struct string, args...)`

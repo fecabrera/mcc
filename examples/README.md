@@ -20,6 +20,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [block_expressions.mc](block_expressions.mc) | `{ ...; emit v; }` as a value, contained temporaries, branch emits, `defer` inside |
 | [iteration.mc](iteration.mc) | `for x in` over the iter/next protocol (array, set, dict), `break`/`continue`, bare `{ }` block scopes |
 | [functions.mc](functions.mc) | void functions, any-order definitions, recursion, mutual recursion |
+| [const_params.mc](const_params.mc) | `const` read-only parameters, structs passed by hidden reference (no copy), `const` on pointers vs values |
 | [variadic.mc](variadic.mc) | variadic `...` definitions, `va_list`, `va_start`/`va_end`, forwarding to `vsnprintf` |
 | [function_pointers.mc](function_pointers.mc) | `fn(...) -> R` types, callbacks in structs, dispatch tables, `null` callbacks |
 | [arrays.mc](arrays.mc) | fixed-size `T[N]` arrays, indexing, `sizeof`, pointer decay, multi-dim, a `@static` buffer |

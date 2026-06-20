@@ -128,6 +128,9 @@ class Func:
             inlined at every call site when optimizing.
         symbol: ``@symbol("...")`` -- the linker name, when not ``name``.
         source: Defining file, stamped by the driver.
+        const_params: Names of parameters declared ``const`` -- read-only in the
+            body; a ``const`` struct is passed by a hidden pointer rather than
+            copied.
     """
 
     name: str
@@ -143,6 +146,7 @@ class Func:
     inline: bool = False
     symbol: str | None = None
     source: str | None = None
+    const_params: set[str] = field(default_factory=set)
 
 
 @dataclass

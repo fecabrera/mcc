@@ -545,6 +545,7 @@ class Parser:
             raise LangError("extern functions cannot be generic", line)
         self.expect("(")
         params = []
+        const_params: set[str] = set()
         variadic = False
         while self.cur.kind != ")":
             if params:
@@ -560,7 +561,10 @@ class Parser:
                     raise LangError("'...' must be the last parameter", ellipsis.line)
                 variadic = True
                 break
+            is_const = bool(self.accept("const"))
             pname = self.expect("IDENT").text
+            if is_const:
+                const_params.add(pname)
             self.expect(":")
             params.append((pname, self.parse_type_ref()))
         self.expect(")")
@@ -569,6 +573,10 @@ class Parser:
             ret_type = self.parse_type_ref()
         if variadic and type_params:
             raise LangError("a generic function cannot be variadic", line)
+        if const_params and extern:
+            raise LangError(
+                "const parameters are not allowed on @extern functions "
+                "(they would change the C calling convention)", line)
         if extern:  # a declaration: signature only, no body
             self.expect(";")
             return Func(name, type_params, params, ret_type, [], line,
@@ -579,6 +587,8 @@ class Parser:
             # return type is the output. No `ret` -- the epilogue returns.
             if variadic:
                 raise LangError("an @asm function cannot be variadic", line)
+            if const_params:
+                raise LangError("const parameters are not allowed on @asm functions", line)
             template = self.parse_asm_body(line)
             inputs = [Var(pname, line) for pname, _ in params]
             is_void = ret_type.name == "void" and not ret_type.stars and not ret_type.dims
@@ -588,7 +598,8 @@ class Parser:
             return Func(name, type_params, params, ret_type, body, line,
                         private=private, static=static, inline=inline)
         return Func(name, type_params, params, ret_type, self.parse_block(), line,
-                    private=private, static=static, variadic=variadic, inline=inline)
+                    private=private, static=static, variadic=variadic, inline=inline,
+                    const_params=const_params)
 
     def parse_asm(self):
         """Parse an inline-assembly expression.

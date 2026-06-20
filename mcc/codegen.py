@@ -673,6 +673,10 @@ class CodeGen:
         self.funcs: dict[str, ir.Function] = {}
         # name -> (return type, param types, variadic)
         self.signatures: dict[str, tuple[LangType, list[LangType], bool]] = {}
+        # symbol -> indices of params passed by hidden reference (const structs).
+        self.hidden_ref: dict[str, frozenset[int]] = {}
+        # Names of the current function's const (read-only) parameters.
+        self.const_locals: set[str] = set()
         # Generic functions: a name maps to its overload set, distinguished
         # by parameter patterns (e.g. hash<T>(T) vs hash<T>(T*)).
         self.templates: dict[str, list[Func]] = {}
@@ -993,19 +997,48 @@ class CodeGen:
                 else:
                     self.program.functions.append(item)
 
-    def param_irs(self, params) -> list:
+    def param_irs(self, params, hidden: frozenset[int] = frozenset()) -> list:
         """Map a function's parameter types to their LLVM argument types.
 
         A ``va_list`` lowers to the form it is passed in (a pointer on every
-        ABI), not its storage layout.
+        ABI), not its storage layout. A hidden-reference parameter (a ``const``
+        struct) lowers to a pointer to its storage rather than the value.
 
         Args:
             params: The parameter ``LangType``s.
+            hidden: Indices of parameters passed by hidden reference.
 
         Returns:
             The LLVM types to use for the parameters.
         """
-        return [self.va_list_passed_ir if is_valist(p) else p.ir for p in params]
+        out = []
+        for i, p in enumerate(params):
+            if is_valist(p):
+                out.append(self.va_list_passed_ir)
+            elif i in hidden:
+                out.append(p.ir.as_pointer())
+            else:
+                out.append(p.ir)
+        return out
+
+    def hidden_ref_indices(self, func: Func, params: list) -> frozenset[int]:
+        """Indices of ``func``'s parameters passed by hidden reference.
+
+        A ``const`` parameter of struct type is handed over as a pointer to the
+        caller's storage instead of copied by value: the callee promises not to
+        mutate it, so sharing the storage is safe and avoids the copy.
+
+        Args:
+            func: The function whose parameters to classify.
+            params: The resolved parameter ``LangType``s, in order.
+
+        Returns:
+            The set of by-reference parameter indices.
+        """
+        return frozenset(
+            i for i, ((name, _), ptype) in enumerate(zip(func.params, params))
+            if name in func.const_params and is_struct(ptype)
+        )
 
     def lang_type(self, ref: TypeRef, line: int) -> LangType:
         """Resolve a parsed ``TypeRef`` to a ``LangType``.
@@ -1490,13 +1523,15 @@ class CodeGen:
                 symbol = self.symbol_bases[key]
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
-                fnty = ir.FunctionType(ret.ir, self.param_irs(params),
+                hidden = self.hidden_ref_indices(func, params)
+                fnty = ir.FunctionType(ret.ir, self.param_irs(params, hidden),
                                        var_arg=func.variadic)
                 fn = ir.Function(self.module, fnty, name=symbol)
                 self.link_shared(fn, func.source)
                 self.mark_inline(fn, func)
                 self.funcs[symbol] = fn
                 self.signatures[symbol] = (ret, params, func.variadic)
+                self.hidden_ref[symbol] = hidden
                 self.static_funcs[key] = symbol
                 continue
             if func.type_params:
@@ -1522,13 +1557,15 @@ class CodeGen:
             self.used_symbols.add(func.name)
             ret = self.lang_type(func.ret_type, func.line)
             params = [self.lang_type(t, func.line) for _, t in func.params]
-            fnty = ir.FunctionType(ret.ir, self.param_irs(params),
+            hidden = self.hidden_ref_indices(func, params)
+            fnty = ir.FunctionType(ret.ir, self.param_irs(params, hidden),
                                    var_arg=func.variadic)
             fn = ir.Function(self.module, fnty, name=func.name)
             self.link_shared(fn, func.source)
             self.mark_inline(fn, func)
             self.funcs[func.name] = fn
             self.signatures[func.name] = (ret, params, func.variadic)
+            self.hidden_ref[func.name] = hidden
         # Functions are declared now, so @static initializers that reference one
         # can be folded to its address.
         for glob, var, var_type in deferred_static_inits:
@@ -1566,8 +1603,16 @@ class CodeGen:
         self.defer_stack = []
         self.loops = []  # break/continue cannot escape into a caller's loop
         self.block_exprs = []  # emit cannot escape into a caller's block-expr
-        for (pname, _), ptype, arg in zip(func.params, params, fn.args):
+        hidden = self.hidden_ref_indices(func, params)
+        self.const_locals = set(func.const_params)
+        for i, ((pname, _), ptype, arg) in enumerate(zip(func.params, params, fn.args)):
             arg.name = pname
+            if i in hidden:
+                # The struct arrives as a pointer to the caller's storage; bind
+                # the local straight to it (no copy). The const guarantee makes
+                # sharing safe; reads go through it exactly like an alloca slot.
+                self.locals[pname] = (arg, ptype)
+                continue
             slot = self.builder.alloca(arg.type, name=pname)
             if over_aligned(ptype):
                 slot.align = type_align(ptype)
@@ -1921,6 +1966,9 @@ class CodeGen:
             self.builder.store(tv.value, slot)
             self.bind_local(stmt.name, slot, tv.type)
         elif isinstance(stmt, Assign):
+            if stmt.name in self.const_locals:
+                raise LangError(
+                    f"cannot assign to const parameter {stmt.name!r}", stmt.line)
             slot, var_type, volatile = self.var_addr(stmt.name, stmt.line)
             tv = self.coerce(self.gen_expr(stmt.value), var_type, stmt.line, f"assignment to {stmt.name}")
             self.gen_store(tv.value, slot, volatile=volatile)
@@ -2032,11 +2080,18 @@ class CodeGen:
                                 stmt.line, "assignment through pointer")
             self.gen_store(value.value, ptr.value, volatile=ptr.type.pointee.volatile)
         elif isinstance(stmt, StoreIndex):
+            base_t = self.lvalue_type(stmt.base)
+            if base_t is not None and is_array(base_t) and self.writes_const(stmt.base):
+                raise LangError(
+                    "cannot assign to an element of a const parameter", stmt.line)
             addr, element = self.gen_index_addr(stmt.base, stmt.index, stmt.line)
             value = self.coerce(self.gen_expr(stmt.value), element,
                                 stmt.line, "assignment to element")
             self.gen_store(value.value, addr, volatile=element.volatile)
         elif isinstance(stmt, StoreMember):
+            if not stmt.arrow and self.writes_const(stmt.base):
+                raise LangError(
+                    "cannot assign to a field of a const parameter", stmt.line)
             addr, ftype, align, volatile = self.gen_member_addr(
                 stmt.base, stmt.field, stmt.arrow, stmt.line
             )
@@ -2459,6 +2514,67 @@ class CodeGen:
             raise LangError(f"cannot assign to constant {name!r}", line)
         raise LangError(f"undefined variable {name!r}", line)
 
+    def writes_const(self, target) -> bool:
+        """Whether a store to ``target`` lands in a const parameter's storage.
+
+        The write stays in the parameter's own storage along a chain of value
+        member accesses (``.``) and in-storage array indexing. A ``->``, a
+        ``*``, or indexing through a pointer crosses into separate storage,
+        which a ``const`` parameter does not protect.
+
+        Args:
+            target: The lvalue being written.
+
+        Returns:
+            ``True`` when the write would mutate a const parameter.
+        """
+        if isinstance(target, Var):
+            return target.name in self.const_locals
+        if isinstance(target, Member) and not target.arrow:
+            return self.writes_const(target.base)
+        if isinstance(target, Index):
+            base_t = self.lvalue_type(target.base)
+            if base_t is not None and is_array(base_t):
+                return self.writes_const(target.base)
+        return False
+
+    def lvalue_type(self, expr) -> "LangType | None":
+        """Best-effort static type of a simple lvalue, without emitting code.
+
+        Resolves ``Var``/``Member``/``Index`` chains; returns ``None`` when the
+        type cannot be determined statically. Used only to tell an in-storage
+        array index from a through-pointer one when checking const writes.
+
+        Args:
+            expr: The lvalue expression.
+
+        Returns:
+            The lvalue's ``LangType``, or ``None``.
+        """
+        if isinstance(expr, Var):
+            return self.var_type_of(expr.name)
+        if isinstance(expr, Member):
+            base_t = self.lvalue_type(expr.base)
+            if base_t is None:
+                return None
+            owner = base_t.pointee if (expr.arrow and is_pointer(base_t)) else base_t
+            if not is_struct(owner):
+                return None
+            try:
+                _, ftype = self.struct_field(owner, expr.field, 0)
+            except LangError:
+                return None
+            return ftype
+        if isinstance(expr, Index):
+            base_t = self.lvalue_type(expr.base)
+            if base_t is None:
+                return None
+            if is_array(base_t):
+                return base_t.element
+            if is_pointer(base_t):
+                return base_t.pointee
+        return None
+
     def var_type_of(self, name: str) -> "LangType | None":
         """Return a name's type if it is a variable in scope, else ``None``.
 
@@ -2607,6 +2723,11 @@ class CodeGen:
         if expr.op == "-" and isinstance(expr.operand, FloatLit):
             return TypedValue(ir.Constant(FLOAT64.ir, -expr.operand.value), FLOAT64)
         if expr.op == "&":
+            if self.writes_const(expr.operand):
+                raise LangError(
+                    "cannot take the address of a const parameter; it is read-only",
+                    expr.line,
+                )
             # The pointer type does not carry the (possibly reduced)
             # alignment: taking the address of a packed field and
             # dereferencing it elsewhere is unsafe, exactly as in C.
@@ -3302,6 +3423,13 @@ class CodeGen:
             symbol = name
         if symbol is None:
             return None
+        if self.hidden_ref.get(symbol):
+            # The function takes a const struct by hidden pointer, an ABI a
+            # plain fn(struct) -> R pointer type cannot express.
+            raise LangError(
+                f"cannot take a function value of {name!r}: it has const struct "
+                "parameters (passed by hidden reference)", line
+            )
         ret, params, variadic = self.signatures[symbol]
         return TypedValue(self.funcs[symbol], function_type(ret, tuple(params), variadic))
 
@@ -3322,7 +3450,8 @@ class CodeGen:
         if expr.type_args:
             raise LangError(f"{expr.name!r} is not a generic function", expr.line)
         ret, params, variadic = self.signatures[symbol]
-        args = self.marshal_args(expr.args, params, variadic, repr(expr.name), expr.line)
+        args = self.marshal_args(expr.args, params, variadic, repr(expr.name),
+                                 expr.line, self.hidden_ref.get(symbol, frozenset()))
         return TypedValue(self.builder.call(self.funcs[symbol], args), ret)
 
     def gen_indirect_call(self, callee: TypedValue, arg_exprs: list,
@@ -3351,7 +3480,7 @@ class CodeGen:
         return TypedValue(self.builder.call(callee.value, args), ret)
 
     def marshal_args(self, arg_exprs: list, params, variadic: bool,
-                     label: str, line: int) -> list:
+                     label: str, line: int, hidden: frozenset[int] = frozenset()) -> list:
         """Evaluate and coerce a call's arguments against the parameter types.
 
         Applies C varargs promotions (small integers and bools widen to
@@ -3364,6 +3493,8 @@ class CodeGen:
             variadic: Whether the callee takes varargs.
             label: A description of the callee, for error messages.
             line: Source line for diagnostics.
+            hidden: Indices of parameters passed by hidden reference (const
+                structs), handed over as a pointer to the argument's storage.
 
         Returns:
             The marshalled LLVM argument values.
@@ -3378,6 +3509,10 @@ class CodeGen:
             )
         args = []
         for i, arg_expr in enumerate(arg_exprs):
+            if i in hidden:
+                args.append(self.hidden_ref_arg(arg_expr, params[i], line,
+                                                 f"argument {i + 1} of {label}"))
+                continue
             if i < len(params) and is_valist(params[i]):
                 # A va_list is handed over in its platform-specific passed form,
                 # derived from its storage; coerce/decay do not apply.
@@ -3402,6 +3537,65 @@ class CodeGen:
                 value = tv.value
             args.append(value)
         return args
+
+    def hidden_ref_arg(self, arg_expr, ptype: LangType, line: int, context: str) -> ir.Value:
+        """Lower a hidden-reference (const struct) argument to a pointer.
+
+        When the argument already has storage of the exact type, its address is
+        shared directly -- no copy, which is the point of the optimization. An
+        rvalue (or a type that still needs coercion, e.g. an ``extends`` upcast)
+        is materialized into a temporary whose address is passed instead.
+
+        Args:
+            arg_expr: The argument expression.
+            ptype: The parameter's (struct) type.
+            line: Source line for diagnostics.
+            context: A label for coercion error messages.
+
+        Returns:
+            A pointer to the argument's storage.
+        """
+        if self.is_addressable_form(arg_expr):
+            addr, t, _, _ = self.gen_addr(arg_expr, line)
+            if t.ir is ptype.ir:
+                return addr
+            tv = TypedValue(self.gen_load(addr), t)
+        else:
+            tv = self.gen_expr(arg_expr)
+        return self.spill_to_temp(tv, ptype, line, context)
+
+    def spill_to_temp(self, tv: TypedValue, ptype: LangType, line: int,
+                      context: str) -> ir.Value:
+        """Coerce a value to ``ptype`` and store it in a fresh stack temporary.
+
+        Used to give an rvalue (or a generic argument already lowered to a
+        value) the storage a hidden-reference parameter needs.
+
+        Args:
+            tv: The argument value.
+            ptype: The parameter's (struct) type.
+            line: Source line for diagnostics.
+            context: A label for coercion error messages.
+
+        Returns:
+            A pointer to the temporary holding the coerced value.
+        """
+        tv = self.coerce(tv, ptype, line, context)
+        tmp = self.entry_alloca(ptype.ir)
+        if over_aligned(ptype):
+            tmp.align = type_align(ptype)
+        self.builder.store(tv.value, tmp)
+        return tmp
+
+    @staticmethod
+    def is_addressable_form(expr) -> bool:
+        """Report whether an expression denotes storage (an lvalue).
+
+        These are the forms :meth:`gen_addr` accepts: a variable, a field, an
+        index, or a dereference.
+        """
+        return (isinstance(expr, (Var, Member, Index))
+                or (isinstance(expr, Unary) and expr.op == "*"))
 
     def unify(self, pattern: TypeRef, actual: LangType, type_params: list[str],
               bindings: dict[str, LangType], strict: bool, context: str, line: int):
@@ -3494,10 +3688,17 @@ class CodeGen:
             if bound is VOID:
                 raise LangError(f"cannot bind type parameter {tparam} to {bound}", expr.line)
         fn, ret, params = self.instantiate(func, bindings)
-        args = [
-            self.coerce(tv, p, expr.line, f"argument {i + 1} of {expr.name!r}").value
-            for i, (tv, p) in enumerate(zip(arg_tvs, params))
-        ]
+        hidden = self.hidden_ref_indices(func, params)
+        args = []
+        for i, (tv, p) in enumerate(zip(arg_tvs, params)):
+            context = f"argument {i + 1} of {expr.name!r}"
+            if i in hidden:
+                # The args are already lowered to values for binding inference;
+                # a hidden-reference parameter takes a pointer, so spill to a
+                # temporary (no shared-storage optimization on the generic path).
+                args.append(self.spill_to_temp(tv, p, expr.line, context))
+            else:
+                args.append(self.coerce(tv, p, expr.line, context).value)
         return TypedValue(self.builder.call(fn, args), ret)
 
     def resolve_bindings(self, func: Func, expr: Call, arg_tvs: list[TypedValue],
@@ -3661,13 +3862,14 @@ class CodeGen:
         outer_source = self.current_source
         saved = (self.builder, self.locals, self.ret_type, self.loops,
                  self.current_variadic, self.scope_names, self.defer_stack,
-                 self.block_exprs)
+                 self.block_exprs, self.const_locals)
         self.type_bindings = bindings
         self.current_source = func.source  # the signature may name private structs
         try:
             ret = self.lang_type(func.ret_type, func.line)
             params = [self.lang_type(t, func.line) for _, t in func.params]
-            fnty = ir.FunctionType(ret.ir, self.param_irs(params))
+            hidden = self.hidden_ref_indices(func, params)
+            fnty = ir.FunctionType(ret.ir, self.param_irs(params, hidden))
             fn = ir.Function(self.module, fnty, name=mangled)
             # A generic instance is emitted in every object that uses it, so it
             # merges like an imported definition rather than colliding.
@@ -3676,12 +3878,13 @@ class CodeGen:
             # Register before generating the body so recursive calls resolve.
             self.funcs[mangled] = fn
             self.signatures[mangled] = (ret, params, False)
+            self.hidden_ref[mangled] = hidden
             self.instances[key] = mangled
             self.gen_function(func, fn, ret, params)
         finally:
             (self.builder, self.locals, self.ret_type, self.loops,
              self.current_variadic, self.scope_names, self.defer_stack,
-             self.block_exprs) = saved
+             self.block_exprs, self.const_locals) = saved
             self.type_bindings = outer_bindings
             self.current_source = outer_source
         return fn, ret, params
