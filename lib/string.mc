@@ -27,6 +27,24 @@ fn string_init(self: struct string*) {
 }
 
 /**
+ * Deep-copies src into a fresh string: initializes dst with src's capacity and
+ * appends every byte of src, so the two share no storage afterward. dst must be
+ * uninitialized (or already destroyed) -- duplicating into a live string leaks
+ * its buffer.
+ *
+ * @param dst: uninitialized string to copy src into
+ * @param src: string to copy from
+ */
+@inline
+fn string_duplicate(dst: struct string*, src: struct string*) {
+    array_init(dst as struct array<uint8>*, src->capacity);
+
+    for entry in src {
+        string_append(dst, entry);
+    }
+}
+
+/**
  * Releases the string's storage. The string must be re-initialized with
  * string_init before being used again.
  *

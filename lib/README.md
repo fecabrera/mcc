@@ -26,7 +26,7 @@ in mcc.
 | [queue.mc](queue.mc) | `import "queue";` | Growable generic FIFO `queue<T>`, a ring buffer: `queue_init`/`queue_destroy`, `queue_push`/`queue_pop`/`queue_peek`/`queue_at`, `queue_len`/`queue_is_empty` (doubles when full). |
 | [set.mc](set.mc) | `import "set";` | Open-addressing hash map `set<K, V>` keyed by value/identity: `set_init`/`set_destroy`, `set_set`/`set_get`/`set_remove`, and `set_it`/`set_next` iteration (yielding `pair<K, V>`). |
 | [dict.mc](dict.mc) | `import "dict";` | String-keyed `dict<V>` that owns content-hashed copies of its keys: `dict_init`/`dict_destroy`, `dict_set`/`dict_get`/`dict_remove`, and `dict_it`/`dict_next` iteration (yielding `pair<uint8*, V>`). |
-| [string.mc](string.mc) | `import "string";` | Growable byte string `string` (a `string extends array<uint8>`): `string_init`/`string_destroy`/`string_reset`, `string_get`/`string_set`, `string_append`, and `string_it`/`string_next` iteration. |
+| [string.mc](string.mc) | `import "string";` | Growable byte string `string` (a `string extends array<uint8>`): `string_init`/`string_duplicate`/`string_destroy`/`string_reset`, `string_get`/`string_set`, `string_append`/`string_append_string`, `string_eq`, and `string_it`/`string_next` iteration. |
 | [iteration/pair.mc](iteration/pair.mc) | `import "iteration/pair";` | `pair<K, V>` — the key/value element type the keyed containers yield from `<struct>_next`. |
 
 ## Hashing
