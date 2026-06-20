@@ -111,6 +111,7 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 | `--nostdlib`              | Do not put the bundled `lib/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).           |
 | `--target TRIPLE`         | Cross-compile for the given LLVM target triple, emitting an object file instead of a host executable.                                                |
 | `--general-regs-only`     | Generate code that uses only general-purpose registers, never the floating-point/SIMD ones.                                                          |
+| `--freestanding`          | Don't assume a hosted C library, so LLVM won't rewrite standard-named calls (e.g. `printf("…\n")` → `puts`) into symbols a bare-metal program never defines. The `-ffreestanding` equivalent. |
 | `-D NAME[=VALUE]`         | Define a name for [`@if`](docs/language.md#conditional-compilation) conditions: `NAME` alone is `1`, `NAME=VALUE` sets an integer. Repeatable; a name with no `-D` reads as `0`. |
 
 `--target` accepts any LLVM triple and emits an object file instead of a
@@ -123,6 +124,15 @@ registers — the equivalent of gcc's `-mgeneral-regs-only`. It stops the
 backend from quietly using a vector register (say, to copy a struct) in
 code that must not touch FP state, such as a kernel or an interrupt
 handler. Supported for aarch64, x86, and riscv targets.
+
+`--freestanding` is the `-ffreestanding` equivalent: it tells LLVM there is
+no hosted C library, so its optimizer won't recognize standard-named
+functions and rewrite calls between them. At `-O2`, a `printf("done\n")`
+(constant string, no args) is otherwise turned into a `puts` call, and
+`printf("%c", c)` into `putchar` — synthesizing references to libc symbols a
+bare-metal program never defines. Pass it when building a kernel or any
+target with no libc. (`--nostdlib` only drops mcc's `lib/` from the import
+path; it does not change this optimizer assumption.)
 
 ## Quickstart
 

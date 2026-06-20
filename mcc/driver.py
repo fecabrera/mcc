@@ -184,7 +184,8 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
 
 def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
                   target: str | None = None,
-                  defines: dict[str, int] | None = None) -> ir.Module:
+                  defines: dict[str, int] | None = None,
+                  freestanding: bool = False) -> ir.Module:
     """Load a source file and lower it to an LLVM IR module.
 
     Args:
@@ -194,6 +195,8 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
         target: An LLVM target triple to build for, or ``None`` for the host.
         defines: Command-line ``-D`` names mapped to integer values, made
             available to ``@if`` conditions.
+        freestanding: When true, mark definitions ``"no-builtins"`` so LLVM
+            does not assume a hosted C library (see :func:`mark_freestanding`).
 
     Returns:
         The generated, unverified LLVM IR module.
@@ -201,8 +204,11 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
     if search_paths is None:
         search_paths = (STDLIB_DIR,)
     program = load_program(path, tuple(search_paths))
-    return CodeGen(program, path.name, root_source=str(path.resolve()),
-                   target=target, defines=defines).generate()
+    module = CodeGen(program, path.name, root_source=str(path.resolve()),
+                     target=target, defines=defines).generate()
+    if freestanding:
+        mark_freestanding(module)
+    return module
 
 
 # For each architecture, the LLVM subtarget features that -- when turned off
@@ -249,6 +255,28 @@ def restrict_to_general_regs(module: ir.Module, triple: str) -> None:
             # The attribute is a key=value string, which llvmlite's validated
             # add() rejects; FunctionAttributes is a plain set, so add it raw.
             set.add(func.attributes, attribute)
+
+
+def mark_freestanding(module: ir.Module) -> None:
+    """Tell LLVM not to assume a hosted C library.
+
+    Tags every definition with the ``"no-builtins"`` attribute, the IR-level
+    equivalent of ``-ffreestanding`` / ``-fno-builtin``. Without it, LLVM's
+    libcall optimizer recognizes standard-named functions (``printf``,
+    ``memcpy``, ...) and may rewrite a call into another it assumes exists --
+    e.g. ``printf("x\\n")`` into ``puts``, or ``printf("%c", c)`` into
+    ``putchar`` -- synthesizing references to symbols a freestanding program
+    never defined. Extern declarations (no body) make no calls, so they are
+    left untouched.
+
+    Args:
+        module: The IR module to annotate, modified in place.
+    """
+    for func in module.functions:
+        if func.blocks:  # a definition, not an extern declaration
+            # A bare string attribute, which llvmlite's validated add() rejects;
+            # FunctionAttributes is a plain set, so add it raw.
+            set.add(func.attributes, '"no-builtins"')
 
 
 def build_native_module(module: ir.Module, opt_level: int, triple: str | None = None,
@@ -374,6 +402,10 @@ def main() -> int:
     cli.add_argument("--general-regs-only", action="store_true",
                      help="generate code that uses only general-purpose registers, never "
                           "the floating-point/SIMD ones (like gcc's -mgeneral-regs-only)")
+    cli.add_argument("--freestanding", action="store_true",
+                     help="do not assume a hosted C library: stop LLVM from rewriting "
+                          "standard-named calls such as printf into puts/putchar/etc. "
+                          "(the -ffreestanding equivalent, for bare-metal/kernel builds)")
     cli.add_argument("-D", "--define", action="append", default=[], metavar="NAME[=VALUE]",
                      help="define a name for @if conditions; NAME alone is 1, NAME=VALUE "
                           "sets an integer (repeatable). An @if name with no -D reads as 0")
@@ -394,7 +426,8 @@ def main() -> int:
         search_paths.append(STDLIB_DIR)
 
     try:
-        module = compile_to_ir(args.source, search_paths, args.target, defines)
+        module = compile_to_ir(args.source, search_paths, args.target, defines,
+                               args.freestanding)
     except OSError as err:
         print(f"mcc: error: cannot read {args.source}: {err.strerror}", file=sys.stderr)
         return 1
