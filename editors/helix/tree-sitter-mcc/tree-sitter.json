@@ -1,0 +1,18 @@
+{
+  "grammars": [
+    {
+      "name": "mcc",
+      "scope": "source.mcc",
+      "file-types": ["mc"],
+      "highlights": ["queries/highlights.scm"]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "BSD-3-Clause",
+    "description": "mcc grammar for tree-sitter",
+    "links": {
+      "repository": "https://github.com/fecabrera/mcc"
+    }
+  }
+}

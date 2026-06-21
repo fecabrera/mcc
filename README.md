@@ -329,6 +329,12 @@ ln -s "$(pwd)/editors/vscode" ~/.vscode/extensions/mcc-language
 See its [README](editors/vscode/README.md) for packaging and other install
 options.
 
+[editors/helix/](editors/helix/) brings the same to [Helix](https://helix-editor.com):
+a `languages.toml` entry plus a [tree-sitter grammar](editors/helix/tree-sitter-mcc/)
+for syntax highlighting, comment toggling, auto-indent, and text objects. See its
+[README](editors/helix/README.md) for the install steps (add the language, copy
+the queries, `hx --grammar fetch && build`).
+
 ## Tests
 
 ```bash

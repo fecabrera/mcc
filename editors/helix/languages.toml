@@ -1,0 +1,25 @@
+# Helix language configuration for mcc (.mc files).
+#
+# Merge this into your Helix `languages.toml` and install the grammar + queries
+# as described in editors/helix/README.md. It gives Helix file-type detection,
+# syntax highlighting (via the bundled tree-sitter grammar), comment toggling
+# (`gc`), auto-indent, and bracket/quote auto-pairs.
+
+[[language]]
+name = "mcc"
+scope = "source.mcc"
+injection-regex = "mcc"
+file-types = ["mc"]
+comment-tokens = ["//"]
+block-comment-tokens = { start = "/*", end = "*/" }
+indent = { tab-width = 4, unit = "    " }
+auto-pairs = { "(" = ")", "{" = "}", "[" = "]", '"' = '"', "'" = "'" }
+grammar = "mcc"
+
+# The grammar lives in this repository under editors/helix/tree-sitter-mcc.
+# `rev = "main"` tracks the latest commit; pin a commit hash for reproducibility.
+# For local development, swap the source for a path:
+#   source = { path = "/absolute/path/to/mcc/editors/helix/tree-sitter-mcc" }
+[[grammar]]
+name = "mcc"
+source = { git = "https://github.com/fecabrera/mcc", subpath = "editors/helix/tree-sitter-mcc", rev = "main" }

@@ -1,0 +1,24 @@
+{
+  "name": "tree-sitter-mcc",
+  "version": "0.1.0",
+  "description": "mcc grammar for tree-sitter",
+  "repository": "https://github.com/fecabrera/mcc",
+  "license": "BSD-3-Clause",
+  "main": "bindings/node",
+  "keywords": [
+    "tree-sitter",
+    "mcc"
+  ],
+  "devDependencies": {
+    "tree-sitter-cli": "^0.26.0"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.mcc",
+      "file-types": [
+        "mc"
+      ],
+      "highlights": "queries/highlights.scm"
+    }
+  ]
+}

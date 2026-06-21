@@ -1,0 +1,6 @@
+# Build artifacts (the checked-in src/ is what Helix compiles)
+*.dylib
+*.so
+*.wasm
+node_modules/
+target/
