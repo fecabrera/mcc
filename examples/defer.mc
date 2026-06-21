@@ -1,6 +1,6 @@
 import "std";
 import "memory";
-import "array";
+import "list";
 
 // `defer` schedules an action to run when the enclosing block exits -- however
 // it exits: falling off the end, a return, or a break/continue out of a loop.
@@ -31,8 +31,8 @@ fn process(n: int32) -> int32 {
 // `defer i = i + 1` that runs at the end of each loop pass -- then destroys the
 // array itself once the loop is done.
 fn build_labels(n: uint64) {
-    let labels: array<uint8*>;
-    array_init(&labels, n);
+    let labels: list<uint8*>;
+    list_init(&labels, n);
     defer {
         let i: uint64 = 0;
         while (i < labels.length) {
@@ -40,7 +40,7 @@ fn build_labels(n: uint64) {
             println("  free %s", labels.data[i]);
             dealloc(labels.data[i]);
         }
-        array_destroy(&labels);              // runs after the loop, last of all
+        list_destroy(&labels);              // runs after the loop, last of all
     }
 
     let i: uint64 = 0;
@@ -48,7 +48,7 @@ fn build_labels(n: uint64) {
         let label: uint8* = alloc<uint8>(2);
         label[0] = 'a' + i as uint8;
         label[1] = 0;
-        array_append(&labels, label);
+        list_append(&labels, label);
         i = i + 1;
     }
     println("built %llu labels", labels.length);

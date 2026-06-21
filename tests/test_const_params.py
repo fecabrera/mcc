@@ -15,12 +15,14 @@ BIG = "struct big { a: int64; b: int64; c: int64; }\n"
 
 # --- parsing ---
 
+
 def test_const_param_parses_onto_the_func():
     (fn,) = parse("fn f(const s: struct big, n: int64) {}").functions
     assert fn.const_params == {"s"}
 
 
 # --- ABI: struct const param is a pointer ---
+
 
 def test_const_struct_param_is_passed_by_pointer():
     ir = compile_ir(BIG + "fn sum(const s: struct big) -> int64 { return s.a; }")
@@ -40,8 +42,11 @@ def test_const_scalar_param_stays_by_value():
 
 # --- runtime behavior ---
 
+
 def test_const_struct_call_runs():
-    src = BIG + """
+    src = (
+        BIG
+        + """
     fn sum(const s: struct big) -> int64 { return s.a + s.b + s.c; }
     fn main() -> int32 {
         let v: struct big;
@@ -49,21 +54,27 @@ def test_const_struct_call_runs():
         return sum(v) as int32;
     }
     """
+    )
     assert run(src) == 6
 
 
 def test_rvalue_argument_is_materialized():
     # A by-value struct result has no storage; it is spilled to a temp.
-    src = BIG + """
+    src = (
+        BIG
+        + """
     fn make() -> struct big { let v: struct big; v.a = 10; v.b = 20; v.c = 0; return v; }
     fn sum(const s: struct big) -> int64 { return s.a + s.b + s.c; }
     fn main() -> int32 { return sum(make()) as int32; }
     """
+    )
     assert run(src) == 30
 
 
 def test_const_param_forwards_to_another_const_param():
-    src = BIG + """
+    src = (
+        BIG
+        + """
     fn inner(const s: struct big) -> int64 { return s.a + s.b + s.c; }
     fn outer(const s: struct big) -> int64 { return inner(s); }
     fn main() -> int32 {
@@ -72,6 +83,7 @@ def test_const_param_forwards_to_another_const_param():
         return outer(v) as int32;
     }
     """
+    )
     assert run(src) == 15
 
 
@@ -104,10 +116,14 @@ def test_const_pointer_param_may_mutate_its_pointee():
 
 # --- immutability errors ---
 
-@pytest.mark.parametrize("body, message", [
-    ("s.a = 0;", "cannot assign to a field of a const parameter"),
-    ("let p = &s;", "cannot take the address of a const parameter"),
-])
+
+@pytest.mark.parametrize(
+    "body, message",
+    [
+        ("s.a = 0;", "cannot assign to a field of a const parameter"),
+        ("let p = &s;", "cannot take the address of a const parameter"),
+    ],
+)
 def test_const_struct_param_is_read_only(body, message):
     with pytest.raises(LangError, match=message):
         compile_ir(BIG + f"fn f(const s: struct big) {{ {body} }}")
@@ -118,12 +134,15 @@ def test_const_scalar_param_cannot_be_assigned():
         compile_ir("fn f(const n: int64) { n = 0; }")
 
 
-def test_const_struct_array_element_is_read_only():
-    with pytest.raises(LangError, match="cannot assign to an element of a const parameter"):
+def test_const_struct_list_element_is_read_only():
+    with pytest.raises(
+        LangError, match="cannot assign to an element of a const parameter"
+    ):
         compile_ir("struct b { t: uint8[4]; }\nfn f(const s: struct b) { s.t[0] = 9; }")
 
 
 # --- restrictions ---
+
 
 def test_const_param_rejected_on_extern():
     with pytest.raises(LangError, match="const parameters are not allowed on @extern"):
@@ -131,9 +150,12 @@ def test_const_param_rejected_on_extern():
 
 
 def test_function_value_of_const_struct_fn_is_rejected():
-    src = BIG + """
+    src = (
+        BIG
+        + """
     fn sum(const s: struct big) -> int64 { return s.a; }
     fn main() -> int32 { let f = sum; return 0; }
     """
+    )
     with pytest.raises(LangError, match="cannot take a function value of 'sum'"):
         compile_ir(src)

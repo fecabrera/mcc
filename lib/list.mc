@@ -1,33 +1,33 @@
 import "memory";
 
 /**
- * A growable, heap-backed array of T.
+ * A growable, heap-backed list of T.
  */
-struct array<T> {
+struct list<T> {
     data: T*;
     length: uint64;
     capacity: uint64;
 }
 
 /**
- * Prepares an array for use, allocating room for capacity elements.
+ * Prepares an list for use, allocating room for capacity elements.
  *
- * @param self:     array to initialize
+ * @param self:     list to initialize
  * @param capacity: initial number of elements to reserve space for
  */
-fn array_init<T>(self: struct array<T>*, capacity: uint64) {
+fn list_init<T>(self: struct list<T>*, capacity: uint64) {
     self->data = alloc<T>(capacity);
     self->length = 0;
     self->capacity = capacity;
 }
 
 /**
- * Releases the array's storage. The array must be re-initialized with
- * array_init before being used again.
+ * Releases the list's storage. The list must be re-initialized with
+ * list_init before being used again.
  *
- * @param self: array to destroy
+ * @param self: list to destroy
  */
-fn array_destroy<T>(self: struct array<T>*) {
+fn list_destroy<T>(self: struct list<T>*) {
     dealloc(self->data);
 
     self->data = null;
@@ -36,24 +36,24 @@ fn array_destroy<T>(self: struct array<T>*) {
 }
 
 /**
- * Empties the array without releasing its storage.
+ * Empties the list without releasing its storage.
  *
- * @param self: array to reset
+ * @param self: list to reset
  */
-fn array_reset<T>(self: struct array<T>*) {
+fn list_reset<T>(self: struct list<T>*) {
     self->length = 0;
 }
 
 /**
  * Reads the element at index into out.
  *
- * @param self:  array to read from
+ * @param self:  list to read from
  * @param index: zero-based index; must be < self->length
  * @param out:   location the element is written to
  *
  * @return true on success, false if index is out of bounds
  */
-fn array_get<T>(self: struct array<T>*, index: uint64, out: T*) -> bool {
+fn list_get<T>(self: struct list<T>*, index: uint64, out: T*) -> bool {
     if (index >= self->length)
         return false;
 
@@ -64,13 +64,13 @@ fn array_get<T>(self: struct array<T>*, index: uint64, out: T*) -> bool {
 /**
  * Overwrites the element at index with value.
  *
- * @param self:  array to write into
+ * @param self:  list to write into
  * @param index: zero-based index; must be < self->length
  * @param value: value to store
  *
  * @return true on success, false if index is out of bounds
  */
-fn array_set<T>(self: struct array<T>*, index: uint64, value: T) -> bool {
+fn list_set<T>(self: struct list<T>*, index: uint64, value: T) -> bool {
     if (index >= self->length)
         return false;
 
@@ -79,27 +79,27 @@ fn array_set<T>(self: struct array<T>*, index: uint64, value: T) -> bool {
 }
 
 /**
- * Appends value to the end of the array, growing its storage if needed.
+ * Appends value to the end of the list, growing its storage if needed.
  *
- * @param self:  array to append to
+ * @param self:  list to append to
  * @param value: value to append
  */
-fn array_append<T>(self: struct array<T>*, value: T) {
+fn list_append<T>(self: struct list<T>*, value: T) {
     if (self->length == self->capacity)
-        array_grow<T>(self);
+        list_grow<T>(self);
 
     self->data[self->length] = value;
     self->length = self->length + 1;
 }
 
 /**
- * Doubles the array's capacity, moving the existing elements.
- * Internal; called by array_append when storage runs out.
+ * Doubles the list's capacity, moving the existing elements.
+ * Internal; called by list_append when storage runs out.
  *
- * @param self: array to grow
+ * @param self: list to grow
  */
 @private
-fn array_grow<T>(self: struct array<T>*) {
+fn list_grow<T>(self: struct list<T>*) {
     let new_capacity: uint64 = self->capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;
@@ -112,26 +112,26 @@ fn array_grow<T>(self: struct array<T>*) {
  ***************************************/
 
 /**
- * A forward cursor over an array's elements, produced by `array_it`. It borrows
- * the array (does not copy it), so the array must outlive the iterator and
+ * A forward cursor over an list's elements, produced by `list_it`. It borrows
+ * the list (does not copy it), so the list must outlive the iterator and
  * must not be resized while iterating.
  */
-struct array_iter<T> {
-    obj: struct array<T>*;   // the array being walked
+struct list_iter<T> {
+    obj: struct list<T>*;   // the list being walked
     idx: uint64;             // index of the next element to yield
 }
 
 /**
- * Begins an iteration over an array, from the first element to the last. Part
- * of the `array_it`/`array_next` protocol (used by `for ... in`); pair it with
- * `array_next`.
+ * Begins an iteration over an list, from the first element to the last. Part
+ * of the `list_it`/`list_next` protocol (used by `for ... in`); pair it with
+ * `list_next`.
  *
- * @param self: array to iterate
+ * @param self: list to iterate
  *
  * @return an iterator positioned at the first element
  */
-fn array_it<T>(self: struct array<T>*) -> struct array_iter<T> {
-    let it: struct array_iter<T>;
+fn list_it<T>(self: struct list<T>*) -> struct list_iter<T> {
+    let it: struct list_iter<T>;
     it.obj = self;
     it.idx = 0;
     return it;
@@ -142,11 +142,11 @@ fn array_it<T>(self: struct array<T>*) -> struct array_iter<T> {
  *
  * @param it:  iterator to advance
  * @param out: location the next element is written to; untouched when the
- *             array is exhausted
+ *             list is exhausted
  *
  * @return true if an element was produced, false once iteration is complete
  */
-fn array_next<T>(it: struct array_iter<T>*, out: T*) -> bool {
+fn list_next<T>(it: struct list_iter<T>*, out: T*) -> bool {
     if (it->idx >= it->obj->length)
         return false;
 

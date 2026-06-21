@@ -10,14 +10,14 @@ class TypeRef:
     """A type as written in source.
 
     Captures a base name, its generic arguments, and pointer depth, so
-    ``struct array<T>**`` is ``TypeRef("array", [TypeRef("T")], 2)``. A
+    ``struct list<T>**`` is ``TypeRef("list", [TypeRef("T")], 2)``. A
     function-pointer type ``fn(A, B) -> R`` sets ``params`` and ``ret`` instead
     of ``args``; its ``name`` is ``"fn"`` and ``stars`` still applies, as in
     ``fn(...) -> R*``.
 
     Attributes:
         name: The base type name (``"fn"`` for a function-pointer type).
-        args: Generic type arguments, e.g. the ``T`` in ``array<T>``.
+        args: Generic type arguments, e.g. the ``T`` in ``list<T>``.
         stars: Pointer depth -- the number of trailing ``*``.
         params: Parameter types for a ``fn(...) -> ret`` type, else ``None``.
         ret: Return type for a function-pointer type, else ``None``.
@@ -33,7 +33,9 @@ class TypeRef:
     stars: int = 0
     params: list["TypeRef"] | None = None  # set for fn(...) -> ret types
     ret: "TypeRef | None" = None
-    dims: list[int | str | None] = field(default_factory=list)  # array sizes, outermost first
+    dims: list[int | str | None] = field(
+        default_factory=list
+    )  # array sizes, outermost first
 
     def __str__(self) -> str:
         """Render the type back to its source spelling.
@@ -43,7 +45,9 @@ class TypeRef:
             trailing ``*``, and array dimensions.
         """
         if self.params is not None:
-            text = "fn(" + ", ".join(str(p) for p in self.params) + ") -> " + str(self.ret)
+            text = (
+                "fn(" + ", ".join(str(p) for p in self.params) + ") -> " + str(self.ret)
+            )
         else:
             text = self.name
             if self.args:
@@ -81,7 +85,7 @@ class StructDecl:
     Attributes:
         name: The struct's name.
         type_params: Generic type parameters, e.g. the ``T`` in
-            ``struct array<T>``.
+            ``struct list<T>``.
         fields: ``(name, type)`` pairs in declaration order.
         line: Source line for diagnostics.
         base: The ``extends Base`` struct this one specializes, or ``None``.
@@ -631,6 +635,29 @@ class Logical:
     op: str
     lhs: object
     rhs: object
+    line: int
+
+
+@dataclass
+class Ternary:
+    """A conditional expression: ``cond ? then : otherwise``.
+
+    Evaluates ``cond`` and yields one arm or the other, never both. The two
+    arms must agree on a type: equal types are kept, an untyped constant arm
+    adapts to the other's type (two untyped integer arms widen to the larger),
+    and ``null`` adapts to a pointer arm. Unlike a statement ``if``, this is an
+    expression, so it always produces a value.
+
+    Attributes:
+        cond: The condition expression (a bool or integer, as in ``if``).
+        then: The expression yielded when ``cond`` is true.
+        otherwise: The expression yielded when ``cond`` is false.
+        line: Source line for diagnostics.
+    """
+
+    cond: object
+    then: object
+    otherwise: object
     line: int
 
 

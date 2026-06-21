@@ -43,7 +43,7 @@ def test_fields_sit_at_unpadded_offsets():
     assert run(source) == 51
 
 
-def test_array_stride_matches_sizeof():
+def test_list_stride_matches_sizeof():
     source = """
     import "libc/stdlib";
     @packed

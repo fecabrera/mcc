@@ -107,7 +107,7 @@ def test_static_global_persists_across_calls():
     assert run(source) == 3
 
 
-def test_static_array_global():
+def test_static_list_global():
     source = """
     @static let cache: int32[4];
     fn put(i: int32, v: int32) { cache[i] = v; }
@@ -146,11 +146,14 @@ def test_top_level_let_requires_extern_or_static():
 
 def test_static_initializer_takes_a_const_reference():
     # A @static initializer is a full constant expression, like a const's.
-    assert run(
-        "const N: int32 = 42;\n"
-        "@static let n: int32 = N;\n"
-        "fn main() -> int32 { return n; }"
-    ) == 42
+    assert (
+        run(
+            "const N: int32 = 42;\n"
+            "@static let n: int32 = N;\n"
+            "fn main() -> int32 { return n; }"
+        )
+        == 42
+    )
 
 
 def test_static_pointer_initialized_from_const_cast():
@@ -162,18 +165,25 @@ def test_static_pointer_initialized_from_const_cast():
     # The integer->pointer cast folds to an inttoptr constant expression.
     assert "inttoptr" in compile_ir(source + "fn main() -> int32 { return 0; }")
     # And the address round-trips at runtime.
-    assert run(
-        source + "fn main() -> int32 { if ((r as uint64) == BASE) return 1; return 0; }"
-    ) == 1
+    assert (
+        run(
+            source
+            + "fn main() -> int32 { if ((r as uint64) == BASE) return 1; return 0; }"
+        )
+        == 1
+    )
 
 
 def test_static_initializer_type_is_inferred():
     # An @static let with an initializer needs no type annotation; it infers
     # from the initializer, like a local `let`.
-    assert run(
-        "@static let answer = 6 as int64 * 7 as int64;\n"
-        "fn main() -> int32 { return answer as int32; }"
-    ) == 42
+    assert (
+        run(
+            "@static let answer = 6 as int64 * 7 as int64;\n"
+            "fn main() -> int32 { return answer as int32; }"
+        )
+        == 42
+    )
 
 
 def test_inferred_static_pointer_from_a_const_cast():
@@ -184,9 +194,13 @@ def test_inferred_static_pointer_from_a_const_cast():
         "@static let dev = BASE as struct reg*;\n"
     )
     assert "inttoptr" in compile_ir(source + "fn main() -> int32 { return 0; }")
-    assert run(
-        source + "fn main() -> int32 { if ((dev as uint64) == BASE) return 1; return 0; }"
-    ) == 1
+    assert (
+        run(
+            source
+            + "fn main() -> int32 { if ((dev as uint64) == BASE) return 1; return 0; }"
+        )
+        == 1
+    )
 
 
 def test_inferred_static_of_an_untyped_constant_is_ambiguous():
@@ -195,7 +209,7 @@ def test_inferred_static_of_an_untyped_constant_is_ambiguous():
         compile_ir("@static let x = 5;\nfn main() -> int32 { return 0; }")
 
 
-def test_inferred_static_array_literal_needs_an_annotation():
+def test_inferred_static_list_literal_needs_an_annotation():
     with pytest.raises(LangError, match="array literal needs a type annotation"):
         compile_ir("@static let xs = [1, 2, 3];\nfn main() -> int32 { return 0; }")
 

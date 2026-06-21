@@ -561,7 +561,8 @@ when promoted. Unary `-` is not allowed on unsigned values. See
 
 By descending precedence: unary `-` `~` `!` `*` `&`, `as` casts, then `*` `/`
 `%`, `+` `-`, shifts `<<` `>>`, bitwise `&`, `^`, `|`, comparisons
-`<` `<=` `>` `>=`, `==` `!=`, then `and`, and loosest of all `or`.
+`<` `<=` `>` `>=`, `==` `!=`, then `and`, then `or`, and loosest of all the
+`?:` conditional.
 Comparisons yield `bool`; `%` and the bitwise/shift operators are
 integer-only. `>>` is an arithmetic shift for signed types and logical for
 unsigned. Unary `~` is bitwise complement (integer-only); `!` is logical
@@ -579,6 +580,25 @@ comparisons, so parentheses are usually unnecessary:
 if (a > 0 or a < 0 and b < 0) { ... }   // a > 0 or (a < 0 and b < 0)
 if (p != null and p->ready) { ... }     // p->ready read only when p != null
 ```
+
+`cond ? a : b` is the conditional expression: it tests `cond` (a `bool` or
+integer, as in an `if`) and yields one arm or the other — never both, so the
+untaken arm's side effects do not happen. It is the loosest operator and
+right-associative, so it reads as an `if`/`else` ladder without parentheses:
+
+```c
+let m = a > b ? a : b;                          // the larger of the two
+let s = x > 0 ? 1 : x < 0 ? -1 : 0;             // x > 0 ? 1 : (x < 0 ? -1 : 0)
+```
+
+The two arms must agree on a type, the same way binary operands do: equal
+types are kept, an untyped constant arm adapts to the other's type (two
+untyped integer arms widen to the larger), and `null` adapts to a pointer
+arm. Because the result is a runtime value rather than a literal, it is the
+concrete unified type, not an adaptable constant — `let n: uint8 = c ? 1 : 2;`
+needs the arms to already be `uint8`, or an `as` cast. When the condition is
+itself constant the whole expression folds, so it may appear in a `const`
+initializer or an `@if` condition.
 
 ## Casts
 

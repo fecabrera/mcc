@@ -7,14 +7,14 @@ from mcc.nodes import ArrayLit, TypeRef
 from helpers import compile_ir, parse, run, run_path
 
 
-def test_array_type_parses():
+def test_list_type_parses():
     (func,) = parse("fn f(g: int32[10]) {}").functions
     t = func.params[0][1]
     assert isinstance(t, TypeRef) and t.name == "int32" and t.dims == [10]
     assert str(t) == "int32[10]"
 
 
-def test_multidim_array_type_parses():
+def test_multidim_list_type_parses():
     (func,) = parse("fn f(g: int32[2][3]) {}").functions
     assert func.params[0][1].dims == [2, 3]
     assert str(func.params[0][1]) == "int32[2][3]"
@@ -42,7 +42,7 @@ def test_sizeof_array():
     assert run(source) == 47
 
 
-def test_array_decays_to_pointer_when_passed():
+def test_list_decays_to_pointer_when_passed():
     source = """
     fn total(p: int32*, n: int32) -> int32 {
         let s: int32 = 0;
@@ -84,7 +84,7 @@ def test_multidim_indexing():
     assert run(source) == 12
 
 
-def test_array_in_a_struct_field():
+def test_list_in_a_struct_field():
     source = """
     struct line { points: int32[4]; count: int32; }
     fn main() -> int32 {
@@ -98,32 +98,33 @@ def test_array_in_a_struct_field():
     assert run(source) == 32
 
 
-def test_array_size_must_be_positive():
+def test_list_size_must_be_positive():
     with pytest.raises(LangError, match="array size must be at least 1"):
         parse("fn main() { let x: int32[0]; }")
 
 
-def test_array_stack_allocation_in_ir():
+def test_list_stack_allocation_in_ir():
     ir_text = compile_ir(
         "fn main() -> int32 { let buf: int32[8]; buf[0] = 1; return buf[0]; }"
     )
     assert "alloca [8 x i32]" in ir_text
 
 
-def test_pointer_to_array_type_is_rejected():
+def test_pointer_to_list_type_is_rejected():
     with pytest.raises(LangError, match="pointer to an array type is not supported"):
         parse("fn main() { let p: (int32[4])*; }")
 
 
 # --- array literals ---
 
-def test_array_literal_parses():
+
+def test_list_literal_parses():
     (func,) = parse("fn main() { let xs: int32[2] = [1, 2]; }").functions
     lit = func.body[0].value
     assert isinstance(lit, ArrayLit) and len(lit.elements) == 2
 
 
-def test_local_array_literal():
+def test_local_list_literal():
     source = """
     fn main() -> int32 {
         let xs: int32[4] = [10, 20, 30, 40];
@@ -133,7 +134,7 @@ def test_local_array_literal():
     assert run(source) == 50
 
 
-def test_array_literal_with_runtime_elements():
+def test_list_literal_with_runtime_elements():
     source = """
     fn main() -> int32 {
         let n: int32 = 5;
@@ -169,7 +170,7 @@ def test_trailing_comma_allowed():
     assert run(source) == 8
 
 
-def test_static_array_literal_of_strings(capfd):
+def test_static_list_literal_of_strings(capfd):
     # The motivating example: a static command table with an inferred row count.
     source = r"""
     import "libc/stdio";
@@ -186,10 +187,9 @@ def test_static_array_literal_of_strings(capfd):
     assert capfd.readouterr().out == "help=show help quit=exit\n"
 
 
-def test_static_array_literal_is_a_constant_global():
+def test_static_list_literal_is_a_constant_global():
     ir_text = compile_ir(
-        "@static let xs: int32[] = [2, 3, 5];\n"
-        "fn main() -> int32 { return xs[2]; }"
+        "@static let xs: int32[] = [2, 3, 5];\nfn main() -> int32 { return xs[2]; }"
     )
     assert "internal global [3 x i32] [i32 2, i32 3, i32 5]" in ir_text
 
@@ -218,20 +218,18 @@ def test_only_outermost_dimension_inferred():
         compile_ir("fn main() -> int32 { let a: int32[2][] = [[1], [2]]; return 0; }")
 
 
-def test_array_literal_needs_a_type_annotation():
+def test_list_literal_needs_a_type_annotation():
     with pytest.raises(LangError, match="array literal needs a type annotation"):
         compile_ir("fn main() -> int32 { let a = [1, 2, 3]; return 0; }")
 
 
-def test_array_literal_only_as_initializer():
+def test_list_literal_only_as_initializer():
     with pytest.raises(LangError, match="only allowed as a variable initializer"):
-        compile_ir(
-            "fn f(p: int32*) {}\n"
-            "fn main() -> int32 { f([1, 2, 3]); return 0; }"
-        )
+        compile_ir("fn f(p: int32*) {}\nfn main() -> int32 { f([1, 2, 3]); return 0; }")
 
 
 # --- len() ---
+
 
 def test_len_of_array():
     source = """

@@ -103,7 +103,9 @@ def test_extern_function_as_a_value():
 
 
 def test_signature_mismatch_is_rejected():
-    with pytest.raises(LangError, match=r"expected fn\(int32\) -> int32, got fn\(int32, int32\)"):
+    with pytest.raises(
+        LangError, match=r"expected fn\(int32\) -> int32, got fn\(int32, int32\)"
+    ):
         compile_ir(
             "fn add(a: int32, b: int32) -> int32 { return a + b; }\n"
             "fn main() -> int32 { let op: fn(int32) -> int32 = add; return op(1); }"
@@ -111,7 +113,9 @@ def test_signature_mismatch_is_rejected():
 
 
 def test_generic_function_has_no_single_value():
-    with pytest.raises(LangError, match="is generic; a function value needs a single function"):
+    with pytest.raises(
+        LangError, match="is generic; a function value needs a single function"
+    ):
         compile_ir(
             "fn id<T>(x: T) -> T { return x; }\n"
             "fn main() -> int32 { let f: fn(int32) -> int32 = id; return f(1); }"
@@ -175,7 +179,7 @@ def test_call_a_parenthesized_value():
     assert run(source) == 42
 
 
-def test_call_an_array_element():
+def test_call_an_list_element():
     # A pointer to function pointers needs the grouped type (fn(...) -> ...)*.
     source = """
     @extern fn malloc(size: uint64) -> uint8*;
@@ -213,7 +217,9 @@ def test_calling_a_non_function_is_an_error():
 
 
 def test_arity_mismatch_on_an_expression_call():
-    with pytest.raises(LangError, match=r"call to fn\(int32\) -> int32 expects 1 argument"):
+    with pytest.raises(
+        LangError, match=r"call to fn\(int32\) -> int32 expects 1 argument"
+    ):
         compile_ir(
             "fn dbl(x: int32) -> int32 { return x * 2; }\n"
             "fn main() -> int32 { return (dbl)(1, 2); }"
@@ -272,10 +278,9 @@ def test_function_pointer_bitcasts_to_a_data_pointer():
 
 # --- arrays of function pointers ---
 
-def test_array_of_function_pointers_parses():
-    (func,) = parse(
-        "fn main() { let t: (fn(int32, int32) -> int32)[4]; }"
-    ).functions
+
+def test_list_of_function_pointers_parses():
+    (func,) = parse("fn main() { let t: (fn(int32, int32) -> int32)[4]; }").functions
     t = func.body[0].type_name
     assert t.params is not None and t.dims == [4]
 
@@ -297,7 +302,7 @@ def test_dispatch_table_indexed_and_called():
     assert run(source) == 50
 
 
-def test_function_pointer_array_literal():
+def test_function_pointer_list_literal():
     source = """
     fn add(a: int32, b: int32) -> int32 { return a + b; }
     fn mul(a: int32, b: int32) -> int32 { return a * b; }
@@ -322,10 +327,8 @@ def test_static_function_pointer_table():
     assert "[2 x i32 (i32, i32)*]" in ir_text
 
 
-def test_array_of_function_pointer_pointers():
+def test_list_of_function_pointer_pointers():
     # The group lets `*` and `[N]` both bind outside the function type.
-    (func,) = parse(
-        "fn main() { let t: (fn(int32) -> int32)*[2]; }"
-    ).functions
+    (func,) = parse("fn main() { let t: (fn(int32) -> int32)*[2]; }").functions
     t = func.body[0].type_name
     assert t.params is not None and t.stars == 1 and t.dims == [2]

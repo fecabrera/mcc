@@ -8,6 +8,7 @@
  */
 
 const PREC = {
+  ternary: 0,
   or: 1,
   and: 2,
   equality: 3,
@@ -279,11 +280,26 @@ module.exports = grammar({
     // -------------------------------------------------------------- expressions
     _expression: ($) =>
       choice(
+        $.ternary_expression,
         $.logical_expression,
         $.binary_expression,
         $.cast_expression,
         $.unary_expression,
         $._postfix_expression,
+      ),
+
+    // `cond ? a : b`, the loosest operator and right-associative, so
+    // `a ? b : c ? d : e` is `a ? b : (c ? d : e)`.
+    ternary_expression: ($) =>
+      prec.right(
+        PREC.ternary,
+        seq(
+          field('condition', $._expression),
+          '?',
+          field('consequence', $._expression),
+          ':',
+          field('alternative', $._expression),
+        ),
       ),
 
     logical_expression: ($) =>

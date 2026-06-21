@@ -1,4 +1,4 @@
-import "array";
+import "list";
 
 /**
  * Default slot count reserved by string_init before the first growth.
@@ -9,12 +9,12 @@ const DEFAULT_STRING_CAPACITY = 10;
 /**
  * A growable, heap-backed byte string.
  *
- * `string` is a specialization of `array<uint8>` (same fields and layout), so a
- * `struct string*` upcasts to a `struct array<uint8>*` and every operation
- * forwards to the matching `array_*` function. Each `string_*` wrapper is
+ * `string` is a specialization of `list<uint8>` (same fields and layout), so a
+ * `struct string*` upcasts to a `struct list<uint8>*` and every operation
+ * forwards to the matching `list_*` function. Each `string_*` wrapper is
  * `@inline`, so the indirection costs nothing once optimized.
  */
-struct string extends array<uint8>;
+struct string extends list<uint8>;
 
 /**
  * Prepares a string for use, reserving DEFAULT_STRING_CAPACITY bytes.
@@ -23,7 +23,7 @@ struct string extends array<uint8>;
  */
 @inline
 fn string_init(self: struct string*) {
-    array_init(self as struct array<uint8>*, DEFAULT_STRING_CAPACITY);
+    list_init(self as struct list<uint8>*, DEFAULT_STRING_CAPACITY);
 }
 
 /**
@@ -35,12 +35,31 @@ fn string_init(self: struct string*) {
  * @param dst: uninitialized string to copy src into
  * @param src: string to copy from
  */
-@inline
 fn string_duplicate(dst: struct string*, src: struct string*) {
-    array_init(dst as struct array<uint8>*, src->capacity);
+    list_init(dst as struct list<uint8>*, src->capacity);
 
     for entry in src {
         string_append(dst, entry);
+    }
+}
+
+/**
+ * Builds a string from the first n bytes of a raw byte array: initializes self
+ * with capacity n and appends each byte, so the string owns a private copy and
+ * shares no storage with str. self must be uninitialized (or already destroyed)
+ * -- building into a live string leaks its buffer.
+ *
+ * @param self: uninitialized string to build into
+ * @param str:  source byte array to copy from
+ * @param n:    number of bytes to copy from str
+ */
+fn string_from_array(self: struct string*, str: uint8*, n: uint64) {
+    list_init(self as struct list<uint8>*, n);
+    
+    let i: uint64 = 0;
+    while (i < n) {
+        string_append(self, str[i]);
+        i = i + 1;
     }
 }
 
@@ -52,7 +71,7 @@ fn string_duplicate(dst: struct string*, src: struct string*) {
  */
 @inline
 fn string_destroy(self: struct string*) {
-    array_destroy(self as struct array<uint8>*);
+    list_destroy(self as struct list<uint8>*);
 }
 
 /**
@@ -62,7 +81,7 @@ fn string_destroy(self: struct string*) {
  */
 @inline
 fn string_reset(self: struct string*) {
-    array_reset(self as struct array<uint8>*);
+    list_reset(self as struct list<uint8>*);
 }
 
 /**
@@ -76,7 +95,7 @@ fn string_reset(self: struct string*) {
  */
 @inline
 fn string_get(self: struct string*, index: uint64, out: uint8*) -> bool {
-    return array_get(self as struct array<uint8>*, index, out);
+    return list_get(self as struct list<uint8>*, index, out);
 }
 
 /**
@@ -90,7 +109,7 @@ fn string_get(self: struct string*, index: uint64, out: uint8*) -> bool {
  */
 @inline
 fn string_set(self: struct string*, index: uint64, value: uint8) -> bool {
-    return array_set(self as struct array<uint8>*, index, value);
+    return list_set(self as struct list<uint8>*, index, value);
 }
 
 /**
@@ -101,7 +120,7 @@ fn string_set(self: struct string*, index: uint64, value: uint8) -> bool {
  */
 @inline
 fn string_append(self: struct string*, value: uint8) {
-    array_append(self as struct array<uint8>*, value);
+    list_append(self as struct list<uint8>*, value);
 }
 
 /**
@@ -133,9 +152,9 @@ fn string_eq(self: struct string*, str: struct string*) -> bool {
 
 /**
  * A forward cursor over a string's bytes, produced by `string_it`. A
- * specialization of `array_iter<uint8>`, so it forwards to the array iterator.
+ * specialization of `list_iter<uint8>`, so it forwards to the list iterator.
  */
-struct string_iter extends array_iter<uint8>;
+struct string_iter extends list_iter<uint8>;
 
 /**
  * Begins an iteration over a string's bytes, front to back. Part of the
@@ -147,7 +166,7 @@ struct string_iter extends array_iter<uint8>;
  * @return an iterator positioned at the first byte
  */
 fn string_it(self: struct string*) -> struct string_iter {
-    return array_it(self as struct array<uint8>*) as struct string_iter;
+    return list_it(self as struct list<uint8>*) as struct string_iter;
 }
 
 /**
@@ -160,5 +179,5 @@ fn string_it(self: struct string*) -> struct string_iter {
  * @return true if a byte was produced, false once iteration is complete
  */
 fn string_next(it: struct string_iter*, out: uint8*) -> bool {
-    return array_next(it as struct array_iter<uint8>*, out);
+    return list_next(it as struct list_iter<uint8>*, out);
 }

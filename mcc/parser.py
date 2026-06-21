@@ -7,20 +7,69 @@ import re
 from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
-    ArrayLit, Asm, Assign, Binary, Block, BlockExpr, BoolLit, Break, Call,
+    ArrayLit,
+    Asm,
+    Assign,
+    Binary,
+    Block,
+    BlockExpr,
+    BoolLit,
+    Break,
+    Call,
     CallExpr,
-    Case, Cast, CharLit, Conditional, Const, Continue, Defer, Emit, ExprStmt,
-    FloatLit, For, Func, GlobalVar, If, Index, IntLit, Len, Let, Logical, Member,
-    NullLit, Program, Return, SizeOf, StoreDeref, StoreIndex, StoreMember, StrLit,
-    StructDecl, TypeRef, Unary, Var, While,
+    Case,
+    Cast,
+    CharLit,
+    Conditional,
+    Const,
+    Continue,
+    Defer,
+    Emit,
+    ExprStmt,
+    FloatLit,
+    For,
+    Func,
+    GlobalVar,
+    If,
+    Index,
+    IntLit,
+    Len,
+    Let,
+    Logical,
+    Member,
+    NullLit,
+    Program,
+    Return,
+    SizeOf,
+    StoreDeref,
+    StoreIndex,
+    StoreMember,
+    StrLit,
+    StructDecl,
+    Ternary,
+    TypeRef,
+    Unary,
+    Var,
+    While,
 )
 
 # C's simple escape sequences, plus \e for ESC (a GCC/Clang extension, handy
 # for ANSI terminal codes). Any other escape (e.g. \q) keeps the bare
 # character. \0 is the NUL byte.
 STRING_ESCAPES = {
-    "a": "\a", "b": "\b", "e": "\x1b", "f": "\f", "n": "\n", "r": "\r",
-    "t": "\t", "v": "\v", "0": "\0", "'": "'", '"': '"', "?": "?", "\\": "\\",
+    "a": "\a",
+    "b": "\b",
+    "e": "\x1b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+    "v": "\v",
+    "0": "\0",
+    "'": "'",
+    '"': '"',
+    "?": "?",
+    "\\": "\\",
 }
 
 
@@ -126,8 +175,13 @@ class Parser:
             imports.append((path, line))
         while self.cur.kind != "EOF":
             item = self.parse_toplevel_item()
-            target = {StructDecl: structs, Func: functions, GlobalVar: globals_,
-                      Const: consts, Conditional: conditionals}[type(item)]
+            target = {
+                StructDecl: structs,
+                Func: functions,
+                GlobalVar: globals_,
+                Const: consts,
+                Conditional: conditionals,
+            }[type(item)]
             target.append(item)
         return Program(imports, structs, functions, globals_, consts, conditionals)
 
@@ -257,9 +311,7 @@ class Parser:
                 "@inline only applies to functions with a body", self.cur.line
             )
         if asm and (extern or self.cur.kind != "fn"):
-            raise LangError(
-                "@asm only applies to functions with a body", self.cur.line
-            )
+            raise LangError("@asm only applies to functions with a body", self.cur.line)
         if clobbers and not asm:
             raise LangError("@clobbers only applies to @asm", self.cur.line)
         if self.cur.kind == "struct":
@@ -277,22 +329,34 @@ class Parser:
             init = None
             if self.accept("="):
                 if extern:
-                    raise LangError("an @extern variable cannot have an initializer", line)
+                    raise LangError(
+                        "an @extern variable cannot have an initializer", line
+                    )
                 init = self.parse_expr()
             self.expect(";")
             if type_name is None and init is None:
                 raise LangError(
                     f"a top-level variable without an initializer needs a type: "
-                    f"@static let {name}: int32;", line)
-            return GlobalVar(name, type_name, line, private=private,
-                             volatile=volatile, static=static, init=init,
-                             symbol=symbol)
+                    f"@static let {name}: int32;",
+                    line,
+                )
+            return GlobalVar(
+                name,
+                type_name,
+                line,
+                private=private,
+                volatile=volatile,
+                static=static,
+                init=init,
+                symbol=symbol,
+            )
         if self.cur.kind == "const":
             line = self.advance().line
             if static or extern or volatile:
                 raise LangError(
                     "a const is already compile-time; @static/@extern/@volatile "
-                    "do not apply", line
+                    "do not apply",
+                    line,
                 )
             name = self.expect("IDENT").text
             type_name = self.parse_type_ref() if self.accept(":") else None
@@ -305,12 +369,30 @@ class Parser:
                 "@volatile only applies to structs and extern variables",
                 self.cur.line,
             )
-        return self.parse_function(private, static, extern, symbol, inline, asm, clobbers)
+        return self.parse_function(
+            private, static, extern, symbol, inline, asm, clobbers
+        )
 
     # Tokens that can begin an expression; used to settle the `as T * x`
     # ambiguity (multiplication, not a pointer type).
-    EXPR_START = {"INT", "FLOAT", "STRING", "CHAR", "IDENT", "true", "false",
-                  "null", "sizeof", "len", "(", "[", "-", "!", "&", "~"}
+    EXPR_START = {
+        "INT",
+        "FLOAT",
+        "STRING",
+        "CHAR",
+        "IDENT",
+        "true",
+        "false",
+        "null",
+        "sizeof",
+        "len",
+        "(",
+        "[",
+        "-",
+        "!",
+        "&",
+        "~",
+    }
 
     def parse_type_ref(self, greedy_stars: bool = True) -> TypeRef:
         """Parse a type reference.
@@ -344,7 +426,9 @@ class Parser:
             self.expect(")")
             extra = self.parse_stars(greedy_stars)
             if extra and inner.dims:
-                raise LangError("pointer to an array type is not supported", self.cur.line)
+                raise LangError(
+                    "pointer to an array type is not supported", self.cur.line
+                )
             inner.stars += extra
             # Dimensions on the group are the outermost, so they come first.
             inner.dims = self.parse_dims() + inner.dims
@@ -357,7 +441,9 @@ class Parser:
             while self.accept(","):
                 args.append(self.parse_type_ref())
             self.expect_close_angle()
-        return TypeRef(name, args, self.parse_stars(greedy_stars), dims=self.parse_dims())
+        return TypeRef(
+            name, args, self.parse_stars(greedy_stars), dims=self.parse_dims()
+        )
 
     def parse_dims(self) -> list[int | str | None]:
         """Parse trailing fixed-array dimensions ``[N]``, ``[name]``, or ``[]``.
@@ -432,7 +518,7 @@ class Parser:
         """Consume the ``>`` closing a type-argument list.
 
         A ``>>`` token here closes two nested generics (e.g.
-        ``array<array<int32>>``): it is split, consuming the first ``>`` and
+        ``list<list<int32>>``): it is split, consuming the first ``>`` and
         leaving the second as the current token.
 
         Raises:
@@ -457,9 +543,14 @@ class Parser:
             self.expect(">")
         return type_params
 
-    def parse_struct(self, private: bool = False, static: bool = False,
-                     align: int | None = None, packed: bool = False,
-                     volatile: bool = False) -> StructDecl:
+    def parse_struct(
+        self,
+        private: bool = False,
+        static: bool = False,
+        align: int | None = None,
+        packed: bool = False,
+        volatile: bool = False,
+    ) -> StructDecl:
         """Parse a ``struct`` declaration with its (optionally generic) fields.
 
         Args:
@@ -491,9 +582,18 @@ class Parser:
                 fields.append((fname, self.parse_type_ref()))
                 self.expect(";")
             self.expect("}")
-        return StructDecl(name, type_params, fields, line, base=base,
-                          private=private, static=static, align=align,
-                          packed=packed, volatile=volatile)
+        return StructDecl(
+            name,
+            type_params,
+            fields,
+            line,
+            base=base,
+            private=private,
+            static=static,
+            align=align,
+            packed=packed,
+            volatile=volatile,
+        )
 
     def parse_base_ref(self) -> TypeRef:
         """Parse the base in ``extends Base``: a struct name, optionally generic.
@@ -507,15 +607,19 @@ class Parser:
         """
         ref = self.parse_type_ref()
         if ref.stars or ref.dims or ref.params is not None:
-            raise LangError(
-                "a struct can only extend a struct name", self.cur.line
-            )
+            raise LangError("a struct can only extend a struct name", self.cur.line)
         return ref
 
-    def parse_function(self, private: bool = False, static: bool = False,
-                       extern: bool = False, symbol: str | None = None,
-                       inline: bool = False, asm: bool = False,
-                       clobbers: list[str] | None = None) -> Func:
+    def parse_function(
+        self,
+        private: bool = False,
+        static: bool = False,
+        extern: bool = False,
+        symbol: str | None = None,
+        inline: bool = False,
+        asm: bool = False,
+        clobbers: list[str] | None = None,
+    ) -> Func:
         """Parse a function definition or an ``@extern`` declaration.
 
         Reads the (optionally generic) signature, an optional trailing ``...``
@@ -576,11 +680,23 @@ class Parser:
         if const_params and extern:
             raise LangError(
                 "const parameters are not allowed on @extern functions "
-                "(they would change the C calling convention)", line)
+                "(they would change the C calling convention)",
+                line,
+            )
         if extern:  # a declaration: signature only, no body
             self.expect(";")
-            return Func(name, type_params, params, ret_type, [], line,
-                        private=private, extern=True, variadic=variadic, symbol=symbol)
+            return Func(
+                name,
+                type_params,
+                params,
+                ret_type,
+                [],
+                line,
+                private=private,
+                extern=True,
+                variadic=variadic,
+                symbol=symbol,
+            )
         if asm:
             # `@asm fn` is sugar for a function whose body is one @asm(...)
             # expression over its parameters: the params are the inputs, the
@@ -588,18 +704,41 @@ class Parser:
             if variadic:
                 raise LangError("an @asm function cannot be variadic", line)
             if const_params:
-                raise LangError("const parameters are not allowed on @asm functions", line)
+                raise LangError(
+                    "const parameters are not allowed on @asm functions", line
+                )
             template = self.parse_asm_body(line)
             inputs = [Var(pname, line) for pname, _ in params]
-            is_void = ret_type.name == "void" and not ret_type.stars and not ret_type.dims
+            is_void = (
+                ret_type.name == "void" and not ret_type.stars and not ret_type.dims
+            )
             out_type = None if is_void else ret_type
             node = Asm(template, inputs, out_type, line, clobbers or [])
             body = [ExprStmt(node, line) if is_void else Return(node, line)]
-            return Func(name, type_params, params, ret_type, body, line,
-                        private=private, static=static, inline=inline)
-        return Func(name, type_params, params, ret_type, self.parse_block(), line,
-                    private=private, static=static, variadic=variadic, inline=inline,
-                    const_params=const_params)
+            return Func(
+                name,
+                type_params,
+                params,
+                ret_type,
+                body,
+                line,
+                private=private,
+                static=static,
+                inline=inline,
+            )
+        return Func(
+            name,
+            type_params,
+            params,
+            ret_type,
+            self.parse_block(),
+            line,
+            private=private,
+            static=static,
+            variadic=variadic,
+            inline=inline,
+            const_params=const_params,
+        )
 
     def parse_asm(self):
         """Parse an inline-assembly expression.
@@ -671,7 +810,9 @@ class Parser:
             tok = self.expect("STRING")
             raw = tok.text[1:-1]
             lines.append(
-                re.sub(r"\\(.)", lambda m: STRING_ESCAPES.get(m.group(1), m.group(1)), raw)
+                re.sub(
+                    r"\\(.)", lambda m: STRING_ESCAPES.get(m.group(1), m.group(1)), raw
+                )
             )
         self.expect("}")
         if not lines:
@@ -739,8 +880,7 @@ class Parser:
             if self.cur.kind == ";":
                 if type_name is None:
                     raise LangError(
-                        f"an uninitialized variable needs a type: "
-                        f"let {name}: int32;",
+                        f"an uninitialized variable needs a type: let {name}: int32;",
                         tok.line,
                     )
                 self.advance()
@@ -847,7 +987,27 @@ class Parser:
         Returns:
             The parsed expression node.
         """
-        return self.parse_or()
+        return self.parse_ternary()
+
+    def parse_ternary(self):
+        """Parse a ``cond ? then : otherwise`` conditional expression.
+
+        The ``?:`` operator binds looser than every other operator (just as in
+        C) and is right-associative, so ``a ? b : c ? d : e`` reads as
+        ``a ? b : (c ? d : e)``. With no ``?`` it is just the ``or`` expression
+        below it.
+
+        Returns:
+            A ``Ternary`` node, or the inner expression when no ``?`` appears.
+        """
+        cond = self.parse_or()
+        if self.cur.kind != "?":
+            return cond
+        line = self.advance().line
+        then = self.parse_expr()
+        self.expect(":")
+        otherwise = self.parse_ternary()  # right-associative
+        return Ternary(cond, then, otherwise, line)
 
     def parse_or(self):
         """Parse a left-associative ``or`` chain (the loosest operator).
@@ -875,8 +1035,16 @@ class Parser:
 
     # Bitwise operators bind tighter than comparisons (unlike C), so
     # `a & b == c` means `(a & b) == c`.
-    PRECEDENCE = [["==", "!="], ["<", "<=", ">", ">="], ["|"], ["^"], ["&"],
-                  ["<<", ">>"], ["+", "-"], ["*", "/", "%"]]
+    PRECEDENCE = [
+        ["==", "!="],
+        ["<", "<=", ">", ">="],
+        ["|"],
+        ["^"],
+        ["&"],
+        ["<<", ">>"],
+        ["+", "-"],
+        ["*", "/", "%"],
+    ]
 
     def parse_binary(self, level: int):
         """Parse a binary-operator expression by precedence climbing.
@@ -997,7 +1165,9 @@ class Parser:
             return NullLit(tok.line)
         if tok.kind == "STRING":
             raw = tok.text[1:-1]
-            text = re.sub(r"\\(.)", lambda m: STRING_ESCAPES.get(m.group(1), m.group(1)), raw)
+            text = re.sub(
+                r"\\(.)", lambda m: STRING_ESCAPES.get(m.group(1), m.group(1)), raw
+            )
             return StrLit(text, tok.line)
         if tok.kind == "CHAR":
             inner = tok.text[1:-1]  # the single character between the quotes

@@ -1,21 +1,21 @@
 import "std";
-import "array";
+import "list";
 import "set";
 import "dict";
 
 // `for x in obj` walks anything that provides the `<struct>_it`/`<struct>_next`
-// protocol -- here the growable array from lib/array.mc (array_it/array_next).
+// protocol -- here the growable array from lib/array.mc (list_it/list_next).
 // The element type is inferred from `<struct>_next`, the loop variable `x` is
 // scoped to the loop, and break/continue work as in any loop.
 
 fn main() -> int32 {
-    let nums: struct array<int32>;
-    array_init(&nums, 4);
-    defer array_destroy(&nums);          // freed however main exits
+    let nums: struct list<int32>;
+    list_init(&nums, 4);
+    defer list_destroy(&nums);          // freed however main exits
 
     let i: int32 = 1;
     while (i <= 6) {
-        array_append(&nums, i * i);      // 1 4 9 16 25 36
+        list_append(&nums, i * i);      // 1 4 9 16 25 36
         i = i + 1;
     }
 

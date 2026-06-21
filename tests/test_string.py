@@ -1,6 +1,6 @@
-"""lib/string.mc: a byte string built as `string extends array<uint8>`.
+"""lib/string.mc: a byte string built as `string extends list<uint8>`.
 
-Exercises the @inline wrappers (which upcast to array<uint8> explicitly) and
+Exercises the @inline wrappers (which upcast to list<uint8> explicitly) and
 `for c in &s`, which dispatches to string_it/string_next by name.
 """
 
@@ -63,5 +63,7 @@ def test_for_in_non_struct_rejected():
 
 def test_for_in_without_protocol_function_rejected():
     with pytest.raises(LangError, match="'foo_it'"):
-        run("struct foo { x: int32; }\n"
-            "fn main() -> int32 { let f: struct foo; for x in &f { } return 0; }")
+        run(
+            "struct foo { x: int32; }\n"
+            "fn main() -> int32 { let f: struct foo; for x in &f { } return 0; }"
+        )

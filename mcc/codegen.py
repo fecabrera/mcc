@@ -19,12 +19,50 @@ from llvmlite import ir
 
 from mcc.errors import LangError
 from mcc.nodes import (
-    ArrayLit, Asm, Assign, Binary, Block, BlockExpr, BoolLit, Break, Call,
+    ArrayLit,
+    Asm,
+    Assign,
+    Binary,
+    Block,
+    BlockExpr,
+    BoolLit,
+    Break,
+    Call,
     CallExpr,
-    Case, Cast, CharLit, Conditional, Const, Continue, Defer, Emit, ExprStmt,
-    FloatLit, For, Func, GlobalVar, If, Index, IntLit,
-    Let, Logical, Len, Member, NullLit, Program, Return, SizeOf, StoreDeref,
-    StoreIndex, StoreMember, StrLit, StructDecl, TypeRef, Unary, Var, While,
+    Case,
+    Cast,
+    CharLit,
+    Conditional,
+    Const,
+    Continue,
+    Defer,
+    Emit,
+    ExprStmt,
+    FloatLit,
+    For,
+    Func,
+    GlobalVar,
+    If,
+    Index,
+    IntLit,
+    Let,
+    Logical,
+    Len,
+    Member,
+    NullLit,
+    Program,
+    Return,
+    SizeOf,
+    StoreDeref,
+    StoreIndex,
+    StoreMember,
+    StrLit,
+    StructDecl,
+    Ternary,
+    TypeRef,
+    Unary,
+    Var,
+    While,
 )
 
 
@@ -40,7 +78,7 @@ class LangType:
     comparison.
 
     Attributes:
-        name: The source-level type name, e.g. ``"int32"`` or ``"array<T>*"``.
+        name: The source-level type name, e.g. ``"int32"`` or ``"list<T>*"``.
         ir: The corresponding ``llvmlite.ir`` type.
         signed: Whether an integer type is signed; meaningful only for ints.
         pointee: The pointed-to type for a pointer, else ``None``.
@@ -132,8 +170,9 @@ def pointer_to(lang_type: LangType) -> LangType:
     Returns:
         A ``LangType`` for a pointer to ``lang_type``.
     """
-    return LangType(lang_type.name + "*", lang_type.ir.as_pointer(),
-                    signed=False, pointee=lang_type)
+    return LangType(
+        lang_type.name + "*", lang_type.ir.as_pointer(), signed=False, pointee=lang_type
+    )
 
 
 def function_type(ret: LangType, params: tuple, variadic: bool = False) -> LangType:
@@ -152,11 +191,12 @@ def function_type(ret: LangType, params: tuple, variadic: bool = False) -> LangT
     """
     fnty = ir.FunctionType(ret.ir, [p.ir for p in params], var_arg=variadic)
     name = "fn(" + ", ".join(p.name for p in params) + ") -> " + ret.name
-    return LangType(name, fnty.as_pointer(), signed=False,
-                    signature=(ret, tuple(params), variadic))
+    return LangType(
+        name, fnty.as_pointer(), signed=False, signature=(ret, tuple(params), variadic)
+    )
 
 
-def array_of(element: LangType, count: int) -> LangType:
+def list_of(element: LangType, count: int) -> LangType:
     """Build a fixed-size array type, e.g. ``int32[10]``.
 
     In value contexts an array decays to a pointer to its first element (see
@@ -169,8 +209,13 @@ def array_of(element: LangType, count: int) -> LangType:
     Returns:
         A ``LangType`` for the fixed-size array.
     """
-    return LangType(f"{element.name}[{count}]", ir.ArrayType(element.ir, count),
-                    signed=False, element=element, count=count)
+    return LangType(
+        f"{element.name}[{count}]",
+        ir.ArrayType(element.ir, count),
+        signed=False,
+        element=element,
+        count=count,
+    )
 
 
 VOID = LangType("void", ir.VoidType())
@@ -254,6 +299,7 @@ def classify_arch(triple: str) -> str:
         return "ARCH_RISCV64"
     return "ARCH_UNKNOWN"
 
+
 I32_ZERO = ir.Constant(ir.IntType(32), 0)
 
 
@@ -306,8 +352,11 @@ def is_integer(lang_type: LangType) -> bool:
         ``True`` for the sized integer types, but not ``bool`` (an ``i1``
         underneath) or pointers.
     """
-    return (isinstance(lang_type.ir, ir.IntType) and lang_type is not BOOL
-            and lang_type.pointee is None)
+    return (
+        isinstance(lang_type.ir, ir.IntType)
+        and lang_type is not BOOL
+        and lang_type.pointee is None
+    )
 
 
 def is_pointer(lang_type: LangType) -> bool:
@@ -384,6 +433,7 @@ def _host_triple() -> str:
         The host's default LLVM target triple.
     """
     import llvmlite.binding as llvm
+
     return llvm.get_default_triple()
 
 
@@ -432,8 +482,9 @@ def over_aligned(lang_type: LangType) -> bool:
         return False
     if lang_type.packed:  # its IR body is packed (alignment 1) already
         return (lang_type.align or 1) > 1
-    return (lang_type.align is not None
-            or any(over_aligned(ftype) for _, ftype in lang_type.fields))
+    return lang_type.align is not None or any(
+        over_aligned(ftype) for _, ftype in lang_type.fields
+    )
 
 
 def type_size(lang_type: LangType) -> int:
@@ -497,8 +548,7 @@ def fold_int_arithmetic(op: str, a: int, b: int, lang_type: LangType) -> int | N
     else:
         # Python's >> is arithmetic; stored constants are already in the
         # type's range, so this matches ashr/lshr per signedness.
-        value = {"&": a & b, "|": a | b, "^": a ^ b,
-                 "<<": a << b, ">>": a >> b}[op]
+        value = {"&": a & b, "|": a | b, "^": a ^ b, "<<": a << b, ">>": a >> b}[op]
     if lang_type.signed:
         half = 1 << (width - 1)
         return (value + half) % (1 << width) - half
@@ -595,8 +645,11 @@ def widen_to(tv: "TypedValue", target: LangType) -> "TypedValue":
     Returns:
         The same value as an adaptable constant of ``target``.
     """
-    return TypedValue(ir.Constant(target.ir, wrap_int(tv.value.constant, target)),
-                      target, adaptable=True)
+    return TypedValue(
+        ir.Constant(target.ir, wrap_int(tv.value.constant, target)),
+        target,
+        adaptable=True,
+    )
 
 
 def fold_untyped_shift(a: int, b: int) -> "TypedValue | None":
@@ -635,8 +688,14 @@ class CodeGen:
     documented inline there.
     """
 
-    def __init__(self, program: Program, name: str, root_source: str | None = None,
-                 target: str | None = None, defines: dict[str, int] | None = None):
+    def __init__(
+        self,
+        program: Program,
+        name: str,
+        root_source: str | None = None,
+        target: str | None = None,
+        defines: dict[str, int] | None = None,
+    ):
         """Initialize the code generator.
 
         Args:
@@ -692,7 +751,9 @@ class CodeGen:
         self.static_funcs: dict[tuple[str | None, str], str] = {}  # -> symbol
         self.static_templates: dict[tuple[str | None, str], Func] = {}
         self.static_structs: dict[tuple[str | None, str], StructDecl] = {}
-        self.symbol_bases: dict[tuple[str | None, str], str] = {}  # static name mangling
+        self.symbol_bases: dict[
+            tuple[str | None, str], str
+        ] = {}  # static name mangling
         self.used_symbols: set[str] = set()
         # @extern declarations refer to symbols defined elsewhere; identical
         # redeclarations across files collapse onto the first one.
@@ -700,8 +761,9 @@ class CodeGen:
         self.globals: dict[str, tuple[ir.GlobalVariable, LangType, bool]] = {}
         # @static globals are file-scoped storage, keyed by (source, name) so
         # other files may reuse the name -- like @static functions.
-        self.static_globals: dict[tuple[str | None, str],
-                                  tuple[ir.GlobalVariable, LangType, bool]] = {}
+        self.static_globals: dict[
+            tuple[str | None, str], tuple[ir.GlobalVariable, LangType, bool]
+        ] = {}
         # name -> (private, source file); for @private access checks
         self.global_privacy: dict[str, tuple[bool, str | None]] = {}
         # Named compile-time constants: name -> folded TypedValue (no storage is
@@ -836,16 +898,16 @@ class CodeGen:
         ctx = self.module.context
         self.va_list_supported = True
         if self.va_list_arch in ("arm64", "aarch64") and apple:
-            storage, passed, align = i8p, i8p, 8           # va_list is char*
-        elif self.va_list_arch in ("arm64", "aarch64"):    # AAPCS __va_list
+            storage, passed, align = i8p, i8p, 8  # va_list is char*
+        elif self.va_list_arch in ("arm64", "aarch64"):  # AAPCS __va_list
             st = ctx.get_identified_type("struct.__va_list")
             st.set_body(i8p, i8p, i8p, ir.IntType(32), ir.IntType(32))
             storage, passed, align = st, st.as_pointer(), 8
-        elif self.va_list_arch in ("x86_64", "amd64"):     # SysV __va_list_tag[1]
+        elif self.va_list_arch in ("x86_64", "amd64"):  # SysV __va_list_tag[1]
             tag = ctx.get_identified_type("struct.__va_list_tag")
             tag.set_body(ir.IntType(32), ir.IntType(32), i8p, i8p)
             storage, passed, align = ir.ArrayType(tag, 1), tag.as_pointer(), 16
-        else:                                              # unknown: declare-only
+        else:  # unknown: declare-only
             storage, passed, align = i8p, i8p, 8
             self.va_list_supported = False
         self.va_list_type = LangType("va_list", storage, signed=False)
@@ -869,7 +931,8 @@ class CodeGen:
         if not self.va_list_supported:
             raise LangError(
                 f"va_list is not supported for target architecture "
-                f"{self.va_list_arch!r}", line
+                f"{self.va_list_arch!r}",
+                line,
             )
 
     def seed_target_consts(self):
@@ -950,24 +1013,46 @@ class CodeGen:
             )
         if isinstance(expr, Logical):
             if expr.op == "and":
-                return int(bool(self.eval_static_value(expr.lhs))
-                           and bool(self.eval_static_value(expr.rhs)))
-            return int(bool(self.eval_static_value(expr.lhs))
-                       or bool(self.eval_static_value(expr.rhs)))
+                return int(
+                    bool(self.eval_static_value(expr.lhs))
+                    and bool(self.eval_static_value(expr.rhs))
+                )
+            return int(
+                bool(self.eval_static_value(expr.lhs))
+                or bool(self.eval_static_value(expr.rhs))
+            )
         if isinstance(expr, Binary):
             a, b = self.eval_static_value(expr.lhs), self.eval_static_value(expr.rhs)
             if expr.op in COMPARISON_OPS:
-                return int({"==": a == b, "!=": a != b, "<": a < b, "<=": a <= b,
-                            ">": a > b, ">=": a >= b}[expr.op])
+                return int(
+                    {
+                        "==": a == b,
+                        "!=": a != b,
+                        "<": a < b,
+                        "<=": a <= b,
+                        ">": a > b,
+                        ">=": a >= b,
+                    }[expr.op]
+                )
             if expr.op in ("/", "%") and b == 0:
                 raise LangError("division by zero in an @if condition", expr.line)
-            ops = {"+": lambda: a + b, "-": lambda: a - b, "*": lambda: a * b,
-                   "/": lambda: int(a / b) if (a < 0) != (b < 0) else a // b,
-                   "%": lambda: a - b * (int(a / b) if (a < 0) != (b < 0) else a // b),
-                   "&": lambda: a & b, "|": lambda: a | b, "^": lambda: a ^ b,
-                   "<<": lambda: a << b, ">>": lambda: a >> b}
+            ops = {
+                "+": lambda: a + b,
+                "-": lambda: a - b,
+                "*": lambda: a * b,
+                "/": lambda: int(a / b) if (a < 0) != (b < 0) else a // b,
+                "%": lambda: a - b * (int(a / b) if (a < 0) != (b < 0) else a // b),
+                "&": lambda: a & b,
+                "|": lambda: a | b,
+                "^": lambda: a ^ b,
+                "<<": lambda: a << b,
+                ">>": lambda: a >> b,
+            }
             if expr.op in ops:
                 return ops[expr.op]()
+        if isinstance(expr, Ternary):
+            chosen = expr.then if self.eval_static_value(expr.cond) else expr.otherwise
+            return self.eval_static_value(chosen)
         raise LangError(
             "an @if condition must be a constant expression over the target facts",
             getattr(expr, "line", 0),
@@ -1036,7 +1121,8 @@ class CodeGen:
             The set of by-reference parameter indices.
         """
         return frozenset(
-            i for i, ((name, _), ptype) in enumerate(zip(func.params, params))
+            i
+            for i, ((name, _), ptype) in enumerate(zip(func.params, params))
             if name in func.const_params and is_struct(ptype)
         )
 
@@ -1075,12 +1161,16 @@ class CodeGen:
             if ref.args:
                 raise LangError("type 'va_list' is not generic", line)
             base = self.valist(line)
-        elif (self.current_source, ref.name) in self.static_structs \
-                or ref.name in self.struct_templates:
+        elif (
+            self.current_source,
+            ref.name,
+        ) in self.static_structs or ref.name in self.struct_templates:
             decl = self.static_structs.get((self.current_source, ref.name))
             if decl is None:
                 decl = self.struct_templates[ref.name]
-                self.check_access(decl.private, decl.source, f"struct {ref.name!r}", line)
+                self.check_access(
+                    decl.private, decl.source, f"struct {ref.name!r}", line
+                )
             if len(ref.args) != len(decl.type_params):
                 raise LangError(
                     f"struct {ref.name!r} expects {len(decl.type_params)} "
@@ -1120,11 +1210,12 @@ class CodeGen:
             if size is None:
                 raise LangError(
                     "an inferred array size [] is only allowed on an initialized "
-                    "variable's outermost dimension", line
+                    "variable's outermost dimension",
+                    line,
                 )
             if isinstance(size, str):  # a const name, e.g. int32[N]
                 size = self.const_dim(size, line)
-            base = array_of(base, size)
+            base = list_of(base, size)
         return base
 
     def const_dim(self, name: str, line: int) -> int:
@@ -1149,14 +1240,15 @@ class CodeGen:
         self.check_access(*self.const_privacy[name], f"constant {name!r}", line)
         if not is_integer(const.type):
             raise LangError(
-                f"array size {name!r} must be an integer constant, not {const.type}", line
+                f"array size {name!r} must be an integer constant, not {const.type}",
+                line,
             )
         size = const.value.constant
         if size < 1:
             raise LangError(f"array size must be at least 1, not {size}", line)
         return size
 
-    def array_type_for(self, ref: TypeRef, value, line: int) -> LangType:
+    def list_type_for(self, ref: TypeRef, value, line: int) -> LangType:
         """Resolve a declared type, inferring an outer ``[]`` from a literal.
 
         Fills an inferred outermost dimension from the length of an
@@ -1176,7 +1268,9 @@ class CodeGen:
         """
         if ref.dims and ref.dims[0] is None:
             if any(d is None for d in ref.dims[1:]):
-                raise LangError("only the outermost array dimension can be inferred", line)
+                raise LangError(
+                    "only the outermost array dimension can be inferred", line
+                )
             if not isinstance(value, ArrayLit):
                 raise LangError(
                     "an inferred array size [] needs an array-literal initializer", line
@@ -1199,12 +1293,15 @@ class CodeGen:
         base_type = self.lang_type(decl.base, decl.line)
         if not is_struct(base_type):
             raise LangError(
-                f"{base_type} is not a struct; cannot extend it", decl.line,
+                f"{base_type} is not a struct; cannot extend it",
+                decl.line,
                 source=decl.source,
             )
         return base_type
 
-    def instantiate_struct(self, decl: StructDecl, args: tuple[LangType, ...]) -> LangType:
+    def instantiate_struct(
+        self, decl: StructDecl, args: tuple[LangType, ...]
+    ) -> LangType:
         """Return the struct instance for a set of type arguments.
 
         Creates the LLVM identified type and resolves field types on first use,
@@ -1231,7 +1328,8 @@ class CodeGen:
         if mangled in self.resolving_bases:
             raise LangError(
                 f"struct {decl.name!r} cannot extend itself (cyclic 'extends')",
-                decl.line, source=decl.source,
+                decl.line,
+                source=decl.source,
             )
         outer = self.type_bindings
         outer_source = self.current_source
@@ -1256,17 +1354,26 @@ class CodeGen:
                 elif decl.packed:
                     raise LangError(
                         "an extending struct cannot be @packed unless its base is",
-                        decl.line, source=decl.source,
+                        decl.line,
+                        source=decl.source,
                     )
             identified = self.module.context.get_identified_type(mangled)
-            struct_type = LangType(mangled, identified, signed=False,
-                                   template=decl.name, args=args, align=align,
-                                   packed=packed, volatile=volatile)
+            struct_type = LangType(
+                mangled,
+                identified,
+                signed=False,
+                template=decl.name,
+                args=args,
+                align=align,
+                packed=packed,
+                volatile=volatile,
+            )
             # Register before resolving fields so self-referential structs
             # (e.g. node<T> holding a node<T>*) can refer to themselves.
             self.struct_types[mangled] = struct_type
             fields = tuple(
-                (fname, self.lang_type(ftype, decl.line)) for fname, ftype in decl.fields
+                (fname, self.lang_type(ftype, decl.line))
+                for fname, ftype in decl.fields
             )
         finally:
             self.resolving_bases.discard(mangled)
@@ -1278,11 +1385,14 @@ class CodeGen:
                 if fname in inherited:
                     raise LangError(
                         f"field {fname!r} is already defined in base struct "
-                        f"{base_type.name!r}", decl.line, source=decl.source,
+                        f"{base_type.name!r}",
+                        decl.line,
+                        source=decl.source,
                     )
             fields = base_type.fields + fields  # base fields first: the prefix
-        natural = 1 if packed \
-            else max((type_align(ftype) for _, ftype in fields), default=1)
+        natural = (
+            1 if packed else max((type_align(ftype) for _, ftype in fields), default=1)
+        )
         if align is not None and align < natural:
             # current_source was restored to the instantiating file above,
             # but decl.line belongs to the declaring file.
@@ -1292,7 +1402,9 @@ class CodeGen:
                 decl.line,
                 source=decl.source,
             )
-        object.__setattr__(struct_type, "fields", fields)  # frozen; fields excluded from eq
+        object.__setattr__(
+            struct_type, "fields", fields
+        )  # frozen; fields excluded from eq
         if packed or over_aligned(struct_type):
             # @packed and @align depart from LLVM's natural layout, so spell
             # the layout out: a packed body with explicit padding, keeping
@@ -1330,7 +1442,9 @@ class CodeGen:
         n = len(base.fields)
         return n <= len(derived.fields) and derived.fields[:n] == base.fields
 
-    def struct_field(self, owner: LangType, fname: str, line: int) -> tuple[int, LangType]:
+    def struct_field(
+        self, owner: LangType, fname: str, line: int
+    ) -> tuple[int, LangType]:
         """Look up a struct field by name.
 
         Args:
@@ -1421,8 +1535,9 @@ class CodeGen:
             value = self.eval_const(const.value, const.line)
             if const.type_name is not None:
                 declared = self.lang_type(const.type_name, const.line)
-                value = self.const_coerce(value, declared, const.line,
-                                          f"const {const.name}")
+                value = self.const_coerce(
+                    value, declared, const.line, f"const {const.name}"
+                )
             self.consts[const.name] = value
             self.const_privacy[const.name] = (const.private, const.source)
         # An @static initializer may name a function (a constant function
@@ -1432,7 +1547,7 @@ class CodeGen:
             self.current_source = var.source  # the type may name private structs
             if var.type_name is not None:
                 # An initializer can supply an inferred outermost [] dimension.
-                var_type = self.array_type_for(var.type_name, var.init, var.line)
+                var_type = self.list_type_for(var.type_name, var.init, var.line)
             else:
                 # An @static let with no annotation infers its type from the
                 # initializer, like a local `let`. (The parser guarantees one is
@@ -1441,17 +1556,22 @@ class CodeGen:
                 if isinstance(var.init, ArrayLit):
                     raise LangError(
                         "an array literal needs a type annotation, e.g. "
-                        f"@static let {var.name}: int32[3] = [...]", var.line)
+                        f"@static let {var.name}: int32[3] = [...]",
+                        var.line,
+                    )
                 inferred = self.eval_const(var.init, var.line)
                 if inferred.adaptable:
                     raise LangError(
                         f"type of {var.name!r} is ambiguous: the initializer is an "
                         f"untyped constant; annotate it "
                         f"(@static let {var.name}: int32 = ...) or cast the value",
-                        var.line)
+                        var.line,
+                    )
                 var_type = inferred.type
             if var_type is VOID:
-                raise LangError(f"cannot declare a void variable {var.name!r}", var.line)
+                raise LangError(
+                    f"cannot declare a void variable {var.name!r}", var.line
+                )
             if var.static:
                 # File-scoped storage with its own definition; the mangled
                 # symbol has internal linkage. An initializer must be constant;
@@ -1478,8 +1598,9 @@ class CodeGen:
             if var.name in self.funcs:
                 raise LangError(f"variable {var.name!r} already defined", var.line)
             # @symbol overrides the linker name; mcc still refers to it by var.name.
-            glob = ir.GlobalVariable(self.module, var_type.ir,
-                                     name=var.symbol or var.name)
+            glob = ir.GlobalVariable(
+                self.module, var_type.ir, name=var.symbol or var.name
+            )
             self.globals[var.name] = (glob, var_type, var.volatile)
             self.global_privacy[var.name] = (var.private, var.source)
             self.used_symbols.add(var.name)
@@ -1492,17 +1613,25 @@ class CodeGen:
                 if func.name in self.extern_decls:
                     if self.signatures[func.name] != (ret, params, func.variadic):
                         raise LangError(
-                            f"conflicting extern declarations for {func.name!r}", func.line
+                            f"conflicting extern declarations for {func.name!r}",
+                            func.line,
                         )
                     continue
-                if func.name in self.funcs or func.name in self.templates \
-                        or func.name in self.globals:
-                    raise LangError(f"function {func.name!r} already defined", func.line)
-                fnty = ir.FunctionType(ret.ir, self.param_irs(params),
-                                       var_arg=func.variadic)
+                if (
+                    func.name in self.funcs
+                    or func.name in self.templates
+                    or func.name in self.globals
+                ):
+                    raise LangError(
+                        f"function {func.name!r} already defined", func.line
+                    )
+                fnty = ir.FunctionType(
+                    ret.ir, self.param_irs(params), var_arg=func.variadic
+                )
                 # @symbol overrides the linker name; mcc still calls it by func.name.
                 self.funcs[func.name] = ir.Function(
-                    self.module, fnty, name=func.symbol or func.name)
+                    self.module, fnty, name=func.symbol or func.name
+                )
                 self.signatures[func.name] = (ret, params, func.variadic)
                 self.func_privacy[func.name] = (func.private, func.source)
                 self.extern_decls.add(func.name)
@@ -1512,7 +1641,9 @@ class CodeGen:
             is_overloadable = func.type_params and not func.static
             if not is_overloadable:
                 if key in declared:
-                    raise LangError(f"function {func.name!r} already defined", func.line)
+                    raise LangError(
+                        f"function {func.name!r} already defined", func.line
+                    )
                 declared.add(key)
             self.current_source = func.source  # signatures may name private structs
             if func.static:
@@ -1524,8 +1655,9 @@ class CodeGen:
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
                 hidden = self.hidden_ref_indices(func, params)
-                fnty = ir.FunctionType(ret.ir, self.param_irs(params, hidden),
-                                       var_arg=func.variadic)
+                fnty = ir.FunctionType(
+                    ret.ir, self.param_irs(params, hidden), var_arg=func.variadic
+                )
                 fn = ir.Function(self.module, fnty, name=symbol)
                 self.link_shared(fn, func.source)
                 self.mark_inline(fn, func)
@@ -1538,7 +1670,9 @@ class CodeGen:
                 # Generic: no code yet -- instances are stamped out per call.
                 # Several templates may share a name (an overload set).
                 if func.name in self.funcs:
-                    raise LangError(f"function {func.name!r} already defined", func.line)
+                    raise LangError(
+                        f"function {func.name!r} already defined", func.line
+                    )
                 overloads = self.templates.setdefault(func.name, [])
                 if overloads:
                     base = f"{func.name}#{len(overloads)}"
@@ -1550,16 +1684,20 @@ class CodeGen:
                 self.used_symbols.add(base)
                 overloads.append(func)
                 continue
-            if func.name in self.funcs or func.name in self.templates \
-                    or func.name in self.globals:
+            if (
+                func.name in self.funcs
+                or func.name in self.templates
+                or func.name in self.globals
+            ):
                 raise LangError(f"function {func.name!r} already defined", func.line)
             self.func_privacy[func.name] = (func.private, func.source)
             self.used_symbols.add(func.name)
             ret = self.lang_type(func.ret_type, func.line)
             params = [self.lang_type(t, func.line) for _, t in func.params]
             hidden = self.hidden_ref_indices(func, params)
-            fnty = ir.FunctionType(ret.ir, self.param_irs(params, hidden),
-                                   var_arg=func.variadic)
+            fnty = ir.FunctionType(
+                ret.ir, self.param_irs(params, hidden), var_arg=func.variadic
+            )
             fn = ir.Function(self.module, fnty, name=func.name)
             self.link_shared(fn, func.source)
             self.mark_inline(fn, func)
@@ -1578,7 +1716,9 @@ class CodeGen:
                 self.gen_function(func, self.funcs[symbol], ret, params)
         return self.module
 
-    def gen_function(self, func: Func, fn: ir.Function, ret: LangType, params: list[LangType]):
+    def gen_function(
+        self, func: Func, fn: ir.Function, ret: LangType, params: list[LangType]
+    ):
         """Emit the body of one already-declared function.
 
         Sets up the entry block, spills parameters to allocas, generates the
@@ -1625,7 +1765,9 @@ class CodeGen:
             elif func.name == "main":
                 self.builder.ret(ir.Constant(ret.ir, 0))
             else:
-                raise LangError(f"function {func.name!r} may end without a return", func.line)
+                raise LangError(
+                    f"function {func.name!r} may end without a return", func.line
+                )
 
     def gen_block(self, statements: list):
         """Generate a block of statements in its own name scope.
@@ -1765,7 +1907,9 @@ class CodeGen:
         self.locals[name] = (slot, lang_type)
         self.scope_names.add(name)
 
-    def coerce(self, tv: TypedValue, expected: LangType, line: int, context: str) -> TypedValue:
+    def coerce(
+        self, tv: TypedValue, expected: LangType, line: int, context: str
+    ) -> TypedValue:
         """Check a value against an expected type, adapting untyped constants.
 
         An adaptable integer constant may take on any integer type its value
@@ -1817,8 +1961,9 @@ class CodeGen:
             return TypedValue(self.builder.bitcast(tv.value, RAWPTR.ir), RAWPTR)
         raise LangError(f"{context}: expected {expected}, got {tv.type}", line)
 
-    def gen_load(self, addr, *, align: int | None = None,
-                 volatile: bool = False, name: str = "") -> ir.Instruction:
+    def gen_load(
+        self, addr, *, align: int | None = None, volatile: bool = False, name: str = ""
+    ) -> ir.Instruction:
         """Emit a load, using a volatile load when requested.
 
         Args:
@@ -1837,8 +1982,9 @@ class CodeGen:
         self.builder._insert(instr)
         return instr
 
-    def gen_store(self, value, addr, *, align: int | None = None,
-                  volatile: bool = False):
+    def gen_store(
+        self, value, addr, *, align: int | None = None, volatile: bool = False
+    ):
         """Emit a store, using a volatile store when requested.
 
         Args:
@@ -1880,7 +2026,9 @@ class CodeGen:
             else:
                 # Evaluate the result before the defers run, so a defer that
                 # frees a buffer cannot clobber what is being returned.
-                tv = self.coerce(self.gen_expr(stmt.value), self.ret_type, stmt.line, "return value")
+                tv = self.coerce(
+                    self.gen_expr(stmt.value), self.ret_type, stmt.line, "return value"
+                )
                 self.run_defers_through(0)
                 if not self.builder.block.is_terminated:
                     self.builder.ret(tv.value)
@@ -1900,7 +2048,8 @@ class CodeGen:
                 if tv.type is NULLT:
                     raise LangError(
                         "cannot infer the type of `emit null`; cast it, "
-                        "e.g. emit null as uint8*", stmt.line
+                        "e.g. emit null as uint8*",
+                        stmt.line,
                     )
                 ctx.type = tv.type
                 ctx.slot = self.entry_alloca(ctx.type.ir)
@@ -1931,13 +2080,16 @@ class CodeGen:
                 if stmt.type_name is None:
                     raise LangError(
                         "an array literal needs a type annotation, "
-                        "e.g. let xs: int32[3] = [...]", stmt.line
+                        "e.g. let xs: int32[3] = [...]",
+                        stmt.line,
                     )
-                declared = self.array_type_for(stmt.type_name, stmt.value, stmt.line)
+                declared = self.list_type_for(stmt.type_name, stmt.value, stmt.line)
                 if not is_array(declared):
-                    raise LangError(f"an array literal cannot initialize a {declared}", stmt.line)
+                    raise LangError(
+                        f"an array literal cannot initialize a {declared}", stmt.line
+                    )
                 slot = self.builder.alloca(declared.ir, name=stmt.name)
-                self.store_array_literal(slot, stmt.value, declared, stmt.line)
+                self.store_list_literal(slot, stmt.value, declared, stmt.line)
                 self.bind_local(stmt.name, slot, declared)
                 return
             tv = self.gen_expr(stmt.value)
@@ -1948,7 +2100,8 @@ class CodeGen:
                 if is_array(declared):
                     raise LangError(
                         f"an array variable is initialized from an array literal, "
-                        f"not a {tv.type}", stmt.line
+                        f"not a {tv.type}",
+                        stmt.line,
                     )
                 tv = self.coerce(tv, declared, stmt.line, f"let {stmt.name}")
             elif tv.adaptable:
@@ -1959,7 +2112,9 @@ class CodeGen:
                     stmt.line,
                 )
             elif tv.type is VOID:
-                raise LangError(f"cannot assign a void value to {stmt.name!r}", stmt.line)
+                raise LangError(
+                    f"cannot assign a void value to {stmt.name!r}", stmt.line
+                )
             slot = self.builder.alloca(tv.type.ir, name=stmt.name)
             if over_aligned(tv.type):
                 slot.align = type_align(tv.type)
@@ -1968,9 +2123,15 @@ class CodeGen:
         elif isinstance(stmt, Assign):
             if stmt.name in self.const_locals:
                 raise LangError(
-                    f"cannot assign to const parameter {stmt.name!r}", stmt.line)
+                    f"cannot assign to const parameter {stmt.name!r}", stmt.line
+                )
             slot, var_type, volatile = self.var_addr(stmt.name, stmt.line)
-            tv = self.coerce(self.gen_expr(stmt.value), var_type, stmt.line, f"assignment to {stmt.name}")
+            tv = self.coerce(
+                self.gen_expr(stmt.value),
+                var_type,
+                stmt.line,
+                f"assignment to {stmt.name}",
+            )
             self.gen_store(tv.value, slot, volatile=volatile)
         elif isinstance(stmt, If):
             cond = self.gen_cond(stmt.cond)
@@ -2076,27 +2237,38 @@ class CodeGen:
             ptr = self.gen_expr(stmt.ptr)
             if not is_pointer(ptr.type):
                 raise LangError(f"cannot dereference a {ptr.type}", stmt.line)
-            value = self.coerce(self.gen_expr(stmt.value), ptr.type.pointee,
-                                stmt.line, "assignment through pointer")
+            value = self.coerce(
+                self.gen_expr(stmt.value),
+                ptr.type.pointee,
+                stmt.line,
+                "assignment through pointer",
+            )
             self.gen_store(value.value, ptr.value, volatile=ptr.type.pointee.volatile)
         elif isinstance(stmt, StoreIndex):
             base_t = self.lvalue_type(stmt.base)
             if base_t is not None and is_array(base_t) and self.writes_const(stmt.base):
                 raise LangError(
-                    "cannot assign to an element of a const parameter", stmt.line)
+                    "cannot assign to an element of a const parameter", stmt.line
+                )
             addr, element = self.gen_index_addr(stmt.base, stmt.index, stmt.line)
-            value = self.coerce(self.gen_expr(stmt.value), element,
-                                stmt.line, "assignment to element")
+            value = self.coerce(
+                self.gen_expr(stmt.value), element, stmt.line, "assignment to element"
+            )
             self.gen_store(value.value, addr, volatile=element.volatile)
         elif isinstance(stmt, StoreMember):
             if not stmt.arrow and self.writes_const(stmt.base):
                 raise LangError(
-                    "cannot assign to a field of a const parameter", stmt.line)
+                    "cannot assign to a field of a const parameter", stmt.line
+                )
             addr, ftype, align, volatile = self.gen_member_addr(
                 stmt.base, stmt.field, stmt.arrow, stmt.line
             )
-            value = self.coerce(self.gen_expr(stmt.value), ftype,
-                                stmt.line, f"assignment to field {stmt.field!r}")
+            value = self.coerce(
+                self.gen_expr(stmt.value),
+                ftype,
+                stmt.line,
+                f"assignment to field {stmt.field!r}",
+            )
             self.gen_store(value.value, addr, align=align, volatile=volatile)
         elif isinstance(stmt, ExprStmt):
             self.gen_expr(stmt.expr)
@@ -2136,14 +2308,16 @@ class CodeGen:
         if not is_struct(struct_t):
             raise LangError(
                 "'for ... in' needs a struct iterable with '<struct>_it' and "
-                f"'<struct>_next' functions, not {iterable.type}", stmt.line
+                f"'<struct>_next' functions, not {iterable.type}",
+                stmt.line,
             )
         base = struct_t.template or struct_t.name
         it_name, next_name = f"{base}_it", f"{base}_next"
         if not self.callable_exists(it_name):
             raise LangError(
                 f"'for ... in' needs a {it_name!r} function for {struct_t}; "
-                "none is in scope", stmt.line
+                "none is in scope",
+                stmt.line,
             )
         # Pass the already-evaluated iterable through a hidden local so the
         # `_it` call (routed through normal overload/generic resolution) does not
@@ -2158,7 +2332,9 @@ class CodeGen:
         it_slot = self.builder.alloca(iterator.type.ir, name="for.iter")
         self.builder.store(iterator.value, it_slot)
 
-        next_fn, element = self.resolve_protocol_next(iterator.type, next_name, stmt.line)
+        next_fn, element = self.resolve_protocol_next(
+            iterator.type, next_name, stmt.line
+        )
 
         # A fresh scope for the element variable and the loop's defers.
         outer_locals, outer_names = dict(self.locals), self.scope_names
@@ -2201,8 +2377,12 @@ class CodeGen:
             ``@static`` of that name is visible from the current source.
         """
         key = (self.current_source, name)
-        return (name in self.templates or name in self.funcs
-                or key in self.static_templates or key in self.static_funcs)
+        return (
+            name in self.templates
+            or name in self.funcs
+            or key in self.static_templates
+            or key in self.static_funcs
+        )
 
     def resolve_protocol_next(self, iter_type: LangType, next_name: str, line: int):
         """Resolve the ``<struct>_next`` that consumes an iterator type.
@@ -2235,7 +2415,8 @@ class CodeGen:
             if symbol is None:
                 raise LangError(
                     f"'for ... in' needs a {next_name!r} for {iter_type}; "
-                    "none is in scope", line
+                    "none is in scope",
+                    line,
                 )
             ret, params, _ = self.signatures[symbol]
             if len(params) != 2 or params[0] != want:
@@ -2260,14 +2441,22 @@ class CodeGen:
                 continue
             bindings: dict[str, LangType] = {}
             try:
-                self.unify(func.params[0][1], want, func.type_params, bindings,
-                           True, "for-loop 'next'", line)
+                self.unify(
+                    func.params[0][1],
+                    want,
+                    func.type_params,
+                    bindings,
+                    True,
+                    "for-loop 'next'",
+                    line,
+                )
             except LangError:
                 continue
             if any(t not in bindings for t in func.type_params):
                 continue
-            if not self.shape_matches(func.params[0][1], want, False,
-                                      func.type_params, line):
+            if not self.shape_matches(
+                func.params[0][1], want, False, func.type_params, line
+            ):
                 continue
             viable.append((self.specificity(func), func, bindings))
         if not viable:
@@ -2282,7 +2471,9 @@ class CodeGen:
         if ret is not BOOL:
             raise LangError(f"{next_name!r} must return bool", line)
         if not is_pointer(params[1]):
-            raise LangError(f"{next_name!r} second parameter must be an out-pointer", line)
+            raise LangError(
+                f"{next_name!r} second parameter must be an out-pointer", line
+            )
         return fn, params[1].pointee
 
     def gen_cond(self, expr) -> ir.Value:
@@ -2340,6 +2531,84 @@ class CodeGen:
         phi.add_incoming(ir.Constant(BOOL.ir, expr.op == "or"), lhs_block)
         phi.add_incoming(rhs, rhs_block)
         return TypedValue(phi, BOOL)
+
+    def gen_ternary(self, expr: Ternary) -> TypedValue:
+        """Emit a ``cond ? then : otherwise`` conditional expression.
+
+        Only the selected arm runs: the condition branches to one of two blocks,
+        each evaluates its arm, and a ``phi`` in the join block merges the
+        results. The arms are unified like binary operands -- equal types are
+        kept, an untyped constant arm adapts to the other's type (two untyped
+        integers widen to the larger), and ``null`` adapts to a pointer arm --
+        and each arm is coerced to that type in its own block before the merge.
+
+        Args:
+            expr: The ``Ternary`` node.
+
+        Returns:
+            The selected arm's value as a ``TypedValue``.
+
+        Raises:
+            LangError: When the two arms have irreconcilable types.
+        """
+        cond = self.gen_cond(expr.cond)
+        then_bb = self.builder.append_basic_block("ternary.then")
+        else_bb = self.builder.append_basic_block("ternary.else")
+        end_bb = self.builder.append_basic_block("ternary.end")
+        self.builder.cbranch(cond, then_bb, else_bb)
+        # Evaluate both arms (each may append blocks of its own) before deciding
+        # the result type, since the unification looks at both.
+        self.builder.position_at_end(then_bb)
+        then_tv = self.gen_expr(expr.then)
+        then_end = self.builder.block
+        self.builder.position_at_end(else_bb)
+        else_tv = self.gen_expr(expr.otherwise)
+        else_end = self.builder.block
+        result_type = self.unify_branches(then_tv, else_tv)
+        # Coerce each arm to the shared type at the end of its own block, so any
+        # adapting (or a pointer-to-rawptr bitcast) lands on the right path.
+        self.builder.position_at_end(then_end)
+        then_val = self.coerce(then_tv, result_type, expr.line, "ternary branch").value
+        self.builder.branch(end_bb)
+        self.builder.position_at_end(else_end)
+        else_val = self.coerce(else_tv, result_type, expr.line, "ternary branch").value
+        self.builder.branch(end_bb)
+        self.builder.position_at_end(end_bb)
+        phi = self.builder.phi(result_type.ir)
+        phi.add_incoming(then_val, then_end)
+        phi.add_incoming(else_val, else_end)
+        return TypedValue(phi, result_type)
+
+    def unify_branches(self, then_tv: TypedValue, else_tv: TypedValue) -> LangType:
+        """Pick the shared type of a ternary's two arms.
+
+        Mirrors :meth:`gen_binary`'s operand unification: equal types are kept,
+        two untyped integer arms widen to the larger, and a single untyped
+        constant arm (including ``null``) takes on the other arm's type.
+        Otherwise the first arm's type is the target, and :meth:`coerce` either
+        bridges it (e.g. a pointer to raw memory) or reports the mismatch.
+
+        Args:
+            then_tv: The ``then`` arm's value.
+            else_tv: The ``otherwise`` arm's value.
+
+        Returns:
+            The concrete type both arms are coerced to before the ``phi``.
+        """
+        if then_tv.type == else_tv.type:
+            return then_tv.type
+        if (
+            then_tv.adaptable
+            and else_tv.adaptable
+            and is_integer(then_tv.type)
+            and is_integer(else_tv.type)
+        ):
+            return wider_int_type(then_tv.type, else_tv.type)
+        if else_tv.adaptable and not then_tv.adaptable:
+            return then_tv.type
+        if then_tv.adaptable and not else_tv.adaptable:
+            return else_tv.type
+        return then_tv.type
 
     def gen_equals(self, subject: TypedValue, value: TypedValue, line: int) -> ir.Value:
         """Emit an ``i1`` for ``subject == value`` (to test a ``when`` arm).
@@ -2406,8 +2675,11 @@ class CodeGen:
             if self.var_type_of(expr.name) is None:
                 const = self.consts.get(expr.name)
                 if const is not None:
-                    self.check_access(*self.const_privacy[expr.name],
-                                      f"constant {expr.name!r}", expr.line)
+                    self.check_access(
+                        *self.const_privacy[expr.name],
+                        f"constant {expr.name!r}",
+                        expr.line,
+                    )
                     return const
                 fv = self.func_value(expr.name, expr.line)
                 if fv is not None:
@@ -2418,12 +2690,15 @@ class CodeGen:
             return self.gen_call(expr)
         if isinstance(expr, CallExpr):
             callee = self.gen_expr(expr.callee)
-            return self.gen_indirect_call(callee, expr.args,
-                                          f"call to {callee.type}", expr.line)
+            return self.gen_indirect_call(
+                callee, expr.args, f"call to {callee.type}", expr.line
+            )
         if isinstance(expr, Unary):
             return self.gen_unary(expr)
         if isinstance(expr, Logical):
             return self.gen_logical(expr)
+        if isinstance(expr, Ternary):
+            return self.gen_ternary(expr)
         if isinstance(expr, Binary):
             return self.gen_binary(expr)
         if isinstance(expr, Cast):
@@ -2441,12 +2716,16 @@ class CodeGen:
             _, lang_type, _, _ = self.gen_addr(expr.operand, expr.line)
             if not is_array(lang_type):
                 raise LangError(f"len() requires an array, got {lang_type}", expr.line)
-            return TypedValue(ir.Constant(UINT64.ir, lang_type.count), UINT64, adaptable=True)
+            return TypedValue(
+                ir.Constant(UINT64.ir, lang_type.count), UINT64, adaptable=True
+            )
         if isinstance(expr, Index):
             addr, element = self.gen_index_addr(expr.base, expr.index, expr.line)
             return self.value_at(addr, element, volatile=element.volatile)
         if isinstance(expr, Member):
-            if not expr.arrow and not isinstance(expr.base, (Var, Member, Index, Unary)):
+            if not expr.arrow and not isinstance(
+                expr.base, (Var, Member, Index, Unary)
+            ):
                 # Field of a non-addressable struct value, e.g. f().field.
                 base = self.gen_expr(expr.base)
                 index, ftype = self.struct_field(base.type, expr.field, expr.line)
@@ -2457,8 +2736,9 @@ class CodeGen:
             return self.value_at(addr, ftype, align=align, volatile=volatile)
         raise LangError(f"cannot compile expression {expr!r}", expr.line)
 
-    def value_at(self, addr, lang_type: LangType, *, align=None, volatile=False,
-                 name="") -> TypedValue:
+    def value_at(
+        self, addr, lang_type: LangType, *, align=None, volatile=False, name=""
+    ) -> TypedValue:
         """Load the value held at an address.
 
         An array decays to a pointer to its first element (C array-to-pointer
@@ -2478,8 +2758,9 @@ class CodeGen:
         if is_array(lang_type):
             first = self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
             return TypedValue(first, pointer_to(lang_type.element))
-        return TypedValue(self.gen_load(addr, align=align, volatile=volatile, name=name),
-                          lang_type)
+        return TypedValue(
+            self.gen_load(addr, align=align, volatile=volatile, name=name), lang_type
+        )
 
     def var_addr(self, name: str, line: int) -> tuple[ir.Value, LangType, bool]:
         """Resolve a variable's storage slot.
@@ -2630,7 +2911,9 @@ class CodeGen:
             return self.gen_member_addr(expr.base, expr.field, expr.arrow, line)
         raise LangError("expression is not addressable", line)
 
-    def gen_index_addr(self, base_expr, index_expr, line: int) -> tuple[ir.Value, LangType]:
+    def gen_index_addr(
+        self, base_expr, index_expr, line: int
+    ) -> tuple[ir.Value, LangType]:
         """Compute the address of ``base[index]``.
 
         Args:
@@ -2654,8 +2937,9 @@ class CodeGen:
         addr = self.builder.gep(base.value, [index.value])
         return addr, base.type.pointee
 
-    def gen_member_addr(self, base_expr, fname: str, arrow: bool,
-                        line: int) -> tuple[ir.Value, LangType, int | None, bool]:
+    def gen_member_addr(
+        self, base_expr, fname: str, arrow: bool, line: int
+    ) -> tuple[ir.Value, LangType, int | None, bool]:
         """Compute the address of ``base.field`` or ``base->field``.
 
         Args:
@@ -2675,7 +2959,9 @@ class CodeGen:
         if arrow:
             base = self.gen_expr(base_expr)
             if not is_pointer(base.type):
-                raise LangError(f"'->' requires a struct pointer, got {base.type}", line)
+                raise LangError(
+                    f"'->' requires a struct pointer, got {base.type}", line
+                )
             owner, base_addr = base.type.pointee, base.value
             base_align, base_volatile = None, False
         else:
@@ -2802,13 +3088,16 @@ class CodeGen:
                     expr.line,
                 )
 
-        constraints = ((["=r"] if out else []) + ["r"] * len(inputs)
-                       + [f"~{{{c}}}" for c in expr.clobbers])
+        constraints = (
+            (["=r"] if out else [])
+            + ["r"] * len(inputs)
+            + [f"~{{{c}}}" for c in expr.clobbers]
+        )
         offset = 1 if out else 0
 
         def rewrite(m: re.Match) -> str:
             ref = m.group(1) or m.group(2)  # bare $0 / $out, or braced ${0:w}
-            modifier = m.group(3) or ""     # the ":w" etc., if braced
+            modifier = m.group(3) or ""  # the ":w" etc., if braced
             if ref == "out":
                 if not out:
                     raise LangError(
@@ -2821,17 +3110,20 @@ class CodeGen:
                 if index >= len(inputs):
                     raise LangError(
                         f"@asm references operand ${index} but only "
-                        f"{len(inputs)} were given", expr.line,
+                        f"{len(inputs)} were given",
+                        expr.line,
                     )
                 llvm_index = index + offset
             return f"${{{llvm_index}{modifier}}}" if modifier else f"${llvm_index}"
 
-        template = re.sub(r"\$(?:(out|\d+)|\{(out|\d+)(:[A-Za-z]+)?\})",
-                          rewrite, expr.template)
+        template = re.sub(
+            r"\$(?:(out|\d+)|\{(out|\d+)(:[A-Za-z]+)?\})", rewrite, expr.template
+        )
         ret_ir = out.ir if out else ir.VoidType()
         fnty = ir.FunctionType(ret_ir, [tv.type.ir for tv in inputs])
-        inline = ir.InlineAsm(fnty, template, ",".join(constraints),
-                              side_effect=out is None)
+        inline = ir.InlineAsm(
+            fnty, template, ",".join(constraints), side_effect=out is None
+        )
         result = self.builder.call(inline, [tv.value for tv in inputs])
         return TypedValue(result, out) if out else TypedValue(result, VOID)
 
@@ -2911,13 +3203,13 @@ class CodeGen:
             NUL-terminated UTF-8 bytes of ``text``.
         """
         data = bytearray(text.encode("utf8") + b"\0")
-        array_ty = ir.ArrayType(ir.IntType(8), len(data))
-        glob = ir.GlobalVariable(self.module, array_ty, name=f".str.{self.str_count}")
+        list_ty = ir.ArrayType(ir.IntType(8), len(data))
+        glob = ir.GlobalVariable(self.module, list_ty, name=f".str.{self.str_count}")
         self.str_count += 1
         glob.linkage = "private"
         glob.global_constant = True
         glob.unnamed_addr = True
-        glob.initializer = ir.Constant(array_ty, data)
+        glob.initializer = ir.Constant(list_ty, data)
         return glob
 
     def gen_string(self, text: str) -> TypedValue:
@@ -2929,7 +3221,9 @@ class CodeGen:
         Returns:
             A ``RAWPTR`` (``uint8*``) ``TypedValue`` to the string's first byte.
         """
-        return TypedValue(self.builder.bitcast(self.string_global(text), RAWPTR.ir), RAWPTR)
+        return TypedValue(
+            self.builder.bitcast(self.string_global(text), RAWPTR.ir), RAWPTR
+        )
 
     def const_string(self, text: str) -> ir.Constant:
         """Build a constant ``uint8*`` to a string's first byte.
@@ -2944,7 +3238,7 @@ class CodeGen:
         """
         return self.string_global(text).gep([I32_ZERO, I32_ZERO])
 
-    def store_array_literal(self, addr, lit, arr_type: LangType, line: int):
+    def store_list_literal(self, addr, lit, arr_type: LangType, line: int):
         """Fill an array's storage from an array literal, element by element.
 
         Each element may be any expression; nested literals recurse for
@@ -2968,13 +3262,15 @@ class CodeGen:
                 line,
             )
         for i, element in enumerate(lit.elements):
-            slot = self.builder.gep(addr, [I32_ZERO, ir.Constant(ir.IntType(32), i)],
-                                    inbounds=True)
+            slot = self.builder.gep(
+                addr, [I32_ZERO, ir.Constant(ir.IntType(32), i)], inbounds=True
+            )
             if is_array(arr_type.element):
-                self.store_array_literal(slot, element, arr_type.element, line)
+                self.store_list_literal(slot, element, arr_type.element, line)
             else:
-                tv = self.coerce(self.gen_expr(element), arr_type.element, line,
-                                 "array element")
+                tv = self.coerce(
+                    self.gen_expr(element), arr_type.element, line, "array element"
+                )
                 self.gen_store(tv.value, slot)
 
     def const_initializer(self, expr, expected: LangType, line: int) -> ir.Constant:
@@ -2997,29 +3293,38 @@ class CodeGen:
         """
         if isinstance(expr, ArrayLit):
             if not is_array(expected):
-                raise LangError(f"an array literal cannot initialize a {expected}", line)
+                raise LangError(
+                    f"an array literal cannot initialize a {expected}", line
+                )
             if len(expr.elements) != expected.count:
                 raise LangError(
                     f"array literal has {len(expr.elements)} elements, "
-                    f"expected {expected.count}", line
+                    f"expected {expected.count}",
+                    line,
                 )
-            return ir.Constant(expected.ir, [
-                self.const_initializer(e, expected.element, line) for e in expr.elements
-            ])
+            return ir.Constant(
+                expected.ir,
+                [
+                    self.const_initializer(e, expected.element, line)
+                    for e in expr.elements
+                ],
+            )
         if isinstance(expr, StrLit) and expected == RAWPTR:
             return self.const_string(expr.value)
         if isinstance(expr, NullLit) and is_pointer(expected):
             return ir.Constant(expected.ir, None)
         if isinstance(expr, (IntLit, CharLit)) and is_integer(expected):
-            return self.coerce(self.gen_const_scalar(expr), expected, line,
-                               "initializer").value
+            return self.coerce(
+                self.gen_const_scalar(expr), expected, line, "initializer"
+            ).value
         if isinstance(expr, FloatLit) and expected is FLOAT64:
             return ir.Constant(FLOAT64.ir, expr.value)
         # Any other constant expression -- a const reference, an `as` cast,
         # `sizeof`, or arithmetic -- is folded like a `const` initializer and
         # coerced to the declared type.
-        return self.const_coerce(self.eval_const(expr, line), expected, line,
-                                 "@static initializer").value
+        return self.const_coerce(
+            self.eval_const(expr, line), expected, line, "@static initializer"
+        ).value
 
     def gen_const_scalar(self, expr) -> TypedValue:
         """Build an adaptable constant for an integer or char literal.
@@ -3073,8 +3378,9 @@ class CodeGen:
         if isinstance(expr, Var):
             const = self.consts.get(expr.name)
             if const is not None:
-                self.check_access(*self.const_privacy[expr.name],
-                                  f"constant {expr.name!r}", expr.line)
+                self.check_access(
+                    *self.const_privacy[expr.name], f"constant {expr.name!r}", expr.line
+                )
                 return const
             # A bare function name folds to its address (a constant function
             # pointer), so a @static table of functions can be initialized.
@@ -3083,7 +3389,8 @@ class CodeGen:
                 return fv
             raise LangError(
                 f"{expr.name!r} is not a constant; a const initializer must be "
-                "a compile-time constant", expr.line
+                "a compile-time constant",
+                expr.line,
             )
         if isinstance(expr, Unary):
             return self.eval_const_unary(expr)
@@ -3091,10 +3398,22 @@ class CodeGen:
             return self.eval_const_cast(expr)
         if isinstance(expr, Binary):
             return self.eval_const_binary(expr)
+        if isinstance(expr, Ternary):
+            cond = self.eval_const(expr.cond, line)
+            if not isinstance(cond.value, ir.Constant) or not (
+                is_integer(cond.type) or cond.type is BOOL
+            ):
+                raise LangError(
+                    "a const ternary needs a constant bool or integer condition",
+                    expr.line,
+                )
+            chosen = expr.then if cond.value.constant else expr.otherwise
+            return self.eval_const(chosen, line)
         raise LangError("a const initializer must be a compile-time constant", line)
 
-    def const_coerce(self, tv: TypedValue, expected: LangType, line: int,
-                     context: str) -> TypedValue:
+    def const_coerce(
+        self, tv: TypedValue, expected: LangType, line: int, context: str
+    ) -> TypedValue:
         """Coerce a constant to an expected type without a builder.
 
         The constant-evaluation counterpart of :meth:`coerce`: handles equality,
@@ -3117,11 +3436,18 @@ class CodeGen:
             return tv
         if tv.type is NULLT and (is_pointer(expected) or is_function(expected)):
             return TypedValue(ir.Constant(expected.ir, None), expected)
-        if (tv.adaptable and is_integer(tv.type) and is_integer(expected)
-                and isinstance(tv.value.constant, int)):
+        if (
+            tv.adaptable
+            and is_integer(tv.type)
+            and is_integer(expected)
+            and isinstance(tv.value.constant, int)
+        ):
             width = expected.ir.width
-            lo, hi = ((-(1 << (width - 1)), 1 << (width - 1)) if expected.signed
-                      else (0, 1 << width))
+            lo, hi = (
+                (-(1 << (width - 1)), 1 << (width - 1))
+                if expected.signed
+                else (0, 1 << width)
+            )
             if lo <= tv.value.constant < hi:
                 return TypedValue(ir.Constant(expected.ir, tv.value.constant), expected)
             raise LangError(
@@ -3144,13 +3470,18 @@ class CodeGen:
         operand = self.eval_const(expr.operand, expr.line)
         if expr.op == "-" and is_integer(operand.type):
             return TypedValue(
-                ir.Constant(operand.type.ir, wrap_int(-operand.value.constant, operand.type)),
-                operand.type, adaptable=operand.adaptable,
+                ir.Constant(
+                    operand.type.ir, wrap_int(-operand.value.constant, operand.type)
+                ),
+                operand.type,
+                adaptable=operand.adaptable,
             )
         if expr.op == "-" and operand.type is FLOAT64:
             return TypedValue(ir.Constant(FLOAT64.ir, -operand.value.constant), FLOAT64)
         if expr.op == "!" and operand.type is BOOL:
-            return TypedValue(ir.Constant(BOOL.ir, int(not operand.value.constant)), BOOL)
+            return TypedValue(
+                ir.Constant(BOOL.ir, int(not operand.value.constant)), BOOL
+            )
         raise LangError(
             f"operator {expr.op!r} is not a compile-time constant for {operand.type}",
             expr.line,
@@ -3178,13 +3509,19 @@ class CodeGen:
         if src == target:
             return TypedValue(tv.value, target)
         if is_integer(src) and is_integer(target):
-            return TypedValue(ir.Constant(target.ir, wrap_int(tv.value.constant, target)), target)
+            return TypedValue(
+                ir.Constant(target.ir, wrap_int(tv.value.constant, target)), target
+            )
         if is_integer(src) and target is BOOL:
             return TypedValue(ir.Constant(BOOL.ir, int(tv.value.constant != 0)), BOOL)
         if is_integer(src) and target is FLOAT64:
-            return TypedValue(ir.Constant(FLOAT64.ir, float(tv.value.constant)), FLOAT64)
+            return TypedValue(
+                ir.Constant(FLOAT64.ir, float(tv.value.constant)), FLOAT64
+            )
         if src is FLOAT64 and is_integer(target):
-            return TypedValue(ir.Constant(target.ir, wrap_int(int(tv.value.constant), target)), target)
+            return TypedValue(
+                ir.Constant(target.ir, wrap_int(int(tv.value.constant), target)), target
+            )
         # Pointer conversions fold to LLVM constant expressions (legal in a
         # global initializer): integer -> pointer, pointer <-> pointer, and
         # pointer -> 64-bit integer -- the same rules as gen_cast.
@@ -3218,26 +3555,43 @@ class CodeGen:
         lhs = self.eval_const(expr.lhs, expr.line)
         rhs = self.eval_const(expr.rhs, expr.line)
         if lhs.type != rhs.type:
-            if (lhs.adaptable and rhs.adaptable
-                    and is_integer(lhs.type) and is_integer(rhs.type)):
+            if (
+                lhs.adaptable
+                and rhs.adaptable
+                and is_integer(lhs.type)
+                and is_integer(rhs.type)
+            ):
                 # Two untyped constants of different default widths: widen both
                 # to the larger so neither narrows (e.g. 1 + 5000000000).
                 wide = wider_int_type(lhs.type, rhs.type)
                 lhs, rhs = widen_to(lhs, wide), widen_to(rhs, wide)
             elif rhs.adaptable:
-                rhs = self.const_coerce(rhs, lhs.type, expr.line, f"operand of {expr.op!r}")
+                rhs = self.const_coerce(
+                    rhs, lhs.type, expr.line, f"operand of {expr.op!r}"
+                )
             elif lhs.adaptable:
-                lhs = self.const_coerce(lhs, rhs.type, expr.line, f"operand of {expr.op!r}")
+                lhs = self.const_coerce(
+                    lhs, rhs.type, expr.line, f"operand of {expr.op!r}"
+                )
             else:
                 raise LangError(
                     f"operands of {expr.op!r} have different types: "
-                    f"{lhs.type} and {rhs.type}", expr.line
+                    f"{lhs.type} and {rhs.type}",
+                    expr.line,
                 )
         op_type = lhs.type
         a, b = lhs.value.constant, rhs.value.constant
-        if expr.op in COMPARISON_OPS and (is_integer(op_type) or op_type in (BOOL, FLOAT64)):
-            result = {"==": a == b, "!=": a != b, "<": a < b, "<=": a <= b,
-                      ">": a > b, ">=": a >= b}[expr.op]
+        if expr.op in COMPARISON_OPS and (
+            is_integer(op_type) or op_type in (BOOL, FLOAT64)
+        ):
+            result = {
+                "==": a == b,
+                "!=": a != b,
+                "<": a < b,
+                "<=": a <= b,
+                ">": a > b,
+                ">=": a >= b,
+            }[expr.op]
             return TypedValue(ir.Constant(BOOL.ir, int(result)), BOOL)
         if is_integer(op_type):
             if expr.op == "<<" and lhs.adaptable:
@@ -3248,15 +3602,20 @@ class CodeGen:
             if folded is None:
                 raise LangError(
                     f"{expr.op!r} is not a compile-time constant here "
-                    "(division by zero or out-of-range shift)", expr.line
+                    "(division by zero or out-of-range shift)",
+                    expr.line,
                 )
-            return TypedValue(ir.Constant(op_type.ir, folded), op_type,
-                              adaptable=lhs.adaptable and rhs.adaptable)
+            return TypedValue(
+                ir.Constant(op_type.ir, folded),
+                op_type,
+                adaptable=lhs.adaptable and rhs.adaptable,
+            )
         if op_type is FLOAT64 and expr.op in ("+", "-", "*", "/"):
             result = {"+": a + b, "-": a - b, "*": a * b, "/": a / b}[expr.op]
             return TypedValue(ir.Constant(FLOAT64.ir, result), FLOAT64)
         raise LangError(
-            f"operator {expr.op!r} is not a compile-time constant for {op_type}", expr.line
+            f"operator {expr.op!r} is not a compile-time constant for {op_type}",
+            expr.line,
         )
 
     def gen_call(self, expr: Call) -> TypedValue:
@@ -3303,7 +3662,9 @@ class CodeGen:
         if expr.name in self.templates:
             return self.gen_generic_call(expr, self.templates[expr.name])
         if expr.name not in self.funcs:
-            raise LangError(f"undefined function {expr.name!r} (missing import?)", expr.line)
+            raise LangError(
+                f"undefined function {expr.name!r} (missing import?)", expr.line
+            )
         private, source = self.func_privacy.get(expr.name, (False, None))
         self.check_access(private, source, f"function {expr.name!r}", expr.line)
         return self.gen_direct_call(expr, expr.name)
@@ -3367,13 +3728,17 @@ class CodeGen:
             form = "va_start(ap, last_named_param)" if arity == 2 else "va_end(ap)"
             raise LangError(f"{form} takes {arity} argument(s)", expr.line)
         if expr.name == "va_start" and not self.current_variadic:
-            raise LangError("va_start is only valid inside a variadic function", expr.line)
+            raise LangError(
+                "va_start is only valid inside a variadic function", expr.line
+            )
         addr, t, _, _ = self.gen_addr(expr.args[0], expr.line)
         if not is_valist(t):
             raise LangError(f"{expr.name} requires a va_list, got {t}", expr.line)
         self.require_valist(expr.line)
         i8ptr = self.builder.bitcast(addr, RAWPTR.ir)
-        return TypedValue(self.builder.call(self.va_intrinsic(expr.name), [i8ptr]), VOID)
+        return TypedValue(
+            self.builder.call(self.va_intrinsic(expr.name), [i8ptr]), VOID
+        )
 
     def va_intrinsic(self, kind: str) -> ir.Function:
         """Return the ``llvm.va_start`` / ``llvm.va_end`` intrinsic.
@@ -3428,10 +3793,13 @@ class CodeGen:
             # plain fn(struct) -> R pointer type cannot express.
             raise LangError(
                 f"cannot take a function value of {name!r}: it has const struct "
-                "parameters (passed by hidden reference)", line
+                "parameters (passed by hidden reference)",
+                line,
             )
         ret, params, variadic = self.signatures[symbol]
-        return TypedValue(self.funcs[symbol], function_type(ret, tuple(params), variadic))
+        return TypedValue(
+            self.funcs[symbol], function_type(ret, tuple(params), variadic)
+        )
 
     def gen_direct_call(self, expr: Call, symbol: str) -> TypedValue:
         """Emit a direct call to a known, non-generic function.
@@ -3450,12 +3818,19 @@ class CodeGen:
         if expr.type_args:
             raise LangError(f"{expr.name!r} is not a generic function", expr.line)
         ret, params, variadic = self.signatures[symbol]
-        args = self.marshal_args(expr.args, params, variadic, repr(expr.name),
-                                 expr.line, self.hidden_ref.get(symbol, frozenset()))
+        args = self.marshal_args(
+            expr.args,
+            params,
+            variadic,
+            repr(expr.name),
+            expr.line,
+            self.hidden_ref.get(symbol, frozenset()),
+        )
         return TypedValue(self.builder.call(self.funcs[symbol], args), ret)
 
-    def gen_indirect_call(self, callee: TypedValue, arg_exprs: list,
-                          label: str, line: int) -> TypedValue:
+    def gen_indirect_call(
+        self, callee: TypedValue, arg_exprs: list, label: str, line: int
+    ) -> TypedValue:
         """Emit a call through a function-pointer value.
 
         The callee may be a variable, a parameter, or any expression of
@@ -3479,8 +3854,15 @@ class CodeGen:
         args = self.marshal_args(arg_exprs, params, variadic, label, line)
         return TypedValue(self.builder.call(callee.value, args), ret)
 
-    def marshal_args(self, arg_exprs: list, params, variadic: bool,
-                     label: str, line: int, hidden: frozenset[int] = frozenset()) -> list:
+    def marshal_args(
+        self,
+        arg_exprs: list,
+        params,
+        variadic: bool,
+        label: str,
+        line: int,
+        hidden: frozenset[int] = frozenset(),
+    ) -> list:
         """Evaluate and coerce a call's arguments against the parameter types.
 
         Applies C varargs promotions (small integers and bools widen to
@@ -3503,15 +3885,20 @@ class CodeGen:
             LangError: On a wrong argument count, a coercion failure, or passing
                 a struct to a variadic function.
         """
-        if len(arg_exprs) < len(params) or (len(arg_exprs) > len(params) and not variadic):
+        if len(arg_exprs) < len(params) or (
+            len(arg_exprs) > len(params) and not variadic
+        ):
             raise LangError(
                 f"{label} expects {len(params)} argument(s), got {len(arg_exprs)}", line
             )
         args = []
         for i, arg_expr in enumerate(arg_exprs):
             if i in hidden:
-                args.append(self.hidden_ref_arg(arg_expr, params[i], line,
-                                                 f"argument {i + 1} of {label}"))
+                args.append(
+                    self.hidden_ref_arg(
+                        arg_expr, params[i], line, f"argument {i + 1} of {label}"
+                    )
+                )
                 continue
             if i < len(params) and is_valist(params[i]):
                 # A va_list is handed over in its platform-specific passed form,
@@ -3538,7 +3925,9 @@ class CodeGen:
             args.append(value)
         return args
 
-    def hidden_ref_arg(self, arg_expr, ptype: LangType, line: int, context: str) -> ir.Value:
+    def hidden_ref_arg(
+        self, arg_expr, ptype: LangType, line: int, context: str
+    ) -> ir.Value:
         """Lower a hidden-reference (const struct) argument to a pointer.
 
         When the argument already has storage of the exact type, its address is
@@ -3564,8 +3953,9 @@ class CodeGen:
             tv = self.gen_expr(arg_expr)
         return self.spill_to_temp(tv, ptype, line, context)
 
-    def spill_to_temp(self, tv: TypedValue, ptype: LangType, line: int,
-                      context: str) -> ir.Value:
+    def spill_to_temp(
+        self, tv: TypedValue, ptype: LangType, line: int, context: str
+    ) -> ir.Value:
         """Coerce a value to ``ptype`` and store it in a fresh stack temporary.
 
         Used to give an rvalue (or a generic argument already lowered to a
@@ -3594,14 +3984,23 @@ class CodeGen:
         These are the forms :meth:`gen_addr` accepts: a variable, a field, an
         index, or a dereference.
         """
-        return (isinstance(expr, (Var, Member, Index))
-                or (isinstance(expr, Unary) and expr.op == "*"))
+        return isinstance(expr, (Var, Member, Index)) or (
+            isinstance(expr, Unary) and expr.op == "*"
+        )
 
-    def unify(self, pattern: TypeRef, actual: LangType, type_params: list[str],
-              bindings: dict[str, LangType], strict: bool, context: str, line: int):
+    def unify(
+        self,
+        pattern: TypeRef,
+        actual: LangType,
+        type_params: list[str],
+        bindings: dict[str, LangType],
+        strict: bool,
+        context: str,
+        line: int,
+    ):
         """Match a parameter pattern against an argument type, binding params.
 
-        For example, ``array<T>*`` against ``array<int32>*`` binds ``T =
+        For example, ``list<T>*`` against ``list<int32>*`` binds ``T =
         int32``.
 
         Args:
@@ -3635,11 +4034,21 @@ class CodeGen:
                     line,
                 )
             return
-        if pattern.args and peeled.template == pattern.name \
-                and len(peeled.args) == len(pattern.args):
+        if (
+            pattern.args
+            and peeled.template == pattern.name
+            and len(peeled.args) == len(pattern.args)
+        ):
             for sub_pattern, sub_actual in zip(pattern.args, peeled.args):
-                self.unify(sub_pattern, sub_actual, type_params, bindings,
-                           strict, context, line)
+                self.unify(
+                    sub_pattern,
+                    sub_actual,
+                    type_params,
+                    bindings,
+                    strict,
+                    context,
+                    line,
+                )
 
     def gen_generic_call(self, expr: Call, candidates: list[Func]) -> TypedValue:
         """Resolve and emit a call to a generic function or overload set.
@@ -3680,13 +4089,18 @@ class CodeGen:
                 )
             viable.sort(key=lambda entry: entry[0], reverse=True)
             if len(viable) > 1 and viable[0][0] == viable[1][0]:
-                raise LangError(f"call to {expr.name!r} is ambiguous between overloads",
-                                expr.line)
+                raise LangError(
+                    f"call to {expr.name!r} is ambiguous between overloads", expr.line
+                )
             _, func, bindings = viable[0]
-        self.check_access(func.private, func.source, f"function {expr.name!r}", expr.line)
+        self.check_access(
+            func.private, func.source, f"function {expr.name!r}", expr.line
+        )
         for tparam, bound in bindings.items():
             if bound is VOID:
-                raise LangError(f"cannot bind type parameter {tparam} to {bound}", expr.line)
+                raise LangError(
+                    f"cannot bind type parameter {tparam} to {bound}", expr.line
+                )
         fn, ret, params = self.instantiate(func, bindings)
         hidden = self.hidden_ref_indices(func, params)
         args = []
@@ -3701,8 +4115,9 @@ class CodeGen:
                 args.append(self.coerce(tv, p, expr.line, context).value)
         return TypedValue(self.builder.call(fn, args), ret)
 
-    def resolve_bindings(self, func: Func, expr: Call, arg_tvs: list[TypedValue],
-                         lenient: bool) -> dict[str, LangType] | None:
+    def resolve_bindings(
+        self, func: Func, expr: Call, arg_tvs: list[TypedValue], lenient: bool
+    ) -> dict[str, LangType] | None:
         """Determine the type-parameter bindings for calling a generic function.
 
         Inference takes typed values first, then untyped constants (whose
@@ -3751,8 +4166,15 @@ class CodeGen:
                 strict = not adaptable_pass and not expr.type_args
                 for (_, ptype), tv in zip(func.params, arg_tvs):
                     if tv.adaptable == adaptable_pass and tv.type is not NULLT:
-                        self.unify(ptype, tv.type, func.type_params, bindings,
-                                   strict, f"call to {expr.name!r}", expr.line)
+                        self.unify(
+                            ptype,
+                            tv.type,
+                            func.type_params,
+                            bindings,
+                            strict,
+                            f"call to {expr.name!r}",
+                            expr.line,
+                        )
         except LangError:
             if lenient:
                 return None
@@ -3768,13 +4190,20 @@ class CodeGen:
             )
         if lenient:
             for (_, ptype), tv in zip(func.params, arg_tvs):
-                if not self.shape_matches(ptype, tv.type, tv.adaptable,
-                                          func.type_params, expr.line):
+                if not self.shape_matches(
+                    ptype, tv.type, tv.adaptable, func.type_params, expr.line
+                ):
                     return None
         return bindings
 
-    def shape_matches(self, pattern: TypeRef, actual: LangType, adaptable: bool,
-                      type_params: list[str], line: int) -> bool:
+    def shape_matches(
+        self,
+        pattern: TypeRef,
+        actual: LangType,
+        adaptable: bool,
+        type_params: list[str],
+        line: int,
+    ) -> bool:
         """Report whether an argument type structurally fits a parameter pattern.
 
         Used only to filter overload candidates.
@@ -3798,10 +4227,14 @@ class CodeGen:
         if pattern.name in type_params and not pattern.args:
             return True
         if pattern.args:
-            return (peeled.template == pattern.name
-                    and len(peeled.args) == len(pattern.args)
-                    and all(self.shape_matches(p, a, False, type_params, line)
-                            for p, a in zip(pattern.args, peeled.args)))
+            return (
+                peeled.template == pattern.name
+                and len(peeled.args) == len(pattern.args)
+                and all(
+                    self.shape_matches(p, a, False, type_params, line)
+                    for p, a in zip(pattern.args, peeled.args)
+                )
+            )
         try:
             resolved = self.lang_type(TypeRef(pattern.name), line)
         except LangError:
@@ -3824,6 +4257,7 @@ class CodeGen:
         Returns:
             The summed specificity score across the parameters.
         """
+
         def score(pattern: TypeRef) -> int:
             """Score one parameter pattern's specificity."""
             value = pattern.stars
@@ -3832,6 +4266,7 @@ class CodeGen:
             elif pattern.name not in func.type_params:
                 value += 8
             return value
+
         return sum(score(p) for _, p in func.params)
 
     def instantiate(
@@ -3855,14 +4290,23 @@ class CodeGen:
             mangled = self.instances[key]
             ret, params, _ = self.signatures[mangled]
             return self.funcs[mangled], ret, params
-        base = self.template_bases.get(id(func)) \
-            or self.symbol_bases.get((func.source, func.name), func.name)
+        base = self.template_bases.get(id(func)) or self.symbol_bases.get(
+            (func.source, func.name), func.name
+        )
         mangled = f"{base}<{', '.join(str(bindings[t]) for t in func.type_params)}>"
         outer_bindings = self.type_bindings
         outer_source = self.current_source
-        saved = (self.builder, self.locals, self.ret_type, self.loops,
-                 self.current_variadic, self.scope_names, self.defer_stack,
-                 self.block_exprs, self.const_locals)
+        saved = (
+            self.builder,
+            self.locals,
+            self.ret_type,
+            self.loops,
+            self.current_variadic,
+            self.scope_names,
+            self.defer_stack,
+            self.block_exprs,
+            self.const_locals,
+        )
         self.type_bindings = bindings
         self.current_source = func.source  # the signature may name private structs
         try:
@@ -3882,9 +4326,17 @@ class CodeGen:
             self.instances[key] = mangled
             self.gen_function(func, fn, ret, params)
         finally:
-            (self.builder, self.locals, self.ret_type, self.loops,
-             self.current_variadic, self.scope_names, self.defer_stack,
-             self.block_exprs, self.const_locals) = saved
+            (
+                self.builder,
+                self.locals,
+                self.ret_type,
+                self.loops,
+                self.current_variadic,
+                self.scope_names,
+                self.defer_stack,
+                self.block_exprs,
+                self.const_locals,
+            ) = saved
             self.type_bindings = outer_bindings
             self.current_source = outer_source
         return fn, ret, params
@@ -3911,8 +4363,12 @@ class CodeGen:
         if lhs.type != rhs.type:
             # An untyped constant operand may adapt to the other side's type;
             # two untyped constants widen to the larger so neither narrows.
-            if (lhs.adaptable and rhs.adaptable
-                    and is_integer(lhs.type) and is_integer(rhs.type)):
+            if (
+                lhs.adaptable
+                and rhs.adaptable
+                and is_integer(lhs.type)
+                and is_integer(rhs.type)
+            ):
                 wide = wider_int_type(lhs.type, rhs.type)
                 lhs, rhs = widen_to(lhs, wide), widen_to(rhs, wide)
             elif rhs.adaptable:
@@ -3923,19 +4379,29 @@ class CodeGen:
         if expr.op in COMPARISON_OPS:
             if is_pointer(op_type) or is_function(op_type):
                 if expr.op not in ("==", "!="):
-                    raise LangError(f"operator {expr.op!r} not supported for {op_type}", expr.line)
+                    raise LangError(
+                        f"operator {expr.op!r} not supported for {op_type}", expr.line
+                    )
                 return TypedValue(
                     self.builder.icmp_unsigned(expr.op, lhs.value, rhs.value), BOOL
                 )
             if isinstance(op_type.ir, ir.IntType):
-                icmp = self.builder.icmp_signed if op_type.signed else self.builder.icmp_unsigned
+                icmp = (
+                    self.builder.icmp_signed
+                    if op_type.signed
+                    else self.builder.icmp_unsigned
+                )
                 return TypedValue(icmp(expr.op, lhs.value, rhs.value), BOOL)
             if op_type is FLOAT64:
-                return TypedValue(self.builder.fcmp_ordered(expr.op, lhs.value, rhs.value), BOOL)
+                return TypedValue(
+                    self.builder.fcmp_ordered(expr.op, lhs.value, rhs.value), BOOL
+                )
         elif is_integer(op_type):
             # Fold constant operands so expressions like 10 * sizeof(int64)
             # remain constants (and can still adapt to other integer types).
-            if isinstance(lhs.value, ir.Constant) and isinstance(rhs.value, ir.Constant):
+            if isinstance(lhs.value, ir.Constant) and isinstance(
+                rhs.value, ir.Constant
+            ):
                 if expr.op == "<<" and lhs.adaptable:
                     widened = fold_untyped_shift(lhs.value.constant, rhs.value.constant)
                     if widened is not None:
@@ -3944,8 +4410,11 @@ class CodeGen:
                     expr.op, lhs.value.constant, rhs.value.constant, op_type
                 )
                 if folded is not None:
-                    return TypedValue(ir.Constant(op_type.ir, folded), op_type,
-                                      adaptable=lhs.adaptable and rhs.adaptable)
+                    return TypedValue(
+                        ir.Constant(op_type.ir, folded),
+                        op_type,
+                        adaptable=lhs.adaptable and rhs.adaptable,
+                    )
             ops = {
                 "+": self.builder.add,
                 "-": self.builder.sub,
@@ -3960,7 +4429,11 @@ class CodeGen:
             }
             return TypedValue(ops[expr.op](lhs.value, rhs.value), op_type)
         elif op_type is FLOAT64 and expr.op != "%":
-            ops = {"+": self.builder.fadd, "-": self.builder.fsub,
-                   "*": self.builder.fmul, "/": self.builder.fdiv}
+            ops = {
+                "+": self.builder.fadd,
+                "-": self.builder.fsub,
+                "*": self.builder.fmul,
+                "/": self.builder.fdiv,
+            }
             return TypedValue(ops[expr.op](lhs.value, rhs.value), op_type)
         raise LangError(f"operator {expr.op!r} not supported for {op_type}", expr.line)

@@ -9,6 +9,7 @@ from helpers import compile_ir, parse, run, run_path
 
 # --------------------------------------------------------------------- parser
 
+
 def test_struct_declaration():
     (decl,) = parse("struct point { x: int32; y: int32; }").structs
     assert decl.name == "point"
@@ -73,22 +74,28 @@ def test_struct_keyword_is_optional_in_types():
 @pytest.mark.parametrize(
     "source, message",
     [
-        (POINT + "fn f(p: struct point*) -> int32 { return p->z; }",
-         "no field 'z'"),
-        (POINT + "fn f(p: struct point) -> int32 { return p->x; }",
-         "'->' requires a struct pointer"),
-        (POINT + "fn f(x: int32) -> int32 { return x.y; }",
-         "int32 is not a struct"),
-        (POINT + "struct point { x: int32; } fn main() {}",
-         "already defined"),
+        (POINT + "fn f(p: struct point*) -> int32 { return p->z; }", "no field 'z'"),
+        (
+            POINT + "fn f(p: struct point) -> int32 { return p->x; }",
+            "'->' requires a struct pointer",
+        ),
+        (POINT + "fn f(x: int32) -> int32 { return x.y; }", "int32 is not a struct"),
+        (POINT + "struct point { x: int32; } fn main() {}", "already defined"),
         ("fn f(p: point*) {}", "unknown type 'point'"),
-        ("struct pair<A, B> { a: A; b: B; }\nfn f(p: pair<int32>*) {}",
-         "expects 2 type argument"),
-        ('import "libc/stdio";\n' + POINT +
-         'fn f(p: struct point) { printf("%d", p); }',
-         "cannot pass a struct to a variadic"),
-        (POINT + "fn f(p: struct point) -> int32 { return p as int32; }",
-         "cannot cast point to int32"),
+        (
+            "struct pair<A, B> { a: A; b: B; }\nfn f(p: pair<int32>*) {}",
+            "expects 2 type argument",
+        ),
+        (
+            'import "libc/stdio";\n'
+            + POINT
+            + 'fn f(p: struct point) { printf("%d", p); }',
+            "cannot pass a struct to a variadic",
+        ),
+        (
+            POINT + "fn f(p: struct point) -> int32 { return p as int32; }",
+            "cannot cast point to int32",
+        ),
     ],
 )
 def test_struct_errors(source, message):
@@ -112,13 +119,17 @@ def test_conflict_detected_inside_generic_struct_pattern():
 
 def test_sizeof_struct_includes_padding():
     # uint8 followed by int64 pads to 16 bytes.
-    assert run(
-        "struct padded { a: uint8; b: int64; }\n"
-        "fn main() -> int32 { return sizeof(struct padded) as int32; }"
-    ) == 16
+    assert (
+        run(
+            "struct padded { a: uint8; b: int64; }\n"
+            "fn main() -> int32 { return sizeof(struct padded) as int32; }"
+        )
+        == 16
+    )
 
 
 # ------------------------------------------------------------------ execution
+
 
 def test_struct_fields_roundtrip(capfd):
     run(
@@ -197,6 +208,7 @@ def test_address_of_field(capfd):
 
 def test_memory_lib_copies(tmp_path, capfd):
     from pathlib import Path
+
     lib_dir = Path(__file__).resolve().parents[1] / "lib"
     main = tmp_path / "main.mc"
     main.write_text(
@@ -231,26 +243,27 @@ def test_memory_lib_copies(tmp_path, capfd):
     assert capfd.readouterr().out == "30 30\n3 4\n"
 
 
-def test_array_lib(tmp_path, capfd):
+def test_list_lib(tmp_path, capfd):
     from pathlib import Path
+
     lib_dir = Path(__file__).resolve().parents[1] / "lib"
     main = tmp_path / "main.mc"
     main.write_text(
-        f'import "{lib_dir / "array"}";\n'
+        f'import "{lib_dir / "list"}";\n'
         """
         import \"libc/stdio\";
         fn main() -> int32 {
-            let floats = alloc<struct array<float64>>(1);
-            array_init(floats, 1);
+            let floats = alloc<struct list<float64>>(1);
+            list_init(floats, 1);
             let i: int32 = 0;
             while (i < 5) {
-                array_append(floats, i as float64 / 2.0);
+                list_append(floats, i as float64 / 2.0);
                 i = i + 1;
             }
             let v: float64 = 0.0;
-            array_get(floats, 3, &v);
+            list_get(floats, 3, &v);
             printf("%f %llu\\n", v, floats->length);
-            array_destroy(floats);
+            list_destroy(floats);
             dealloc(floats);
             return 0;
         }
@@ -260,27 +273,28 @@ def test_array_lib(tmp_path, capfd):
     assert capfd.readouterr().out == "1.500000 5\n"
 
 
-def test_array_iterator(tmp_path, capfd):
+def test_list_iterator(tmp_path, capfd):
     from pathlib import Path
+
     lib_dir = Path(__file__).resolve().parents[1] / "lib"
     main = tmp_path / "main.mc"
     main.write_text(
-        f'import "{lib_dir / "array"}";\n'
+        f'import "{lib_dir / "list"}";\n'
         """
         import \"libc/stdio\";
         fn main() -> int32 {
-            let xs: struct array<int32>;
-            array_init(&xs, 2);
-            array_append(&xs, 10);
-            array_append(&xs, 20);
-            array_append(&xs, 30);          // grows past the initial capacity
-            defer array_destroy(&xs);
+            let xs: struct list<int32>;
+            list_init(&xs, 2);
+            list_append(&xs, 10);
+            list_append(&xs, 20);
+            list_append(&xs, 30);          // grows past the initial capacity
+            defer list_destroy(&xs);
 
             let sum: int32 = 0;
             {
-                let it = array_it(&xs);        // array_it/array_next protocol
+                let it = list_it(&xs);        // list_it/list_next protocol
                 let x: int32;
-                while (array_next(&it, &x)) {
+                while (list_next(&it, &x)) {
                     sum = sum + x;
                 }
             }
@@ -295,19 +309,20 @@ def test_array_iterator(tmp_path, capfd):
 
 def test_for_in_loop(tmp_path, capfd):
     from pathlib import Path
+
     lib_dir = Path(__file__).resolve().parents[1] / "lib"
     main = tmp_path / "main.mc"
     main.write_text(
-        f'import "{lib_dir / "array"}";\n'
+        f'import "{lib_dir / "list"}";\n'
         """
         import \"libc/stdio\";
         fn main() -> int32 {
-            let xs: struct array<int32>;
-            array_init(&xs, 2);
-            array_append(&xs, 10);
-            array_append(&xs, 20);
-            array_append(&xs, 30);
-            defer array_destroy(&xs);
+            let xs: struct list<int32>;
+            list_init(&xs, 2);
+            list_append(&xs, 10);
+            list_append(&xs, 20);
+            list_append(&xs, 30);
+            defer list_destroy(&xs);
 
             let sum: int32 = 0;
             for v in &xs {               // element type inferred from next

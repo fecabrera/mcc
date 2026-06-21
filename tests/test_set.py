@@ -20,8 +20,9 @@ def splitmix64(key: int) -> int:
 def test_iteration_visits_all_entries():
     # Drives set `next`, instantiating it -- which writes the entry to the out
     # pair via a `set_entry as pair` value upcast (see lib/set.mc).
-    assert run(
-        """
+    assert (
+        run(
+            """
         import "set";
         import "iteration/pair";
         fn main() -> int32 {
@@ -39,13 +40,16 @@ def test_iteration_visits_all_entries():
             return total as int32;
         }
         """
-    ) == 660
+        )
+        == 660
+    )
 
 
 def test_for_in_iterates_set():
     # `for x in s` dispatches to set_it/set_next by name.
-    assert run(
-        """
+    assert (
+        run(
+            """
         import "set";
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
@@ -58,13 +62,15 @@ def test_for_in_iterates_set():
             return total as int32;
         }
         """
-    ) == 660
+        )
+        == 660
+    )
 
 
 def test_nested_generic_type_args_split_shift_token():
-    # `array<int32>>` ends with a `>>` token that must close two generics.
-    program = parse("fn f(a: struct array<struct array<int32>>*) {}")
-    assert str(program.functions[0].params[0][1]) == "array<array<int32>>*"
+    # `list<int32>>` ends with a `>>` token that must close two generics.
+    program = parse("fn f(a: struct list<struct list<int32>>*) {}")
+    assert str(program.functions[0].params[0][1]) == "list<list<int32>>*"
 
 
 def test_hash_matches_splitmix64(tmp_path, capfd):

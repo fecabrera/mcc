@@ -43,7 +43,9 @@ def test_private_fn_blocked_across_files(tmp_path):
 def test_private_generic_fn_blocked_across_files(tmp_path):
     write_lib(tmp_path)
     main = tmp_path / "main.mc"
-    main.write_text('import "lib";\nfn main() -> int32 { return generic_secret(1 as int32); }')
+    main.write_text(
+        'import "lib";\nfn main() -> int32 { return generic_secret(1 as int32); }'
+    )
     with pytest.raises(LangError, match="function 'generic_secret' is private"):
         run_path(main)
 
@@ -70,15 +72,15 @@ def test_privacy_holds_through_transitive_imports(tmp_path):
 def test_stdlib_internals_are_private(tmp_path):
     main = tmp_path / "main.mc"
     main.write_text(
-        'import "array";\n'
+        'import "list";\n'
         "fn main() -> int32 {\n"
-        "    let a = alloc<struct array<int32>>(1);\n"
-        "    array_init(a, 1);\n"
-        "    array_grow(a);\n"
+        "    let a = alloc<struct list<int32>>(1);\n"
+        "    list_init(a, 1);\n"
+        "    list_grow(a);\n"
         "    return 0;\n"
         "}"
     )
-    with pytest.raises(LangError, match="function 'array_grow' is private to array.mc"):
+    with pytest.raises(LangError, match="function 'list_grow' is private to list.mc"):
         run_path(main)
 
 

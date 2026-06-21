@@ -15,7 +15,9 @@ from helpers import _execute, compile_ir, parse, run
 def test_const_parses():
     program = parse("const DEBUG = 1;")
     (const,) = program.consts
-    assert isinstance(const, Const) and const.name == "DEBUG" and const.type_name is None
+    assert (
+        isinstance(const, Const) and const.name == "DEBUG" and const.type_name is None
+    )
 
 
 def test_value_is_substituted():
@@ -99,7 +101,9 @@ def test_const_arithmetic_and_references():
 
 def test_const_cast_folds():
     # 300 truncated to a uint8 is 44, at compile time.
-    assert run("const X = 300 as uint8; fn main() -> int32 { return X as int32; }") == 44
+    assert (
+        run("const X = 300 as uint8; fn main() -> int32 { return X as int32; }") == 44
+    )
 
 
 def test_char_const():
@@ -126,12 +130,17 @@ def test_bool_const_in_a_condition():
 
 
 def test_comparison_const():
-    assert run("const BIG = 5 > 3; fn main() -> int32 { if (BIG) { return 1; } return 0; }") == 1
+    assert (
+        run(
+            "const BIG = 5 > 3; fn main() -> int32 { if (BIG) { return 1; } return 0; }"
+        )
+        == 1
+    )
 
 
 def test_string_const(capfd):
     source = (
-        "import \"libc/stdio\";\n"
+        'import "libc/stdio";\n'
         'const GREETING = "hi, const";\n'
         'fn main() -> int32 { printf("%s\\n", GREETING); return 0; }\n'
     )
@@ -140,6 +149,7 @@ def test_string_const(capfd):
 
 
 # --- errors ---
+
 
 def test_cannot_assign_to_a_const():
     with pytest.raises(LangError, match="cannot assign to constant 'X'"):
@@ -160,17 +170,17 @@ def test_duplicate_const_is_an_error():
         compile_ir("const X = 1; const X = 2; fn main() -> int32 { return 0; }")
 
 
-def test_const_array_size_must_be_positive():
+def test_const_list_size_must_be_positive():
     with pytest.raises(LangError, match="array size must be at least 1"):
         compile_ir("const N = 0; fn main() -> int32 { let b: int32[N]; return 0; }")
 
 
-def test_unknown_const_array_size():
+def test_unknown_const_list_size():
     with pytest.raises(LangError, match="unknown array size 'BOGUS'"):
         compile_ir("fn main() -> int32 { let b: int32[BOGUS]; return 0; }")
 
 
-def test_non_integer_const_array_size():
+def test_non_integer_const_list_size():
     with pytest.raises(LangError, match="must be an integer constant"):
         compile_ir('const S = "x"; fn main() -> int32 { let b: int32[S]; return 0; }')
 
@@ -191,6 +201,7 @@ def test_static_and_const_cannot_combine():
 
 
 # --- across files ---
+
 
 def test_imported_const(tmp_path):
     (tmp_path / "config.mc").write_text("const WIDTH = 80;\n")

@@ -12,25 +12,31 @@ def compile_for(source: str, target: str) -> str:
     return str(CodeGen(parse(source), "test", target=target).generate())
 
 
-@pytest.mark.parametrize("triple, os_name", [
-    ("arm64-apple-darwin25.5.0", "OS_DARWIN"),
-    ("x86_64-unknown-linux-gnu", "OS_LINUX"),
-    ("x86_64-pc-windows-msvc", "OS_WINDOWS"),
-    ("aarch64-unknown-none-elf", "OS_NONE"),  # bare metal: no OS
-    ("not-a-triple", "OS_UNKNOWN"),
-])
+@pytest.mark.parametrize(
+    "triple, os_name",
+    [
+        ("arm64-apple-darwin25.5.0", "OS_DARWIN"),
+        ("x86_64-unknown-linux-gnu", "OS_LINUX"),
+        ("x86_64-pc-windows-msvc", "OS_WINDOWS"),
+        ("aarch64-unknown-none-elf", "OS_NONE"),  # bare metal: no OS
+        ("not-a-triple", "OS_UNKNOWN"),
+    ],
+)
 def test_classify_os(triple, os_name):
     assert classify_os(triple) == os_name
 
 
-@pytest.mark.parametrize("triple, arch_name", [
-    ("x86_64-unknown-linux-gnu", "ARCH_X86_64"),
-    ("amd64-pc-windows-msvc", "ARCH_X86_64"),
-    ("aarch64-unknown-none-elf", "ARCH_AARCH64"),
-    ("arm64-apple-darwin25.5.0", "ARCH_AARCH64"),
-    ("riscv64-unknown-elf", "ARCH_RISCV64"),
-    ("not-a-triple", "ARCH_UNKNOWN"),
-])
+@pytest.mark.parametrize(
+    "triple, arch_name",
+    [
+        ("x86_64-unknown-linux-gnu", "ARCH_X86_64"),
+        ("amd64-pc-windows-msvc", "ARCH_X86_64"),
+        ("aarch64-unknown-none-elf", "ARCH_AARCH64"),
+        ("arm64-apple-darwin25.5.0", "ARCH_AARCH64"),
+        ("riscv64-unknown-elf", "ARCH_RISCV64"),
+        ("not-a-triple", "ARCH_UNKNOWN"),
+    ],
+)
 def test_classify_arch(triple, arch_name):
     assert classify_arch(triple) == arch_name
 
@@ -62,15 +68,21 @@ def test_enum_values_are_available_as_constants():
 def test_host_target_os_compares_equal():
     # Running in-process targets the host; whatever it is, TARGET_OS must equal
     # exactly one known OS and not the others.
-    assert run(
-        "fn main() -> int32 { if (TARGET_OS == OS_UNKNOWN) { return 1; } return 0; }"
-    ) == 0
+    assert (
+        run(
+            "fn main() -> int32 { if (TARGET_OS == OS_UNKNOWN) { return 1; } return 0; }"
+        )
+        == 0
+    )
 
 
-def test_target_const_usable_as_array_size():
-    assert run(
-        "fn main() -> int32 { let a: int32[ARCH_AARCH64]; return len(a) as int32; }"
-    ) == 2
+def test_target_const_usable_as_list_size():
+    assert (
+        run(
+            "fn main() -> int32 { let a: int32[ARCH_AARCH64]; return len(a) as int32; }"
+        )
+        == 2
+    )
 
 
 def test_user_const_cannot_shadow_a_target_fact():

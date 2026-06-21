@@ -224,7 +224,7 @@ reference section.
 - [x] [Types](docs/language.md#types) — `int8`–`int64`, `uint8`–`uint64`, `bool`, `float64`,
       `void`; untyped integer constants with range-checked adaptation
 - [x] [Operators](docs/language.md#operators) — arithmetic, comparison, logical
-      (`and`/`or`/`!`), bitwise (`&` `|` `^` `<<` `>>` `~`)
+      (`and`/`or`/`!`), bitwise (`&` `|` `^` `<<` `>>` `~`), `cond ? a : b`
 - [x] [Casts](docs/language.md#casts) — explicit `as`
 - [x] [Pointers](docs/language.md#pointers) — address-of, deref, `null`
 - [x] [Function pointers](docs/language.md#function-pointers)

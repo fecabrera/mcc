@@ -1,5 +1,5 @@
 import "std";
-import "array";
+import "list";
 import "stack";
 import "queue";
 
@@ -7,18 +7,18 @@ import "queue";
 // doubles when it fills, so they all start small and grow as needed.
 
 fn main() -> int32 {
-    // array<T> -- a growable random-access sequence (lib/array.mc).
-    let nums: struct array<int32>;
-    array_init(&nums, 2);
+    // list<T> -- a growable random-access sequence (lib/array.mc).
+    let nums: struct list<int32>;
+    list_init(&nums, 2);
     let i: int32 = 0;
     while (i < 10) {
-        array_append(&nums, i * i);      // grows past the initial capacity of 2
+        list_append(&nums, i * i);      // grows past the initial capacity of 2
         i = i + 1;
     }
     let value: int32 = 0;
-    if (array_get(&nums, 6, &value))
+    if (list_get(&nums, 6, &value))
         println("array: length %llu, nums[6] = %d", nums.length, value);
-    array_destroy(&nums);
+    list_destroy(&nums);
 
     // stack<T> -- LIFO: push and pop at the top (lib/stack.mc).
     let chars: struct stack<uint8>;

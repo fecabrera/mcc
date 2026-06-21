@@ -15,7 +15,7 @@ def test_sizeof_rounds_up_to_alignment():
     assert run(source) == 16
 
 
-def test_array_stride_matches_sizeof():
+def test_list_stride_matches_sizeof():
     # p[1] must land sizeof(cell) bytes in, or the writes would overlap.
     source = """
     import "libc/stdlib";
