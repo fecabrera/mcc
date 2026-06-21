@@ -191,7 +191,7 @@ fn main() -> int32 { println("answer = %d", 42); return 0; }
 ```
 
 Alongside `std` are `memory` (typed `alloc`/`dealloc`), the
-`array`/`stack`/`queue`/`set`/`dict` containers, and the `hashing/*` functions.
+`list`/`stack`/`queue`/`set`/`dict` containers, and the `hashing/*` functions.
 
 The [`libc/`](lib/libc/) modules are instead `@extern` bindings for the C
 library itself — `printf`, `malloc`, the `str*`/`mem*` functions, `FILE*`
@@ -241,7 +241,7 @@ reference section.
 ### Standard library
 
 - [x] Core — `memory` (typed `alloc`/`dealloc`), `std` (`print`/`println`)
-- [x] Containers — `array`, `stack`, `queue`, `set`, `dict`, `string`
+- [x] Containers — `list`, `stack`, `queue`, `set`, `dict`, `string`
 - [x] Hashing — `splitmix64`, `fnv1a`, `murmur3`, `crc32`, `md5`
 - [x] [libc bindings](docs/language.md#reaching-libc) — `stdio`, `stdlib`, `string`, `ctype`,
       `math`, `limits`, `float`, `time`, `errno`

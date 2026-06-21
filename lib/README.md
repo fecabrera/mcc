@@ -14,19 +14,19 @@ in mcc.
 
 | Module | Import | Provides |
 |--------|--------|----------|
-| [memory.mc](memory.mc) | `import "memory";` | Typed heap allocation over `malloc`/`realloc`/`free`: `alloc<T>`, `resize<T>`, `dealloc<T>`, `copy_bytes<T>`, `set_bytes<T>`, `copy_items<T>`, `set_items<T>` (and the raw `malloc`/`realloc`/`free`/`memcpy`/`memset`). |
+| [memory.mc](memory.mc) | `import "memory";` | Typed heap allocation over `malloc`/`realloc`/`free`: `alloc<T>`, `resize<T>`, `dealloc<T>`, `bytecopy<T>`, `copy<T>`, `set_bytes<T>`, `set_items<T>` (`copy_bytes`/`copy_items` remain as deprecated aliases; and the raw `malloc`/`realloc`/`free`/`memcpy`/`memset`). |
 | [std.mc](std.mc) | `import "std";` | Variadic `print` and `println` — printf-style output, forwarding through a `va_list`. |
 
 ## Data structures
 
 | Module | Import | Provides |
 |--------|--------|----------|
-| [array.mc](array.mc) | `import "array";` | Growable generic `array<T>`: `array_init`/`array_destroy`/`array_reset`, `array_get`/`array_set`, `array_append` (doubles when full), and `array_it`/`array_next` iteration. |
+| [list.mc](list.mc) | `import "list";` | Growable generic `list<T>`: `list_init`/`list_destroy`/`list_reset`, `list_get`/`list_set`, `list_append` (doubles when full), and `list_it`/`list_next` iteration. |
 | [stack.mc](stack.mc) | `import "stack";` | Growable generic LIFO `stack<T>`: `stack_init`/`stack_destroy`, `stack_push`/`stack_pop`/`stack_peek`, `stack_len`/`stack_is_empty` (doubles when full). |
 | [queue.mc](queue.mc) | `import "queue";` | Growable generic FIFO `queue<T>`, a ring buffer: `queue_init`/`queue_destroy`, `queue_push`/`queue_pop`/`queue_peek`/`queue_at`, `queue_len`/`queue_is_empty` (doubles when full). |
 | [set.mc](set.mc) | `import "set";` | Open-addressing hash map `set<K, V>` keyed by value/identity: `set_init`/`set_destroy`, `set_set`/`set_get`/`set_remove`, and `set_it`/`set_next` iteration (yielding `pair<K, V>`). |
 | [dict.mc](dict.mc) | `import "dict";` | String-keyed `dict<V>` that owns content-hashed copies of its keys: `dict_init`/`dict_destroy`, `dict_set`/`dict_get`/`dict_remove`, and `dict_it`/`dict_next` iteration (yielding `pair<uint8*, V>`). |
-| [string.mc](string.mc) | `import "string";` | Growable byte string `string` (a `string extends array<uint8>`): `string_init`/`string_duplicate`/`string_destroy`/`string_reset`, `string_get`/`string_set`, `string_append`, `string_eq`, and `string_it`/`string_next` iteration. |
+| [string.mc](string.mc) | `import "string";` | Growable byte string `string` (a `string extends list<uint8>`): `string_init`/`string_duplicate`/`string_destroy`/`string_reset`, `string_get`/`string_set`, `string_append`, `string_eq`, and `string_it`/`string_next` iteration. |
 | [iteration/pair.mc](iteration/pair.mc) | `import "iteration/pair";` | `pair<K, V>` — the key/value element type the keyed containers yield from `<struct>_next`. |
 
 ## Hashing

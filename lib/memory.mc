@@ -47,9 +47,42 @@ fn dealloc<T>(p: T*) {
  * @param dst: destination, with room for at least n elements
  * @param src: source to read from
  * @param n:   number of elements to copy
+ * @return number of bytes copied (n * sizeof(T))
  */
+@inline
+fn bytecopy<T>(dst: T*, src: T*, n: uint64) -> uint64 {
+    let count = n * sizeof(T);
+    memcpy(dst, src, count);
+    return count;
+}
+
+// deprecated
+@inline
 fn copy_bytes<T>(dst: T*, src: T*, n: uint64) {
-    memcpy(dst, src, n * sizeof(T));
+    bytecopy(dst, src, n);
+}
+
+/**
+ * Copies n elements of type T from src to dst one item at a time.
+ *
+ * @param dst: destination, with room for at least n elements
+ * @param src: source to read from
+ * @param n:   number of elements to copy
+ * @return number of elements copied (n)
+ */
+fn copy<T>(dst: T*, src: T*, n: uint64) -> uint64 {
+    let i: uint64 = 0;
+    while (i < n) {
+        dst[i] = src[i];
+        i = i + 1;
+    }
+    return i;
+}
+
+// deprecated
+@inline
+fn copy_items<T>(dst: T*, src: T*, n: uint64) {
+    copy(dst, src, n);
 }
 
 /**
@@ -63,21 +96,6 @@ fn copy_bytes<T>(dst: T*, src: T*, n: uint64) {
  */
 fn set_bytes<T>(dst: T*, value: uint8, n: uint64) {
     memset(dst, value as int32, n * sizeof(T));   // libc memset takes an int
-}
-
-/**
- * Copies n elements of type T from src to dst one item at a time.
- *
- * @param dst: destination, with room for at least n elements
- * @param src: source to read from
- * @param n:   number of elements to copy
- */
-fn copy_items<T>(dst: T*, src: T*, n: uint64) {
-    let i: uint64 = 0;
-    while (i < n) {
-        dst[i] = src[i];
-        i = i + 1;
-    }
 }
 
 /**

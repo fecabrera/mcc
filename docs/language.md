@@ -381,16 +381,16 @@ A body that is a single statement does not need braces:
 
 `for x in obj` iterates anything that supplies the **`_it`/`_next` protocol** —
 a pair of functions named after the iterable's struct, which the compiler
-dispatches by name. For an `obj` of type `struct array<T>` it calls `array_it`
-and `array_next`:
+dispatches by name. For an `obj` of type `struct list<T>` it calls `list_it`
+and `list_next`:
 
 ```c
-fn array_it<T>(self: struct array<T>*) -> struct array_iter<T>;   // make a cursor
-fn array_next<T>(it: struct array_iter<T>*, out: T*) -> bool;      // false when done
+fn list_it<T>(self: struct list<T>*) -> struct list_iter<T>;     // make a cursor
+fn list_next<T>(it: struct list_iter<T>*, out: T*) -> bool;       // false when done
 ```
 
 ```c
-for v in &nums {            // nums: array<int32>; v is int32, inferred from array_next
+for v in &nums {            // nums: list<int32>; v is int32, inferred from list_next
     if (v < 0) { continue; }
     if (v > 99) { break; }
     use(v);
@@ -404,7 +404,7 @@ iterator held as a hidden, collision-proof temporary.
 
 Define `<struct>_it` and `<struct>_next` to make your own types iterable; a
 struct built with [`extends`](#structs) can reuse its base's by forwarding
-through an upcast. The `array`, `set`, `dict`, and `string` libraries all do
+through an upcast. The `list`, `set`, `dict`, and `string` libraries all do
 this — see [examples/iteration.mc](examples/iteration.mc).
 
 `case` matches a value against a series of `when` arms, with an optional
@@ -898,7 +898,7 @@ pointer, array, or function type is not a valid base.
 passed to and returned from functions, but not to variadic functions like
 printf — pass a pointer or a field instead. See
 [examples/structs.mc](examples/structs.mc) and the data structures built on
-them: the growable [lib/array.mc](lib/array.mc), the open-addressing hash
+them: the growable [lib/list.mc](lib/list.mc), the open-addressing hash
 table [lib/set.mc](lib/set.mc) (borrowing, identity-keyed), and the
 string-keyed [lib/dict.mc](lib/dict.mc), which owns copies of its keys and
 compares them by content.
@@ -942,14 +942,14 @@ file (however it was imported) is a compile error naming the owning file:
 
 ```c
 /**
- * Doubles the array's capacity. Internal; called by array_append.
+ * Doubles the list's capacity. Internal; called by list_append.
  */
 @private
-fn array_grow<T>(self: struct array<T>*) { ... }
+fn list_grow<T>(self: struct list<T>*) { ... }
 ```
 
 ```
-error: line 5: function 'array_grow' is private to array.mc
+error: line 5: function 'list_grow' is private to list.mc
 ```
 
 `@static` goes further, like C's `static`: the name is file-scoped rather

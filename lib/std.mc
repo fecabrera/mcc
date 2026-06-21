@@ -45,8 +45,6 @@ fn writechar(c: uint8) {
 /**
  * Writes a string's bytes to standard output (its `length` bytes from `data`).
  *
- * @todo: use `const str: struct string` instead.
- *
  * @param str: string to write
  */
 fn writestr(const str: struct string) {
@@ -55,8 +53,6 @@ fn writestr(const str: struct string) {
 
 /**
  * Writes a string to standard output followed by a newline.
- *
- * @todo: use `const str: struct string` instead.
  *
  * @param str: string to write
  */

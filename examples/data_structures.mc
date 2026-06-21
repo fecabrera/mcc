@@ -7,7 +7,7 @@ import "queue";
 // doubles when it fills, so they all start small and grow as needed.
 
 fn main() -> int32 {
-    // list<T> -- a growable random-access sequence (lib/array.mc).
+    // list<T> -- a growable random-access sequence (lib/list.mc).
     let nums: struct list<int32>;
     list_init(&nums, 2);
     let i: int32 = 0;
