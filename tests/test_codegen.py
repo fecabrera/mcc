@@ -128,6 +128,12 @@ def test_shift_count_widens_to_value_type():
     assert "zext" in main_ir("let a: uint64 = 1; let b: uint32 = 2; let c = a << b;")
 
 
+def test_shift_by_unsigned_count_with_untyped_value():
+    # `1 << count` (untyped value, unsigned count): the untyped 1 adapts to the
+    # count's type rather than forcing the count to int32 -- this must compile.
+    assert "shl" in main_ir("let count: uint32 = 3; let x = 1 << count;")
+
+
 def test_same_sign_widening_runtime_values():
     assert run(
         "fn main() -> int32 {\n"

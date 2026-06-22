@@ -517,7 +517,6 @@ def type_size(lang_type: LangType) -> int:
 
 
 COMPARISON_OPS = ("==", "!=", "<", "<=", ">", ">=")
-SHIFT_OPS = ("<<", ">>")
 
 
 def fold_int_arithmetic(op: str, a: int, b: int, lang_type: LangType) -> int | None:
@@ -4393,14 +4392,7 @@ class CodeGen:
         """
         lhs = self.gen_expr(expr.lhs)
         rhs = self.gen_expr(expr.rhs)
-        if expr.op in SHIFT_OPS:
-            # The right operand of a shift is a count, not a peer: the result
-            # keeps the left operand's type, and the count widens to it.
-            if lhs.type != rhs.type:
-                rhs = self.widen_operand(
-                    rhs, lhs.type, expr.line, f"shift count of {expr.op!r}"
-                )
-        elif lhs.type != rhs.type:
+        if lhs.type != rhs.type:
             ctx = f"operand of {expr.op!r}"
             both_int = is_integer(lhs.type) and is_integer(rhs.type)
             # An untyped constant operand adapts to the other side's type.

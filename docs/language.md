@@ -577,10 +577,11 @@ explicit `as`. So `let z: uint32 = a + b;` is an error (the `uint64` result
 would narrow) and `uint32 + int32` is an error (mixed signedness). That keeps
 storage boundaries deliberate while sparing you casts mid-calculation.
 
-A shift follows the same in-expression rule but is not symmetric: the right
-operand is a count, so the result keeps the **left** operand's type and the
-count widens to it. `let x: uint64 = 1 << 40;` works (the untyped `1` widens),
-but a `uint32` value shifted that far still needs `(v as uint64) << 40`.
+Shifts combine their operands by the same rule (the count widens to meet the
+value), so `count << amount` works across same-signed widths. Untyped shift
+constants are still sized by their result: `let x: uint64 = 1 << 40;` works (the
+untyped `1` widens to hold the result), but a typed `uint32` value shifted that
+far overflows its width and needs `(v as uint64) << 40`.
 
 Signedness changes behavior, not representation: unsigned types use unsigned
 division, remainder, and comparisons, and zero-extend instead of sign-extend
