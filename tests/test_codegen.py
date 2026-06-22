@@ -113,6 +113,58 @@ def test_in_range_int32_constants_still_compile():
     main_ir("let a: int32 = 5; let b: int32 = 0x7FFFFFFF; let c: int32 = ~0;")
 
 
+def test_same_sign_widening_is_commutative():
+    # uint32 widens to uint64 regardless of operand order; result is uint64.
+    assert "zext" in main_ir("let a: uint64 = 1; let b: uint32 = 2; let c = a + b;")
+    assert "zext" in main_ir("let a: uint64 = 1; let b: uint32 = 2; let c = b + a;")
+
+
+def test_signed_widening_uses_sext():
+    assert "sext" in main_ir("let a: int64 = 1; let b: int32 = 2; let c = a + b;")
+
+
+def test_shift_count_widens_to_value_type():
+    # the shift count widens to the value's type (the result type)
+    assert "zext" in main_ir("let a: uint64 = 1; let b: uint32 = 2; let c = a << b;")
+
+
+def test_same_sign_widening_runtime_values():
+    assert run(
+        "fn main() -> int32 {\n"
+        "    let a: uint64 = 4000000000; let b: uint32 = 5;\n"
+        "    if (a + b != b + a) { return 1; }\n"        # commutative
+        "    if (a + b != 4000000005) { return 2; }\n"
+        "    let s: int64 = -5; let t: int32 = 2;\n"
+        "    if (s + t != -3) { return 3; }\n"           # signed widening
+        "    if (t + s != -3) { return 4; }\n"
+        "    return 0;\n"
+        "}"
+    ) == 0
+
+
+@pytest.mark.parametrize(
+    "source, message",
+    [
+        # mixed signedness never widens implicitly
+        ("let a: uint32 = 1; let b: int32 = 2; let c = a + b;",
+         "operand of '\\+': expected"),
+        ("let a: uint64 = 1; let b: int32 = 2; let c = a + b;",
+         "operand of '\\+': expected"),
+        # the (wider) result cannot be stored back into a narrower type
+        ("let a: uint64 = 1; let b: uint32 = 2; let c: uint32 = a + b;",
+         "expected uint32, got uint64"),
+        # widening is NOT implicit when crossing into a typed slot: assignment
+        # of a narrower value to a wider variable still needs an explicit cast.
+        ("let b: uint16 = 2; let x: uint32 = b;", "expected uint32, got uint16"),
+        # a plain narrowing assignment still needs a cast
+        ("let a: uint64 = 1; let b: uint32 = a;", "expected uint32, got uint64"),
+    ],
+)
+def test_widening_does_not_narrow_or_mix_signs(source, message):
+    with pytest.raises(LangError, match=message):
+        main_ir(source)
+
+
 def test_missing_return_in_main_is_implicit_zero():
     ir_text = compile_ir("fn main() -> int32 {}")
     assert "ret i32 0" in ir_text
@@ -175,6 +227,7 @@ def test_uninstantiated_template_emits_nothing():
         ("fn f<T>(a: T, b: T) {} fn main() -> int32 "
          "{ let x: int32 = 1; let y: int64 = 2; f(x, y); return 0; }",
          "conflicting types for type parameter T in call to 'f': int32 vs int64"),
+        # arguments do not implicitly widen -- only binary operands do
         ("fn f<T>(a: T, b: T) {} fn main() -> int32 "
          "{ let x: int32 = 1; let y: int64 = 2; f<int64>(x, y); return 0; }",
          "argument 1 of 'f': expected int64, got int32"),

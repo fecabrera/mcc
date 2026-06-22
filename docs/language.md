@@ -542,15 +542,45 @@ that holds the value: `7` is `int32` — so `printf("%d", 7)` matches C's
 no silent truncation. Constant integer arithmetic folds at compile time and
 stays untyped, widening as needed (`1 + 5000000000` is `int64`;
 `10 * sizeof(int64)` is `uint64` because `sizeof` is typed; `2 + 3` is
-still untyped). There are no other implicit conversions: operands of a
-binary operator must have the same type.
+still untyped).
 
-The guiding principle: **untyped integer constants adapt to fit, but a typed
-value keeps its type** — to use it at a different width or signedness, convert
-it explicitly with `as`. So `let x: uint64 = 1 << 40;` just works (the untyped
-`1` widens), but a `uint32` value shifted that far needs `(v as uint64) << 40`.
-That keeps numeric code type-safe — no implicit promotions, C's classic source
-of sign and width bugs — while leaving untyped constants ergonomic.
+The one implicit conversion between typed values is **lossless widening inside
+an expression**: when a binary operator combines two integers of the **same
+signedness**, the narrower one is extended to the wider, and the result is the
+wider type. Because both sides meet at the wider type, the operator stays
+commutative — `a + b` and `b + a` agree — so arithmetic like `a + b * c` over
+mixed widths needs no per-term casts:
+
+```c
+let a: uint64 = 1;
+let b: uint32 = 2;
+let c: uint16 = 3;
+let r = a + b * c;         // uint64: b and c widen as the expression combines
+```
+
+Crucially, this applies **only between operands within an expression** — never
+when a value crosses into a named typed slot. Assignment, `return`, and call
+arguments still require the types to match (untyped constants aside), so a
+widening there is explicit:
+
+```c
+let b: uint32 = 2;
+let x: uint64 = b;         // error: assigning uint32 to uint64 needs `b as uint64`
+let y: uint64 = b + 0;     // ok: widening happens inside the expression
+```
+
+The guiding principle: **a value never narrows or changes signedness
+implicitly, and only crosses widths automatically while being combined in an
+expression.** Narrowing to a smaller type, crossing between signed and
+unsigned, or widening on the way into a variable/return/argument all need an
+explicit `as`. So `let z: uint32 = a + b;` is an error (the `uint64` result
+would narrow) and `uint32 + int32` is an error (mixed signedness). That keeps
+storage boundaries deliberate while sparing you casts mid-calculation.
+
+A shift follows the same in-expression rule but is not symmetric: the right
+operand is a count, so the result keeps the **left** operand's type and the
+count widens to it. `let x: uint64 = 1 << 40;` works (the untyped `1` widens),
+but a `uint32` value shifted that far still needs `(v as uint64) << 40`.
 
 Signedness changes behavior, not representation: unsigned types use unsigned
 division, remainder, and comparisons, and zero-extend instead of sign-extend

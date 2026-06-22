@@ -517,6 +517,7 @@ def type_size(lang_type: LangType) -> int:
 
 
 COMPARISON_OPS = ("==", "!=", "<", "<=", ">", ">=")
+SHIFT_OPS = ("<<", ">>")
 
 
 def fold_int_arithmetic(op: str, a: int, b: int, lang_type: LangType) -> int | None:
@@ -1960,6 +1961,38 @@ class CodeGen:
         if expected == RAWPTR and is_pointer(tv.type):
             return TypedValue(self.builder.bitcast(tv.value, RAWPTR.ir), RAWPTR)
         raise LangError(f"{context}: expected {expected}, got {tv.type}", line)
+
+    def widen_operand(
+        self, tv: TypedValue, target: LangType, line: int, context: str
+    ) -> TypedValue:
+        """Coerce a binary operand, allowing lossless same-signedness widening.
+
+        Unlike :meth:`coerce` (used for assignment, ``return``, and arguments,
+        which keep widening explicit), arithmetic widens a narrower integer to a
+        wider one of the same signedness so an expression like ``a + b * c`` need
+        not cast every term. Narrowing and mixed signedness still raise, via the
+        fallback to :meth:`coerce`.
+
+        Args:
+            tv: The operand to widen or check.
+            target: The type to bring it to.
+            line: Source line for diagnostics.
+            context: A label describing the site, for the error message.
+
+        Returns:
+            ``tv`` widened to ``target`` (or unchanged when already that type).
+        """
+        if (
+            is_integer(tv.type)
+            and is_integer(target)
+            and tv.type.signed == target.signed
+            and tv.type.ir.width < target.ir.width
+        ):
+            if isinstance(tv.value, ir.Constant):  # fold without a builder
+                return TypedValue(ir.Constant(target.ir, tv.value.constant), target)
+            extend = self.builder.sext if target.signed else self.builder.zext
+            return TypedValue(extend(tv.value, target.ir), target)
+        return self.coerce(tv, target, line, context)
 
     def gen_load(
         self, addr, *, align: int | None = None, volatile: bool = False, name: str = ""
@@ -4360,21 +4393,37 @@ class CodeGen:
         """
         lhs = self.gen_expr(expr.lhs)
         rhs = self.gen_expr(expr.rhs)
-        if lhs.type != rhs.type:
-            # An untyped constant operand may adapt to the other side's type;
-            # two untyped constants widen to the larger so neither narrows.
-            if (
-                lhs.adaptable
-                and rhs.adaptable
-                and is_integer(lhs.type)
-                and is_integer(rhs.type)
-            ):
+        if expr.op in SHIFT_OPS:
+            # The right operand of a shift is a count, not a peer: the result
+            # keeps the left operand's type, and the count widens to it.
+            if lhs.type != rhs.type:
+                rhs = self.widen_operand(
+                    rhs, lhs.type, expr.line, f"shift count of {expr.op!r}"
+                )
+        elif lhs.type != rhs.type:
+            ctx = f"operand of {expr.op!r}"
+            both_int = is_integer(lhs.type) and is_integer(rhs.type)
+            # An untyped constant operand adapts to the other side's type.
+            if rhs.adaptable and not lhs.adaptable:
+                rhs = self.coerce(rhs, lhs.type, expr.line, ctx)
+            elif lhs.adaptable and not rhs.adaptable:
+                lhs = self.coerce(lhs, rhs.type, expr.line, ctx)
+            elif lhs.adaptable and rhs.adaptable and both_int:
+                # Two untyped constants: widen to the larger, staying adaptable
+                # (so neither narrows and the result can still fold/adapt).
                 wide = wider_int_type(lhs.type, rhs.type)
                 lhs, rhs = widen_to(lhs, wide), widen_to(rhs, wide)
-            elif rhs.adaptable:
-                rhs = self.coerce(rhs, lhs.type, expr.line, f"operand of {expr.op!r}")
+            elif both_int and lhs.type.signed == rhs.type.signed:
+                # Two typed integers of the same signedness: widen the narrower
+                # to the wider; the result is the wider type. This applies only
+                # within an expression -- crossing into a typed slot (assignment,
+                # return, argument) still needs an explicit cast. (Mixed
+                # signedness falls through to the type error below.)
+                wide = wider_int_type(lhs.type, rhs.type)
+                lhs = self.widen_operand(lhs, wide, expr.line, ctx)
+                rhs = self.widen_operand(rhs, wide, expr.line, ctx)
             else:
-                lhs = self.coerce(lhs, rhs.type, expr.line, f"operand of {expr.op!r}")
+                lhs = self.coerce(lhs, rhs.type, expr.line, ctx)
         op_type = lhs.type
         if expr.op in COMPARISON_OPS:
             if is_pointer(op_type) or is_function(op_type):
