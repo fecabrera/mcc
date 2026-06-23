@@ -2058,9 +2058,13 @@ class CodeGen:
             else:
                 # Evaluate the result before the defers run, so a defer that
                 # frees a buffer cannot clobber what is being returned.
-                tv = self.coerce(
-                    self.gen_expr(stmt.value), self.ret_type, stmt.line, "return value"
-                )
+                tv = self.gen_expr(stmt.value)
+                if tv.type is VOID:
+                    # `return f();` where f is void: there is no void value to
+                    # return (matching `let x = f();`). Call f as a statement
+                    # and use a bare `return;` instead.
+                    raise LangError("cannot return a void value", stmt.line)
+                tv = self.coerce(tv, self.ret_type, stmt.line, "return value")
                 self.run_defers_through(0)
                 if not self.builder.block.is_terminated:
                     self.builder.ret(tv.value)

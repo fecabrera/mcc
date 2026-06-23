@@ -217,6 +217,12 @@ def test_uninstantiated_template_emits_nothing():
          "may end without a return"),
         ("fn main() -> int32 { let v: void = 1; return 0; }", "void variable"),
         ("fn main() -> int32 { let v: void; return 0; }", "void variable"),
+        # `return f();` where f is void has no value to return -- rejected like
+        # `let x = f();`, rather than emitting a malformed `ret void <value>`.
+        ("fn f() {} fn g() { return f(); } fn main() -> int32 { g(); return 0; }",
+         "cannot return a void value"),
+        ("fn f() {} fn g() -> int32 { return f(); } fn main() -> int32 { return g(); }",
+         "cannot return a void value"),
         ("fn main() -> int32 { let x: int32; let x: int32; return 0; }",
          "already declared"),
         ("fn main() -> int32 { break; return 0; }", "'break' outside a loop"),
