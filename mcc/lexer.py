@@ -10,14 +10,14 @@ from mcc.errors import LangError
 KEYWORDS = {"fn", "return", "let", "const", "if", "else", "while", "until",
             "break", "continue", "defer", "for", "in", "case", "when", "and",
             "or", "true", "false", "import", "as", "sizeof", "len", "struct",
-            "extends", "null", "emit"}
+            "extends", "null", "emit", "enum"}
 
 TOKEN_SPEC = [
     ("COMMENT", r"//[^\n]*|/\*(?s:.*?)\*/"),
     ("WS", r"[ \t\r\n]+"),
     ("ARROW", r"->"),
     ("ELLIPSIS", r"\.\.\."),
-    ("OP2", r"==|!=|<=|>=|<<|>>"),
+    ("OP2", r"==|!=|<=|>=|<<|>>|::"),
     ("ANNOT", r"@[A-Za-z_]\w*"),
     ("FLOAT", r"\d+\.\d+(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+"),
     ("INT", r"0[xX][0-9a-fA-F]+|\d+"),

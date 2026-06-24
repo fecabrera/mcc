@@ -37,6 +37,8 @@ from mcc.nodes import (
     Continue,
     Defer,
     Emit,
+    EnumAccess,
+    EnumDecl,
     ExprStmt,
     FloatLit,
     For,
@@ -159,6 +161,23 @@ class BlockExprCtx:
     defer_depth: int
     slot: object = None
     type: "LangType | None" = None
+
+
+@dataclass
+class EnumType:
+    """A resolved ``enum``: its underlying type and folded members.
+
+    Attributes:
+        underlying: The ``LangType`` the enum aliases and its members carry.
+        members: Member name -> its folded constant ``TypedValue``.
+        private: ``@private`` -- usable only within ``source``.
+        source: The file the enum was declared in.
+    """
+
+    underlying: LangType
+    members: dict
+    private: bool
+    source: "str | None"
 
 
 def pointer_to(lang_type: LangType) -> LangType:
@@ -744,6 +763,10 @@ class CodeGen:
         self.instances: dict[tuple[int, tuple[str, ...]], str] = {}
         self.struct_templates: dict[str, StructDecl] = {}
         self.struct_types: dict[str, LangType] = {}  # mangled name -> instance
+        # Enums: name -> EnumType. @static enums are file-scoped, keyed by
+        # (source, name) so other files may reuse the name (like @static structs).
+        self.enums: dict[str, EnumType] = {}
+        self.static_enums: dict[tuple[str | None, str], EnumType] = {}
         # Mangled names whose `extends` base is currently being resolved, so a
         # cyclic `extends` (A extends B extends A) is caught instead of looping.
         self.resolving_bases: set[str] = set()
@@ -1079,6 +1102,8 @@ class CodeGen:
                     self.program.globals.append(item)
                 elif isinstance(item, Const):
                     self.program.consts.append(item)
+                elif isinstance(item, EnumDecl):
+                    self.program.enums.append(item)
                 else:
                     self.program.functions.append(item)
 
@@ -1125,6 +1150,92 @@ class CodeGen:
             for i, ((name, _), ptype) in enumerate(zip(func.params, params))
             if name in func.const_params and is_struct(ptype)
         )
+
+    def lookup_enum(self, name: str) -> "EnumType | None":
+        """Resolve an enum name, preferring a file-scoped ``@static`` one.
+
+        Args:
+            name: The enum's name.
+
+        Returns:
+            The matching ``EnumType``, or ``None`` when no enum has that name in
+            scope. A same-named ``@static`` enum in the current file shadows a
+            global one, exactly as ``@static`` structs do.
+        """
+        static = self.static_enums.get((self.current_source, name))
+        return static if static is not None else self.enums.get(name)
+
+    def register_enum(self, decl: EnumDecl):
+        """Resolve an enum's underlying type and fold its member constants.
+
+        Registers the enum before folding its members so a member's value may
+        reference an earlier member of the same enum (``B = A + 1``). Each member
+        is folded as a compile-time constant and coerced to the underlying type,
+        which it then carries (non-adaptable, like a typed ``const``).
+
+        Args:
+            decl: The enum declaration to register.
+
+        Raises:
+            LangError: On a name clash, a duplicate member, or a member value
+                that is not a constant of the underlying type.
+        """
+        self.current_source = decl.source
+        underlying = (
+            self.lang_type(decl.underlying, decl.line)
+            if decl.underlying is not None
+            else INT32
+        )
+        if underlying is VOID:
+            raise LangError(f"enum {decl.name!r} cannot have a void type", decl.line)
+        enum = EnumType(underlying, {}, decl.private, decl.source)
+        if decl.static:
+            key = (decl.source, decl.name)
+            if key in self.static_enums or key in self.static_structs:
+                raise LangError(f"type {decl.name!r} already defined", decl.line)
+            self.static_enums[key] = enum
+        else:
+            if (
+                decl.name in TYPES
+                or decl.name in self.enums
+                or decl.name in self.struct_templates
+            ):
+                raise LangError(f"type {decl.name!r} already defined", decl.line)
+            self.enums[decl.name] = enum
+        for mname, vexpr in decl.members:
+            if mname in enum.members:
+                raise LangError(
+                    f"enum {decl.name!r} has a duplicate member {mname!r}", decl.line
+                )
+            value = self.eval_const(vexpr, decl.line)
+            value = self.const_coerce(
+                value, underlying, decl.line, f"enum member {decl.name}::{mname}"
+            )
+            enum.members[mname] = TypedValue(value.value, underlying)
+
+    def resolve_enum_access(self, expr: EnumAccess) -> TypedValue:
+        """Resolve an ``Enum::Member`` to its folded constant value.
+
+        Args:
+            expr: The ``EnumAccess`` node.
+
+        Returns:
+            The member's constant ``TypedValue``.
+
+        Raises:
+            LangError: On an unknown enum, a missing member, or a ``@private``
+                enum referenced from another file.
+        """
+        enum = self.lookup_enum(expr.enum)
+        if enum is None:
+            raise LangError(f"unknown enum {expr.enum!r}", expr.line)
+        self.check_access(enum.private, enum.source, f"enum {expr.enum!r}", expr.line)
+        member = enum.members.get(expr.member)
+        if member is None:
+            raise LangError(
+                f"enum {expr.enum!r} has no member {expr.member!r}", expr.line
+            )
+        return member
 
     def lang_type(self, ref: TypeRef, line: int) -> LangType:
         """Resolve a parsed ``TypeRef`` to a ``LangType``.
@@ -1179,6 +1290,11 @@ class CodeGen:
                 )
             args = tuple(self.lang_type(a, line) for a in ref.args)
             base = self.instantiate_struct(decl, args)
+        elif (enum := self.lookup_enum(ref.name)) is not None:
+            if ref.args:
+                raise LangError(f"enum {ref.name!r} is not generic", line)
+            self.check_access(enum.private, enum.source, f"enum {ref.name!r}", line)
+            base = enum.underlying
         else:
             raise LangError(f"unknown type {ref.name!r}", line)
         if ref.stars and base is VOID:
@@ -1540,6 +1656,11 @@ class CodeGen:
                 )
             self.consts[const.name] = value
             self.const_privacy[const.name] = (const.private, const.source)
+        # Enums are registered after consts, so a member's value may use one;
+        # they are folded in source order, so a member may reference any enum
+        # member declared earlier (including earlier members of the same enum).
+        for decl in self.program.enums:
+            self.register_enum(decl)
         # An @static initializer may name a function (a constant function
         # pointer), so its evaluation waits until functions are declared below.
         deferred_static_inits = []
@@ -2739,6 +2860,8 @@ class CodeGen:
             return self.gen_binary(expr)
         if isinstance(expr, Cast):
             return self.gen_cast(expr)
+        if isinstance(expr, EnumAccess):
+            return self.resolve_enum_access(expr)
         if isinstance(expr, Asm):
             return self.gen_asm(expr)
         if isinstance(expr, SizeOf):
@@ -3428,6 +3551,8 @@ class CodeGen:
                 "a compile-time constant",
                 expr.line,
             )
+        if isinstance(expr, EnumAccess):
+            return self.resolve_enum_access(expr)
         if isinstance(expr, Unary):
             return self.eval_const_unary(expr)
         if isinstance(expr, Cast):

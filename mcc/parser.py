@@ -25,6 +25,8 @@ from mcc.nodes import (
     Continue,
     Defer,
     Emit,
+    EnumAccess,
+    EnumDecl,
     ExprStmt,
     FloatLit,
     For,
@@ -167,7 +169,8 @@ class Parser:
             LangError: On any syntax error in the file.
         """
         imports = []
-        structs, functions, globals_, consts, conditionals = [], [], [], [], []
+        structs, functions, globals_, consts, conditionals, enums = (
+            [], [], [], [], [], [])
         while self.cur.kind == "import":
             line = self.advance().line
             path = self.expect("STRING").text[1:-1]
@@ -181,9 +184,12 @@ class Parser:
                 GlobalVar: globals_,
                 Const: consts,
                 Conditional: conditionals,
+                EnumDecl: enums,
             }[type(item)]
             target.append(item)
-        return Program(imports, structs, functions, globals_, consts, conditionals)
+        return Program(
+            imports, structs, functions, globals_, consts, conditionals, enums
+        )
 
     def parse_toplevel_block(self) -> list:
         """Parse a brace-delimited group of top-level declarations.
@@ -318,6 +324,19 @@ class Parser:
             if extern:
                 raise LangError("@extern does not apply to structs", self.cur.line)
             return self.parse_struct(private, static, align, packed, volatile)
+        if self.cur.kind == "enum":
+            if extern:
+                raise LangError("@extern does not apply to enums", self.cur.line)
+            if inline:
+                raise LangError(
+                    "@inline only applies to functions with a body", self.cur.line
+                )
+            if volatile:
+                raise LangError(
+                    "@volatile only applies to structs and extern variables",
+                    self.cur.line,
+                )
+            return self.parse_enum(private, static)
         if self.cur.kind == "let":
             line = self.advance().line
             if not extern and not static:
@@ -609,6 +628,39 @@ class Parser:
         if ref.stars or ref.dims or ref.params is not None:
             raise LangError("a struct can only extend a struct name", self.cur.line)
         return ref
+
+    def parse_enum(self, private: bool = False, static: bool = False) -> EnumDecl:
+        """Parse an ``enum`` declaration.
+
+        ``enum Name[: type] { Member = value, ... }`` -- the underlying type is
+        optional (defaulting to ``int32``), each member carries an explicit
+        ``= value`` expression, and a trailing comma is allowed.
+
+        Args:
+            private: Whether ``@private`` was applied.
+            static: Whether ``@static`` was applied.
+
+        Returns:
+            The parsed ``EnumDecl``.
+
+        Raises:
+            LangError: When the enum has no members.
+        """
+        line = self.expect("enum").line
+        name = self.expect("IDENT").text
+        underlying = self.parse_type_ref() if self.accept(":") else None
+        self.expect("{")
+        members = []
+        while self.cur.kind != "}":
+            mname = self.expect("IDENT").text
+            self.expect("=")
+            members.append((mname, self.parse_expr()))
+            if not self.accept(","):  # a trailing comma is allowed
+                break
+        self.expect("}")
+        if not members:
+            raise LangError(f"enum {name!r} has no members", line)
+        return EnumDecl(name, underlying, members, line, private=private, static=static)
 
     def parse_function(
         self,
@@ -1209,6 +1261,10 @@ class Parser:
             self.expect(")")
             return Len(operand, tok.line)
         if tok.kind == "IDENT":
+            if self.cur.kind == "::":
+                self.advance()
+                member = self.expect("IDENT").text
+                return EnumAccess(tok.text, member, tok.line)
             type_args = self.try_type_args() if self.cur.kind == "<" else []
             if self.cur.kind != "(":
                 return Var(tok.text, tok.line)

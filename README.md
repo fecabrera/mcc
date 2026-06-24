@@ -232,6 +232,8 @@ reference section.
 - [x] [Structs](docs/language.md#structs) — `.`/`->` access, generics,
       `@packed`/`@align`/`@volatile`, `extends` (prefix specialization),
       struct value upcast
+- [x] [Enums](docs/language.md#enums) — `enum Name[: type] { … }`, `Name::Member`
+      constants over any underlying type, the name usable as a type
 - [x] [Imports](docs/language.md#imports) — bare-name resolution, search paths
 - [x] [Visibility](docs/language.md#visibility) — `@private`, `@static`
 - [x] [Extern declarations](docs/language.md#extern-declarations) — `@extern`, `@symbol`

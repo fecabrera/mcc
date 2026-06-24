@@ -88,6 +88,7 @@ module.exports = grammar({
     _declaration: ($) =>
       choice(
         $.struct_declaration,
+        $.enum_declaration,
         $.function_definition,
         $.extern_function,
         $.global_variable,
@@ -107,6 +108,20 @@ module.exports = grammar({
 
     field_list: ($) =>
       seq('{', repeat(seq(field('name', $.identifier), ':', $._type, ';')), '}'),
+
+    enum_declaration: ($) =>
+      seq(
+        repeat($.annotation),
+        'enum',
+        field('name', alias($.identifier, $.type_identifier)),
+        optional(seq(':', field('underlying', $._type))),
+        $.enum_body,
+      ),
+
+    enum_body: ($) => seq('{', commaSep($.enum_member), optional(','), '}'),
+
+    enum_member: ($) =>
+      seq(field('name', $.identifier), '=', field('value', $._expression)),
 
     type_parameters: ($) => seq('<', commaSep1(alias($.identifier, $.type_identifier)), '>'),
 
@@ -359,6 +374,7 @@ module.exports = grammar({
         $.char,
         $.boolean,
         $.null,
+        $.enum_access,
         $.identifier_expression,
         $.parenthesized_expression,
         $.block_expression,
@@ -366,6 +382,13 @@ module.exports = grammar({
         $.sizeof_expression,
         $.len_expression,
         $.asm_expression,
+      ),
+
+    enum_access: ($) =>
+      seq(
+        field('enum', alias($.identifier, $.type_identifier)),
+        '::',
+        field('member', $.identifier),
       ),
 
     identifier_expression: ($) => $.identifier,

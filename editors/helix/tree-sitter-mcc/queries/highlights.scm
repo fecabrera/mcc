@@ -39,12 +39,17 @@
 (field_list name: (identifier) @variable.other.member)
 (member_expression field: (identifier) @variable.other.member)
 
+; Enum members are named compile-time constants.
+(enum_member name: (identifier) @constant)
+(enum_access member: (identifier) @constant)
+
 ; ----------------------------------------------------------------- keywords
 [
   "fn"
   "let"
   "const"
   "struct"
+  "enum"
   "extends"
 ] @keyword
 
@@ -106,6 +111,7 @@
   ">"
   "."
   "?"
+  "::"
 ] @operator
 
 ; ------------------------------------------------------------- punctuation

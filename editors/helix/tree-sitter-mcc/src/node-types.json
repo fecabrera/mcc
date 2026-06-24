@@ -74,6 +74,10 @@
           "named": true
         },
         {
+          "type": "enum_access",
+          "named": true
+        },
+        {
           "type": "float",
           "named": true
         },
@@ -166,6 +170,10 @@
         },
         {
           "type": "char",
+          "named": true
+        },
+        {
+          "type": "enum_access",
           "named": true
         },
         {
@@ -383,6 +391,10 @@
             "named": true
           },
           {
+            "type": "enum_access",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -470,6 +482,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "enum_access",
             "named": true
           },
           {
@@ -637,6 +653,10 @@
         },
         {
           "type": "char",
+          "named": true
+        },
+        {
+          "type": "enum_access",
           "named": true
         },
         {
@@ -889,6 +909,10 @@
             "named": true
           },
           {
+            "type": "enum_access",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -992,6 +1016,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "enum_access",
             "named": true
           },
           {
@@ -1150,6 +1178,10 @@
           "named": true
         },
         {
+          "type": "enum_access",
+          "named": true
+        },
+        {
           "type": "float",
           "named": true
         },
@@ -1275,6 +1307,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "enum_access",
             "named": true
           },
           {
@@ -1432,6 +1468,10 @@
             "named": true
           },
           {
+            "type": "enum_access",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -1536,6 +1576,10 @@
         },
         {
           "type": "const_declaration",
+          "named": true
+        },
+        {
+          "type": "enum_declaration",
           "named": true
         },
         {
@@ -1751,6 +1795,10 @@
           "named": true
         },
         {
+          "type": "enum_access",
+          "named": true
+        },
+        {
           "type": "float",
           "named": true
         },
@@ -1806,6 +1854,221 @@
     }
   },
   {
+    "type": "enum_access",
+    "named": true,
+    "fields": {
+      "enum": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      },
+      "member": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "enum_body",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "enum_member",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "enum_declaration",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      },
+      "underlying": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "array_type",
+            "named": true
+          },
+          {
+            "type": "function_type",
+            "named": true
+          },
+          {
+            "type": "grouped_type",
+            "named": true
+          },
+          {
+            "type": "pointer_type",
+            "named": true
+          },
+          {
+            "type": "struct",
+            "named": false
+          },
+          {
+            "type": "type_arguments",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "annotation",
+          "named": true
+        },
+        {
+          "type": "enum_body",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "enum_member",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "array_expression",
+            "named": true
+          },
+          {
+            "type": "asm_expression",
+            "named": true
+          },
+          {
+            "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block_expression",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "cast_expression",
+            "named": true
+          },
+          {
+            "type": "char",
+            "named": true
+          },
+          {
+            "type": "enum_access",
+            "named": true
+          },
+          {
+            "type": "float",
+            "named": true
+          },
+          {
+            "type": "identifier_expression",
+            "named": true
+          },
+          {
+            "type": "index_expression",
+            "named": true
+          },
+          {
+            "type": "len_expression",
+            "named": true
+          },
+          {
+            "type": "logical_expression",
+            "named": true
+          },
+          {
+            "type": "member_expression",
+            "named": true
+          },
+          {
+            "type": "null",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "sizeof_expression",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "ternary_expression",
+            "named": true
+          },
+          {
+            "type": "unary_expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "expression_statement",
     "named": true,
     "fields": {},
@@ -1843,6 +2106,10 @@
         },
         {
           "type": "char",
+          "named": true
+        },
+        {
+          "type": "enum_access",
           "named": true
         },
         {
@@ -2117,6 +2384,10 @@
             "named": true
           },
           {
+            "type": "enum_access",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -2365,6 +2636,10 @@
             "named": true
           },
           {
+            "type": "enum_access",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -2610,6 +2885,10 @@
             "named": true
           },
           {
+            "type": "enum_access",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -2784,6 +3063,10 @@
             "named": true
           },
           {
+            "type": "enum_access",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -2871,6 +3154,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "enum_access",
             "named": true
           },
           {
@@ -2967,6 +3254,10 @@
         },
         {
           "type": "char",
+          "named": true
+        },
+        {
+          "type": "enum_access",
           "named": true
         },
         {
@@ -3076,6 +3367,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "enum_access",
             "named": true
           },
           {
@@ -3201,6 +3496,10 @@
           "named": true
         },
         {
+          "type": "enum_access",
+          "named": true
+        },
+        {
           "type": "float",
           "named": true
         },
@@ -3293,6 +3592,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "enum_access",
             "named": true
           },
           {
@@ -3481,6 +3784,10 @@
           "named": true
         },
         {
+          "type": "enum_access",
+          "named": true
+        },
+        {
           "type": "float",
           "named": true
         },
@@ -3618,6 +3925,10 @@
           "named": true
         },
         {
+          "type": "enum_access",
+          "named": true
+        },
+        {
           "type": "float",
           "named": true
         },
@@ -3729,6 +4040,10 @@
         },
         {
           "type": "const_declaration",
+          "named": true
+        },
+        {
+          "type": "enum_declaration",
           "named": true
         },
         {
@@ -3863,6 +4178,10 @@
             "named": true
           },
           {
+            "type": "enum_access",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -3953,6 +4272,10 @@
             "named": true
           },
           {
+            "type": "enum_access",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -4040,6 +4363,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "enum_access",
             "named": true
           },
           {
@@ -4223,6 +4550,10 @@
           "named": true
         },
         {
+          "type": "enum_access",
+          "named": true
+        },
+        {
           "type": "float",
           "named": true
         },
@@ -4347,6 +4678,10 @@
         },
         {
           "type": "emit_statement",
+          "named": true
+        },
+        {
+          "type": "enum_access",
           "named": true
         },
         {
@@ -4531,6 +4866,10 @@
             "named": true
           },
           {
+            "type": "enum_access",
+            "named": true
+          },
+          {
             "type": "float",
             "named": true
           },
@@ -4643,6 +4982,10 @@
     "named": false
   },
   {
+    "type": "::",
+    "named": false
+  },
+  {
     "type": ";",
     "named": false
   },
@@ -4741,6 +5084,10 @@
   },
   {
     "type": "emit",
+    "named": false
+  },
+  {
+    "type": "enum",
     "named": false
   },
   {

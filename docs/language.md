@@ -934,6 +934,52 @@ table [lib/set.mc](lib/set.mc) (borrowing, identity-keyed), and the
 string-keyed [lib/dict.mc](lib/dict.mc), which owns copies of its keys and
 compares them by content.
 
+## Enums
+
+An `enum` is a named set of compile-time constants. The declaration names the
+enum, an optional underlying type (defaulting to `int32`), and one or more
+members, each with an explicit value:
+
+```c
+enum Color: int32 {
+    Red   = 0,
+    Green = 1,
+    Blue  = 2,
+}
+```
+
+A member is read as `Enum::Member` — `Color::Green` — and folds to a constant
+of the underlying type, with no storage emitted (like a [const](#constants)).
+The enum's name is also usable as a type, aliasing the underlying type, so it
+can annotate variables, parameters, return types, struct fields, and arrays:
+
+```c
+fn name_of(c: Color) -> uint8* {
+    case (c) {
+        when Color::Red:   return "red";
+        when Color::Green: return "green";
+        else:              return "blue";
+    }
+}
+
+let palette: Color[3] = [Color::Red, Color::Green, Color::Blue];
+```
+
+The underlying type may be any type, and a member's value any constant
+expression that resolves to it — so an enum can carry flags, wide values, or
+even strings:
+
+```c
+enum Flags: uint64 { A = 1 << 0, B = 1 << 1, High = 1 << 40 }
+enum Msg:   uint8* { Hi = "hello", Bye = "bye" }
+```
+
+A member may reference an earlier member of the same enum (`B = E::A + 1`) or
+any other constant already in scope. Members are typed exactly as the
+underlying type and do not silently adapt to other types — assign across types
+with an explicit [cast](#casts). An enum may be `@private` to its file or
+`@static` (file-scoped, so other files may reuse the name), like a struct.
+
 ## Imports
 
 `import "file";` at the top of a file compiles another `.mc` file into the

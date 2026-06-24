@@ -68,6 +68,7 @@ class Program:
         globals: Top-level variables (``@extern`` or ``@static``).
         consts: Named compile-time constants.
         conditionals: Top-level ``@if`` blocks selecting whole declarations.
+        enums: Enumeration declarations.
     """
 
     imports: list[tuple[str, int]]
@@ -76,6 +77,7 @@ class Program:
     globals: list["GlobalVar"]
     consts: list["Const"] = field(default_factory=list)
     conditionals: list["Conditional"] = field(default_factory=list)
+    enums: list["EnumDecl"] = field(default_factory=list)
 
 
 @dataclass
@@ -110,6 +112,35 @@ class StructDecl:
     align: int | None = None
     packed: bool = False
     volatile: bool = False
+    source: str | None = None
+
+
+@dataclass
+class EnumDecl:
+    """An ``enum`` declaration: a named set of compile-time constants.
+
+    ``enum Color: int32 { Red = 0, Green = 1, ... }`` introduces ``Color`` as a
+    type aliasing its underlying type, plus a constant ``Color::Red`` of that
+    type for each member. The underlying type may be any type; a member's value
+    is any expression that folds to a constant of it.
+
+    Attributes:
+        name: The enum's name, usable both as a type and as the ``::`` scope.
+        underlying: The underlying ``TypeRef``, or ``None`` to default to
+            ``int32``.
+        members: ``(name, value expression)`` pairs in declaration order.
+        line: Source line for diagnostics.
+        private: ``@private`` -- usable only within its source file.
+        static: ``@static`` -- file-scoped name other files may reuse.
+        source: Defining file, stamped by the driver.
+    """
+
+    name: str
+    underlying: TypeRef | None
+    members: list[tuple[str, object]]
+    line: int
+    private: bool = False
+    static: bool = False
     source: str | None = None
 
 
@@ -772,6 +803,24 @@ class Member:
     base: object
     field: str
     arrow: bool
+    line: int
+
+
+@dataclass
+class EnumAccess:
+    """A scoped enum member: ``Enum::Member``.
+
+    Resolves to the member's compile-time constant value, typed as the enum's
+    underlying type.
+
+    Attributes:
+        enum: The enum's name.
+        member: The member name.
+        line: Source line for diagnostics.
+    """
+
+    enum: str
+    member: str
     line: int
 
 
