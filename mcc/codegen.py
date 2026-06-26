@@ -45,6 +45,7 @@ from mcc.nodes import (
     Func,
     GlobalVar,
     If,
+    Import,
     Index,
     IntLit,
     Let,
@@ -317,6 +318,139 @@ def classify_arch(triple: str) -> str:
     if arch == "riscv64":
         return "ARCH_RISCV64"
     return "ARCH_UNKNOWN"
+
+
+def target_fact_values(target: str | None) -> dict[str, int]:
+    """The built-in target facts for a triple: ``TARGET_*`` and the enum names.
+
+    Args:
+        target: An LLVM target triple, or ``None`` for the host.
+
+    Returns:
+        A name -> value map of ``TARGET_OS``/``TARGET_ARCH`` plus every
+        ``OS_*``/``ARCH_*`` constant.
+    """
+    triple = (target or _host_triple()).lower()
+    values = {**TARGET_OS_VALUES, **TARGET_ARCH_VALUES}
+    values["TARGET_OS"] = TARGET_OS_VALUES[classify_os(triple)]
+    values["TARGET_ARCH"] = TARGET_ARCH_VALUES[classify_arch(triple)]
+    return values
+
+
+def compute_target_facts(
+    target: str | None, defines: dict[str, int] | None = None
+) -> dict[str, int]:
+    """The facts an ``@if`` condition sees: the target facts plus ``-D`` defines.
+
+    Used both by code generation and by the driver, which resolves conditional
+    imports before code generation runs.
+
+    Args:
+        target: An LLVM target triple, or ``None`` for the host.
+        defines: Command-line ``-D`` names mapped to integer values.
+
+    Returns:
+        A name -> value map combining the target facts and the defines.
+    """
+    return {**target_fact_values(target), **(defines or {})}
+
+
+def eval_static_value(expr, facts: dict[str, int]) -> int:
+    """Evaluate an ``@if`` condition to an integer against ``facts``.
+
+    Only ``facts`` names (an undefined one reads as 0), integer/bool literals,
+    comparisons, logical ``and``/``or``/``!``, and integer arithmetic are
+    allowed -- nothing that needs the runtime.
+
+    Args:
+        expr: The constant expression to evaluate.
+        facts: The target facts and ``-D`` defines in effect.
+
+    Returns:
+        The integer value of the expression.
+
+    Raises:
+        LangError: On a disallowed operator, division by zero, or a
+            non-constant expression.
+    """
+    if isinstance(expr, IntLit) or isinstance(expr, CharLit):
+        return expr.value
+    if isinstance(expr, BoolLit):
+        return int(expr.value)
+    if isinstance(expr, Var):
+        # A target fact or -D define resolves to its value; any other name is
+        # false, as in C's #if -- so @if(FEATURE) with no -DFEATURE in effect
+        # takes the @else branch instead of erroring.
+        return facts.get(expr.name, 0)
+    if isinstance(expr, Unary):
+        v = eval_static_value(expr.operand, facts)
+        if expr.op == "!":
+            return int(not v)
+        if expr.op == "-":
+            return -v
+        raise LangError(
+            f"operator {expr.op!r} is not allowed in an @if condition", expr.line
+        )
+    if isinstance(expr, Logical):
+        if expr.op == "and":
+            return int(
+                bool(eval_static_value(expr.lhs, facts))
+                and bool(eval_static_value(expr.rhs, facts))
+            )
+        return int(
+            bool(eval_static_value(expr.lhs, facts))
+            or bool(eval_static_value(expr.rhs, facts))
+        )
+    if isinstance(expr, Binary):
+        a = eval_static_value(expr.lhs, facts)
+        b = eval_static_value(expr.rhs, facts)
+        if expr.op in COMPARISON_OPS:
+            return int(
+                {
+                    "==": a == b,
+                    "!=": a != b,
+                    "<": a < b,
+                    "<=": a <= b,
+                    ">": a > b,
+                    ">=": a >= b,
+                }[expr.op]
+            )
+        if expr.op in ("/", "%") and b == 0:
+            raise LangError("division by zero in an @if condition", expr.line)
+        ops = {
+            "+": lambda: a + b,
+            "-": lambda: a - b,
+            "*": lambda: a * b,
+            "/": lambda: int(a / b) if (a < 0) != (b < 0) else a // b,
+            "%": lambda: a - b * (int(a / b) if (a < 0) != (b < 0) else a // b),
+            "&": lambda: a & b,
+            "|": lambda: a | b,
+            "^": lambda: a ^ b,
+            "<<": lambda: a << b,
+            ">>": lambda: a >> b,
+        }
+        if expr.op in ops:
+            return ops[expr.op]()
+    if isinstance(expr, Ternary):
+        chosen = expr.then if eval_static_value(expr.cond, facts) else expr.otherwise
+        return eval_static_value(chosen, facts)
+    raise LangError(
+        "an @if condition must be a constant expression over the target facts",
+        getattr(expr, "line", 0),
+    )
+
+
+def eval_static_cond(expr, facts: dict[str, int]) -> bool:
+    """Whether an ``@if`` condition holds: its value is nonzero, as in C's #if.
+
+    Args:
+        expr: The condition expression.
+        facts: The target facts and ``-D`` defines in effect.
+
+    Returns:
+        ``True`` when the condition evaluates nonzero.
+    """
+    return eval_static_value(expr, facts) != 0
 
 
 I32_ZERO = ir.Constant(ir.IntType(32), 0)
@@ -968,10 +1102,7 @@ class CodeGen:
         time. A bare-metal triple such as ``aarch64-unknown-none-elf`` reports
         ``OS_NONE`` / ``ARCH_AARCH64``.
         """
-        triple = (self.target or _host_triple()).lower()
-        values = {**TARGET_OS_VALUES, **TARGET_ARCH_VALUES}
-        values["TARGET_OS"] = TARGET_OS_VALUES[classify_os(triple)]
-        values["TARGET_ARCH"] = TARGET_ARCH_VALUES[classify_arch(triple)]
+        values = target_fact_values(self.target)
         for name, value in values.items():
             self.consts[name] = TypedValue(
                 ir.Constant(INT32.ir, value), INT32, adaptable=True
@@ -981,105 +1112,15 @@ class CodeGen:
         # command-line -D defines. Unlike the target facts, -D names are not
         # seeded as ordinary constants: they exist only for @if (an @if name
         # with no definition is simply false, as in C's #if).
-        self.target_facts = {**values, **self.defines}
+        self.target_facts = compute_target_facts(self.target, self.defines)
 
     def eval_static_cond(self, expr) -> bool:
-        """Evaluate whether a compile-time ``@if`` branch is taken.
-
-        The condition is a constant expression over the target facts
-        (``TARGET_OS``, ``TARGET_ARCH``, and the ``OS_*``/``ARCH_*`` names) and
-        the command-line ``-D`` defines; a nonzero result is true, as in C's
-        ``#if``. A name with no definition reads as 0.
-
-        Args:
-            expr: The condition expression.
-
-        Returns:
-            ``True`` when the condition evaluates nonzero.
-        """
-        return self.eval_static_value(expr) != 0
+        """Whether a compile-time ``@if`` branch is taken (see :func:`eval_static_cond`)."""
+        return eval_static_cond(expr, self.target_facts)
 
     def eval_static_value(self, expr) -> int:
-        """Evaluate an ``@if`` condition to an integer.
-
-        Only the target facts and ``-D`` defines (an undefined name reads as
-        0), integer/bool literals, comparisons, logical ``and``/``or``/``not``,
-        and integer arithmetic are allowed -- nothing that needs the runtime.
-
-        Args:
-            expr: The constant expression to evaluate.
-
-        Returns:
-            The integer value of the expression.
-
-        Raises:
-            LangError: On a disallowed operator, division by zero, or a
-                non-constant expression.
-        """
-        if isinstance(expr, IntLit) or isinstance(expr, CharLit):
-            return expr.value
-        if isinstance(expr, BoolLit):
-            return int(expr.value)
-        if isinstance(expr, Var):
-            # A target fact or -D define resolves to its value; any other name
-            # is false, as in C's #if -- so @if(FEATURE) with no -DFEATURE in
-            # effect takes the @else branch instead of erroring.
-            return self.target_facts.get(expr.name, 0)
-        if isinstance(expr, Unary):
-            v = self.eval_static_value(expr.operand)
-            if expr.op == "!":
-                return int(not v)
-            if expr.op == "-":
-                return -v
-            raise LangError(
-                f"operator {expr.op!r} is not allowed in an @if condition", expr.line
-            )
-        if isinstance(expr, Logical):
-            if expr.op == "and":
-                return int(
-                    bool(self.eval_static_value(expr.lhs))
-                    and bool(self.eval_static_value(expr.rhs))
-                )
-            return int(
-                bool(self.eval_static_value(expr.lhs))
-                or bool(self.eval_static_value(expr.rhs))
-            )
-        if isinstance(expr, Binary):
-            a, b = self.eval_static_value(expr.lhs), self.eval_static_value(expr.rhs)
-            if expr.op in COMPARISON_OPS:
-                return int(
-                    {
-                        "==": a == b,
-                        "!=": a != b,
-                        "<": a < b,
-                        "<=": a <= b,
-                        ">": a > b,
-                        ">=": a >= b,
-                    }[expr.op]
-                )
-            if expr.op in ("/", "%") and b == 0:
-                raise LangError("division by zero in an @if condition", expr.line)
-            ops = {
-                "+": lambda: a + b,
-                "-": lambda: a - b,
-                "*": lambda: a * b,
-                "/": lambda: int(a / b) if (a < 0) != (b < 0) else a // b,
-                "%": lambda: a - b * (int(a / b) if (a < 0) != (b < 0) else a // b),
-                "&": lambda: a & b,
-                "|": lambda: a | b,
-                "^": lambda: a ^ b,
-                "<<": lambda: a << b,
-                ">>": lambda: a >> b,
-            }
-            if expr.op in ops:
-                return ops[expr.op]()
-        if isinstance(expr, Ternary):
-            chosen = expr.then if self.eval_static_value(expr.cond) else expr.otherwise
-            return self.eval_static_value(chosen)
-        raise LangError(
-            "an @if condition must be a constant expression over the target facts",
-            getattr(expr, "line", 0),
-        )
+        """Evaluate an ``@if`` condition (see the module :func:`eval_static_value`)."""
+        return eval_static_value(expr, self.target_facts)
 
     def flatten_conditionals(self):
         """Resolve top-level ``@if`` blocks before anything is emitted.
@@ -1087,7 +1128,9 @@ class CodeGen:
         Evaluates each condition over the target facts and splices the live
         branch's declarations into the program in source order, dropping the
         dead branch entirely (it is parsed but never type-checked). Branches may
-        nest, so newly spliced conditionals are resolved in turn.
+        nest, so newly spliced conditionals are resolved in turn. Conditional
+        ``import``\\ s are ignored here -- the driver already resolved them while
+        merging, against the same conditions.
         """
         pending = list(self.program.conditionals)
         while pending:
@@ -1104,6 +1147,8 @@ class CodeGen:
                     self.program.consts.append(item)
                 elif isinstance(item, EnumDecl):
                     self.program.enums.append(item)
+                elif isinstance(item, Import):
+                    pass  # already merged by the driver
                 else:
                     self.program.functions.append(item)
 

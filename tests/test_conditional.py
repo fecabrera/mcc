@@ -281,9 +281,16 @@ def test_if_cannot_be_combined_with_annotations():
         parse("@private @if (TARGET_OS == OS_DARWIN) { fn f() {} }")
 
 
-def test_import_inside_if_is_rejected():
-    with pytest.raises(LangError, match="import is not allowed inside @if"):
-        parse('@if (TARGET_OS == OS_DARWIN) { import "x"; }')
+def test_import_inside_if_parses():
+    from mcc.nodes import Import
+    (cond,) = parse('@if (TARGET_OS == OS_DARWIN) { import "x"; }').conditionals
+    (item,) = cond.then
+    assert isinstance(item, Import) and item.path == "x"
+
+
+def test_stray_top_level_import_is_rejected():
+    with pytest.raises(LangError, match="import must precede all declarations"):
+        parse('fn a() -> int32 { return 0; }\nimport "x";')
 
 
 def test_disallowed_operator_in_condition():
@@ -327,3 +334,63 @@ def test_private_in_a_branch_stays_private(tmp_path):
     main.write_text('import "lib";\nfn main() -> int32 { return secret(); }')
     with pytest.raises(LangError, match="function 'secret' is private"):
         run_path(main)
+
+
+# --- conditional imports: @if branches may carry `import`s ---
+
+def test_conditional_import_selected_by_define(tmp_path):
+    from helpers import _execute
+    from mcc.driver import compile_to_ir
+    (tmp_path / "a.mc").write_text("fn pid() -> int32 { return 1; }")
+    (tmp_path / "b.mc").write_text("fn pid() -> int32 { return 2; }")
+    main = tmp_path / "main.mc"
+    main.write_text(
+        '@if (USE_B) {\n  import "b";\n} @else {\n  import "a";\n}\n'
+        "fn main() -> int32 { return pid(); }"
+    )
+    assert _execute(compile_to_ir(main, (tmp_path,), None, {"USE_B": 1})) == 2
+    assert _execute(compile_to_ir(main, (tmp_path,), None, {})) == 1
+
+
+def test_conditional_import_dead_branch_need_not_exist(tmp_path):
+    # Only the taken branch's import is resolved, so a missing file in the dead
+    # branch is harmless -- the point of shipping per-target dependencies.
+    from helpers import _execute
+    from mcc.driver import compile_to_ir
+    (tmp_path / "real.mc").write_text("fn pid() -> int32 { return 7; }")
+    main = tmp_path / "main.mc"
+    main.write_text(
+        '@if (USE_GHOST) {\n  import "ghost";\n} @else {\n  import "real";\n}\n'
+        "fn main() -> int32 { return pid(); }"
+    )
+    assert _execute(compile_to_ir(main, (tmp_path,), None, {})) == 7
+
+
+def test_conditional_import_selected_by_target(tmp_path):
+    from mcc.driver import compile_to_ir
+    (tmp_path / "lin.mc").write_text("fn pid() -> int32 { return 2; }")
+    (tmp_path / "dar.mc").write_text("fn pid() -> int32 { return 1; }")
+    main = tmp_path / "main.mc"
+    main.write_text(
+        '@if (TARGET_OS == OS_LINUX) {\n  import "lin";\n} @else {\n  import "dar";\n}\n'
+        "fn main() -> int32 { return pid(); }"
+    )
+    ir = str(compile_to_ir(main, (tmp_path,), "x86_64-unknown-linux-gnu", {}))
+    assert "ret i32 2" in ir and "ret i32 1" not in ir
+
+
+def test_conditional_import_with_declarations_in_branch(tmp_path):
+    # A branch may mix an import with ordinary declarations; the import resolves
+    # in the driver while the declarations flatten in codegen, same condition.
+    from helpers import _execute
+    from mcc.driver import compile_to_ir
+    (tmp_path / "base.mc").write_text("fn base() -> int32 { return 10; }")
+    main = tmp_path / "main.mc"
+    main.write_text(
+        '@if (TARGET_ARCH != 0) {\n'
+        '  import "base";\n'
+        "  fn pid() -> int32 { return base() + 5; }\n"
+        "}\n"
+        "fn main() -> int32 { return pid(); }"
+    )
+    assert _execute(compile_to_ir(main, (tmp_path,), None, {})) == 15

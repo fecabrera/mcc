@@ -1595,6 +1595,10 @@
           "named": true
         },
         {
+          "type": "import",
+          "named": true
+        },
+        {
           "type": "struct_declaration",
           "named": true
         }

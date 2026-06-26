@@ -28,6 +28,7 @@ from mcc.nodes import (
     EnumAccess,
     EnumDecl,
     ExprStmt,
+    Import,
     FloatLit,
     For,
     Func,
@@ -178,6 +179,11 @@ class Parser:
             imports.append((path, line))
         while self.cur.kind != "EOF":
             item = self.parse_toplevel_item()
+            if isinstance(item, Import):
+                raise LangError(
+                    "an import must precede all declarations or appear inside an @if",
+                    item.line,
+                )
             target = {
                 StructDecl: structs,
                 Func: functions,
@@ -194,20 +200,16 @@ class Parser:
     def parse_toplevel_block(self) -> list:
         """Parse a brace-delimited group of top-level declarations.
 
-        Used for a branch of a top-level ``@if``. Imports must precede all
-        declarations, so they are not allowed here.
+        Used for a branch of a top-level ``@if``. A branch may hold ``import``
+        statements (resolved by the driver once the condition is evaluated)
+        alongside ordinary declarations and nested ``@if`` blocks.
 
         Returns:
-            The declarations parsed from the block.
-
-        Raises:
-            LangError: When an ``import`` appears inside the block.
+            The items parsed from the block.
         """
         self.expect("{")
         items = []
         while self.cur.kind != "}":
-            if self.cur.kind == "import":
-                raise LangError("import is not allowed inside @if", self.cur.line)
             items.append(self.parse_toplevel_item())
         self.expect("}")
         return items
@@ -276,6 +278,13 @@ class Parser:
             return self.parse_conditional(self.parse_toplevel_block)
         if self.cur.kind == "ANNOT" and self.cur.text == "@else":
             raise LangError("@else without a matching @if", self.cur.line)
+        if self.cur.kind == "import":
+            # Only valid inside an @if branch (parse_toplevel_block); a stray one
+            # in the declaration section is rejected by parse_program.
+            line = self.advance().line
+            path = self.expect("STRING").text[1:-1]
+            self.expect(";")
+            return Import(path, line)
         private = static = extern = packed = volatile = inline = asm = False
         align = None
         symbol = None

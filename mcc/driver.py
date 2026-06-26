@@ -12,10 +12,16 @@ from pathlib import Path
 import llvmlite.binding as llvm
 from llvmlite import ir
 
-from mcc.codegen import CodeGen, TARGET_ARCH_VALUES, TARGET_OS_VALUES
+from mcc.codegen import (
+    CodeGen,
+    TARGET_ARCH_VALUES,
+    TARGET_OS_VALUES,
+    compute_target_facts,
+    eval_static_cond,
+)
 from mcc.errors import LangError
 from mcc.lexer import tokenize
-from mcc.nodes import Conditional, Program
+from mcc.nodes import Conditional, Import, Program
 from mcc.parser import Parser
 
 
@@ -111,16 +117,44 @@ def _import_candidates(base: Path, import_path: str) -> list[Path]:
     return [target.with_suffix(".mc"), target.with_suffix(".mci")]
 
 
+def _conditional_imports(conditionals: list, facts: dict[str, int]) -> list:
+    """The imports from the taken branch of each ``@if``, recursively.
+
+    Conditional imports are resolved against the same target facts code
+    generation will use, so the imports and the branch's declarations agree on
+    which branch is live.
+
+    Args:
+        conditionals: The top-level ``@if`` blocks to scan.
+        facts: The target facts and ``-D`` defines in effect.
+
+    Returns:
+        The ``(path, line)`` imports nested in live branches, in order.
+    """
+    out = []
+    for cond in conditionals:
+        taken = cond.then if eval_static_cond(cond.cond, facts) else cond.otherwise
+        for item in taken:
+            if isinstance(item, Import):
+                out.append((item.path, item.line))
+            elif isinstance(item, Conditional):
+                out.extend(_conditional_imports([item], facts))
+    return out
+
+
 def merge_imports(program: Program, base_dir: Path,
                   search_paths: tuple[Path, ...] = (),
+                  facts: dict[str, int] | None = None,
                   visited: set[Path] | None = None,
                   source: str | None = None) -> Program:
     """Merge a parsed program's ``import "file";`` graph into one program.
 
     Each import resolves relative to ``base_dir`` first, then through the
-    search-path directories in order; the ``.mc`` suffix is optional. A file
-    imported more than once (including via cycles) is loaded only the first
+    search-path directories in order; the ``.mc``/``.mci`` suffix is optional. A
+    file imported more than once (including via cycles) is loaded only the first
     time. Imported declarations are placed before the importing program's own.
+    Imports nested in a top-level ``@if`` are resolved too, for the branch
+    ``facts`` select.
 
     Args:
         program: The parsed program whose imports to resolve.
@@ -128,6 +162,8 @@ def merge_imports(program: Program, base_dir: Path,
             relative to it first.
         search_paths: Additional directories to search, in order, after
             ``base_dir``.
+        facts: The target facts and ``-D`` defines for evaluating conditional
+            imports; the host facts when ``None``.
         visited: Set of already-loaded absolute paths, shared across the
             recursion to break cycles; created when ``None``.
         source: Path of the importing file, used for error reporting; ``None``
@@ -140,11 +176,14 @@ def merge_imports(program: Program, base_dir: Path,
     Raises:
         LangError: When an imported file cannot be found on any search path.
     """
+    if facts is None:
+        facts = compute_target_facts(None, None)
     if visited is None:
         visited = set()
     structs, functions = [], []
     globals_, consts, conditionals, enums = [], [], [], []
-    for import_path, line in program.imports:
+    imports = program.imports + _conditional_imports(program.conditionals, facts)
+    for import_path, line in imports:
         candidates = []
         for base in (base_dir, *search_paths):
             candidates.extend(_import_candidates(base, import_path))
@@ -153,7 +192,7 @@ def merge_imports(program: Program, base_dir: Path,
             tried = ", ".join(str(c) for c in candidates)
             raise LangError(f"cannot import {import_path!r}: tried {tried}", line,
                             source=source)
-        imported = load_program(target, search_paths, visited)
+        imported = load_program(target, search_paths, facts, visited)
         structs += imported.structs
         functions += imported.functions
         globals_ += imported.globals
@@ -170,6 +209,7 @@ def merge_imports(program: Program, base_dir: Path,
 
 
 def load_program(path: Path, search_paths: tuple[Path, ...] = (),
+                 facts: dict[str, int] | None = None,
                  _visited: set[Path] | None = None) -> Program:
     """Parse a source file and recursively merge its import graph.
 
@@ -179,6 +219,8 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
     Args:
         path: The source file to load.
         search_paths: Directories to search for imports, in order.
+        facts: The target facts and ``-D`` defines for conditional imports; the
+            host facts when ``None``.
         _visited: Set of already-loaded absolute paths, shared across the
             recursion; created when ``None``.
 
@@ -201,7 +243,7 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
             err.source = str(resolved)
         raise
     _stamp_sources(program, str(resolved))
-    return merge_imports(program, resolved.parent, search_paths, visited,
+    return merge_imports(program, resolved.parent, search_paths, facts, visited,
                          source=str(resolved))
 
 
@@ -226,7 +268,8 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
     """
     if search_paths is None:
         search_paths = (STDLIB_DIR,)
-    program = load_program(path, tuple(search_paths))
+    facts = compute_target_facts(target, defines)
+    program = load_program(path, tuple(search_paths), facts)
     module = CodeGen(program, path.name, root_source=str(path.resolve()),
                      target=target, defines=defines).generate()
     if freestanding:
@@ -422,7 +465,7 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
     try:
         text = source.read_text()
         imports = Parser(tokenize(text)).parse_program().imports
-        program = load_program(source, search_paths)
+        program = load_program(source, search_paths, compute_target_facts(target, defines))
         cg = CodeGen(program, source.name, root_source=str(source.resolve()),
                      target=target, defines=defines)
         cg.generate()

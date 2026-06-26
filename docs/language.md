@@ -343,9 +343,27 @@ fn page_size() -> uint64 {
 }
 ```
 
-`@else @if` chains, and blocks may nest. `import` is not allowed inside an `@if`
-(imports must precede all declarations). Note `@if`/`@else` are compile-time and
+`@else @if` chains, and blocks may nest. Note `@if`/`@else` are compile-time and
 distinct from the runtime `if`/`else`.
+
+A branch may also contain `import` statements, to pull in a dependency only for
+the targets that need it:
+
+```c
+@if (TARGET_OS == OS_DARWIN) {
+    import "platform/darwin";
+} @else {
+    import "platform/linux";
+}
+```
+
+Only the live branch's imports are resolved, so a file named in a dead branch
+need not even exist — handy for shipping per-target bindings. A branch may mix
+imports with ordinary declarations. (A plain, unconditional `import` still has to
+precede all declarations, as before; only a conditional one lives inside an
+`@if`.) Like every `@if`, the condition sees only the target facts and `-D`
+defines — not user `const`s — since imports are resolved before constants are
+folded.
 
 ## Control flow
 

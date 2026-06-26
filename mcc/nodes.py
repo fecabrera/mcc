@@ -423,6 +423,23 @@ class Emit:
 
 
 @dataclass
+class Import:
+    """An ``import "file";`` appearing inside a top-level ``@if`` branch.
+
+    A plain top-of-file import is collected directly into ``Program.imports``;
+    this node carries one nested in a conditional, which the driver resolves
+    once the branch's condition is evaluated against the target facts.
+
+    Attributes:
+        path: The imported file's path, as written (without the quotes).
+        line: Source line for diagnostics.
+    """
+
+    path: str
+    line: int
+
+
+@dataclass
 class Conditional:
     """An ``@if (cond) { ... } @else { ... }`` compile-time selection.
 

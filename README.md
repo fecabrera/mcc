@@ -219,7 +219,8 @@ reference section.
 - [x] [Generics](docs/language.md#generics) — monomorphized, on functions and structs
 - [x] [Variables](docs/language.md#variables) — `let` with type inference
 - [x] [Constants](docs/language.md#constants) — `const`, folded at compile time
-- [x] [Conditional compilation](docs/language.md#conditional-compilation) — structured `@if`
+- [x] [Conditional compilation](docs/language.md#conditional-compilation) — structured `@if`,
+      including conditional `import`s
 - [x] [Control flow](docs/language.md#control-flow) — `if`/`else`, `while`, `until`,
       `for … in`, `break`/`continue`, braceless bodies
 - [x] [`defer`](docs/language.md#defer) — statement and block forms, reverse order

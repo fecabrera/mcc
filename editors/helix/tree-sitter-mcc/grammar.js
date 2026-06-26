@@ -192,7 +192,10 @@ module.exports = grammar({
       ),
 
     _conditional_body: ($) => choice($.declaration_block, $.block),
-    declaration_block: ($) => seq('{', repeat($._declaration), '}'),
+    // A top-level @if branch holds declarations and may also carry conditional
+    // imports (resolved per target).
+    declaration_block: ($) =>
+      seq('{', repeat(choice($._declaration, $.import)), '}'),
 
     // -------------------------------------------------------------------- types
     _type: ($) =>
