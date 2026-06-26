@@ -1,7 +1,8 @@
 # mcc support for Helix
 
 A [Helix](https://helix-editor.com) configuration for [mcc](../../README.md)
-source files (`.mc`), with a tree-sitter grammar for syntax highlighting:
+source files (`.mc`) and interface stubs (`.mci`), with a tree-sitter grammar
+for syntax highlighting:
 
 - syntax highlighting (keywords, types, `@`-annotations, functions, parameters,
   strings/chars/numbers, operators) via [tree-sitter-mcc](tree-sitter-mcc/),

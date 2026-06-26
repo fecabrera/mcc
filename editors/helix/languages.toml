@@ -9,7 +9,7 @@
 name = "mcc"
 scope = "source.mcc"
 injection-regex = "mcc"
-file-types = ["mc"]
+file-types = ["mc", "mci"]
 comment-tokens = ["//"]
 block-comment-tokens = { start = "/*", end = "*/" }
 indent = { tab-width = 4, unit = "    " }

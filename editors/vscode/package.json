@@ -1,7 +1,7 @@
 {
   "name": "mcc-language",
   "displayName": "mcc language",
-  "description": "Syntax highlighting for the mcc language (.mc files).",
+  "description": "Syntax highlighting for the mcc language (.mc and .mci files).",
   "version": "0.1.0",
   "publisher": "fecabrera",
   "license": "BSD-3-Clause",
@@ -24,7 +24,8 @@
           "MC"
         ],
         "extensions": [
-          ".mc"
+          ".mc",
+          ".mci"
         ],
         "configuration": "./language-configuration.json"
       }
