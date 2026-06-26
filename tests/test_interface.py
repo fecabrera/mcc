@@ -9,7 +9,7 @@ are dropped, and imports are preserved.
 import pytest
 
 from mcc.codegen import CodeGen
-from mcc.driver import emit_interface
+from mcc.driver import _import_candidates, emit_interface, load_program
 from mcc.errors import LangError
 from mcc.interface import render_interface
 from mcc.lexer import tokenize
@@ -213,3 +213,34 @@ def test_emit_interface_resolves_at_if_for_target(tmp_path):
     # Only the live (@else, non-Darwin) branch survives -- one prototype, no @if.
     assert "@extern fn host() -> int32;" in text
     assert "@if" not in text and text.count("host") == 1
+
+
+# ------------------------------------------------------- .mci import resolution
+
+def test_bare_import_resolves_to_mci_when_no_source(tmp_path):
+    (tmp_path / "dep.mci").write_text("@extern fn dep() -> int32;")
+    main = tmp_path / "main.mc"
+    main.write_text('import "dep";\nfn main() -> int32 { return dep(); }')
+    program = load_program(main, (tmp_path,))
+    assert any(f.name == "dep" and f.extern for f in program.functions)
+
+
+def test_source_mc_wins_over_mci(tmp_path):
+    # When both exist, the real source resolves; the stub is the fallback.
+    (tmp_path / "dep.mc").write_text("fn dep() -> int32 { return 1; }")
+    (tmp_path / "dep.mci").write_text("@extern fn dep() -> int32;")
+    main = tmp_path / "main.mc"
+    main.write_text('import "dep";\nfn main() -> int32 { return dep(); }')
+    program = load_program(main, (tmp_path,))
+    (dep,) = [f for f in program.functions if f.name == "dep"]
+    assert not dep.extern  # the .mc definition, not the .mci prototype
+
+
+def test_import_candidate_order(tmp_path):
+    cands = _import_candidates(tmp_path, "dep")
+    assert [c.name for c in cands] == ["dep.mc", "dep.mci"]
+
+
+def test_explicit_mci_suffix_is_kept(tmp_path):
+    cands = _import_candidates(tmp_path, "dep.mci")
+    assert [c.name for c in cands] == ["dep.mci"]

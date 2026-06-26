@@ -93,6 +93,8 @@ mcc examples/helloworld.mc              # compile to a native executable
 mcc examples/helloworld.mc -o hello     # choose the output name
 mcc examples/helloworld.mc --run        # JIT-compile and run immediately
 mcc examples/helloworld.mc --emit-llvm  # print the LLVM IR instead of compiling
+mcc lib/list.mc -c                      # compile to an object (.o), don't link
+mcc lib/list.mc --emit-interface        # write an importable .mci stub
 mcc examples/helloworld.mc -O3          # optimization level (0-3, default 2)
 mcc main.mc -I vendor -I deps           # extra import search paths
 mcc main.mc --nostdlib                  # don't put lib/ on the import path
@@ -104,6 +106,8 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `source`                  | The `.mc` file to compile (required). Its imports are resolved and compiled with it.                                                                 |
 | `-o`, `--output FILE`     | Name of the generated file. Defaults to the source name without its extension (a native executable), or with a `.o` suffix when `--target` is given. |
+| `-c`, `--compile`         | Compile to an object file (`.o`) for the host and stop, without linking an executable. Defaults the output to the source name with a `.o` suffix.     |
+| `--emit-interface`        | Write a [`.mci` interface stub](docs/language.md#interface-files) describing the file's public surface (to ship beside an object) and exit.           |
 | `-O 0`–`3`                | Optimization level, from `0` (none) to `3` (most aggressive). Default `2`.                                                                           |
 | `--run`                   | JIT-compile and run the program immediately instead of writing a file; its exit code becomes mcc's. Cannot be combined with `--target`.              |
 | `--emit-llvm`             | Print the generated LLVM IR to stdout and exit, without compiling or linking.                                                                        |
@@ -256,10 +260,10 @@ reference section.
 - [x] Optimization levels `-O0`–`-O3`
 - [x] Cross-compilation (`--target`), `--general-regs-only`, `--nostdlib`, `-I`
 - [x] Separate compilation across files
-- [~] [Interface files](docs/language.md#interface-files) — `--emit-interface`
+- [x] Object-only compilation (`-c`) — emit a `.o` without linking
+- [x] [Interface files](docs/language.md#interface-files) — `--emit-interface`
       writes a `.mci` stub (`@extern` prototypes plus full types/consts/generics)
-      to ship beside an object; `.mci` import resolution and a native
-      object-only flag are still to come
+      to ship beside an object; a bare `import` resolves to `.mc` then `.mci`
 - [x] [Editor support](#editor-support) — VS Code syntax highlighting
 
 ### Planned

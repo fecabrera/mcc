@@ -1019,12 +1019,15 @@ object plus a thin interface to compile and link against, rather than the full
 source:
 
 ```sh
-mcc mathlib.mc --target $(host-triple) -o mathlib.o   # the object
-mcc mathlib.mc --emit-interface -o mathlib.mci         # the interface
+mcc mathlib.mc -c                  # the object (mathlib.o), no linking
+mcc mathlib.mc --emit-interface    # the interface (mathlib.mci)
 ```
 
-A consumer `import`s the `.mci` and links the `.o`. The stub mixes two forms,
-by whether a declaration carries a linkable symbol:
+A consumer `import`s the library and links the object. A bare `import "mathlib";`
+resolves to `mathlib.mc` if the source is present, otherwise to `mathlib.mci` --
+so the same import works whether you have the sources or just the shipped object
+plus its stub. The stub mixes two forms, by whether a declaration carries a
+linkable symbol:
 
 - A concrete function becomes an `@extern` prototype — its body lives in the
   object, reached by the symbol the bare name resolves to.

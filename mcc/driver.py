@@ -89,6 +89,28 @@ def _stamp_sources(program: Program, source: str) -> None:
     _stamp_conditionals(program.conditionals, source)
 
 
+def _import_candidates(base: Path, import_path: str) -> list[Path]:
+    """Resolve one ``import`` path within a directory to candidate files.
+
+    A source file is ``.mc``; a generated interface stub (see
+    ``--emit-interface``) is ``.mci``. A bare ``import "foo"`` tries ``foo.mc``
+    first, then ``foo.mci`` -- so a checkout with sources resolves to them, while
+    a consumer that received only an object plus its interface falls back to the
+    stub. An explicit ``.mc``/``.mci`` suffix is taken as written.
+
+    Args:
+        base: The directory to resolve against.
+        import_path: The import path as written in source.
+
+    Returns:
+        The candidate paths to try, in priority order.
+    """
+    target = base / import_path
+    if target.suffix in (".mc", ".mci"):
+        return [target]
+    return [target.with_suffix(".mc"), target.with_suffix(".mci")]
+
+
 def merge_imports(program: Program, base_dir: Path,
                   search_paths: tuple[Path, ...] = (),
                   visited: set[Path] | None = None,
@@ -125,10 +147,7 @@ def merge_imports(program: Program, base_dir: Path,
     for import_path, line in program.imports:
         candidates = []
         for base in (base_dir, *search_paths):
-            target = base / import_path
-            if target.suffix != ".mc":
-                target = target.with_suffix(".mc")
-            candidates.append(target)
+            candidates.extend(_import_candidates(base, import_path))
         target = next((c for c in candidates if c.is_file()), None)
         if target is None:
             tried = ", ".join(str(c) for c in candidates)
@@ -443,6 +462,8 @@ def main() -> int:
     cli = argparse.ArgumentParser(prog="mcc", description="Compile .mc source files with LLVM.")
     cli.add_argument("source", type=Path)
     cli.add_argument("-o", "--output", type=Path, help="output executable name")
+    cli.add_argument("-c", "--compile", action="store_true",
+                     help="compile to an object file (.o) without linking")
     cli.add_argument("-O", type=int, default=2, choices=range(4), help="optimization level")
     cli.add_argument("--run", action="store_true", help="JIT-compile and run immediately")
     cli.add_argument("--emit-llvm", action="store_true", help="print LLVM IR and exit")
@@ -470,6 +491,11 @@ def main() -> int:
 
     if args.target and args.run:
         print("mcc: error: --run cannot execute cross-compiled code", file=sys.stderr)
+        return 1
+
+    if args.compile and args.run:
+        print("mcc: error: --run cannot be combined with -c (compile only)",
+              file=sys.stderr)
         return 1
 
     try:
@@ -516,6 +542,15 @@ def main() -> int:
     if args.target:
         # No host linker for a foreign target: emit the object file and let
         # the target toolchain (e.g. aarch64-elf-gcc) link it.
+        output = args.output or args.source.with_suffix(".o")
+        output.write_bytes(target_machine.emit_object(native))
+        print(f"wrote {output}")
+        return 0
+
+    if args.compile:
+        # Compile only: emit a native object for the host and stop, leaving the
+        # link to a later mcc/cc invocation (e.g. a library shipped beside its
+        # .mci interface).
         output = args.output or args.source.with_suffix(".o")
         output.write_bytes(target_machine.emit_object(native))
         print(f"wrote {output}")

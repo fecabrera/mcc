@@ -329,3 +329,60 @@ def test_define_cannot_redefine_a_target_fact(tmp_path):
     result = mcc(src, "-DTARGET_ARCH=9", "--run")
     assert result.returncode == 1
     assert "built-in target fact" in result.stderr
+
+
+# ----------------------------------------------------------- -c / interface
+
+def test_compile_only_emits_object(tmp_path):
+    src = tmp_path / "lib.mc"
+    src.write_text("fn twice(n: int32) -> int32 { return n * 2; }")
+    obj = tmp_path / "lib.o"
+    result = mcc(src, "-c", "-o", obj)
+    assert result.returncode == 0, result.stderr
+    assert obj.exists()
+    assert not (tmp_path / "lib").exists()  # no executable, no link step
+
+
+def test_compile_only_default_object_name(tmp_path):
+    src = tmp_path / "lib.mc"
+    src.write_text("fn one() -> int32 { return 1; }")
+    assert mcc(src, "-c").returncode == 0
+    assert (tmp_path / "lib.o").exists()
+
+
+def test_compile_only_rejects_run(tmp_path):
+    src = tmp_path / "lib.mc"
+    src.write_text("fn main() -> int32 { return 0; }")
+    result = mcc(src, "-c", "--run")
+    assert result.returncode == 1 and "compile only" in result.stderr
+
+
+def test_interface_package_roundtrip(tmp_path):
+    # Build a library to an object + interface, drop the source, then compile a
+    # consumer that imports it by bare name (resolving to the .mci) and links
+    # the object.
+    lib = tmp_path / "mathlib.mc"
+    lib.write_text(
+        "const SCALE = 10;\n"
+        "fn scaled(n: int32) -> int32 { return n * SCALE; }\n"
+    )
+    assert mcc(lib, "-c", "-o", tmp_path / "mathlib.o").returncode == 0
+    assert mcc(lib, "--emit-interface").returncode == 0
+    assert (tmp_path / "mathlib.mci").exists()
+    lib.unlink()  # ship only the .o + .mci
+
+    consumer = tmp_path / "app.mc"
+    consumer.write_text(
+        'import "mathlib";\n'
+        "@extern fn printf(fmt: uint8*, ...) -> int32;\n"
+        'fn main() -> int32 { printf("%d\\n", scaled(5)); return 0; }'
+    )
+    assert mcc(consumer, "-c", "-I", tmp_path, "-o", tmp_path / "app.o").returncode == 0
+    exe = tmp_path / "app"
+    link = subprocess.run(
+        ["cc", str(tmp_path / "app.o"), str(tmp_path / "mathlib.o"), "-o", str(exe)],
+        capture_output=True, text=True,
+    )
+    assert link.returncode == 0, link.stderr
+    out = subprocess.run([exe], capture_output=True, text=True)
+    assert out.stdout == "50\n"
