@@ -98,6 +98,11 @@
         {
           "name": "storage.type.mcc",
           "match": "\\b(fn|let|const|struct|enum)\\b"
+        },
+        {
+          "comment": "`type` is contextual: only a keyword as `type <name> = …`.",
+          "name": "storage.type.mcc",
+          "match": "\\btype\\b(?=\\s+[A-Za-z_]\\w*\\s*=)"
         }
       ]
     },

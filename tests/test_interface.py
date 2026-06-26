@@ -244,3 +244,31 @@ def test_import_candidate_order(tmp_path):
 def test_explicit_mci_suffix_is_kept(tmp_path):
     cands = _import_candidates(tmp_path, "dep.mci")
     assert [c.name for c in cands] == ["dep.mci"]
+
+
+# ----------------------------------------------------------- type aliases
+
+def test_type_alias_is_emitted_in_full():
+    out = iface(
+        "type cb = fn(int32) -> int32;\n"
+        "fn run(f: cb, x: int32) -> int32 { return f(x); }"
+    )
+    assert "type cb = fn(int32) -> int32;" in out
+    assert "@extern fn run(f: cb, x: int32) -> int32;" in out
+
+
+def test_reachable_private_alias_is_included():
+    out = iface(
+        "@private type id = uint64;\n"
+        "fn tag(x: id) -> int32 { return x as int32; }"
+    )
+    assert "@private type id = uint64;" in out
+    assert "@extern fn tag(x: id) -> int32;" in out
+
+
+def test_unreachable_alias_is_dropped():
+    out = iface(
+        "@private type unused = uint8;\n"
+        "fn pub() -> int32 { return 0; }"
+    )
+    assert "unused" not in out

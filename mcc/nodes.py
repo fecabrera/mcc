@@ -69,6 +69,7 @@ class Program:
         consts: Named compile-time constants.
         conditionals: Top-level ``@if`` blocks selecting whole declarations.
         enums: Enumeration declarations.
+        aliases: Type-alias declarations.
     """
 
     imports: list[tuple[str, int]]
@@ -78,6 +79,7 @@ class Program:
     consts: list["Const"] = field(default_factory=list)
     conditionals: list["Conditional"] = field(default_factory=list)
     enums: list["EnumDecl"] = field(default_factory=list)
+    aliases: list["TypeAlias"] = field(default_factory=list)
 
 
 @dataclass
@@ -139,6 +141,32 @@ class EnumDecl:
     name: str
     underlying: TypeRef | None
     members: list[tuple[str, object]]
+    line: int
+    private: bool = False
+    static: bool = False
+    source: str | None = None
+    span: tuple[int, int] | None = field(default=None, compare=False)
+
+
+@dataclass
+class TypeAlias:
+    """A ``type <name> = <type>;`` declaration -- a transparent type name.
+
+    The alias is structural, not a new distinct type: ``type cb = fn(int32) ->
+    int32;`` makes ``cb`` interchangeable with the function-pointer type it names.
+
+    Attributes:
+        name: The alias name, usable anywhere a type is.
+        target: The aliased type.
+        line: Source line for diagnostics.
+        private: ``@private`` -- usable only within its source file.
+        static: ``@static`` -- file-scoped name other files may reuse.
+        source: Defining file, stamped by the driver.
+        span: Source byte span, for the interface generator.
+    """
+
+    name: str
+    target: TypeRef
     line: int
     private: bool = False
     static: bool = False

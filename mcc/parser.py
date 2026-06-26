@@ -50,6 +50,7 @@ from mcc.nodes import (
     StrLit,
     StructDecl,
     Ternary,
+    TypeAlias,
     TypeRef,
     Unary,
     Var,
@@ -170,8 +171,8 @@ class Parser:
             LangError: On any syntax error in the file.
         """
         imports = []
-        structs, functions, globals_, consts, conditionals, enums = (
-            [], [], [], [], [], [])
+        structs, functions, globals_, consts, conditionals, enums, aliases = (
+            [], [], [], [], [], [], [])
         while self.cur.kind == "import":
             line = self.advance().line
             path = self.expect("STRING").text[1:-1]
@@ -191,10 +192,12 @@ class Parser:
                 Const: consts,
                 Conditional: conditionals,
                 EnumDecl: enums,
+                TypeAlias: aliases,
             }[type(item)]
             target.append(item)
         return Program(
-            imports, structs, functions, globals_, consts, conditionals, enums
+            imports, structs, functions, globals_, consts, conditionals, enums,
+            aliases,
         )
 
     def parse_toplevel_block(self) -> list:
@@ -351,6 +354,25 @@ class Parser:
             if extern:
                 raise LangError("@extern does not apply to structs", self.cur.line)
             return self.parse_struct(private, static, align, packed, volatile)
+        # `type` is a contextual keyword: `type <name> = <type>;` at top level.
+        # Elsewhere (a field, variable, or parameter) `type` stays an identifier.
+        if (
+            self.cur.kind == "IDENT"
+            and self.cur.text == "type"
+            and self.tokens[self.pos + 1].kind == "IDENT"
+        ):
+            if extern:
+                raise LangError("@extern does not apply to type aliases", self.cur.line)
+            if inline:
+                raise LangError(
+                    "@inline only applies to functions with a body", self.cur.line
+                )
+            if volatile:
+                raise LangError(
+                    "@volatile only applies to structs and extern variables",
+                    self.cur.line,
+                )
+            return self.parse_type_alias(private, static)
         if self.cur.kind == "enum":
             if extern:
                 raise LangError("@extern does not apply to enums", self.cur.line)
@@ -688,6 +710,28 @@ class Parser:
         if not members:
             raise LangError(f"enum {name!r} has no members", line)
         return EnumDecl(name, underlying, members, line, private=private, static=static)
+
+    def parse_type_alias(
+        self, private: bool = False, static: bool = False
+    ) -> TypeAlias:
+        """Parse a ``type <name> = <type>;`` declaration.
+
+        The leading ``type`` is a contextual keyword (an identifier elsewhere),
+        already confirmed by the caller.
+
+        Args:
+            private: Whether ``@private`` was applied.
+            static: Whether ``@static`` was applied.
+
+        Returns:
+            The parsed ``TypeAlias``.
+        """
+        line = self.advance().line  # the 'type' identifier
+        name = self.expect("IDENT").text
+        self.expect("=")
+        target = self.parse_type_ref()
+        self.expect(";")
+        return TypeAlias(name, target, line, private=private, static=static)
 
     def parse_function(
         self,

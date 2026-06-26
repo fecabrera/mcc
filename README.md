@@ -239,6 +239,8 @@ reference section.
       struct value upcast
 - [x] [Enums](docs/language.md#enums) — `enum Name[: type] { … }`, `Name::Member`
       constants over any underlying type, the name usable as a type
+- [x] [Type aliases](docs/language.md#type-aliases) — `type <name> = <type>;`,
+      transparent (e.g. `type callback = fn(int32, uint8**) -> int32;`)
 - [x] [Imports](docs/language.md#imports) — bare-name resolution, search paths
 - [x] [Visibility](docs/language.md#visibility) — `@private`, `@static`
 - [x] [Extern declarations](docs/language.md#extern-declarations) — `@extern`, `@symbol`
@@ -271,8 +273,6 @@ reference section.
 
 - [ ] Methods / OOP — `<struct>::<method>` definitions (the `for … in`
       protocol already dispatches by struct name to pave the way)
-- [ ] Type aliases — TS-style `type <name> = <type>;`, e.g.
-      `type callback = fn(int32, uint8**) -> int32;`
 - [ ] `typeof(expr)` — use an expression's static type in a type position,
       including in an alias: `type t = typeof(var);`
 - [ ] Constant-expression array sizes — `T[N]` where `N` is any constant

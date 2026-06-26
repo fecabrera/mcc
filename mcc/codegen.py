@@ -62,6 +62,7 @@ from mcc.nodes import (
     StrLit,
     StructDecl,
     Ternary,
+    TypeAlias,
     TypeRef,
     Unary,
     Var,
@@ -177,6 +178,21 @@ class EnumType:
 
     underlying: LangType
     members: dict
+    private: bool
+    source: "str | None"
+
+
+@dataclass
+class Alias:
+    """A resolved ``type`` alias: its target type plus visibility.
+
+    Attributes:
+        target: The aliased ``TypeRef``, resolved lazily on each use.
+        private: ``@private`` -- usable only within ``source``.
+        source: The file the alias was declared in.
+    """
+
+    target: TypeRef
     private: bool
     source: "str | None"
 
@@ -901,6 +917,12 @@ class CodeGen:
         # (source, name) so other files may reuse the name (like @static structs).
         self.enums: dict[str, EnumType] = {}
         self.static_enums: dict[tuple[str | None, str], EnumType] = {}
+        # Type aliases: name -> Alias (transparent; resolved lazily). @static
+        # aliases are file-scoped, like @static structs/enums.
+        self.type_aliases: dict[str, Alias] = {}
+        self.static_type_aliases: dict[tuple[str | None, str], Alias] = {}
+        # Alias names currently being resolved, to catch a cyclic alias chain.
+        self.resolving_aliases: set[str] = set()
         # Mangled names whose `extends` base is currently being resolved, so a
         # cyclic `extends` (A extends B extends A) is caught instead of looping.
         self.resolving_bases: set[str] = set()
@@ -1147,6 +1169,8 @@ class CodeGen:
                     self.program.consts.append(item)
                 elif isinstance(item, EnumDecl):
                     self.program.enums.append(item)
+                elif isinstance(item, TypeAlias):
+                    self.program.aliases.append(item)
                 elif isinstance(item, Import):
                     pass  # already merged by the driver
                 else:
@@ -1209,6 +1233,49 @@ class CodeGen:
         """
         static = self.static_enums.get((self.current_source, name))
         return static if static is not None else self.enums.get(name)
+
+    def lookup_alias(self, name: str) -> "Alias | None":
+        """Resolve a type-alias name, preferring a file-scoped ``@static`` one.
+
+        Args:
+            name: The alias's name.
+
+        Returns:
+            The matching ``Alias``, or ``None`` when no alias has that name in
+            scope.
+        """
+        static = self.static_type_aliases.get((self.current_source, name))
+        return static if static is not None else self.type_aliases.get(name)
+
+    def register_alias(self, decl: TypeAlias):
+        """Record a type alias for later (lazy) resolution.
+
+        The target is not resolved here -- it is on each use, in
+        :meth:`lang_type` -- so an alias may name a type declared later.
+
+        Args:
+            decl: The alias declaration.
+
+        Raises:
+            LangError: When the name clashes with a built-in type or another
+                type/alias in the same scope.
+        """
+        self.current_source = decl.source
+        alias = Alias(decl.target, decl.private, decl.source)
+        if decl.static:
+            key = (decl.source, decl.name)
+            if key in self.static_type_aliases or key in self.static_structs:
+                raise LangError(f"type {decl.name!r} already defined", decl.line)
+            self.static_type_aliases[key] = alias
+        else:
+            if (
+                decl.name in TYPES
+                or decl.name in self.type_aliases
+                or decl.name in self.enums
+                or decl.name in self.struct_templates
+            ):
+                raise LangError(f"type {decl.name!r} already defined", decl.line)
+            self.type_aliases[decl.name] = alias
 
     def register_enum(self, decl: EnumDecl):
         """Resolve an enum's underlying type and fold its member constants.
@@ -1340,6 +1407,24 @@ class CodeGen:
                 raise LangError(f"enum {ref.name!r} is not generic", line)
             self.check_access(enum.private, enum.source, f"enum {ref.name!r}", line)
             base = enum.underlying
+        elif (alias := self.lookup_alias(ref.name)) is not None:
+            if ref.args:
+                raise LangError(f"type alias {ref.name!r} is not generic", line)
+            self.check_access(
+                alias.private, alias.source, f"type alias {ref.name!r}", line
+            )
+            if ref.name in self.resolving_aliases:
+                raise LangError(
+                    f"type alias {ref.name!r} refers to itself (cyclic alias)", line
+                )
+            self.resolving_aliases.add(ref.name)
+            outer_source = self.current_source
+            self.current_source = alias.source  # target may name private types
+            try:
+                base = self.lang_type(alias.target, line)
+            finally:
+                self.resolving_aliases.discard(ref.name)
+                self.current_source = outer_source
         else:
             raise LangError(f"unknown type {ref.name!r}", line)
         if ref.stars and base is VOID:
@@ -1684,6 +1769,10 @@ class CodeGen:
                 raise LangError(f"type {decl.name!r} already defined", decl.line)
             self.struct_templates[decl.name] = decl
             self.used_symbols.add(decl.name)
+        # Type aliases are registered next (records only; resolved lazily on
+        # use), so a const's or signature's type may name one.
+        for alias in self.program.aliases:
+            self.register_alias(alias)
         # Constants are folded before globals, so a global's type (or a later
         # const) may use one as an array size. They are evaluated in source
         # order, so a const may reference any declared earlier (as in C). The

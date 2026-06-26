@@ -1601,6 +1601,10 @@
         {
           "type": "struct_declaration",
           "named": true
+        },
+        {
+          "type": "type_alias",
+          "named": true
         }
       ]
     }
@@ -4069,6 +4073,10 @@
         {
           "type": "struct_declaration",
           "named": true
+        },
+        {
+          "type": "type_alias",
+          "named": true
         }
       ]
     }
@@ -4427,6 +4435,66 @@
           }
         ]
       }
+    }
+  },
+  {
+    "type": "type_alias",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "array_type",
+            "named": true
+          },
+          {
+            "type": "function_type",
+            "named": true
+          },
+          {
+            "type": "grouped_type",
+            "named": true
+          },
+          {
+            "type": "pointer_type",
+            "named": true
+          },
+          {
+            "type": "struct",
+            "named": false
+          },
+          {
+            "type": "type_arguments",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "annotation",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -5168,6 +5236,10 @@
   },
   {
     "type": "true",
+    "named": false
+  },
+  {
+    "type": "type",
     "named": false
   },
   {

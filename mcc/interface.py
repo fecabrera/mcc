@@ -31,6 +31,7 @@ from mcc.nodes import (
     Func,
     GlobalVar,
     StructDecl,
+    TypeAlias,
     TypeRef,
     Var,
 )
@@ -127,7 +128,8 @@ class InterfaceWriter:
     def _root_decls(self):
         """Yield every top-level declaration defined in the root file."""
         p = self.cg.program
-        for group in (p.structs, p.enums, p.consts, p.globals, p.functions):
+        for group in (p.structs, p.enums, p.aliases, p.consts, p.globals,
+                      p.functions):
             for decl in group:
                 if decl.source == self.root:
                     yield decl
@@ -167,6 +169,8 @@ class InterfaceWriter:
                 _collect_refs(value, names)
         elif isinstance(decl, Const):
             _collect_refs(decl.value, names)
+        elif isinstance(decl, TypeAlias):
+            _collect_refs(decl.target, names)
         elif isinstance(decl, GlobalVar):
             if decl.type_name is not None:
                 _collect_refs(decl.type_name, names)

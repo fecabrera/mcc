@@ -89,6 +89,7 @@ module.exports = grammar({
       choice(
         $.struct_declaration,
         $.enum_declaration,
+        $.type_alias,
         $.function_definition,
         $.extern_function,
         $.global_variable,
@@ -122,6 +123,18 @@ module.exports = grammar({
 
     enum_member: ($) =>
       seq(field('name', $.identifier), '=', field('value', $._expression)),
+
+    // `type` is a contextual keyword (an identifier elsewhere); tree-sitter's
+    // keyword extraction via `word` keeps it usable as a plain identifier.
+    type_alias: ($) =>
+      seq(
+        repeat($.annotation),
+        'type',
+        field('name', alias($.identifier, $.type_identifier)),
+        '=',
+        field('value', $._type),
+        ';',
+      ),
 
     type_parameters: ($) => seq('<', commaSep1(alias($.identifier, $.type_identifier)), '>'),
 

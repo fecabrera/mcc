@@ -998,6 +998,32 @@ underlying type and do not silently adapt to other types — assign across types
 with an explicit [cast](#casts). An enum may be `@private` to its file or
 `@static` (file-scoped, so other files may reuse the name), like a struct.
 
+## Type aliases
+
+`type <name> = <type>;` introduces a name for an existing type, usable anywhere
+a type is:
+
+```c
+type byte = uint8;
+type bytes = uint8*;
+type callback = fn(int32, uint8**) -> int32;
+
+struct point { x: int32; y: int32; }
+type point_ref = struct point*;
+```
+
+An alias is **transparent**, not a new distinct type: `callback` *is* the
+function-pointer type it names, so a `callback` value and a matching
+`fn(int32, uint8**) -> int32` value are interchangeable without a cast. Pointer
+and array suffixes apply on top of the alias, so with `type bytes = uint8*;`,
+`bytes*` is `uint8**`.
+
+`type` is a contextual keyword — it only introduces an alias as a top-level
+`type <name> = …`, so it remains usable as an ordinary identifier (a field,
+variable, or parameter named `type`). An alias may be `@private` to its file or
+`@static` (file-scoped), like a struct or enum; a cyclic alias
+(`type a = b; type b = a;`) is an error.
+
 ## Imports
 
 `import "file";` at the top of a file compiles another `.mc` file into the
