@@ -5,9 +5,11 @@ import "libc/string";
 import "iteration/pair";
 
 // Slot states
-@private const DICT_ENTRY_STATE_EMPTY = 0;
-@private const DICT_ENTRY_STATE_OCCUPIED = 1;
-@private const DICT_ENTRY_STATE_TOMBSTONE = 2;
+enum dict_entry_state: uint8 {
+    EMPTY = 0,
+    OCCUPIED = 1,
+    TOMBSTONE = 2,
+}
 
 /**
  * One slot in a dict's backing array. A specialization of
@@ -46,7 +48,7 @@ struct dict<V> {
  *
  * @return true if the contents are equal
  */
-@static
+@private
 fn str_eq(a: uint8*, b: uint8*) -> bool {
     let i: uint64 = 0;
     while (a[i] == b[i]) {
@@ -64,7 +66,7 @@ fn str_eq(a: uint8*, b: uint8*) -> bool {
  *
  * @return owned copy; release with dealloc
  */
-@static
+@private
 fn str_clone(s: uint8*) -> uint8* {
     let n = strlen(s) + 1;
     let copy = alloc<uint8>(n);
@@ -85,7 +87,7 @@ fn dict_init<V>(self: struct dict<V>*, capacity: uint64) {
 
     let i: uint64 = 0;
     while (i < capacity) {
-        self->entries[i].state = DICT_ENTRY_STATE_EMPTY;
+        self->entries[i].state = dict_entry_state::EMPTY;
         i = i + 1;
     }
 }
@@ -99,7 +101,7 @@ fn dict_init<V>(self: struct dict<V>*, capacity: uint64) {
 fn dict_destroy<V>(self: struct dict<V>*) {
     let i: uint64 = 0;
     while (i < self->capacity) {
-        if (self->entries[i].state == DICT_ENTRY_STATE_OCCUPIED)
+        if (self->entries[i].state == dict_entry_state::OCCUPIED)
             dealloc(self->entries[i].key);
         i = i + 1;
     }
@@ -127,8 +129,8 @@ fn dict_set<V>(self: struct dict<V>*, key: uint8*, value: V) {
     let tombstone_slot: uint64 = 0;
     let has_tombstone = false;
 
-    while (self->entries[slot].state != DICT_ENTRY_STATE_EMPTY) {
-        if (self->entries[slot].state == DICT_ENTRY_STATE_OCCUPIED) {
+    while (self->entries[slot].state != dict_entry_state::EMPTY) {
+        if (self->entries[slot].state == dict_entry_state::OCCUPIED) {
             if (str_eq(self->entries[slot].key, key)) {
                 self->entries[slot].value = value;
                 return;
@@ -145,7 +147,7 @@ fn dict_set<V>(self: struct dict<V>*, key: uint8*, value: V) {
 
     self->entries[slot].key = str_clone(key);
     self->entries[slot].value = value;
-    self->entries[slot].state = DICT_ENTRY_STATE_OCCUPIED;
+    self->entries[slot].state = dict_entry_state::OCCUPIED;
     self->length = self->length + 1;
 }
 
@@ -162,8 +164,8 @@ fn dict_set<V>(self: struct dict<V>*, key: uint8*, value: V) {
 fn dict_get<V>(self: struct dict<V>*, key: uint8*, out: V*) -> bool {
     let slot = hash(key) % self->capacity;
 
-    while (self->entries[slot].state != DICT_ENTRY_STATE_EMPTY) {
-        if (self->entries[slot].state == DICT_ENTRY_STATE_OCCUPIED) {
+    while (self->entries[slot].state != dict_entry_state::EMPTY) {
+        if (self->entries[slot].state == dict_entry_state::OCCUPIED) {
             if (str_eq(self->entries[slot].key, key)) {
                 *out = self->entries[slot].value;
                 return true;
@@ -185,12 +187,12 @@ fn dict_get<V>(self: struct dict<V>*, key: uint8*, out: V*) -> bool {
 fn dict_remove<V>(self: struct dict<V>*, key: uint8*) {
     let slot = hash(key) % self->capacity;
 
-    while (self->entries[slot].state != DICT_ENTRY_STATE_EMPTY) {
-        if (self->entries[slot].state == DICT_ENTRY_STATE_OCCUPIED) {
+    while (self->entries[slot].state != dict_entry_state::EMPTY) {
+        if (self->entries[slot].state == dict_entry_state::OCCUPIED) {
             if (str_eq(self->entries[slot].key, key)) {
                 dealloc(self->entries[slot].key);
                 self->entries[slot].key = null;
-                self->entries[slot].state = DICT_ENTRY_STATE_TOMBSTONE;
+                self->entries[slot].state = dict_entry_state::TOMBSTONE;
                 self->length = self->length - 1;
                 return;
             }
@@ -216,15 +218,15 @@ fn dict_grow<V>(self: struct dict<V>*) {
 
     let i: uint64 = 0;
     while (i < new_capacity) {
-        new_entries[i].state = DICT_ENTRY_STATE_EMPTY;
+        new_entries[i].state = dict_entry_state::EMPTY;
         i = i + 1;
     }
 
     i = 0;
     while (i < old_capacity) {
-        if (old_entries[i].state == DICT_ENTRY_STATE_OCCUPIED) {
+        if (old_entries[i].state == dict_entry_state::OCCUPIED) {
             let slot = hash(old_entries[i].key) % new_capacity;
-            while (new_entries[slot].state == DICT_ENTRY_STATE_OCCUPIED)
+            while (new_entries[slot].state == dict_entry_state::OCCUPIED)
                 slot = (slot + 1) % new_capacity;
 
             new_entries[slot] = old_entries[i];
@@ -283,7 +285,7 @@ fn dict_next<V>(it: struct dict_iter<V>*, out: struct pair<uint8*, V>*) -> bool 
         let entry = it->obj->entries[it->idx];
         defer it->idx = it->idx + 1;
 
-        if (entry.state == DICT_ENTRY_STATE_OCCUPIED) {
+        if (entry.state == dict_entry_state::OCCUPIED) {
             *out = entry as struct pair<uint8*, V>;
             return true;
         }

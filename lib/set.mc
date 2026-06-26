@@ -2,10 +2,12 @@ import "memory";
 import "hash";
 import "iteration/pair";
 
-// Slot states (internal to this file)
-@private const SET_ENTRY_STATE_EMPTY = 0;
-@private const SET_ENTRY_STATE_OCCUPIED = 1;
-@private const SET_ENTRY_STATE_TOMBSTONE = 2;
+// Slot states
+enum set_entry_state: uint8 {
+    EMPTY = 0,
+    OCCUPIED = 1,
+    TOMBSTONE = 2,
+}
 
 /**
  * One slot in a set's backing array. Extends `pair<K, V>` with a slot state,
@@ -49,7 +51,7 @@ fn set_init<K, V>(self: struct set<K, V>*, capacity: uint64) {
 
     let i: uint64 = 0;
     while (i < capacity) {
-        self->entries[i].state = SET_ENTRY_STATE_EMPTY;
+        self->entries[i].state = set_entry_state::EMPTY;
         i = i + 1;
     }
 }
@@ -83,8 +85,8 @@ fn set_set<K, V>(self: struct set<K, V>*, key: K, value: V) {
     let tombstone_slot: uint64 = 0;
     let has_tombstone = false;
 
-    while (self->entries[slot].state != SET_ENTRY_STATE_EMPTY) {
-        if (self->entries[slot].state == SET_ENTRY_STATE_OCCUPIED) {
+    while (self->entries[slot].state != set_entry_state::EMPTY) {
+        if (self->entries[slot].state == set_entry_state::OCCUPIED) {
             if (self->entries[slot].key == key) {
                 self->entries[slot].value = value;
                 return;
@@ -101,7 +103,7 @@ fn set_set<K, V>(self: struct set<K, V>*, key: K, value: V) {
 
     self->entries[slot].key = key;
     self->entries[slot].value = value;
-    self->entries[slot].state = SET_ENTRY_STATE_OCCUPIED;
+    self->entries[slot].state = set_entry_state::OCCUPIED;
     self->length = self->length + 1;
 }
 
@@ -117,8 +119,8 @@ fn set_set<K, V>(self: struct set<K, V>*, key: K, value: V) {
 fn set_get<K, V>(self: struct set<K, V>*, key: K, out: V*) -> bool {
     let slot = hash(key) % self->capacity;
 
-    while (self->entries[slot].state != SET_ENTRY_STATE_EMPTY) {
-        if (self->entries[slot].state == SET_ENTRY_STATE_OCCUPIED) {
+    while (self->entries[slot].state != set_entry_state::EMPTY) {
+        if (self->entries[slot].state == set_entry_state::OCCUPIED) {
             if (self->entries[slot].key == key) {
                 *out = self->entries[slot].value;
                 return true;
@@ -139,10 +141,10 @@ fn set_get<K, V>(self: struct set<K, V>*, key: K, out: V*) -> bool {
 fn set_remove<K, V>(self: struct set<K, V>*, key: K) {
     let slot = hash(key) % self->capacity;
 
-    while (self->entries[slot].state != SET_ENTRY_STATE_EMPTY) {
-        if (self->entries[slot].state == SET_ENTRY_STATE_OCCUPIED) {
+    while (self->entries[slot].state != set_entry_state::EMPTY) {
+        if (self->entries[slot].state == set_entry_state::OCCUPIED) {
             if (self->entries[slot].key == key) {
-                self->entries[slot].state = SET_ENTRY_STATE_TOMBSTONE;
+                self->entries[slot].state = set_entry_state::TOMBSTONE;
                 self->length = self->length - 1;
                 return;
             }
@@ -167,15 +169,15 @@ fn set_grow<K, V>(self: struct set<K, V>*) {
 
     let i: uint64 = 0;
     while (i < new_capacity) {
-        new_entries[i].state = SET_ENTRY_STATE_EMPTY;
+        new_entries[i].state = set_entry_state::EMPTY;
         i = i + 1;
     }
 
     i = 0;
     while (i < old_capacity) {
-        if (old_entries[i].state == SET_ENTRY_STATE_OCCUPIED) {
+        if (old_entries[i].state == set_entry_state::OCCUPIED) {
             let slot = hash(old_entries[i].key) % new_capacity;
-            while (new_entries[slot].state == SET_ENTRY_STATE_OCCUPIED)
+            while (new_entries[slot].state == set_entry_state::OCCUPIED)
                 slot = (slot + 1) % new_capacity;
 
             new_entries[slot] = old_entries[i];
@@ -232,7 +234,7 @@ fn set_next<K, V>(it: struct set_iter<K, V>*, out: struct pair<K, V>*) -> bool {
         let entry = it->obj->entries[it->idx];
         defer it->idx = it->idx + 1;
 
-        if (entry.state == SET_ENTRY_STATE_OCCUPIED) {
+        if (entry.state == set_entry_state::OCCUPIED) {
             *out = entry as struct pair<K, V>;
             return true;
         }
