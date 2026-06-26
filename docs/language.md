@@ -1011,6 +1011,41 @@ imported and monomorphized-generic definitions are emitted with
 directly keeps strong linkage, so a real name clash between two such files
 is still a link error.
 
+## Interface files
+
+`mcc src.mc --emit-interface` writes `src.mci`, an importable stub describing
+the file's public surface — useful for shipping a precompiled library as an
+object plus a thin interface to compile and link against, rather than the full
+source:
+
+```sh
+mcc mathlib.mc --target $(host-triple) -o mathlib.o   # the object
+mcc mathlib.mc --emit-interface -o mathlib.mci         # the interface
+```
+
+A consumer `import`s the `.mci` and links the `.o`. The stub mixes two forms,
+by whether a declaration carries a linkable symbol:
+
+- A concrete function becomes an `@extern` prototype — its body lives in the
+  object, reached by the symbol the bare name resolves to.
+- Types, constants, and generic/`@inline` functions are emitted **in full**:
+  the consumer needs their layout, value, or body to type-check and to
+  re-instantiate or re-inline them (as C++ keeps templates and `inline` in
+  headers).
+
+The stub is the public surface plus its **transitive closure**: a `@private`
+helper a shipped body or signature reaches is pulled in too — a `@private`
+generic called by a public generic travels as source — but keeps its `@private`
+marker, so it stays private to the `.mci` (the consumer uses the public API
+that needs it without being able to name it). Unreachable `@private`/`@static`
+declarations are dropped, the original `import` lines are preserved (a
+dependency's own `.mci` is imported in turn), and `@if` is already resolved, so
+each interface matches the target it was generated for.
+
+Two things cannot be expressed and raise an error: a `const` struct parameter
+(passed by hidden pointer, an ABI `@extern` cannot describe) and a reachable
+`@static` concrete function (its symbol is file-local).
+
 ## Visibility
 
 Everything is public by default. Marking a function or struct `@private`

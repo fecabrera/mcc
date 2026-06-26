@@ -1,0 +1,301 @@
+"""Generate a ``.mci`` interface stub from a compiled program.
+
+An interface is valid mcc source that another program ``import``\\ s to compile
+and link against a precompiled object: concrete functions become ``@extern``
+prototypes (the real bodies live in the ``.o``), while types, constants, and
+generic/``@inline`` functions are emitted in full because the consumer needs
+their layout, value, or body to type-check and re-instantiate them.
+
+The stub is the root file's **public surface plus its transitive closure**: any
+declaration a shipped body or signature reaches is pulled in, even a ``@private``
+one (a generic helper called by a public generic must travel as source). Pulled-in
+``@private`` declarations keep their marker, so they stay private to the ``.mci`` --
+the consumer can use the public API that needs them but cannot name them directly.
+Unreachable ``@private``/``@static`` declarations are dropped, the original
+``import`` lines are preserved (a dependency's interface is pulled in
+transitively), and ``@if`` is already resolved before generation, so each
+interface reflects the target it was compiled for.
+"""
+
+from __future__ import annotations
+
+from dataclasses import fields, is_dataclass
+
+from mcc.codegen import CodeGen, is_struct
+from mcc.errors import LangError
+from mcc.nodes import (
+    Call,
+    Const,
+    EnumAccess,
+    EnumDecl,
+    Func,
+    GlobalVar,
+    StructDecl,
+    TypeRef,
+    Var,
+)
+
+
+def _is_void(ref: TypeRef) -> bool:
+    """Whether a return ``TypeRef`` is plain ``void`` (no pointer/array)."""
+    return (
+        ref.name == "void"
+        and not ref.stars
+        and not ref.dims
+        and ref.params is None
+    )
+
+
+def _type_names(ref: TypeRef) -> set[str]:
+    """Collect every base type name a type mentions, recursively.
+
+    Walks generic arguments and a function type's parameter/return types, so
+    ``list<hidden>*`` yields ``{"list", "hidden"}``.
+    """
+    names = set()
+    if ref.params is not None:
+        for p in ref.params:
+            names |= _type_names(p)
+        if ref.ret is not None:
+            names |= _type_names(ref.ret)
+    else:
+        names.add(ref.name)
+        for a in ref.args:
+            names |= _type_names(a)
+    return names
+
+
+def _collect_refs(obj, names: set[str]) -> None:
+    """Accumulate every name an AST fragment references into ``names``.
+
+    Adds function-call targets (``Call``), value references (``Var``), enum
+    scopes (``EnumAccess``), and the base names of any ``TypeRef`` reached, then
+    recurses through dataclass fields and lists -- enough to find every top-level
+    declaration a signature or body depends on.
+
+    Args:
+        obj: An AST node, list, or scalar to scan.
+        names: The set to add referenced names to, in place.
+    """
+    if isinstance(obj, TypeRef):
+        names |= _type_names(obj)
+        return  # _type_names already walked args/params/ret
+    if isinstance(obj, Var):
+        names.add(obj.name)
+    elif isinstance(obj, Call):
+        names.add(obj.name)
+    elif isinstance(obj, EnumAccess):
+        names.add(obj.enum)
+    if is_dataclass(obj):
+        for f in fields(obj):
+            _collect_refs(getattr(obj, f.name), names)
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            _collect_refs(item, names)
+
+
+class InterfaceWriter:
+    """Renders a compiled program's public surface (and closure) as a ``.mci``.
+
+    Attributes:
+        cg: A code generator run through :meth:`CodeGen.generate`, for its type
+            checks and flattened program.
+        source: The root file's full source text, sliced for verbatim
+            declarations.
+        imports: The root file's own ``(path, line)`` imports, re-emitted.
+        root: The root file's resolved path; only its declarations are emitted.
+        by_name: Each root declaration indexed by name (a name may map to
+            several functions -- an overload set).
+    """
+
+    def __init__(self, cg: CodeGen, source: str, imports: list):
+        """Initialize the writer.
+
+        Args:
+            cg: A code generator whose :meth:`generate` has already run.
+            source: The root file's source text.
+            imports: The root file's ``(path, line)`` import list.
+        """
+        self.cg = cg
+        self.source = source
+        self.imports = imports
+        self.root = cg.root_source
+        self.by_name: dict[str, list] = {}
+        for decl in self._root_decls():
+            self.by_name.setdefault(decl.name, []).append(decl)
+
+    def _root_decls(self):
+        """Yield every top-level declaration defined in the root file."""
+        p = self.cg.program
+        for group in (p.structs, p.enums, p.consts, p.globals, p.functions):
+            for decl in group:
+                if decl.source == self.root:
+                    yield decl
+
+    def _decl_refs(self, decl) -> set[str]:
+        """Names a declaration depends on, given how it will be emitted.
+
+        A function's body counts only when it travels (generic or ``@inline``);
+        a concrete function contributes its signature alone, since its body
+        stays in the object.
+
+        Args:
+            decl: The declaration to scan.
+
+        Returns:
+            The set of referenced names, with the declaration's own type
+            parameters removed.
+        """
+        names: set[str] = set()
+        if isinstance(decl, Func):
+            for _, t in decl.params:
+                _collect_refs(t, names)
+            _collect_refs(decl.ret_type, names)
+            if decl.type_params or decl.inline:  # the body travels
+                _collect_refs(decl.body, names)
+            names -= set(decl.type_params)
+        elif isinstance(decl, StructDecl):
+            for _, t in decl.fields:
+                _collect_refs(t, names)
+            if decl.base is not None:
+                _collect_refs(decl.base, names)
+            names -= set(decl.type_params)
+        elif isinstance(decl, EnumDecl):
+            if decl.underlying is not None:
+                _collect_refs(decl.underlying, names)
+            for _, value in decl.members:
+                _collect_refs(value, names)
+        elif isinstance(decl, Const):
+            _collect_refs(decl.value, names)
+        elif isinstance(decl, GlobalVar):
+            if decl.type_name is not None:
+                _collect_refs(decl.type_name, names)
+        return names
+
+    def _closure(self) -> list:
+        """The declarations to emit: the public surface plus all it reaches.
+
+        Seeds with every public (non-``@private``, non-``@static``) root
+        declaration, then pulls in whatever their signatures and shipped bodies
+        reference -- including ``@private``/``@static`` helpers -- transitively.
+
+        Returns:
+            The reachable declarations, in source order.
+        """
+        included: dict[int, object] = {}
+        work = [
+            decl
+            for decl in self._root_decls()
+            if not decl.private and not getattr(decl, "static", False)
+        ]
+        while work:
+            decl = work.pop()
+            if id(decl) in included:
+                continue
+            included[id(decl)] = decl
+            for name in self._decl_refs(decl):
+                work.extend(self.by_name.get(name, ()))
+        return sorted(
+            (d for d in included.values() if d.span is not None),
+            key=lambda d: d.span[0],
+        )
+
+    def _slice(self, decl) -> str:
+        """Return a declaration's verbatim source text from its span."""
+        start, end = decl.span
+        return self.source[start:end]
+
+    def _extern_prototype(self, func: Func) -> str:
+        """Render a concrete function as an ``@extern`` prototype.
+
+        Keeps a ``@private`` marker so a pulled-in helper stays private to the
+        interface; the bare name resolves to the compiled symbol (the parser
+        forbids ``@symbol`` on non-extern functions, so there is none to carry).
+
+        Args:
+            func: The function to externalize.
+
+        Returns:
+            The ``@extern fn ...;`` declaration text.
+
+        Raises:
+            LangError: When a parameter is a ``const`` struct (its hidden-pointer
+                ABI cannot be expressed as ``@extern``), or the function is
+                ``@static`` (its symbol is file-local, so no stable name exists).
+        """
+        if func.static:
+            raise LangError(
+                f"cannot export @static function {func.name!r} in an interface: its "
+                "symbol is file-local; make the helper @private or generic/@inline",
+                func.line,
+                source=func.source,
+            )
+        self.cg.current_source = func.source
+        for pname, ptype in func.params:
+            if pname in func.const_params and is_struct(
+                self.cg.lang_type(ptype, func.line)
+            ):
+                raise LangError(
+                    f"cannot generate an interface for {func.name!r}: a const "
+                    f"struct parameter ({pname!r}) is passed by hidden pointer, "
+                    "an ABI @extern cannot express",
+                    func.line,
+                    source=func.source,
+                )
+        params = [f"{pname}: {ptype}" for pname, ptype in func.params]
+        if func.variadic:
+            params.append("...")
+        ret = "" if _is_void(func.ret_type) else f" -> {func.ret_type}"
+        head = "@private @extern" if func.private else "@extern"
+        return f"{head} fn {func.name}({', '.join(params)}){ret};"
+
+    def _render(self, decl) -> str:
+        """Render one declaration for the interface.
+
+        A concrete function becomes an ``@extern`` prototype; everything else --
+        a type, constant, global, ``@extern`` declaration, or generic/``@inline``
+        function -- is emitted verbatim from its source span.
+
+        Args:
+            decl: The declaration to render.
+
+        Returns:
+            The interface text for the declaration.
+        """
+        if isinstance(decl, Func) and not (
+            decl.extern or decl.type_params or decl.inline
+        ):
+            return self._extern_prototype(decl)
+        return self._slice(decl)
+
+    def render(self) -> str:
+        """Render the full interface stub.
+
+        Returns:
+            The ``.mci`` source: a header comment, the preserved imports, then
+            every reachable declaration in source order, separated by blank
+            lines.
+        """
+        name = self.root.rsplit("/", 1)[-1] if self.root else "module"
+        blocks = [
+            f"// Interface generated from {name} by mcc -- do not edit.\n"
+            "// Import this alongside the matching object file."
+        ]
+        if self.imports:
+            blocks.append("\n".join(f'import "{path}";' for path, _ in self.imports))
+        blocks.extend(self._render(decl) for decl in self._closure())
+        return "\n\n".join(blocks) + "\n"
+
+
+def render_interface(cg: CodeGen, source: str, imports: list) -> str:
+    """Render a ``.mci`` interface from a generated program.
+
+    Args:
+        cg: A code generator whose :meth:`CodeGen.generate` has already run.
+        source: The root file's source text.
+        imports: The root file's ``(path, line)`` import list.
+
+    Returns:
+        The interface stub as mcc source text.
+    """
+    return InterfaceWriter(cg, source, imports).render()

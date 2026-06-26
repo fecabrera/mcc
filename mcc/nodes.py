@@ -113,6 +113,7 @@ class StructDecl:
     packed: bool = False
     volatile: bool = False
     source: str | None = None
+    span: tuple[int, int] | None = field(default=None, compare=False)
 
 
 @dataclass
@@ -142,6 +143,7 @@ class EnumDecl:
     private: bool = False
     static: bool = False
     source: str | None = None
+    span: tuple[int, int] | None = field(default=None, compare=False)
 
 
 @dataclass
@@ -182,6 +184,7 @@ class Func:
     symbol: str | None = None
     source: str | None = None
     const_params: set[str] = field(default_factory=set)
+    span: tuple[int, int] | None = field(default=None, compare=False)
 
 
 @dataclass
@@ -210,6 +213,7 @@ class GlobalVar:
     init: object | None = None
     symbol: str | None = None
     source: str | None = None
+    span: tuple[int, int] | None = field(default=None, compare=False)
 
 
 @dataclass
@@ -232,6 +236,7 @@ class Const:
     line: int
     private: bool = False
     source: str | None = None
+    span: tuple[int, int] | None = field(default=None, compare=False)
 
 
 @dataclass

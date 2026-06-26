@@ -377,6 +377,56 @@ def parse_defines(items: list[str]) -> dict[str, int]:
     return defines
 
 
+def emit_interface(source: Path, search_paths: tuple[Path, ...],
+                   target: str | None, defines: dict[str, int],
+                   output: Path | None) -> int:
+    """Write a ``.mci`` interface stub for ``source`` and return an exit status.
+
+    Compiles the source the same way as a normal build (so ``@if`` is resolved
+    and constants/enums are folded for the chosen target), then renders its
+    public surface as an importable stub. Compile and I/O errors are reported as
+    ``file: error: ...`` on stderr.
+
+    Args:
+        source: The entry source file to describe.
+        search_paths: Import search-path directories.
+        target: An LLVM target triple, or ``None`` for the host; selects which
+            ``@if`` branches and constant values the interface reflects.
+        defines: Command-line ``-D`` values for ``@if`` conditions.
+        output: The ``.mci`` path to write, or ``None`` for ``source.mci``.
+
+    Returns:
+        0 on success, 1 on a reported error.
+    """
+    from mcc.interface import render_interface
+
+    try:
+        text = source.read_text()
+        imports = Parser(tokenize(text)).parse_program().imports
+        program = load_program(source, search_paths)
+        cg = CodeGen(program, source.name, root_source=str(source.resolve()),
+                     target=target, defines=defines)
+        cg.generate()
+        stub = render_interface(cg, text, imports)
+    except OSError as err:
+        print(f"mcc: error: cannot read {source}: {err.strerror}", file=sys.stderr)
+        return 1
+    except LangError as err:
+        where = Path(err.source) if err.source else source
+        if where.is_absolute():
+            try:
+                where = where.relative_to(Path.cwd())
+            except ValueError:
+                pass
+        print(f"{where}: error: {err}", file=sys.stderr)
+        return 1
+
+    out = output or source.with_suffix(".mci")
+    out.write_text(stub)
+    print(f"wrote {out}")
+    return 0
+
+
 def main() -> int:
     """Run the ``mcc`` command-line interface.
 
@@ -396,6 +446,9 @@ def main() -> int:
     cli.add_argument("-O", type=int, default=2, choices=range(4), help="optimization level")
     cli.add_argument("--run", action="store_true", help="JIT-compile and run immediately")
     cli.add_argument("--emit-llvm", action="store_true", help="print LLVM IR and exit")
+    cli.add_argument("--emit-interface", action="store_true",
+                     help="write a .mci interface stub (@extern prototypes plus full "
+                          "types, constants, and generic/@inline functions) and exit")
     cli.add_argument("-I", "--import-path", action="append", type=Path, default=[],
                      metavar="DIR", help="add a directory to the import search path (repeatable)")
     cli.add_argument("--nostdlib", action="store_true",
@@ -428,6 +481,10 @@ def main() -> int:
     search_paths = list(args.import_path)
     if not args.nostdlib:
         search_paths.append(STDLIB_DIR)
+
+    if args.emit_interface:
+        return emit_interface(args.source, tuple(search_paths), args.target, defines,
+                              args.output)
 
     try:
         module = compile_to_ir(args.source, search_paths, args.target, defines,

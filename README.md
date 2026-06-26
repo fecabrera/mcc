@@ -256,6 +256,10 @@ reference section.
 - [x] Optimization levels `-O0`–`-O3`
 - [x] Cross-compilation (`--target`), `--general-regs-only`, `--nostdlib`, `-I`
 - [x] Separate compilation across files
+- [~] [Interface files](docs/language.md#interface-files) — `--emit-interface`
+      writes a `.mci` stub (`@extern` prototypes plus full types/consts/generics)
+      to ship beside an object; `.mci` import resolution and a native
+      object-only flag are still to come
 - [x] [Editor support](#editor-support) — VS Code syntax highlighting
 
 ### Planned

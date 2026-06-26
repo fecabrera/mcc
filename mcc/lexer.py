@@ -40,11 +40,14 @@ class Token:
             "->", "fn", ";").
         text: The exact source text the token was matched from.
         line: The 1-based line number where the token begins.
+        offset: The 0-based byte offset where the token begins, used to slice a
+            declaration's verbatim source span (see the interface generator).
     """
 
     kind: str
     text: str
     line: int
+    offset: int = 0  # start byte offset in the source, for span slicing
 
 
 def tokenize(source: str) -> list[Token]:
@@ -78,8 +81,8 @@ def tokenize(source: str) -> list[Token]:
             if kind in ("ARROW", "ELLIPSIS", "OP", "OP2") \
                     or (kind == "IDENT" and text in KEYWORDS):
                 kind = text
-            tokens.append(Token(kind, text, line))
+            tokens.append(Token(kind, text, line, match.start()))
         line += text.count("\n")
         pos = match.end()
-    tokens.append(Token("EOF", "", line))
+    tokens.append(Token("EOF", "", line, len(source)))
     return tokens

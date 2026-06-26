@@ -240,6 +240,24 @@ class Parser:
         return Conditional(cond, then, otherwise, line)
 
     def parse_toplevel_item(self):
+        """Parse one top-level item and record its source byte span.
+
+        Wraps :meth:`_parse_toplevel_item`, stamping ``span`` (start/end byte
+        offsets, including any leading annotations) on declarations that carry
+        it. The interface generator slices a declaration's verbatim source from
+        this span.
+
+        Returns:
+            The parsed declaration, with ``span`` set when it has the field.
+        """
+        start = self.cur.offset
+        item = self._parse_toplevel_item()
+        last = self.tokens[self.pos - 1]
+        if hasattr(item, "span"):
+            item.span = (start, last.offset + len(last.text))
+        return item
+
+    def _parse_toplevel_item(self):
         """Parse one top-level item: a struct, global, const, function, or @if.
 
         Leading annotations (``@private``, ``@static``, ``@extern``,
