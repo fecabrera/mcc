@@ -31,7 +31,8 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [extern.mc](extern.mc) | `@extern` functions (including variadic `...`), interfacing with libc |
 | [inline_asm.mc](inline_asm.mc) | `@asm fn` and the `@asm(...)` expression, `$out`/`$N` operands and `:w` register modifiers, gated by `@if` on `TARGET_ARCH` |
 | [enums.mc](enums.mc) | `enum Name: T { M = v, ... }`, `Enum::Member`, the enum name as a type, custom underlying types (uint64 flags, string members), members referencing earlier ones |
-| [structs.mc](structs.mc) | structs, generic structs, `->` / `.`, `null`, a hand-built linked list |
+| [structs.mc](structs.mc) | structs, generic structs, `->` / `.`, `null`, struct literals, a hand-built linked list |
+| [struct_literals.mc](struct_literals.mc) | `struct Name { field = value, ... }` literals: omitted fields zeroed, free field order, generics, nesting, as args/returns/through a pointer |
 | [data_structures.mc](data_structures.mc) | the growable lib containers: `list<T>`, `stack<T>` (LIFO), `queue<T>` (FIFO ring buffer) |
 | [pointers.mc](pointers.mc) | `import`, heap allocation, `&` `*` `[]`, `sizeof`, `as` casts |
 | [generics.mc](generics.mc) | type inference, generic recursion, multiple type parameters |

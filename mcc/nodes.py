@@ -658,6 +658,24 @@ class ArrayLit:
 
 
 @dataclass
+class StructLit:
+    """A struct literal ``struct Name[<args>] { field = expr, ... }``.
+
+    Produces a struct value with the listed fields set and every omitted field
+    zero-initialized.
+
+    Attributes:
+        type_ref: The struct type (its name and any generic arguments).
+        fields: ``(field name, value expression)`` pairs, in source order.
+        line: Source line for diagnostics.
+    """
+
+    type_ref: TypeRef
+    fields: list
+    line: int
+
+
+@dataclass
 class Var:
     """A reference to a named variable, constant, or function.
 

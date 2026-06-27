@@ -49,6 +49,7 @@ from mcc.nodes import (
     StoreMember,
     StrLit,
     StructDecl,
+    StructLit,
     Ternary,
     TypeAlias,
     TypeRef,
@@ -1321,6 +1322,8 @@ class Parser:
                     break
             self.expect("]")
             return ArrayLit(elements, tok.line)
+        if tok.kind == "struct":
+            return self.parse_struct_lit(tok.line)
         if tok.kind == "sizeof":
             self.expect("(")
             type_name = self.parse_type_ref()
@@ -1341,6 +1344,36 @@ class Parser:
                 return Var(tok.text, tok.line)
             return Call(tok.text, type_args, self.parse_call_args(), tok.line)
         raise LangError(f"unexpected token {tok.text!r}", tok.line)
+
+    def parse_struct_lit(self, line: int) -> StructLit:
+        """Parse a struct literal ``struct Name[<args>] { field = expr, ... }``.
+
+        The leading ``struct`` keyword has already been consumed. A trailing
+        comma is allowed, and an empty ``{ }`` zero-initializes every field.
+
+        Args:
+            line: Source line of the ``struct`` keyword, for diagnostics.
+
+        Returns:
+            The parsed ``StructLit``.
+        """
+        name = self.expect("IDENT").text
+        args = []
+        if self.accept("<"):
+            args.append(self.parse_type_ref())
+            while self.accept(","):
+                args.append(self.parse_type_ref())
+            self.expect_close_angle()
+        self.expect("{")
+        fields = []
+        while self.cur.kind != "}":
+            fname = self.expect("IDENT").text
+            self.expect("=")
+            fields.append((fname, self.parse_expr()))
+            if not self.accept(","):  # a trailing comma is allowed
+                break
+        self.expect("}")
+        return StructLit(TypeRef(name, args), fields, line)
 
     def try_type_args(self) -> list[TypeRef]:
         """Speculatively parse ``<type, ...>`` generic arguments at a call site.

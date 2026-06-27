@@ -61,6 +61,7 @@ from mcc.nodes import (
     StoreMember,
     StrLit,
     StructDecl,
+    StructLit,
     Ternary,
     TypeAlias,
     TypeRef,
@@ -2147,6 +2148,50 @@ class CodeGen:
             raise LangError("block expression never emits a value", expr.line)
         return TypedValue(self.gen_load(ctx.slot), ctx.type)
 
+    def gen_struct_lit(self, expr: StructLit) -> TypedValue:
+        """Lower a struct literal ``struct Name { field = expr, ... }``.
+
+        Allocates a temporary, zero-initializes it (so omitted fields read as
+        zero), stores each named field, and yields the struct by value. The
+        field expressions are coerced to their declared types, so an untyped
+        integer constant adapts as it would in an assignment.
+
+        Args:
+            expr: The ``StructLit`` node.
+
+        Returns:
+            The constructed struct as a ``TypedValue``.
+
+        Raises:
+            LangError: When the type is not a struct, a field is unknown, or a
+                field is given twice.
+        """
+        struct_type = self.lang_type(expr.type_ref, expr.line)
+        if not is_struct(struct_type):
+            raise LangError(
+                f"a struct literal needs a struct type, not {struct_type}", expr.line
+            )
+        slot = self.builder.alloca(struct_type.ir)
+        if over_aligned(struct_type):
+            slot.align = type_align(struct_type)
+        self.builder.store(ir.Constant(struct_type.ir, None), slot)  # zero omitted fields
+        seen: set[str] = set()
+        for fname, value_expr in expr.fields:
+            if fname in seen:
+                raise LangError(
+                    f"field {fname!r} is set twice in the struct literal", expr.line
+                )
+            seen.add(fname)
+            index, ftype = self.struct_field(struct_type, fname, expr.line)
+            addr = self.builder.gep(
+                slot, [I32_ZERO, ir.Constant(ir.IntType(32), index)], inbounds=True
+            )
+            value = self.coerce(
+                self.gen_expr(value_expr), ftype, value_expr.line, f"field {fname!r}"
+            )
+            self.builder.store(value.value, addr)
+        return TypedValue(self.builder.load(slot), struct_type)
+
     def bind_local(self, name: str, slot, lang_type: LangType):
         """Record a local in the current scope.
 
@@ -2958,6 +3003,8 @@ class CodeGen:
             raise LangError(
                 "an array literal is only allowed as a variable initializer", expr.line
             )
+        if isinstance(expr, StructLit):
+            return self.gen_struct_lit(expr)
         if isinstance(expr, BlockExpr):
             return self.gen_block_expr(expr)
         if isinstance(expr, Var):

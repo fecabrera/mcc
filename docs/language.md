@@ -853,6 +853,24 @@ fn main() -> int32 {
 }
 ```
 
+A **struct literal** builds a struct value in one expression:
+`struct Name { field = value, ... }`. Any field left out is zero-initialized,
+so `struct point { }` is all zeros and the order of the listed fields does not
+matter. Each value is checked against its field's type exactly as an assignment
+would be, so untyped integer constants adapt to the field type. The literal is
+an ordinary value — usable as an initializer, an argument, a return value, or
+the right side of an assignment (`*p = struct point { x = 1, y = 2 };`).
+
+```c
+let p = struct point { x = 6, y = 4 };
+let q = struct point { x = 9 };          // y is 0
+let r = struct node<int32> { value = 1 };  // generic: give the type arguments
+```
+
+Generic structs need their type arguments spelled out
+(`struct pair<int32, uint8*> { ... }`); they are not inferred from the field
+values. A field whose own type is a struct takes a nested literal.
+
 `@align(N)` raises a struct's alignment to `N` bytes — a power of two; asking
 for less than the natural alignment is an error. `sizeof` rounds up to a
 multiple of the alignment, and field offsets and array strides stay

@@ -262,7 +262,8 @@ reference section.
 - [x] [Pointers](docs/language.md#pointers) — address-of, deref, `null`
 - [x] [Function pointers](docs/language.md#function-pointers)
 - [x] [Arrays](docs/language.md#arrays) — fixed-size `T[N]`, indexing, `len`, `sizeof`
-- [x] [Structs](docs/language.md#structs) — `.`/`->` access, generics,
+- [x] [Structs](docs/language.md#structs) — `.`/`->` access, generics, struct
+      literals (`struct point { x = 6, y = 4 }`, omitted fields zeroed),
       `@packed`/`@align`/`@volatile`, `extends` (prefix specialization),
       struct value upcast
 - [x] [Enums](docs/language.md#enums) — `enum Name[: type] { … }`, `Name::Member`
@@ -330,11 +331,9 @@ Grouped by scope.
         like `linux_dirent64`'s `d_name[]` (today needs the `T[1]` "struct hack")
   - [ ] `offsetof(struct S, field)` — the byte offset of a field as a constant
         (today only `sizeof`, which includes trailing padding)
-  - [ ] struct literals — `struct point { x = 6, y = 4 }`, with omitted fields
-        zero-initialized (today a struct is built field-by-field after `let`)
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
-      `fn new<T>() -> T*`, writes a struct literal through the result, and emits
-      the pointer:
+      `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
+      through the result, and emits the pointer:
   ```c
   let var = new T { ... };
   // desugars to
@@ -344,10 +343,10 @@ Grouped by scope.
       emit tmp;
   };
   ```
-  Everything here already works (block expressions, `new<T>` in
-  [memory](lib/memory.mc), deref-assign, whole-struct copy) except the struct
-  literal, so the remaining work is struct literals plus the surface-syntax
-  rewrite into the block above — no new codegen.
+  Every piece already works (block expressions, `new<T>` in
+  [memory](lib/memory.mc), struct literals, deref-assign, whole-struct copy),
+  so the only remaining work is the surface-syntax rewrite into the block above
+  — no new codegen.
 
 #### Functions and methods
 
