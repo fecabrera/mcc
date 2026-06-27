@@ -332,7 +332,7 @@ Grouped by scope.
         zero-initialized (today a struct is built field-by-field after `let`)
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a struct literal through the result, and emits
-      the pointer; depends on struct literals:
+      the pointer:
   ```c
   let var = new T { ... };
   // desugars to
@@ -342,6 +342,10 @@ Grouped by scope.
       emit tmp;
   };
   ```
+  Everything here already works (block expressions, `new<T>` in
+  [memory](lib/memory.mc), deref-assign, whole-struct copy) except the struct
+  literal, so the remaining work is struct literals plus the surface-syntax
+  rewrite into the block above — no new codegen.
 
 #### Functions and methods
 
