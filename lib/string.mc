@@ -1,4 +1,5 @@
 import "list";
+import "range";
 
 /**
  * Default slot count reserved by string_init before the first growth.
@@ -56,10 +57,9 @@ fn string_duplicate(dst: struct string*, src: struct string*) {
 fn string_from_array(self: struct string*, str: uint8*, n: uint64) {
     list_init(self as struct list<uint8>*, n);
     
-    let i: uint64 = 0;
-    while (i < n) {
+    let r = struct range { end = n };
+    for i in &r {
         string_append(self, str[i]);
-        i = i + 1;
     }
 }
 
@@ -136,11 +136,10 @@ fn string_eq(self: struct string*, str: struct string*) -> bool {
     if (self->length != str->length)
         return false;
     
-    let i: uint64 = 0;
-    while(i < self->length) {
+    let r = struct range { end = self->length };
+    for i in &r {
         if (self->data[i] != str->data[i])
             return false;
-        i = i + 1;
     }
     
     return true;

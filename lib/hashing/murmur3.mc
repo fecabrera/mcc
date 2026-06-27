@@ -1,3 +1,5 @@
+import "range";
+
 /**
  * Rotates x left by r bits.
  *
@@ -40,8 +42,8 @@ fn murmur3(key: uint8*, length: uint64, seed: uint32) -> uint32 {
     let h: uint32 = seed;
     let nblocks = length / 4;
 
-    let i: uint64 = 0;
-    while (i < nblocks) {
+    let r = struct range { end = nblocks };
+    for i in &r {
         let k = load_le(&key[i * 4]);
         k = k * 3432918353;  // 0xcc9e2d51
         k = rotl32(k, 15);
@@ -49,7 +51,6 @@ fn murmur3(key: uint8*, length: uint64, seed: uint32) -> uint32 {
         h = h ^ k;
         h = rotl32(h, 13);
         h = h * 5 + 3864292196;  // 0xe6546b64
-        i = i + 1;
     }
 
     let tail = nblocks * 4;

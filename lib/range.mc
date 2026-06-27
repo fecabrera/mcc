@@ -20,6 +20,7 @@ struct range_iter<T> {
  *
  * @return an iterator positioned at start
  */
+@inline
 fn range_it<T>(self: struct range<T>*) -> struct range_iter<T> {
     let it: struct range_iter<T>;
     it.obj = self;
@@ -36,6 +37,7 @@ fn range_it<T>(self: struct range<T>*) -> struct range_iter<T> {
  *
  * @return true if a value was produced, false once idx reaches end
  */
+@inline
 fn range_next<T>(it: struct range_iter<T>*, out: T*) -> bool {
     if (it->idx < it->obj->end) {
         *out = it->idx;

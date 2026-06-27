@@ -1,5 +1,6 @@
 import "memory";
 import "hash";
+import "range";
 import "iteration/pair";
 
 // Slot states
@@ -49,10 +50,9 @@ fn set_init<K, V>(self: struct set<K, V>*, capacity: uint64) {
     self->length = 0;
     self->capacity = capacity;
 
-    let i: uint64 = 0;
-    while (i < capacity) {
+    let r = struct range { end = capacity };
+    for i in &r {
         self->entries[i].state = set_entry_state::EMPTY;
-        i = i + 1;
     }
 }
 
