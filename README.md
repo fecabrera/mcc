@@ -263,7 +263,8 @@ reference section.
 - [x] [Function pointers](docs/language.md#function-pointers)
 - [x] [Arrays](docs/language.md#arrays) — fixed-size `T[N]`, indexing, `len`, `sizeof`
 - [x] [Structs](docs/language.md#structs) — `.`/`->` access, generics, struct
-      literals (`struct point { x = 6, y = 4 }`, omitted fields zeroed),
+      literals (`struct point { x = 6, y = 4 }`, omitted fields zeroed, generic
+      type arguments inferred from the fields),
       `@packed`/`@align`/`@volatile`, `extends` (prefix specialization),
       struct value upcast
 - [x] [Enums](docs/language.md#enums) — `enum Name[: type] { … }`, `Name::Member`

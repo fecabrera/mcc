@@ -47,8 +47,11 @@ fn main() -> int32 {
     let a = alloc<struct node<int32>>(1);
     let b = alloc<struct node<int32>>(1);
     let c = alloc<struct node<int32>>(1);
-    *a = struct node<int32> { value = 1, next = b };
-    *b = struct node<int32> { value = 2, next = c };
+    // `next` points to a typed node, so the type argument is inferred...
+    *a = struct node { value = 1, next = b };
+    *b = struct node { value = 2, next = c };
+    // ...but here `next` is null (which pins nothing) and `value` is an untyped
+    // constant, so there is nothing to infer T from -- spell it out.
     *c = struct node<int32> { value = 4, next = null };
     println("list sum = %d", sum_list(a));
     dealloc(a); dealloc(b); dealloc(c);
