@@ -2194,13 +2194,47 @@ class CodeGen:
             slot.align = type_align(struct_type)
         self.builder.store(ir.Constant(struct_type.ir, None), slot)  # zero omitted fields
         for fname, tv, line in items:
-            index, ftype = self.struct_field(struct_type, fname, line)
-            addr = self.builder.gep(
-                slot, [I32_ZERO, ir.Constant(ir.IntType(32), index)], inbounds=True
+            self.store_struct_field(slot, struct_type, fname, tv, line, "field")
+        # Fill any omitted field that declares a default; the rest keep the zero.
+        for fname, default_expr in self.struct_defaults(decl).items():
+            if fname in seen:
+                continue
+            self.store_struct_field(
+                slot, struct_type, fname, self.gen_expr(default_expr),
+                default_expr.line, "default for field",
             )
-            value = self.coerce(tv, ftype, line, f"field {fname!r}")
-            self.builder.store(value.value, addr)
         return TypedValue(self.builder.load(slot), struct_type)
+
+    def store_struct_field(self, slot, struct_type, fname, tv, line, what):
+        """Coerce ``tv`` to field ``fname``'s type and store it into ``slot``."""
+        index, ftype = self.struct_field(struct_type, fname, line)
+        addr = self.builder.gep(
+            slot, [I32_ZERO, ir.Constant(ir.IntType(32), index)], inbounds=True
+        )
+        value = self.coerce(tv, ftype, line, f"{what} {fname!r}")
+        self.builder.store(value.value, addr)
+
+    def struct_defaults(self, decl) -> dict:
+        """Collect a struct's default field values, including inherited ones.
+
+        ``extends`` lays base fields first, so a derived struct's literal can
+        rely on the base's defaults too; a derived default overrides a base one
+        of the same name.
+
+        Args:
+            decl: The struct declaration, or ``None``.
+
+        Returns:
+            A ``{field name: default-value expression}`` map (empty when
+            ``decl`` is ``None``).
+        """
+        if decl is None:
+            return {}
+        merged = {}
+        if decl.base is not None:
+            merged.update(self.struct_defaults(self.lookup_struct_decl(decl.base.name)))
+        merged.update(decl.defaults)
+        return merged
 
     def lookup_struct_decl(self, name: str) -> "StructDecl | None":
         """Find a struct declaration by name, preferring a file-scoped one.

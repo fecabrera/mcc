@@ -10,6 +10,10 @@ struct point { x: int32; y: int32; }
 struct pair<A, B> { a: A; b: B; }
 struct line { from: struct point; to: struct point; }
 
+// A field may declare a default with `= value`; a literal that omits the field
+// uses the default instead of zero.
+struct config { capacity: int32 = 16; verbose: int32 = 0; name: uint8*; }
+
 // A literal is an ordinary value, so it works as a function argument...
 fn length2(p: struct point) -> int32 { return p.x * p.x + p.y * p.y; }
 
@@ -48,6 +52,11 @@ fn main() -> int32 {
         to   = struct point { x = 4, y = 6 },
     };
     println("segment (%d,%d) -> (%d,%d)", seg.from.x, seg.from.y, seg.to.x, seg.to.y);
+
+    // Default field values: the omitted fields take their declared defaults
+    // (capacity = 16, verbose = 0), while a given field overrides its default.
+    let cfg = struct config { name = "db" };
+    println("config: capacity=%d verbose=%d name=%s", cfg.capacity, cfg.verbose, cfg.name);
 
     // A literal is a value, so it can be written through a pointer -- the
     // pattern an eventual `new point { ... }` sugar would build on.

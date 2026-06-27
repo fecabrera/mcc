@@ -876,6 +876,26 @@ untyped constant fills a parameter no typed field determined. A parameter that
 no provided field mentions can't be inferred, so spell those cases out. A field
 whose own type is a struct takes a nested literal.
 
+A field may declare a **default value** with `name: type = expr;`. When a struct
+literal omits that field, its default is used instead of zero (an explicit value
+in the literal still wins); fields with no default stay zero. `extends` carries
+the base's defaults down to a derived struct's literal.
+
+```c
+struct config {
+    capacity: int32 = 16;     // used when a literal omits `capacity`
+    verbose:  int32 = 0;
+    name:     uint8*;         // no default — zero (null) when omitted
+}
+
+let c = struct config { name = "db" };   // capacity = 16, verbose = 0
+```
+
+A default is an ordinary expression evaluated at each literal that uses it, so
+it should be self-contained — a literal, a `const`, or another in-scope value —
+and not refer to the struct's own type parameters. A defaulted field that is
+omitted does not take part in type-argument inference.
+
 `@align(N)` raises a struct's alignment to `N` bytes — a power of two; asking
 for less than the natural alignment is an error. `sizeof` rounds up to a
 multiple of the alignment, and field offsets and array strides stay

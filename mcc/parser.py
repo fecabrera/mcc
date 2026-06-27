@@ -640,6 +640,7 @@ class Parser:
             base = self.parse_base_ref()
         # The body is required, except `struct B extends A;` (a specialization
         # that adds no fields of its own).
+        defaults = {}
         if base is not None and self.accept(";"):
             fields = []
         else:
@@ -648,7 +649,10 @@ class Parser:
             while self.cur.kind != "}":
                 fname = self.expect("IDENT").text
                 self.expect(":")
-                fields.append((fname, self.parse_type_ref()))
+                ftype = self.parse_type_ref()
+                if self.accept("="):  # name: type = default;
+                    defaults[fname] = self.parse_expr()
+                fields.append((fname, ftype))
                 self.expect(";")
             self.expect("}")
         return StructDecl(
@@ -662,6 +666,7 @@ class Parser:
             align=align,
             packed=packed,
             volatile=volatile,
+            defaults=defaults,
         )
 
     def parse_base_ref(self) -> TypeRef:

@@ -101,6 +101,9 @@ class StructDecl:
         align: ``@align(N)`` -- raised alignment, a power of two, or ``None``.
         packed: ``@packed`` -- no padding between fields; alignment 1.
         volatile: ``@volatile`` -- field accesses cannot be optimized away.
+        defaults: ``{field name: default-value expression}`` for fields declared
+            ``name: type = expr;``. A struct literal uses a field's default when
+            the field is omitted (falling back to zero when there is none).
         source: Defining file, stamped by the driver.
     """
 
@@ -114,6 +117,7 @@ class StructDecl:
     align: int | None = None
     packed: bool = False
     volatile: bool = False
+    defaults: dict = field(default_factory=dict)
     source: str | None = None
     span: tuple[int, int] | None = field(default=None, compare=False)
 

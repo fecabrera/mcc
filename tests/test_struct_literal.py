@@ -142,6 +142,60 @@ def test_unknown_field_on_generic_literal_is_rejected():
         compile_ir(source)
 
 
+# --------------------------------------------------------- default member values
+
+
+def test_field_default_parses():
+    (decl,) = parse("struct cfg { cap: int32 = 16; name: uint8*; }").structs
+    assert decl.defaults.keys() == {"cap"}
+    assert "name" not in decl.defaults
+
+
+def test_omitted_field_uses_its_default():
+    source = """
+        struct cfg { cap: int32 = 16; flag: int32 = 1; }
+        fn main() -> int32 {
+            let c = struct cfg { };       // both defaulted
+            return c.cap + c.flag;        // 16 + 1
+        }
+    """
+    assert run(source) == 17
+
+
+def test_provided_field_overrides_default():
+    source = """
+        struct cfg { cap: int32 = 16; }
+        fn main() -> int32 {
+            let c = struct cfg { cap = 5 };
+            return c.cap;
+        }
+    """
+    assert run(source) == 5
+
+
+def test_default_with_generic_and_inference():
+    source = """
+        struct range<T> { start: T = 0; end: T; }
+        fn main() -> int32 {
+            let r = struct range { end = 5 };   // start defaults to 0; T from end
+            return (r.end - r.start) as int32;
+        }
+    """
+    assert run(source) == 5
+
+
+def test_inherited_field_default():
+    source = """
+        struct base { tag: int32 = 7; }
+        struct derived extends base { extra: int32 = 9; }
+        fn main() -> int32 {
+            let d = struct derived { };
+            return d.tag + d.extra;     // 7 + 9
+        }
+    """
+    assert run(source) == 16
+
+
 def test_nested_struct_literal():
     source = """
         struct point { x: int32; y: int32; }

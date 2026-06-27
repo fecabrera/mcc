@@ -2,7 +2,7 @@
 // with `for ... in`. Generic over the integer type T.
 
 struct range<T> {
-    start: T;   // first value, included
+    start: T = 0;   // first value, included
     end: T;     // one past the last value, excluded
 }
 
