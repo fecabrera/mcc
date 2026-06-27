@@ -1,8 +1,13 @@
 import "std";
 
+// An array dimension can be any constant integer expression -- a `const`,
+// `sizeof`, arithmetic over them -- not just a literal. `counts` is sized for
+// every decimal digit, written as a constant expression.
+const DIGITS = 10;
+
 // `@static` makes a file-scoped variable with its own zero-initialized
 // storage that persists for the whole program -- here, a histogram buffer.
-@static let counts: int32[10];
+@static let counts: int32[DIGITS];
 
 // A static lookup table built from an array literal. The outer dimension is
 // left as [] and inferred from the literal; @static initializers must be
@@ -35,6 +40,11 @@ fn main() -> int32 {
     }
     println("squares[5] = %d, sum = %d", squares[5], sum(squares, 6));
     println("sizeof(int32[6]) = %llu bytes", sizeof(int32[6]));
+
+    // A constant expression sizes this one: room for a digit histogram plus a
+    // spare slot. len() reports the computed size (DIGITS + 1 == 11).
+    let padded: int32[DIGITS + 1];
+    println("padded holds %llu ints", len(padded));
 
     // An array literal initializes in one place; the size can be inferred.
     let digits: int32[] = [3, 1, 4, 1, 5, 9, 1];

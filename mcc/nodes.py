@@ -24,8 +24,9 @@ class TypeRef:
         dims: Fixed array sizes, outermost first, so ``int32[3][4]`` is
             ``dims=[3, 4]``. A ``None`` entry is an inferred ``[]`` (allowed
             only as the outermost dimension of an initialized array); a ``str``
-            entry names an integer ``const`` resolved to its value during code
-            generation.
+            entry names an integer ``const``; anything more complex is kept as
+            its expression node. All are resolved to a positive integer during
+            code generation.
     """
 
     name: str
@@ -33,9 +34,7 @@ class TypeRef:
     stars: int = 0
     params: list["TypeRef"] | None = None  # set for fn(...) -> ret types
     ret: "TypeRef | None" = None
-    dims: list[int | str | None] = field(
-        default_factory=list
-    )  # array sizes, outermost first
+    dims: list = field(default_factory=list)  # array sizes, outermost first
 
     def __str__(self) -> str:
         """Render the type back to its source spelling.
@@ -52,8 +51,47 @@ class TypeRef:
             text = self.name
             if self.args:
                 text += "<" + ", ".join(str(a) for a in self.args) + ">"
-        dims = "".join(f"[{'' if d is None else d}]" for d in self.dims)
+        dims = "".join(f"[{render_dim(d)}]" for d in self.dims)
         return text + "*" * self.stars + dims
+
+
+def render_dim(d) -> str:
+    """Render an array dimension back to its source spelling.
+
+    A dimension is ``None`` (an inferred ``[]``), an integer literal, the
+    ``str`` name of a ``const``, or a constant expression node.
+    """
+    if d is None:
+        return ""
+    if isinstance(d, (int, str)):
+        return str(d)
+    return render_const_expr(d)
+
+
+def render_const_expr(e) -> str:
+    """Best-effort render of a constant expression (used in array dimensions)."""
+    if isinstance(e, IntLit):
+        return str(e.value)
+    if isinstance(e, BoolLit):
+        return "true" if e.value else "false"
+    if isinstance(e, Var):
+        return e.name
+    if isinstance(e, EnumAccess):
+        return f"{e.enum}::{e.member}"
+    if isinstance(e, SizeOf):
+        return f"sizeof({e.type_name})"
+    if isinstance(e, Unary):
+        return f"{e.op}{render_const_expr(e.operand)}"
+    if isinstance(e, Cast):
+        return f"{render_const_expr(e.value)} as {e.type_name}"
+    if isinstance(e, Binary):
+        return f"({render_const_expr(e.lhs)} {e.op} {render_const_expr(e.rhs)})"
+    if isinstance(e, Ternary):
+        return (
+            f"({render_const_expr(e.cond)} ? {render_const_expr(e.then)} "
+            f": {render_const_expr(e.otherwise)})"
+        )
+    return "?"
 
 
 @dataclass

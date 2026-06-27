@@ -514,29 +514,37 @@ class Parser:
             name, args, self.parse_stars(greedy_stars), dims=self.parse_dims()
         )
 
-    def parse_dims(self) -> list[int | str | None]:
-        """Parse trailing fixed-array dimensions ``[N]``, ``[name]``, or ``[]``.
+    def parse_dims(self) -> list:
+        """Parse trailing fixed-array dimensions ``[N]``, ``[expr]``, or ``[]``.
+
+        Each non-empty dimension is a constant expression, evaluated in codegen.
+        The two common forms are kept in a simpler shape: a plain integer literal
+        becomes an ``int`` and a lone ``const`` name a ``str``; anything else is
+        kept as its expression node. ``[]`` is an inferred dimension (``None``).
 
         Returns:
-            The dimensions, outermost first: an integer size, the ``str`` name
-            of an integer ``const`` (resolved in codegen), or ``None`` for an
-            inferred ``[]``.
+            The dimensions, outermost first.
 
         Raises:
-            LangError: When an explicit array size is less than 1.
+            LangError: When an explicit integer-literal size is less than 1.
         """
         dims = []
         while self.cur.kind == "[":
             line = self.advance().line
             if self.cur.kind == "]":
                 dims.append(None)  # an inferred [] dimension
-            elif self.cur.kind == "IDENT":
-                dims.append(self.advance().text)  # a const name, resolved in codegen
             else:
-                size = int_value(self.expect("INT").text)
-                if size < 1:
-                    raise LangError(f"array size must be at least 1, not {size}", line)
-                dims.append(size)
+                expr = self.parse_expr()
+                if isinstance(expr, IntLit):
+                    if expr.value < 1:
+                        raise LangError(
+                            f"array size must be at least 1, not {expr.value}", line
+                        )
+                    dims.append(expr.value)  # a literal size
+                elif isinstance(expr, Var):
+                    dims.append(expr.name)  # a const name, resolved in codegen
+                else:
+                    dims.append(expr)  # a constant expression, resolved in codegen
             self.expect("]")
         return dims
 

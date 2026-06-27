@@ -25,7 +25,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [variadic.mc](variadic.mc) | variadic `...` definitions, `va_list`, `va_start`/`va_end`, forwarding to `vsnprintf` |
 | [function_pointers.mc](function_pointers.mc) | `fn(...) -> R` types, callbacks in structs, dispatch tables, `null` callbacks |
 | [type_aliases.mc](type_aliases.mc) | `type <name> = <type>;` transparent aliases for builtins, pointers, function pointers, and structs; `type` as an identifier |
-| [arrays.mc](arrays.mc) | fixed-size `T[N]` arrays, indexing, `sizeof`, pointer decay, multi-dim, a `@static` buffer |
+| [arrays.mc](arrays.mc) | fixed-size `T[N]` arrays (`N` a constant expression), indexing, `sizeof`, pointer decay, multi-dim, a `@static` buffer |
 | [io.mc](io.mc) | printf format specifiers, `puts`, `putchar`, string escapes |
 | [unsigned.mc](unsigned.mc) | unsigned division/comparison semantics, zero-extension |
 | [extern.mc](extern.mc) | `@extern` functions (including variadic `...`), interfacing with libc |

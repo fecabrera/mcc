@@ -103,6 +103,57 @@ def test_list_size_must_be_positive():
         parse("fn main() { let x: int32[0]; }")
 
 
+def test_const_expression_dimension_parses():
+    (func,) = parse("fn f(g: int32[N + 1]) {}").functions
+    t = func.params[0][1]
+    assert str(t) == "int32[(N + 1)]"   # kept as an expression, rendered back
+
+
+def test_const_expression_dimension_size():
+    source = """
+    const N = 4;
+    fn main() -> int32 {
+        let a: int32[N + 1];     // 5
+        let b: int32[N * 2];     // 8
+        return (len(a) + len(b)) as int32;
+    }
+    """
+    assert run(source) == 13
+
+
+def test_const_expression_dimension_in_struct_field():
+    source = """
+    const ROWS = 3;
+    const COLS = 4;
+    struct grid { cells: int32[ROWS * COLS]; }
+    fn main() -> int32 {
+        let g: struct grid;
+        return len(g.cells) as int32;   // 12
+    }
+    """
+    assert run(source) == 12
+
+
+def test_sizeof_in_dimension():
+    source = """
+    fn main() -> int32 {
+        let a: int32[sizeof(int64)];    // 8
+        return len(a) as int32;
+    }
+    """
+    assert run(source) == 8
+
+
+def test_const_expression_dimension_must_be_positive():
+    with pytest.raises(LangError, match="array size must be at least 1"):
+        compile_ir("const N = 2; fn main() { let x: int32[N - 2]; }")
+
+
+def test_non_constant_dimension_is_rejected():
+    with pytest.raises(LangError, match="not a constant"):
+        compile_ir("fn f(n: int32) { let x: int32[n + 1]; }")
+
+
 def test_list_stack_allocation_in_ir():
     ir_text = compile_ir(
         "fn main() -> int32 { let buf: int32[8]; buf[0] = 1; return buf[0]; }"

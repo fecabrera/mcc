@@ -779,6 +779,18 @@ fn main() -> int32 {
 }
 ```
 
+A dimension `N` may be any constant integer expression — a literal, a `const`,
+`sizeof`, an `as` cast, or arithmetic over them — evaluated at compile time, and
+it must come out at least 1. So all of these are fixed-size arrays:
+
+```c
+const ROWS = 4;
+const COLS = 4;
+let board: int32[ROWS * COLS];      // 16
+let line:  uint8[COLS + 1];         // 5, room for a trailing NUL
+let words: uint8*[sizeof(int64)];   // 8
+```
+
 An array literal `[a, b, c]` (a trailing comma is allowed) initializes an
 array, nesting for more dimensions. The outermost dimension can be left as
 `[]` and is inferred from the literal's length:

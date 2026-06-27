@@ -1462,8 +1462,34 @@ class CodeGen:
                 )
             if isinstance(size, str):  # a const name, e.g. int32[N]
                 size = self.const_dim(size, line)
+            elif not isinstance(size, int):  # a constant expression, e.g. int32[N+1]
+                size = self.eval_dim(size, line)
             base = list_of(base, size)
         return base
+
+    def eval_dim(self, expr, line: int) -> int:
+        """Fold a constant-expression array size to a positive integer.
+
+        Args:
+            expr: The dimension expression (e.g. ``N + 1`` or ``2 * SIZE``).
+            line: Source line for diagnostics.
+
+        Returns:
+            The positive integer size.
+
+        Raises:
+            LangError: When the expression is not a constant integer, or is less
+                than 1.
+        """
+        tv = self.eval_const(expr, line)
+        if not isinstance(tv.value, ir.Constant) or not is_integer(tv.type):
+            raise LangError(
+                "an array size must be a constant integer expression", line
+            )
+        size = tv.value.constant
+        if size < 1:
+            raise LangError(f"array size must be at least 1, not {size}", line)
+        return size
 
     def const_dim(self, name: str, line: int) -> int:
         """Resolve a ``const`` used as an array size to its integer value.
