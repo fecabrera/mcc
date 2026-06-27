@@ -14,7 +14,7 @@ in mcc.
 
 | Module | Import | Provides |
 |--------|--------|----------|
-| [memory.mc](memory.mc) | `import "memory";` | Typed heap allocation over `malloc`/`realloc`/`free`: `alloc<T>`, `resize<T>`, `dealloc<T>`, `bytecopy<T>`, `copy<T>`, `set_bytes<T>`, `set_items<T>`, `bytezero<T>`, `zero<T>` (`copy_bytes`/`copy_items` remain as deprecated aliases; and the raw `malloc`/`realloc`/`free`/`memcpy`/`memset`). |
+| [memory.mc](memory.mc) | `import "memory";` | Typed heap allocation over `malloc`/`realloc`/`free`: `alloc<T>`, `new<T>`, `resize<T>`, `dealloc<T>`, `bytecopy<T>`, `copy<T>`, `set_bytes<T>`, `set_items<T>`, `bytezero<T>`, `zero<T>` (`copy_bytes`/`copy_items` remain as deprecated aliases; and the raw `malloc`/`realloc`/`free`/`memcpy`/`memset`). |
 | [std.mc](std.mc) | `import "std";` | Variadic `print` and `println` — printf-style output, forwarding through a `va_list`. |
 
 ## Data structures

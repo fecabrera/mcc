@@ -16,6 +16,16 @@ fn alloc<T>(n: uint64) -> T* {
 }
 
 /**
+ * Allocates heap space for a single element of type T -- shorthand for
+ * alloc<T>(1).
+ *
+ * @return pointer to the element; the memory is uninitialized
+ */
+fn new<T>() -> T* {
+    return alloc<T>(1);
+}
+
+/**
  * Resizes a block previously returned by alloc<T> to hold n elements of type
  * T, preserving its contents up to the smaller of the old and new sizes.
  * Returns the (possibly relocated) pointer; the old pointer must not be used

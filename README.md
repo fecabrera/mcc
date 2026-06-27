@@ -311,6 +311,13 @@ Grouped by scope.
         (a struct and its `extends` specializations) or
         `fn myfunc<T in (t1, t2, ...)>(x: T)` (an explicit set of types)
 
+#### Modules and imports
+
+- [ ] Selective imports — `import { a, b, fnc } from "<path>";` to bring in only
+      named declarations (today `import "<path>";` pulls in the whole module)
+- [ ] Import aliasing — rename selected names with `as`:
+      `import { a as _a, b, fnc } from "<path>";`
+
 #### Structs, arrays, and data layout
 
 - [ ] Constant-expression array sizes — `T[N]` where `N` is any constant
@@ -323,6 +330,18 @@ Grouped by scope.
         (today only `sizeof`, which includes trailing padding)
   - [ ] struct literals — `struct point { x = 6, y = 4 }`, with omitted fields
         zero-initialized (today a struct is built field-by-field after `let`)
+- [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
+      `fn new<T>() -> T*`, writes a struct literal through the result, and emits
+      the pointer; depends on struct literals:
+  ```c
+  let var = new T { ... };
+  // desugars to
+  let var = {
+      let tmp = new<T>();
+      *tmp = T { ... };
+      emit tmp;
+  };
+  ```
 
 #### Functions and methods
 
