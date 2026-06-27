@@ -3213,7 +3213,7 @@ class CodeGen:
         if isinstance(expr, Asm):
             return self.gen_asm(expr)
         if isinstance(expr, SizeOf):
-            size = type_size(self.lang_type(expr.type_name, expr.line))
+            size = type_size(self.sizeof_operand(expr.type_name, expr.line))
             return TypedValue(ir.Constant(UINT64.ir, size), UINT64)
         if isinstance(expr, Len):
             # The element count is a compile-time property of the array's type;
@@ -3362,6 +3362,28 @@ class CodeGen:
             if is_pointer(base_t):
                 return base_t.pointee
         return None
+
+    def sizeof_operand(self, ref: TypeRef, line: int) -> LangType:
+        """Resolve a ``sizeof`` operand to the type whose size is wanted.
+
+        The operand is normally a type, but a bare name that is a variable in
+        scope is taken as that variable -- ``sizeof(v)`` is the size of ``v``'s
+        type -- as in C. The operand is never evaluated, so there are no side
+        effects. A name that is not a variable (or any non-trivial type form)
+        resolves as a type.
+
+        Args:
+            ref: The parsed operand ``TypeRef``.
+            line: Source line for diagnostics.
+
+        Returns:
+            The ``LangType`` whose size ``sizeof`` should report.
+        """
+        if not ref.stars and not ref.dims and not ref.args and ref.params is None:
+            var_type = self.var_type_of(ref.name)
+            if var_type is not None:
+                return var_type
+        return self.lang_type(ref, line)
 
     def var_type_of(self, name: str) -> "LangType | None":
         """Return a name's type if it is a variable in scope, else ``None``.

@@ -164,6 +164,41 @@ def test_sizeof_values():
     assert run("fn main() -> int32 { return sizeof(int32*) as int32; }") == 8
 
 
+def test_sizeof_of_a_variable():
+    # sizeof(v) is the size of the variable's type, as in C.
+    assert run("fn main() -> int32 { let n: int16 = 0; return sizeof(n) as int32; }") == 2
+    assert run(
+        "fn main() -> int32 { let buf: uint8[16]; return sizeof(buf) as int32; }"
+    ) == 16
+    src = """
+    struct point { x: int32; y: int32; }
+    fn main() -> int32 { let p: struct point; return sizeof(p) as int32; }
+    """
+    assert run(src) == 8
+
+
+def test_sizeof_of_a_variable_is_not_evaluated():
+    # The operand of sizeof is unevaluated -- a call in it must not run.
+    src = """
+    @static let calls: int32[1];
+    fn bump() -> int32 { calls[0] = calls[0] + 1; return 0; }
+    fn main() -> int32 {
+        let n: int32 = 0;
+        let s = sizeof(n);      // does not touch n or call anything
+        return calls[0];        // 0: nothing ran
+    }
+    """
+    assert run(src) == 0
+
+
+def test_sizeof_variable_does_not_load_in_ir():
+    # No load of the variable is emitted -- sizeof folds to a constant.
+    ir_text = compile_ir(
+        "fn main() -> int32 { let buf: int32[4]; return sizeof(buf) as int32; }"
+    )
+    assert "i64 16" in ir_text
+
+
 def test_string_literals_are_uint8_pointers():
     # 'h' is byte 104; indexing a string yields uint8.
     assert run('fn main() -> int32 { let s = "hi"; return s[0] as int32; }') == 104

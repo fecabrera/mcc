@@ -33,6 +33,11 @@ fn main() -> int32 {
     println("sizeof(uint8)  = %llu", sizeof(uint8));
     println("sizeof(int32*) = %llu", sizeof(int32*));
 
+    // sizeof also takes a variable -- the size of its type, no type spelled out.
+    // The operand is not evaluated, so this never touches x or p.
+    println("sizeof(x)      = %llu", sizeof(x));    // x is int32 -> 4
+    println("sizeof(p)      = %llu", sizeof(p));    // p is int32* -> 8
+
     // `as` casts: between integer types (truncate / extend), to and from
     // float64, and between pointer types.
     println("300 as uint8     = %u", 300 as uint8);

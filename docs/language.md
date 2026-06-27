@@ -689,7 +689,10 @@ fn main() -> int32 {
 ```
 
 `sizeof(type)` is a compile-time `uint64` constant (pointers are 8 bytes).
-`uint8*` doubles as the raw-memory pointer (C's `void*`): any pointer
+`sizeof` also accepts a variable — `sizeof(v)` is the size of `v`'s type, as in
+C — so you need not spell the type out. The operand is never evaluated, so it
+has no side effects and folds to the same constant. `uint8*` doubles as the
+raw-memory pointer (C's `void*`): any pointer
 implicitly coerces to it, which is why `free(nums)` works without a cast.
 String literals have type `uint8*`, so `"hi"[0]` is the byte `104`. There is
 no pointer arithmetic (`p + 1`); use `&p[1]`. See
