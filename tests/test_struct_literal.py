@@ -196,6 +196,29 @@ def test_inherited_field_default():
     assert run(source) == 16
 
 
+def test_plain_declaration_applies_defaults():
+    source = """
+        struct cfg { cap: int32 = 16; flag: int32 = 1; other: int32; }
+        fn main() -> int32 {
+            let c: struct cfg;          // default-initialized, no literal
+            return c.cap + c.flag + c.other;   // 16 + 1 + 0
+        }
+    """
+    assert run(source) == 17
+
+
+def test_plain_declaration_applies_inherited_defaults():
+    source = """
+        struct base { tag: int32 = 7; }
+        struct derived extends base { extra: int32 = 9; }
+        fn main() -> int32 {
+            let d: struct derived;
+            return d.tag + d.extra;
+        }
+    """
+    assert run(source) == 16
+
+
 def test_nested_struct_literal():
     source = """
         struct point { x: int32; y: int32; }

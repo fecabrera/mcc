@@ -883,7 +883,7 @@ the base's defaults down to a derived struct's literal.
 
 ```c
 struct config {
-    capacity: int32 = 16;     // used when a literal omits `capacity`
+    capacity: int32 = 16;     // used when `capacity` is omitted
     verbose:  int32 = 0;
     name:     uint8*;         // no default — zero (null) when omitted
 }
@@ -891,8 +891,13 @@ struct config {
 let c = struct config { name = "db" };   // capacity = 16, verbose = 0
 ```
 
-A default is an ordinary expression evaluated at each literal that uses it, so
-it should be self-contained — a literal, a `const`, or another in-scope value —
+Declaring any default also changes a bare declaration: `let c: struct config;`
+is then default-initialized (zeroed, then its defaults applied) — the same as
+`let c = struct config { }` — rather than left uninitialized. A struct with no
+defaults keeps the uninitialized behavior of a bare `let`, like any other type.
+
+A default is an ordinary expression evaluated wherever it is applied, so it
+should be self-contained — a literal, a `const`, or another in-scope value —
 and not refer to the struct's own type parameters. A defaulted field that is
 omitted does not take part in type-argument inference.
 

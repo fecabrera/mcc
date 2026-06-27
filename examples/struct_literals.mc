@@ -58,6 +58,11 @@ fn main() -> int32 {
     let cfg = struct config { name = "db" };
     println("config: capacity=%d verbose=%d name=%s", cfg.capacity, cfg.verbose, cfg.name);
 
+    // Declaring a default also makes a bare `let` default-initialized (the same
+    // as `struct config { }`), rather than leaving the value uninitialized.
+    let dfl: struct config;
+    println("default config: capacity=%d verbose=%d", dfl.capacity, dfl.verbose);
+
     // A literal is a value, so it can be written through a pointer -- the
     // pattern an eventual `new point { ... }` sugar would build on.
     let h = alloc<struct point>(1);

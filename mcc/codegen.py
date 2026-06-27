@@ -2236,6 +2236,30 @@ class CodeGen:
         merged.update(decl.defaults)
         return merged
 
+    def init_struct_defaults(self, slot, struct_type, ref, line: int):
+        """Default-initialize a plainly-declared struct ``let s: struct T;``.
+
+        When the struct declares any default field values (its own or inherited),
+        zero the storage and store each default -- the same result as the empty
+        literal ``struct T { }``. A struct with no defaults is left untouched, so
+        it keeps the uninitialized behavior of a bare ``let``.
+
+        Args:
+            slot: The variable's alloca.
+            struct_type: The resolved struct ``LangType``.
+            ref: The declared ``TypeRef`` (its name finds the declaration).
+            line: Source line for diagnostics.
+        """
+        defaults = self.struct_defaults(self.lookup_struct_decl(ref.name))
+        if not defaults:
+            return
+        self.builder.store(ir.Constant(struct_type.ir, None), slot)  # zero first
+        for fname, default_expr in defaults.items():
+            self.store_struct_field(
+                slot, struct_type, fname, self.gen_expr(default_expr),
+                default_expr.line, "default for field",
+            )
+
     def lookup_struct_decl(self, name: str) -> "StructDecl | None":
         """Find a struct declaration by name, preferring a file-scoped one.
 
@@ -2520,6 +2544,13 @@ class CodeGen:
                 elif is_valist(declared):
                     self.require_valist(stmt.line)
                     slot.align = self.va_list_align  # ABI alignment for va_start
+                # A struct that declares default field values is default-
+                # initialized here (zero, then its defaults) rather than left
+                # uninitialized -- so `let c: struct config;` matches
+                # `let c = struct config { };`. Structs with no defaults keep the
+                # uninitialized behavior, as does every other type.
+                if is_struct(declared):
+                    self.init_struct_defaults(slot, declared, stmt.type_name, stmt.line)
                 self.bind_local(stmt.name, slot, declared)
                 return
             if isinstance(stmt.value, ArrayLit):  # let xs: T[N] = [...]
