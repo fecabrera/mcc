@@ -91,6 +91,57 @@ def test_generic_struct_literal_runs():
     assert run(source) == 42
 
 
+def test_generic_struct_literal_infers_type_args():
+    source = """
+        struct pair<A, B> { a: A; b: B; }
+        fn main() -> int32 {
+            let n: int64 = 30;
+            let p = struct pair { a = n, b = 12 };   // A=int64, B inferred from 12
+            return (p.a + p.b) as int32;
+        }
+    """
+    assert run(source) == 42
+
+
+def test_inference_typed_field_pins_parameter():
+    source = """
+        struct box<T> { lo: T; hi: T; }
+        fn main() -> int32 {
+            let n: int64 = 40;
+            let b = struct box { lo = 2, hi = n };   // lo adapts to int64 from hi
+            return (b.lo + b.hi) as int32;
+        }
+    """
+    assert run(source) == 42
+
+
+def test_inference_conflict_is_rejected():
+    source = """
+        struct box<T> { lo: T; hi: T; }
+        fn f(a: int32, b: int64) { let x = struct box { lo = a, hi = b }; }
+    """
+    with pytest.raises(LangError, match="conflicting types for type parameter T"):
+        compile_ir(source)
+
+
+def test_uninferable_parameter_is_rejected():
+    source = """
+        struct holder<T> { tag: int32; item: T; }
+        fn f() { let h = struct holder { tag = 1 }; }
+    """
+    with pytest.raises(LangError, match="cannot infer type parameter.*T"):
+        compile_ir(source)
+
+
+def test_unknown_field_on_generic_literal_is_rejected():
+    source = """
+        struct box<T> { lo: T; hi: T; }
+        fn f() { let h = struct box { nope = 1 }; }
+    """
+    with pytest.raises(LangError, match="no field 'nope'"):
+        compile_ir(source)
+
+
 def test_nested_struct_literal():
     source = """
         struct point { x: int32; y: int32; }

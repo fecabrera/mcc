@@ -2154,7 +2154,8 @@ class CodeGen:
         Allocates a temporary, zero-initializes it (so omitted fields read as
         zero), stores each named field, and yields the struct by value. The
         field expressions are coerced to their declared types, so an untyped
-        integer constant adapts as it would in an assignment.
+        integer constant adapts as it would in an assignment. A generic struct's
+        type arguments are inferred from the field values when none are given.
 
         Args:
             expr: The ``StructLit`` node.
@@ -2163,34 +2164,109 @@ class CodeGen:
             The constructed struct as a ``TypedValue``.
 
         Raises:
-            LangError: When the type is not a struct, a field is unknown, or a
-                field is given twice.
+            LangError: When the type is not a struct, a field is unknown, a field
+                is given twice, or a type parameter cannot be inferred.
         """
-        struct_type = self.lang_type(expr.type_ref, expr.line)
-        if not is_struct(struct_type):
-            raise LangError(
-                f"a struct literal needs a struct type, not {struct_type}", expr.line
-            )
-        slot = self.builder.alloca(struct_type.ir)
-        if over_aligned(struct_type):
-            slot.align = type_align(struct_type)
-        self.builder.store(ir.Constant(struct_type.ir, None), slot)  # zero omitted fields
+        ref = expr.type_ref
+        # Evaluate each field's value once, in source order, rejecting repeats.
         seen: set[str] = set()
+        items = []  # (field name, value, source line)
         for fname, value_expr in expr.fields:
             if fname in seen:
                 raise LangError(
                     f"field {fname!r} is set twice in the struct literal", expr.line
                 )
             seen.add(fname)
-            index, ftype = self.struct_field(struct_type, fname, expr.line)
+            items.append((fname, self.gen_expr(value_expr), value_expr.line))
+
+        decl = self.lookup_struct_decl(ref.name)
+        if decl is not None and decl.type_params and not ref.args:
+            struct_type = self.infer_struct_lit_type(decl, items, expr.line)
+        else:
+            struct_type = self.lang_type(ref, expr.line)
+        if not is_struct(struct_type):
+            raise LangError(
+                f"a struct literal needs a struct type, not {struct_type}", expr.line
+            )
+
+        slot = self.builder.alloca(struct_type.ir)
+        if over_aligned(struct_type):
+            slot.align = type_align(struct_type)
+        self.builder.store(ir.Constant(struct_type.ir, None), slot)  # zero omitted fields
+        for fname, tv, line in items:
+            index, ftype = self.struct_field(struct_type, fname, line)
             addr = self.builder.gep(
                 slot, [I32_ZERO, ir.Constant(ir.IntType(32), index)], inbounds=True
             )
-            value = self.coerce(
-                self.gen_expr(value_expr), ftype, value_expr.line, f"field {fname!r}"
-            )
+            value = self.coerce(tv, ftype, line, f"field {fname!r}")
             self.builder.store(value.value, addr)
         return TypedValue(self.builder.load(slot), struct_type)
+
+    def lookup_struct_decl(self, name: str) -> "StructDecl | None":
+        """Find a struct declaration by name, preferring a file-scoped one.
+
+        A same-named ``@static`` struct in the current file shadows a global
+        template, exactly as :meth:`lang_type` resolves struct types.
+
+        Args:
+            name: The struct's name.
+
+        Returns:
+            The matching ``StructDecl``, or ``None`` when no struct has that
+            name in scope.
+        """
+        decl = self.static_structs.get((self.current_source, name))
+        if decl is not None:
+            return decl
+        return self.struct_templates.get(name)
+
+    def infer_struct_lit_type(self, decl, items, line: int) -> LangType:
+        """Infer a generic struct's type arguments from a literal's fields.
+
+        Unifies each provided field's value type against the field's declared
+        pattern -- ``start: T`` against an ``int32`` value binds ``T = int32`` --
+        the same way a generic function call infers from its arguments. Typed
+        fields bind first (and disagreements conflict); untyped constants then
+        fill any parameter still unbound without overriding a typed one, and
+        ``null`` never contributes.
+
+        Args:
+            decl: The generic struct's declaration.
+            items: The literal's ``(field name, value, line)`` triples.
+            line: Source line of the literal, for diagnostics.
+
+        Returns:
+            The instantiated (monomorphized) struct ``LangType``.
+
+        Raises:
+            LangError: When a field is unknown or a type parameter cannot be
+                inferred from the given fields.
+        """
+        self.check_access(decl.private, decl.source, f"struct {decl.name!r}", line)
+        patterns = dict(decl.fields)
+        for fname, _tv, fline in items:
+            if fname not in patterns:
+                raise LangError(f"struct {decl.name!r} has no field {fname!r}", fline)
+        bindings: dict[str, LangType] = {}
+        context = f"struct literal {decl.name!r}"
+        for adaptable_pass in (False, True):
+            strict = not adaptable_pass
+            for fname, tv, fline in items:
+                if tv.adaptable == adaptable_pass and tv.type is not NULLT:
+                    self.unify(
+                        patterns[fname], tv.type, decl.type_params,
+                        bindings, strict, context, fline,
+                    )
+        missing = [t for t in decl.type_params if t not in bindings]
+        if missing:
+            raise LangError(
+                f"cannot infer type parameter(s) {', '.join(missing)} for struct "
+                f"{decl.name!r} from its fields; specify them explicitly, e.g. "
+                f"struct {decl.name}<int32> {{ ... }}",
+                line,
+            )
+        args = tuple(bindings[t] for t in decl.type_params)
+        return self.instantiate_struct(decl, args)
 
     def bind_local(self, name: str, slot, lang_type: LangType):
         """Record a local in the current scope.

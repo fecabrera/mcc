@@ -32,11 +32,15 @@ fn main() -> int32 {
     // Passed straight to a function, no named temporary needed.
     println("length2(6, 8) = %d", length2(struct point { x = 6, y = 8 }));
 
-    // Generic structs work too -- spell out the type arguments (they are not
-    // inferred from the field values). An untyped constant adapts to the field
-    // type, just as in an assignment.
+    // Generic structs work too. The type arguments can be given explicitly...
     let pr = struct pair<int32, uint8*> { a = 42, b = "answer" };
     println("pair = (%d, %s)", pr.a, pr.b);
+
+    // ...or inferred from the field values, like a generic function call. Here
+    // A = int32 (from 7) and B = uint8* (from the string). An untyped constant
+    // adapts to the field type, just as in an assignment.
+    let pr2 = struct pair { a = 7, b = "inferred" };
+    println("pair2 = (%d, %s)", pr2.a, pr2.b);
 
     // A field whose type is itself a struct takes a nested literal.
     let seg = struct line {

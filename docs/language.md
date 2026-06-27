@@ -863,13 +863,18 @@ the right side of an assignment (`*p = struct point { x = 1, y = 2 };`).
 
 ```c
 let p = struct point { x = 6, y = 4 };
-let q = struct point { x = 9 };          // y is 0
-let r = struct node<int32> { value = 1 };  // generic: give the type arguments
+let q = struct point { x = 9 };            // y is 0
+let r = struct node<int32> { value = 1 };  // generic, type argument given
 ```
 
-Generic structs need their type arguments spelled out
-(`struct pair<int32, uint8*> { ... }`); they are not inferred from the field
-values. A field whose own type is a struct takes a nested literal.
+A generic struct's type arguments may be given explicitly
+(`struct pair<int32, uint8*> { ... }`) or **inferred** from the field values,
+the same way a generic function call infers from its arguments — so
+`struct pair { a = 1, b = "x" }` deduces `A = int32`, `B = uint8*`. A typed
+field pins the parameter (and two typed fields that disagree are an error); an
+untyped constant fills a parameter no typed field determined. A parameter that
+no provided field mentions can't be inferred, so spell those cases out. A field
+whose own type is a struct takes a nested literal.
 
 `@align(N)` raises a struct's alignment to `N` bytes — a power of two; asking
 for less than the natural alignment is an error. `sizeof` rounds up to a
