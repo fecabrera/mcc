@@ -37,6 +37,7 @@ fn main() -> int32 {
 - [Quickstart](#quickstart)
 - [Examples](#examples)
 - [Standard library](#standard-library)
+- [C ABI compatibility](#c-abi-compatibility)
 - [Roadmap](#roadmap)
 - [Language reference](docs/language.md) — the complete guide to every feature
 - [Editor support](#editor-support)
@@ -203,6 +204,32 @@ streams, and so on — for when you want C directly; see
 [Reaching libc](docs/language.md#reaching-libc). The [standard library index](lib/README.md)
 lists every module.
 
+## C ABI compatibility
+
+mcc follows the platform C ABI for **scalars and pointers**, so any function
+whose signature is built from them interoperates with C in both directions —
+call C from mcc with `@extern`, or expose mcc functions to a C linker. This is
+why the [libc bindings](lib/libc/) work directly:
+
+| mcc type | C type |
+| --- | --- |
+| `int8`–`int64`, `uint8`–`uint64` | `char`/`short`/`int`/`long`/`long long` (and `unsigned`) |
+| `float64` | `double` |
+| `T*` | `T *` |
+| `va_list`, variadic `...` | `va_list`, varargs |
+
+Generics don't change this: a generic is monomorphized to concrete types before
+codegen, so an instantiation obeys the same ABI as a hand-written one.
+
+**Structs passed or returned by value are not ABI-compatible yet.** mcc hands
+LLVM the raw aggregate, but LLVM does not apply the platform ABI's
+register/`byval`/`sret` classification automatically the way a C compiler does,
+so a `struct` argument or return won't match a C function expecting the same
+struct. Across the C boundary, pass a pointer (`struct point*`) instead. Fixing
+this is [on the roadmap](#planned). (`bool` is `i1`; it matches C's 1-byte
+`_Bool` inside structs but isn't strictly the `_Bool` parameter ABI — rarely a
+concern in practice.)
+
 ## Roadmap
 
 What the compiler does today, and what is planned next. Checked items are
@@ -271,8 +298,10 @@ reference section.
 
 ### Planned
 
-- [ ] Methods / OOP — `<struct>::<method>` definitions (the `for … in`
-      protocol already dispatches by struct name to pave the way)
+Grouped by scope.
+
+#### Types and generics
+
 - [ ] `typeof(expr)` — use an expression's static type in a type position,
       including in an alias: `type t = typeof(var);`
 - [ ] Generic type parameters:
@@ -281,6 +310,9 @@ reference section.
   - [ ] bounds — constrain a parameter with `fn myfunc<T extends mystruct>(x: T)`
         (a struct and its `extends` specializations) or
         `fn myfunc<T in (t1, t2, ...)>(x: T)` (an explicit set of types)
+
+#### Structs, arrays, and data layout
+
 - [ ] Constant-expression array sizes — `T[N]` where `N` is any constant
       expression (today only a literal, a single `const` name, or `[]`)
 - [ ] Struct ergonomics and C-layout interop:
@@ -291,6 +323,29 @@ reference section.
         (today only `sizeof`, which includes trailing padding)
   - [ ] struct literals — `struct point { x = 6, y = 4 }`, with omitted fields
         zero-initialized (today a struct is built field-by-field after `let`)
+
+#### Functions and methods
+
+- [ ] Methods / OOP — `<struct>::<method>` definitions (the `for … in`
+      protocol already dispatches by struct name to pave the way)
+- [~] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
+  the callee promises not to mutate:
+  - [x] pass by hidden reference: a large value (a struct) is passed by a hidden
+        pointer instead of copied, so you get value semantics without
+        hand-writing a pointer (see [const parameters](docs/language.md#const-parameters))
+  - [ ] literal promotion: because the parameter is read-only, a literal
+        argument is promoted to its type at compile time — a string literal to a
+        `struct string`, say — so `fn println(const fmt: struct string, args...)`
+        accepts `println("{}", a)` directly
+- [ ] Native variadic arguments — `fn f(args...)`, a named binding over a
+      builtin `any` element `{ value, type }` (heterogeneous, type-erased);
+      `typeid`-tagged, consumed with a `case type (x) { when int32 n: … }`
+      type-switch. Allocation-free (caller-stack). Depends on typeof/typeid.
+- [ ] C `va_arg` interop — read individual arguments from a C-ABI `va_list`
+      in mcc (today a `va_list` can only be forwarded to a C `v*` function)
+
+#### Metaprogramming and builtins
+
 - [ ] Compile-time macros:
   - [ ] macro functions — `@macro <name>(<args>) { ... }`, compile-time
         expansion (`@inline` already covers the call-overhead case)
@@ -314,12 +369,9 @@ reference section.
   - [ ] `@naked` — separate opt-in for no-prologue/epilogue functions
         (`_start`, interrupt entry, trampolines): args arrive in the ABI
         registers and the body writes its own `ret`
-- [ ] C `va_arg` interop — read individual arguments from a C-ABI `va_list`
-      in mcc (today a `va_list` can only be forwarded to a C `v*` function)
-- [ ] Native variadic arguments — `fn f(args...)`, a named binding over a
-      builtin `any` element `{ value, type }` (heterogeneous, type-erased);
-      `typeid`-tagged, consumed with a `case type (x) { when int32 n: … }`
-      type-switch. Allocation-free (caller-stack). Depends on typeof/typeid.
+
+#### Standard library
+
 - [ ] Formatted `print`/`println` — Rust/Python-style `{}` placeholders,
       type-driven (no `%`-letters), written in mcc over native varargs; enables
       compile-time format checking and per-struct `format` methods later:
@@ -331,15 +383,25 @@ reference section.
   - [ ] switch the parameter to `const fmt: struct string` once `const`
         parameters land, so a string literal promotes to it at the call site
         and the format can be parsed at compile time
-- [~] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
-  the callee promises not to mutate:
-  - [x] pass by hidden reference: a large value (a struct) is passed by a hidden
-        pointer instead of copied, so you get value semantics without
-        hand-writing a pointer (see [const parameters](docs/language.md#const-parameters))
-  - [ ] literal promotion: because the parameter is read-only, a literal
-        argument is promoted to its type at compile time — a string literal to a
-        `struct string`, say — so `fn println(const fmt: struct string, args...)`
-        accepts `println("{}", a)` directly
+
+#### Tooling and C interop
+
+- [ ] Linker passthrough — link against libraries and extra objects: `-l<name>`,
+      `-L<dir>` library search paths, and forwarding object/library inputs to
+      `cc` (today only `libm` is linked, and there is no `-l`/`-L`; `-c` plus a
+      manual `cc` is the only route)
+- [ ] Linker selection — `--linker=/path/to/ld` to pick a specific linker
+      (today whatever the driver `cc` defaults to)
+- [ ] Compiler-driver selection — `--cc=/path/to/cc` to choose the C driver used
+      for linking (today the system `cc` on `PATH`)
+- [ ] Library output — compile to a static (`.a`) or shared (`.so`/`.dylib`)
+      library, paired with the `.mci` interface so consumers can link against it
+- [ ] C header generation — emit a `.h` of the public surface (like
+      `--emit-interface` does for `.mci`), so C code can call into an mcc library
+- [ ] C struct-passing ABI — classify by-value struct arguments and returns
+      into registers/`byval`/`sret` per the platform ABI, so structs cross the
+      C boundary correctly (today only scalars and pointers are ABI-compatible;
+      see [C ABI compatibility](#c-abi-compatibility))
 
 <!-- Add upcoming features here, e.g. - [ ] feature — short note -->
 
