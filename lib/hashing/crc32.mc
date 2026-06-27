@@ -16,13 +16,13 @@ fn crc32(data: uint8*, length: uint64) -> uint32 {
     let r = struct range { end = length };
     for i in &r {
         crc = crc ^ data[i] as uint32;
-        let bit: int32 = 0;
-        while (bit < 8) {
+
+        let bits = struct range<int32> { end = 8 };
+        for bit in &bits {
             if (crc & 1)
                 crc = (crc >> 1) ^ 3988292384;  // 0xedb88320
             else
                 crc = crc >> 1;
-            bit = bit + 1;
         }
     }
 
