@@ -490,7 +490,6 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
 
     out = output or source.with_suffix(".mci")
     out.write_text(stub)
-    print(f"wrote {out}")
     return 0
 
 
@@ -592,7 +591,6 @@ def main() -> int:
         # the target toolchain (e.g. aarch64-elf-gcc) link it.
         output = args.output or args.source.with_suffix(".o")
         output.write_bytes(target_machine.emit_object(native))
-        print(f"wrote {output}")
         return 0
 
     if args.compile:
@@ -601,7 +599,6 @@ def main() -> int:
         # .mci interface).
         output = args.output or args.source.with_suffix(".o")
         output.write_bytes(target_machine.emit_object(native))
-        print(f"wrote {output}")
         return 0
 
     if args.run:
@@ -615,5 +612,4 @@ def main() -> int:
     obj_path.write_bytes(target_machine.emit_object(native))
     subprocess.run(["cc", str(obj_path), "-o", str(output), "-lm"], check=True)
     obj_path.unlink()
-    print(f"wrote {output}")
     return 0
