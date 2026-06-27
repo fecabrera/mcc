@@ -349,8 +349,34 @@ Grouped by scope.
 
 #### Functions and methods
 
-- [ ] Methods / OOP — `<struct>::<method>` definitions (the `for … in`
-      protocol already dispatches by struct name to pave the way)
+- [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
+      keyed to a struct, including a `constructor` and `@private` methods (the
+      `for … in` protocol already dispatches by struct name to pave the way):
+  ```c
+  struct point { x: int32; y: int32; }
+  fn point::constructor(self: struct point*, x: int32, y: int32) { ... }
+  fn point::length2(self: struct point*) -> int32 { ... }
+  @private fn point::helper(self: struct point*) { ... }
+  ```
+  - [ ] method-call sugar — `var->method(...)` desugars to
+        `point::method(var, ...)`, passing the receiver as `self` (so `var` is a
+        `struct point*`):
+    ```c
+    var->length2();   // desugars to point::length2(var)
+    ```
+  - [ ] `new <struct>(...)` sugar — desugars to a block that allocates with
+        `new<<struct>>()`, runs the constructor, and emits the pointer (the
+        constructor counterpart to the [`new T { ... }`](#structs-arrays-and-data-layout)
+        literal sugar):
+    ```c
+    let var = new point(3, 4);
+    // desugars to
+    let var = {
+        let tmp = new<struct point>();
+        point::constructor(tmp, 3, 4);
+        emit tmp;
+    };
+    ```
 - [~] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
   the callee promises not to mutate:
   - [x] pass by hidden reference: a large value (a struct) is passed by a hidden
