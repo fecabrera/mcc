@@ -102,21 +102,21 @@ mcc main.mc --target aarch64-unknown-none-elf   # cross-compile to an object fil
 mcc main.mc --general-regs-only         # never use FP/SIMD registers
 ```
 
-| Option                    | Description                                                                                                                                          |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`                  | The `.mc` file to compile (required). Its imports are resolved and compiled with it.                                                                 |
-| `-o`, `--output FILE`     | Name of the generated file. Defaults to the source name without its extension (a native executable), or with a `.o` suffix when `--target` is given. |
-| `-c`, `--compile`         | Compile to an object file (`.o`) for the host and stop, without linking an executable. Defaults the output to the source name with a `.o` suffix.     |
-| `--emit-interface`        | Write a [`.mci` interface stub](docs/language.md#interface-files) describing the file's public surface (to ship beside an object) and exit.           |
-| `-O 0`–`3`                | Optimization level, from `0` (none) to `3` (most aggressive). Default `2`.                                                                           |
-| `--run`                   | JIT-compile and run the program immediately instead of writing a file; its exit code becomes mcc's. Cannot be combined with `--target`.              |
-| `--emit-llvm`             | Print the generated LLVM IR to stdout and exit, without compiling or linking.                                                                        |
-| `-I`, `--import-path DIR` | Add a directory to the import search path. Repeatable; later paths are searched after earlier ones.                                                  |
-| `--nostdlib`              | Do not put the bundled `lib/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).           |
-| `--target TRIPLE`         | Cross-compile for the given LLVM target triple, emitting an object file instead of a host executable.                                                |
-| `--general-regs-only`     | Generate code that uses only general-purpose registers, never the floating-point/SIMD ones.                                                          |
+| Option                    | Description                                                                                                                                                                                   |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `source`                  | The `.mc` file to compile (required). Its imports are resolved and compiled with it.                                                                                                          |
+| `-o`, `--output FILE`     | Name of the generated file. Defaults to the source name without its extension (a native executable), or with a `.o` suffix when `--target` is given.                                          |
+| `-c`, `--compile`         | Compile to an object file (`.o`) for the host and stop, without linking an executable. Defaults the output to the source name with a `.o` suffix.                                             |
+| `--emit-interface`        | Write a [`.mci` interface stub](docs/language.md#interface-files) describing the file's public surface (to ship beside an object) and exit.                                                   |
+| `-O 0`–`3`                | Optimization level, from `0` (none) to `3` (most aggressive). Default `2`.                                                                                                                    |
+| `--run`                   | JIT-compile and run the program immediately instead of writing a file; its exit code becomes mcc's. Cannot be combined with `--target`.                                                       |
+| `--emit-llvm`             | Print the generated LLVM IR to stdout and exit, without compiling or linking.                                                                                                                 |
+| `-I`, `--import-path DIR` | Add a directory to the import search path. Repeatable; later paths are searched after earlier ones.                                                                                           |
+| `--nostdlib`              | Do not put the bundled `lib/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).                                                    |
+| `--target TRIPLE`         | Cross-compile for the given LLVM target triple, emitting an object file instead of a host executable.                                                                                         |
+| `--general-regs-only`     | Generate code that uses only general-purpose registers, never the floating-point/SIMD ones.                                                                                                   |
 | `--freestanding`          | Don't assume a hosted C library, so LLVM won't rewrite standard-named calls (e.g. `printf("…\n")` → `puts`) into symbols a bare-metal program never defines. The `-ffreestanding` equivalent. |
-| `-D NAME[=VALUE]`         | Define a name for [`@if`](docs/language.md#conditional-compilation) conditions: `NAME` alone is `1`, `NAME=VALUE` sets an integer. Repeatable; a name with no `-D` reads as `0`. |
+| `-D NAME[=VALUE]`         | Define a name for [`@if`](docs/language.md#conditional-compilation) conditions: `NAME` alone is `1`, `NAME=VALUE` sets an integer. Repeatable; a name with no `-D` reads as `0`.              |
 
 `--target` accepts any LLVM triple and emits an object file instead of a
 host executable; link it with that target's toolchain (e.g.
@@ -275,14 +275,30 @@ reference section.
       protocol already dispatches by struct name to pave the way)
 - [ ] `typeof(expr)` — use an expression's static type in a type position,
       including in an alias: `type t = typeof(var);`
+- [ ] Generic type parameters:
+  - [ ] defaults — `fn myfunc<T = uint8*>(x: T) { ... }`, used when a type
+        argument can't be inferred or isn't supplied
+  - [ ] bounds — constrain a parameter with `fn myfunc<T extends mystruct>(x: T)`
+        (a struct and its `extends` specializations) or
+        `fn myfunc<T in (t1, t2, ...)>(x: T)` (an explicit set of types)
 - [ ] Constant-expression array sizes — `T[N]` where `N` is any constant
       expression (today only a literal, a single `const` name, or `[]`)
-- [ ] Macro functions — compile-time expansion (`@inline` already covers the
-      call-overhead case)
+- [ ] Struct ergonomics and C-layout interop:
+  - [ ] flexible array members — a trailing `field: T[]` that adds 0 to
+        `sizeof` and decays to a pointer at the struct's tail, for C structs
+        like `linux_dirent64`'s `d_name[]` (today needs the `T[1]` "struct hack")
+  - [ ] `offsetof(struct S, field)` — the byte offset of a field as a constant
+        (today only `sizeof`, which includes trailing padding)
+  - [ ] struct literals — `struct point { x = 6, y = 4 }`, with omitted fields
+        zero-initialized (today a struct is built field-by-field after `let`)
+- [ ] Compile-time macros:
+  - [ ] macro functions — `@macro <name>(<args>) { ... }`, compile-time
+        expansion (`@inline` already covers the call-overhead case)
+  - [ ] `@define <name> = <value>` — a named compile-time substitution
 - [ ] Bit-twiddling builtins — `byte_swap<T>` (`llvm.bswap`) and
       `bit_reverse<T>` (`llvm.bitreverse`) over the integer types
 - [~] [Inline assembly](docs/language.md#inline-assembly) — arch-specific (pair with `@if` on
-      `TARGET_ARCH`), preferring intrinsics where they exist:
+  `TARGET_ARCH`), preferring intrinsics where they exist:
   - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an
         operand model (`$out`/`$N` operands, `=r`/`r` register class, `${N:w}`
         modifiers); output-less asm is implicitly volatile. Works on the host
@@ -315,8 +331,8 @@ reference section.
   - [ ] switch the parameter to `const fmt: struct string` once `const`
         parameters land, so a string literal promotes to it at the call site
         and the format can be parsed at compile time
-- [ ] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
-      the callee promises not to mutate:
+- [~] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
+  the callee promises not to mutate:
   - [x] pass by hidden reference: a large value (a struct) is passed by a hidden
         pointer instead of copied, so you get value semantics without
         hand-writing a pointer (see [const parameters](docs/language.md#const-parameters))
