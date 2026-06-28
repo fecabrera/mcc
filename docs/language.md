@@ -403,9 +403,14 @@ dispatches by name. For an `obj` of type `struct list<T>` it calls `list_it`
 and `list_next`:
 
 ```c
-fn list_it<T>(self: struct list<T>*) -> struct list_iter<T>;     // make a cursor
-fn list_next<T>(it: struct list_iter<T>*, out: T*) -> bool;       // false when done
+fn list_it<T>(self: struct list<T>*) -> struct iterator<list<T>>;  // make a cursor
+fn list_next<T>(it: struct iterator<list<T>>*, out: T*) -> bool;    // false when done
 ```
+
+The cursor is the shared `struct iterator<C> { obj: C*; idx: uint64; }` from
+`iteration/iterator` — the `list`, `set`, `dict`, and `string` libraries all use
+it rather than each defining its own — but the protocol only cares about the
+function names, so a cursor of any shape works.
 
 ```c
 for v in &nums {            // nums: list<int32>; v is int32, inferred from list_next

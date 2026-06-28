@@ -1,5 +1,6 @@
 import "list";
 import "range";
+import "iteration/iterator";
 
 /**
  * Default slot count reserved by string_init before the first growth.
@@ -59,6 +60,20 @@ fn string_from_array(self: struct string*, str: uint8*) {
         string_push(self, str[i]);
         i = i + 1;
     }
+}
+
+/**
+ * Builds a string by copying a borrowed run of bytes: initializes self and
+ * appends every byte of the slice, so the string owns a private copy. self must
+ * be uninitialized (or already destroyed). A string literal borrows in directly
+ * (`str as slice<uint8>`), which drops the literal's trailing NUL.
+ *
+ * @param self: uninitialized string to build into
+ * @param str:  byte slice to copy from
+ */
+@inline
+fn string_from_slice(self: struct string*, const str: slice<uint8>) {
+    list_from_slice(self, str);
 }
 
 /**
@@ -159,12 +174,6 @@ fn string_eq(self: struct string*, str: struct string*) -> bool {
  ***************************************/
 
 /**
- * A forward cursor over a string's bytes, produced by `string_it`. A
- * specialization of `list_iter<uint8>`, so it forwards to the list iterator.
- */
-type string_iter = list_iter<uint8>;
-
-/**
  * Begins an iteration over a string's bytes, front to back. Part of the
  * `string_it`/`string_next` protocol (used by `for ... in`); pair it with
  * `string_next`.
@@ -173,7 +182,7 @@ type string_iter = list_iter<uint8>;
  *
  * @return an iterator positioned at the first byte
  */
-fn string_it(self: struct string*) -> struct string_iter {
+fn string_it(self: struct string*) -> struct iterator<struct string> {
     return list_it(self);
 }
 
@@ -186,6 +195,6 @@ fn string_it(self: struct string*) -> struct string_iter {
  *
  * @return true if a byte was produced, false once iteration is complete
  */
-fn string_next(it: struct string_iter*, out: uint8*) -> bool {
+fn string_next(it: struct iterator<struct string>*, out: uint8*) -> bool {
     return list_next(it, out);
 }

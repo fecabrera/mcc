@@ -300,7 +300,8 @@ reference section.
 
 - [x] Core — `memory` (typed `alloc`/`dealloc`), `std` (`print`/`println`)
 - [x] Containers — `list`, `stack`, `queue`, `set`, `dict`, `string`
-- [x] Iterables — `range` (half-open integer range for `for ... in`)
+- [x] Iterables — `range` (half-open integer range for `for ... in`) and the
+      shared `iteration/iterator` cursor the containers iterate through
 - [x] Hashing — `splitmix64`, `fnv1a`, `murmur3`, `crc32`, `md5`
 - [x] [libc bindings](docs/language.md#reaching-libc) — `stdio`, `stdlib`, `string`, `ctype`,
       `math`, `limits`, `float`, `time`, `errno`

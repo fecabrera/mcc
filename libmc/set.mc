@@ -2,6 +2,7 @@ import "memory";
 import "hash";
 import "range";
 import "iteration/pair";
+import "iteration/iterator";
 
 // Slot states
 enum set_entry_state: uint8 {
@@ -195,16 +196,6 @@ fn set_grow<K, V>(self: struct set<K, V>*) {
  ***************************************/
 
 /**
- * A forward cursor over a set's occupied entries, produced by `set_it`. It
- * borrows the set (does not copy it), so the set must outlive the iterator and
- * must not be modified or resized while iterating.
- */
-struct set_iter<K, V> {
-    obj: struct set<K, V>*;   // the set being walked
-    idx: uint64;              // index of the next slot to examine
-}
-
-/**
  * Begins an iteration over a set's key/value pairs, in unspecified
  * (hash-table slot) order. Part of the `set_it`/`set_next` protocol (used by
  * `for ... in`); pair it with `set_next`.
@@ -213,11 +204,8 @@ struct set_iter<K, V> {
  *
  * @return an iterator positioned before the first occupied entry
  */
-fn set_it<K, V>(self: struct set<K, V>*) -> struct set_iter<K, V> {
-    let it: struct set_iter<K, V>;
-    it.obj = self;
-    it.idx = 0;
-    return it;
+fn set_it<K, V>(self: struct set<K, V>*) -> struct iterator<struct set<K, V>> {
+    return struct iterator<struct set<K, V>> { obj = self, idx = 0 };
 }
 
 /**
@@ -229,7 +217,7 @@ fn set_it<K, V>(self: struct set<K, V>*) -> struct set_iter<K, V> {
  *
  * @return true if a pair was produced, false once iteration is complete
  */
-fn set_next<K, V>(it: struct set_iter<K, V>*, out: struct pair<K, V>*) -> bool {
+fn set_next<K, V>(it: struct iterator<struct set<K, V>>*, out: struct pair<K, V>*) -> bool {
     while (it->idx < it->obj->capacity) {
         let entry = it->obj->entries[it->idx];
         defer it->idx = it->idx + 1;

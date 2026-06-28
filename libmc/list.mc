@@ -1,5 +1,6 @@
 import "memory";
 import "range";
+import "iteration/iterator";
 
 /**
  * A growable, heap-backed list of T.
@@ -52,6 +53,23 @@ fn list_from_array<T>(self: struct list<T>*, arr: T*, n: uint64) {
     let r = struct range { end = n };
     for i in &r {
         list_push(self, arr[i]);
+    }
+}
+
+/**
+ * Builds a list from a slice: initializes self with the slice's length and
+ * appends every element, so the list owns a private copy and shares no storage
+ * with the borrowed run. self must be uninitialized (or already destroyed) --
+ * building into a live list leaks its buffer.
+ *
+ * @param self: uninitialized list to build into
+ * @param arr:  slice to copy from
+ */
+fn list_from_slice<T>(self: struct list<T>*, const arr: slice<T>) {
+    list_init(self, arr.length);
+
+    for el in arr {
+        list_push(self, el);
     }
 }
 
@@ -158,16 +176,6 @@ fn list_grow<T>(self: struct list<T>*) {
  ***************************************/
 
 /**
- * A forward cursor over an list's elements, produced by `list_it`. It borrows
- * the list (does not copy it), so the list must outlive the iterator and
- * must not be resized while iterating.
- */
-struct list_iter<T> {
-    obj: struct list<T>*;   // the list being walked
-    idx: uint64;             // index of the next element to yield
-}
-
-/**
  * Begins an iteration over an list, from the first element to the last. Part
  * of the `list_it`/`list_next` protocol (used by `for ... in`); pair it with
  * `list_next`.
@@ -176,11 +184,8 @@ struct list_iter<T> {
  *
  * @return an iterator positioned at the first element
  */
-fn list_it<T>(self: struct list<T>*) -> struct list_iter<T> {
-    let it: struct list_iter<T>;
-    it.obj = self;
-    it.idx = 0;
-    return it;
+fn list_it<T>(self: struct list<T>*) -> struct iterator<list<T>> {
+    return struct iterator { obj = self, idx = 0 };
 }
 
 /**
@@ -192,7 +197,7 @@ fn list_it<T>(self: struct list<T>*) -> struct list_iter<T> {
  *
  * @return true if an element was produced, false once iteration is complete
  */
-fn list_next<T>(it: struct list_iter<T>*, out: T*) -> bool {
+fn list_next<T>(it: struct iterator<list<T>>*, out: T*) -> bool {
     if (it->idx >= it->obj->length)
         return false;
 

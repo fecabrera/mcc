@@ -4,6 +4,7 @@ import "set";
 import "range";
 import "libc/string";
 import "iteration/pair";
+import "iteration/iterator";
 
 // Slot states
 enum dict_entry_state: uint8 {
@@ -243,16 +244,6 @@ fn dict_grow<V>(self: struct dict<V>*) {
  ***************************************/
 
 /**
- * A forward cursor over a dict's occupied entries, produced by `iter`. It
- * borrows the dict (does not copy it), so the dict must outlive the iterator
- * and must not be modified or resized while iterating.
- */
-struct dict_iter<V> {
-    obj: struct dict<V>*;   // the dict being walked
-    idx: uint64;            // index of the next slot to examine
-}
-
-/**
  * Begins an iteration over a dict's string-keyed entries, in unspecified
  * (hash-table slot) order. Part of the `dict_it`/`dict_next` protocol (used by
  * `for ... in`); pair it with `dict_next`.
@@ -261,11 +252,8 @@ struct dict_iter<V> {
  *
  * @return an iterator positioned before the first occupied entry
  */
-fn dict_it<V>(self: struct dict<V>*) -> struct dict_iter<V> {
-    let it: struct dict_iter<V>;
-    it.obj = self;
-    it.idx = 0;
-    return it;
+fn dict_it<V>(self: struct dict<V>*) -> struct iterator<struct dict<V>> {
+    return struct iterator<struct dict<V>> { obj = self, idx = 0 };
 }
 
 /**
@@ -279,7 +267,7 @@ fn dict_it<V>(self: struct dict<V>*) -> struct dict_iter<V> {
  *
  * @return true if a pair was produced, false once iteration is complete
  */
-fn dict_next<V>(it: struct dict_iter<V>*, out: struct pair<uint8*, V>*) -> bool {
+fn dict_next<V>(it: struct iterator<struct dict<V>>*, out: struct pair<uint8*, V>*) -> bool {
     while (it->idx < it->obj->capacity) {
         let entry = it->obj->entries[it->idx];
         defer it->idx = it->idx + 1;
