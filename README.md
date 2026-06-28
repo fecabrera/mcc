@@ -273,7 +273,8 @@ reference section.
       expression), indexing, `len`, `sizeof`
 - [x] [Structs](docs/language.md#structs) — `.`/`->` access, generics, struct
       literals (`struct point { x = 6, y = 4 }`, omitted fields zeroed or set to
-      a field's `= default`, generic type arguments inferred from the fields),
+      a field's `= default`, generic type arguments inferred from typed field
+      values),
       `@packed`/`@align`/`@volatile`, `extends` (prefix specialization),
       struct value upcast
 - [x] [Enums](docs/language.md#enums) — `enum Name[: type] { … }`, `Name::Member`
@@ -318,11 +319,22 @@ Grouped by scope.
 - [ ] `typeof(expr)` — use an expression's static type in a type position,
       including in an alias: `type t = typeof(var);`
 - [ ] Generic type parameters:
-  - [ ] defaults — `fn myfunc<T = uint8*>(x: T) { ... }`, used when a type
-        argument can't be inferred or isn't supplied
+  - [ ] defaults — a declared fallback type parameter, on functions
+        (`fn myfunc<T = uint8*>(x: T) { ... }`) and structs
+        (`struct range<T = int64> { ... }`), used when a type argument isn't
+        supplied or inferable from a *typed* value. The strongly-typed way to
+        pick a default — declared at the definition, not guessed from an untyped
+        literal at the use site (`let a = 0` and a no-anchor `struct range { … }`
+        should stay ambiguous errors, not silently become `int32`)
   - [ ] bounds — constrain a parameter with `fn myfunc<T extends mystruct>(x: T)`
         (a struct and its `extends` specializations) or
         `fn myfunc<T in (t1, t2, ...)>(x: T)` (an explicit set of types)
+
+#### Expressions and operators
+
+- [ ] Compound assignment — `+= -= *= /= %= &= |= ^= <<= >>=`, where `x op= y`
+      means `x = x op y` but evaluates the target `x` once (so the index/field of
+      a complex lvalue like `arr[next()] += 1` is computed a single time)
 
 #### Modules and imports
 
@@ -339,6 +351,29 @@ Grouped by scope.
         like `linux_dirent64`'s `d_name[]` (today needs the `T[1]` "struct hack")
   - [ ] `offsetof(struct S, field)` — the byte offset of a field as a constant
         (today only `sizeof`, which includes trailing padding)
+- [ ] Unions — `union Name { i: int64; f: float64; p: void*; }`, members
+      sharing one storage (size of the largest, all at offset 0), for C-layout
+      interop (`epoll_data`, `sigval`, most syscall structs embed a union) and
+      type punning. The unsafe primitive under `any`
+- [ ] `any` — a tagged union over the above: a union payload plus a
+      `typeof`-checked type discriminant, so the live member is recovered safely
+      (`case type`). The element type of the [variadic](#functions-and-methods)
+      pack's `slice<any>`. Depends on unions and typeof/typeid
+- [ ] `slice<T>` — a builtin non-owning view, `{ T* ptr; len }`, over a
+      contiguous run of `T`: runtime `len`, indexing, and `for … in`. It borrows
+      and never allocates, distinct from a C array `T[]` (which stays length-less
+      and decays to a bare pointer for the ABI). A stack `T[N]` or a library
+      `list<T>` yields one, and the variadic pack is a `slice<any>`. A 2-word
+      struct, so not C-ABI by value — across the C boundary pass `T*` plus a
+      length instead
+- [ ] `tuple<A, B, ...>` — a builtin heterogeneous, fixed-arity product: each
+      position keeps its own statically-known type, accessed by position (`t.0`,
+      `t.1`). For multiple return values
+      (`fn divmod(a: int32, b: int32) -> tuple<int32, int32>`) and ad-hoc
+      grouping without a one-off struct. Distinct from `slice<any>`: a tuple
+      keeps each element's static type and a compile-time arity, where erasing
+      every slot to `any` would collapse into a fixed-length `slice<any>`. Also
+      the door to a statically-typed variadic later (no erasure), if wanted
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:
@@ -395,10 +430,16 @@ Grouped by scope.
         argument is promoted to its type at compile time — a string literal to a
         `struct string`, say — so `fn println(const fmt: struct string, args...)`
         accepts `println("{}", a)` directly
-- [ ] Native variadic arguments — `fn f(args...)`, a named binding over a
-      builtin `any` element `{ value, type }` (heterogeneous, type-erased);
-      `typeid`-tagged, consumed with a `case type (x) { when int32 n: … }`
-      type-switch. Allocation-free (caller-stack). Depends on typeof/typeid.
+- [ ] Native variadic arguments — `fn f(args: slice<any>)` (with `fn f(args...)`
+      as sugar): the caller boxes each argument into a caller-stack
+      [`any`](#structs-arrays-and-data-layout) and passes a
+      [`slice<any>`](#structs-arrays-and-data-layout) over them — allocation-free.
+      The callee walks it with `for a in args` and a
+      `case type (a) { when int32 n: … else: … }` type-switch (the open `any`
+      universe makes the `else` required). This is the runtime, type-erased
+      variadic model (printf / `{}`-placeholder formatting); a statically-typed
+      `tuple<…>` variant, processed by compile-time iteration, is a possible
+      later path. Depends on any, slice, and typeof/typeid.
 - [ ] C `va_arg` interop — read individual arguments from a C-ABI `va_list`
       in mcc (today a `va_list` can only be forwarded to a C `v*` function)
 
