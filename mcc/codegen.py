@@ -1577,11 +1577,17 @@ class CodeGen:
                 raise LangError(
                     "only the outermost array dimension can be inferred", line
                 )
-            if not isinstance(value, ArrayLit):
+            if isinstance(value, ArrayLit):
+                outer = len(value.elements)
+            elif isinstance(value, StrLit):
+                outer = len(self.string_data(value.value))  # bytes, NUL included
+            else:
                 raise LangError(
-                    "an inferred array size [] needs an array-literal initializer", line
+                    "an inferred array size [] needs an array-literal or "
+                    "string-literal initializer",
+                    line,
                 )
-            ref = dataclasses_replace(ref, dims=[len(value.elements), *ref.dims[1:]])
+            ref = dataclasses_replace(ref, dims=[outer, *ref.dims[1:]])
         return self.lang_type(ref, line)
 
     def resolve_base(self, decl: StructDecl) -> "LangType | None":
@@ -2669,6 +2675,27 @@ class CodeGen:
                 self.store_list_literal(slot, stmt.value, declared, stmt.line)
                 self.bind_local(stmt.name, slot, declared)
                 return
+            # A string literal is a uint8[N] byte array (NUL included). Bound to
+            # an array variable (declared `uint8[...]` or left to inference), it
+            # materializes as an owned copy -- so `len` works and it can be
+            # mutated. Declared as a pointer (`let s: uint8* = "..."`, or a
+            # pointer alias), it keeps the old decay to a uint8* into the shared
+            # constant (no copy), which the generic path below handles.
+            if isinstance(stmt.value, StrLit):
+                if stmt.type_name is None:
+                    declared = self.string_array_type(stmt.value.value)
+                else:
+                    declared = self.list_type_for(stmt.type_name, stmt.value, stmt.line)
+                if is_array(declared):
+                    declared = self.string_array_let_type(
+                        declared, stmt.value.value, stmt.line
+                    )
+                    slot = self.builder.alloca(declared.ir, name=stmt.name)
+                    self.store_string_literal(
+                        slot, stmt.value.value, declared, stmt.line
+                    )
+                    self.bind_local(stmt.name, slot, declared)
+                    return
             tv = self.gen_expr(stmt.value)
             if stmt.type_name is not None:
                 declared = self.lang_type(stmt.type_name, stmt.line)
@@ -3590,6 +3617,12 @@ class CodeGen:
             return addr, element, None, element.volatile
         if isinstance(expr, Member):
             return self.gen_member_addr(expr.base, expr.field, expr.arrow, line)
+        if isinstance(expr, StrLit):
+            # A string literal is a uint8[N] array (NUL included) living in a
+            # constant global; addressing it (for len/sizeof, or a borrow) keeps
+            # the array type, while reading it as a value decays to uint8*.
+            glob = self.string_global(expr.value)
+            return glob, self.string_array_type(expr.value), None, False
         raise LangError("expression is not addressable", line)
 
     def gen_index_addr(
@@ -3986,6 +4019,31 @@ class CodeGen:
             length = self.builder.trunc(length, UINT64.ir)
         return self.make_slice(target, ptr, length)
 
+    def string_data(self, text: str) -> bytearray:
+        """The bytes a string literal occupies: its UTF-8 plus a NUL terminator.
+
+        Args:
+            text: The string contents.
+
+        Returns:
+            The NUL-terminated UTF-8 bytes.
+        """
+        return bytearray(text.encode("utf8") + b"\0")
+
+    def string_array_type(self, text: str) -> LangType:
+        """The ``uint8[N]`` array type a string literal denotes.
+
+        ``N`` counts the trailing NUL, so the bytes stay a valid C string when
+        the array decays to a ``uint8*``.
+
+        Args:
+            text: The string contents.
+
+        Returns:
+            The ``uint8[N]`` ``LangType``.
+        """
+        return list_of(UINT8, len(self.string_data(text)))
+
     def string_global(self, text: str) -> ir.GlobalVariable:
         """Create a private constant global holding a string's bytes.
 
@@ -3996,7 +4054,7 @@ class CodeGen:
             A private, unnamed, constant ``GlobalVariable`` holding the
             NUL-terminated UTF-8 bytes of ``text``.
         """
-        data = bytearray(text.encode("utf8") + b"\0")
+        data = self.string_data(text)
         list_ty = ir.ArrayType(ir.IntType(8), len(data))
         glob = ir.GlobalVariable(self.module, list_ty, name=f".str.{self.str_count}")
         self.str_count += 1
@@ -4031,6 +4089,56 @@ class CodeGen:
             A constant pointer to the string's first byte.
         """
         return self.string_global(text).gep([I32_ZERO, I32_ZERO])
+
+    def string_array_let_type(self, declared: LangType, text: str, line: int) -> LangType:
+        """Validate an array type a string-literal ``let`` is bound to.
+
+        The element type must be ``uint8`` and the array must be large enough to
+        hold the literal's bytes (its NUL included); a larger ``uint8[M]`` is
+        zero-filled past the string.
+
+        Args:
+            declared: The resolved array type the literal is bound to.
+            text: The string contents.
+            line: Source line for diagnostics.
+
+        Returns:
+            ``declared`` unchanged, once validated.
+
+        Raises:
+            LangError: When the element type is not ``uint8`` or the array is too
+                small to hold the string.
+        """
+        if declared.element is not UINT8:
+            raise LangError(
+                f"a string literal initializes a uint8 array or a uint8*, "
+                f"not a {declared}",
+                line,
+            )
+        need = len(self.string_data(text))
+        if declared.count < need:
+            raise LangError(
+                f"string literal needs {need} bytes (its NUL included) but the "
+                f"array holds only {declared.count}",
+                line,
+            )
+        return declared
+
+    def store_string_literal(self, addr, text: str, arr_type: LangType, line: int):
+        """Copy a string literal's bytes into an owned ``uint8[N]`` array.
+
+        Stores the literal's NUL-terminated bytes, zero-filling any array slots
+        past the string (an oversized ``uint8[M]`` annotation).
+
+        Args:
+            addr: The array's storage address.
+            text: The string contents.
+            arr_type: The ``uint8[N]`` array type being filled.
+            line: Source line for diagnostics.
+        """
+        data = self.string_data(text)
+        data.extend(b"\0" * (arr_type.count - len(data)))  # zero-pad an oversize buffer
+        self.builder.store(ir.Constant(arr_type.ir, data), addr)
 
     def store_list_literal(self, addr, lit, arr_type: LangType, line: int):
         """Fill an array's storage from an array literal, element by element.
@@ -4105,6 +4213,13 @@ class CodeGen:
             )
         if isinstance(expr, StrLit) and expected == RAWPTR:
             return self.const_string(expr.value)
+        if isinstance(expr, StrLit) and is_array(expected):
+            # A uint8[N] initialized from a string literal: the bytes inline,
+            # zero-filled past the string (an oversize buffer).
+            self.string_array_let_type(expected, expr.value, line)
+            data = self.string_data(expr.value)
+            data.extend(b"\0" * (expected.count - len(data)))
+            return ir.Constant(expected.ir, data)
         if isinstance(expr, NullLit) and is_pointer(expected):
             return ir.Constant(expected.ir, None)
         if isinstance(expr, (IntLit, CharLit)) and is_integer(expected):

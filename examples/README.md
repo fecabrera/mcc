@@ -27,6 +27,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [type_aliases.mc](type_aliases.mc) | `type <name> = <type>;` transparent aliases for builtins, pointers, function pointers, and structs; `type` as an identifier |
 | [arrays.mc](arrays.mc) | fixed-size `T[N]` arrays (`N` a constant expression), indexing, `sizeof`, pointer decay, multi-dim, a `@static` buffer |
 | [io.mc](io.mc) | printf format specifiers, `puts`, `putchar`, string escapes |
+| [strings.mc](strings.mc) | string literals as `uint8[N]` byte arrays (NUL counted): owned vs `uint8*`, inferred/oversize sizes, decay, mutation, `len`, indexing, borrowing as `slice<uint8>` |
 | [unsigned.mc](unsigned.mc) | unsigned division/comparison semantics, zero-extension |
 | [extern.mc](extern.mc) | `@extern` functions (including variadic `...`), interfacing with libc |
 | [inline_asm.mc](inline_asm.mc) | `@asm fn` and the `@asm(...)` expression, `$out`/`$N` operands and `:w` register modifiers, gated by `@if` on `TARGET_ARCH` |

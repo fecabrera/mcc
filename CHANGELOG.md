@@ -8,6 +8,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **String literals are `uint8[N]` byte arrays** (NUL included) rather than bare
+  `uint8*`. They still decay to a `uint8*` wherever a pointer is used (call
+  arguments, returns, comparisons, indexing), so existing code is unaffected, but
+  an owned binding now keeps its array type: `let s = "hi";` is a mutable
+  `uint8[3]`, `let s: uint8[] = "hi";` infers the size, and `let s: uint8[8] =
+  "hi";` zero-fills the rest. This makes `len(s)` / `len("hi")` work and lets a
+  string be borrowed as a `slice<uint8>`. Annotating `uint8*` keeps the old
+  pointer-to-constant behavior (no copy). See [Strings](docs/language.md#strings).
+
 ### Added
 
 - **Slices** — `slice<T>`, a builtin non-owning view `{ ptr: T*; length: uint64 }`

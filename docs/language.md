@@ -703,7 +703,8 @@ C — so you need not spell the type out. The operand is never evaluated, so it
 has no side effects and folds to the same constant. `uint8*` doubles as the
 raw-memory pointer (C's `void*`): any pointer
 implicitly coerces to it, which is why `free(nums)` works without a cast.
-String literals have type `uint8*`, so `"hi"[0]` is the byte `104`. There is
+A [string literal](#strings) is a `uint8[N]` array that decays to a `uint8*`
+here, so `"hi"[0]` is the byte `104`. There is
 no pointer arithmetic (`p + 1`); use `&p[1]`. See
 [examples/pointers.mc](examples/pointers.mc) and
 [libmc/memory.mc](libmc/memory.mc) for a generic typed allocator.
@@ -1310,14 +1311,33 @@ the emitted symbol changes.
 
 ## Strings
 
-String literals compile to constant C strings and have type `uint8*`, so a
-string is just a pointer to its bytes: it can be stored in a `uint8*`
-variable, array, or struct field, indexed (`"hi"[0]` is `104`), and passed
-to functions — there is no separate `string` type or built-in mutable string
-storage. They support C's simple escape sequences — `\a` `\b` `\f` `\n` `\r`
-`\t` `\v`, the quotes `\'` `\"`, `\\`, `\?`, and `\0` for NUL — plus `\e` for
-ESC (a GCC/Clang extension, handy for ANSI terminal codes). Any other escape
-keeps the bare character.
+A string literal is a NUL-terminated [byte array](#arrays) `uint8[N]`, where `N`
+counts the trailing NUL (`"hi"` is `uint8[3]`). Stored in a constant, the bytes
+stay a valid C string, so the array **decays to a `uint8*`** wherever a pointer
+is used — passed to a function, returned, compared, or indexed (`"hi"[0]` is
+`104`) — just like any other array. There is no separate `string` type. They
+support C's simple escape sequences — `\a` `\b` `\f` `\n` `\r` `\t` `\v`, the
+quotes `\'` `\"`, `\\`, `\?`, and `\0` for NUL — plus `\e` for ESC (a GCC/Clang
+extension, handy for ANSI terminal codes). Any other escape keeps the bare
+character.
+
+Because the literal carries its array type, the choice at a `let` is yours:
+
+```c
+let owned = "hi";              // uint8[3]: an owned, mutable copy of the bytes
+let owned2: uint8[] = "hi";    // same, size inferred from the literal
+let buf: uint8[8] = "hi";      // a larger owned buffer, zero-filled past "hi\0"
+let p: uint8* = "hi";          // decays: a pointer into the shared constant (no copy)
+```
+
+An owned `uint8[N]` binding can be mutated (`owned[0] = 'H'`), measured with
+[`len`](#arrays) (which counts the NUL — `len(owned)` is `3`), and
+[borrowed](#slices) as a `slice<uint8>`; the `uint8*` form keeps the old
+pointer-to-constant behavior. An explicit `uint8[M]` must be large enough to
+hold the bytes (NUL included). (Borrowing a string *literal* directly as a
+`slice<const uint8>` is the separate [Stage 4](../README.md) "literal
+adaptation", not yet implemented — borrow the `uint8[N]` binding instead.) See
+[examples/strings.mc](../examples/strings.mc).
 
 A character literal in single quotes is a `uint8` — the byte value of a
 single character, using the same escapes (`'a'`, `'\n'`, `'\0'`, `'\''`,
