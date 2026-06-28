@@ -205,6 +205,14 @@ streams, and so on — for when you want C directly; see
 [Reaching libc](docs/language.md#reaching-libc). The [standard library index](libmc/README.md)
 lists every module.
 
+The standard library is **compiled from source** with each program. Shipping it
+as a precompiled native library (`libmc.a`/`.so`, built by [build.sh](build.sh))
+is **experimental**: the stdlib itself compiles cleanly into those archives, but
+*linking a program against them* is not ready — some exported symbols (`errno`,
+`crc32`, …) collide with system symbols, which needs
+[namespaced exported symbols](#planned). Until then the precompiled archives
+aren't linked.
+
 ## C ABI compatibility
 
 mcc follows the platform C ABI for **scalars and pointers**, so any function
