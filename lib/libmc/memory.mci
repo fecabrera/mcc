@@ -1,0 +1,75 @@
+// Interface generated from memory.mc by mcc -- do not edit.
+// Import this alongside the matching object file.
+
+import "libc/string";
+import "libc/stdlib";
+import "range";
+
+@inline
+fn alloc<T>(n: uint64) -> T* {
+    return malloc(n * sizeof(T)) as T*;
+}
+
+@inline
+fn new<T>() -> T* {
+    return alloc<T>(1);
+}
+
+@inline
+fn resize<T>(p: T*, n: uint64) -> T* {
+    return realloc(p, n * sizeof(T)) as T*;
+}
+
+@inline
+fn dealloc<T>(p: T*) {
+    free(p);
+}
+
+@inline
+fn bytecopy<T>(dst: T*, src: T*, n: uint64) -> uint64 {
+    let count = n * sizeof(T);
+    memcpy(dst, src, count);
+    return count;
+}
+
+@inline
+fn copy_bytes<T>(dst: T*, src: T*, n: uint64) {
+    bytecopy(dst, src, n);
+}
+
+@inline
+fn copy<T>(dst: T*, src: T*, n: uint64) -> uint64 {
+    let r = struct range { end = n };
+    for i in &r {
+        dst[i] = src[i];
+    }
+    return n;
+}
+
+@inline
+fn copy_items<T>(dst: T*, src: T*, n: uint64) {
+    copy(dst, src, n);
+}
+
+@inline
+fn bytezero<T>(dst: T*, n: uint64) {
+    set_bytes(dst, 0, n);
+}
+
+@inline
+fn zero<T>(dst: T*, n: uint64) {
+    set_items(dst, 0, n);
+}
+
+@inline
+fn set_bytes<T>(dst: T*, value: uint8, n: uint64) {
+    memset(dst, value as int32, n * sizeof(T));   // libc memset takes an int
+}
+
+@inline
+fn set_items<T>(dst: T*, value: T, n: uint64) {
+    let r = struct range { end = n };
+    for i in &r {
+        dst[i] = value;
+    }
+}

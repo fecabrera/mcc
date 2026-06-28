@@ -1,0 +1,25 @@
+// Interface generated from std.mc by mcc -- do not edit.
+// Import this alongside the matching object file.
+
+import "string";
+import "libc/stdio";
+
+@extern fn print(format: uint8*, ...);
+
+@extern fn println(format: uint8*, ...);
+
+@inline
+fn writechar(c: uint8) {
+    putchar(c as int32);
+}
+
+@inline
+fn writestr(const str: struct string) {
+    fwrite(str.data, sizeof(uint8), str.length, stdout);
+}
+
+@inline
+fn writeln(const str: struct string) {
+    writestr(str);
+    writechar('\n');
+}

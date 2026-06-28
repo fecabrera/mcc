@@ -1,0 +1,6 @@
+// Interface generated from murmur3.mc by mcc -- do not edit.
+// Import this alongside the matching object file.
+
+import "range";
+
+@extern fn murmur3(key: uint8*, length: uint64, seed: uint32) -> uint32;

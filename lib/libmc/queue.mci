@@ -1,0 +1,84 @@
+// Interface generated from queue.mc by mcc -- do not edit.
+// Import this alongside the matching object file.
+
+import "memory";
+import "range";
+
+struct queue<T> {
+    data: T*;         // heap-allocated element buffer
+    head: uint64;     // index of the front element
+    length: uint64;   // number of live elements
+    capacity: uint64; // total allocated slots
+}
+
+fn queue_init<T>(self: struct queue<T>*, capacity: uint64) {
+    self->data = alloc<T>(capacity);
+    self->head = 0;
+    self->length = 0;
+    self->capacity = capacity;
+}
+
+fn queue_destroy<T>(self: struct queue<T>*) {
+    dealloc(self->data);
+
+    self->data = null;
+    self->head = 0;
+    self->length = 0;
+    self->capacity = 0;
+}
+
+fn queue_push<T>(self: struct queue<T>*, value: T) {
+    if (self->length == self->capacity)
+        queue_grow(self);
+
+    let pos = (self->head + self->length) % (self->capacity);
+
+    self->length = self->length + 1;
+    self->data[pos] = value;
+}
+
+fn queue_pop<T>(self: struct queue<T>*) -> T {
+    let pos = self->head;
+
+    self->head = (self->head + 1) % self->capacity;
+    self->length = self->length - 1;
+
+    return self->data[pos];
+}
+
+fn queue_at<T>(self: struct queue<T>*, index: uint64) -> T {
+    let pos = (self->head + index) % (self->capacity);
+    return self->data[pos];
+}
+
+fn queue_peek<T>(self: struct queue<T>*) -> T {
+    return self->data[self->head];
+}
+
+fn queue_len<T>(self: struct queue<T>*) -> uint64 {
+    return self->length;
+}
+
+fn queue_is_empty<T>(self: struct queue<T>*) -> bool {
+    return self->length == 0;
+}
+
+@private
+fn queue_grow<T>(self: struct queue<T>*) {
+    let new_capacity: uint64 = self->capacity * 2;
+    if (new_capacity == 0)
+        new_capacity = 1;
+
+    let new_data: T* = alloc<T>(new_capacity);
+
+    let r = struct range { end = self->length };
+    for i in &r {
+        new_data[i] = self->data[(self->head + i) % self->capacity];
+    }
+
+    dealloc(self->data);
+
+    self->data = new_data;
+    self->head = 0;
+    self->capacity = new_capacity;
+}

@@ -23,6 +23,13 @@ __pycache__/
 *.so
 *.dylib
 
+# ...but the precompiled standard library is checked in: its interface stubs
+# (platform-independent) and the libmc archives (rebuilt per platform by
+# build.sh / CI). The libmc/*.o intermediates stay ignored.
+!lib/libmc/**/*.mci
+!lib/libmc.a
+!lib/libmc.so
+
 # mcc writes executables next to the source by default, so anything directly
 # in examples/ that is not a source file or the index is a build product. The
 # baremetal subdirectory holds sources (its build products land in the repo

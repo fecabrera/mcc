@@ -1,0 +1,30 @@
+// Interface generated from ctype.mc by mcc -- do not edit.
+// Import this alongside the matching object file.
+
+@extern fn isalnum(c: int32) -> int32;
+
+@extern fn isalpha(c: int32) -> int32;
+
+@extern fn isblank(c: int32) -> int32;
+
+@extern fn iscntrl(c: int32) -> int32;
+
+@extern fn isdigit(c: int32) -> int32;
+
+@extern fn isgraph(c: int32) -> int32;
+
+@extern fn islower(c: int32) -> int32;
+
+@extern fn isprint(c: int32) -> int32;
+
+@extern fn ispunct(c: int32) -> int32;
+
+@extern fn isspace(c: int32) -> int32;
+
+@extern fn isupper(c: int32) -> int32;
+
+@extern fn isxdigit(c: int32) -> int32;
+
+@extern fn tolower(c: int32) -> int32;
+
+@extern fn toupper(c: int32) -> int32;

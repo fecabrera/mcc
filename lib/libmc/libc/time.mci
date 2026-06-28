@@ -1,0 +1,36 @@
+// Interface generated from time.mc by mcc -- do not edit.
+// Import this alongside the matching object file.
+
+const CLOCKS_PER_SEC = 1000000;
+
+struct tm {
+    tm_sec: int32;     // seconds after the minute [0, 60]
+    tm_min: int32;     // minutes after the hour [0, 59]
+    tm_hour: int32;    // hours since midnight [0, 23]
+    tm_mday: int32;    // day of the month [1, 31]
+    tm_mon: int32;     // months since January [0, 11]
+    tm_year: int32;    // years since 1900
+    tm_wday: int32;    // days since Sunday [0, 6]
+    tm_yday: int32;    // days since January 1 [0, 365]
+    tm_isdst: int32;   // daylight saving: >0 in effect, 0 not, <0 unknown
+    tm_gmtoff: int64;  // offset from UTC in seconds (BSD/glibc extension)
+    tm_zone: uint8*;   // timezone abbreviation (BSD/glibc extension)
+}
+
+@extern fn time(timer: int64*) -> int64;
+
+@extern fn difftime(end: int64, start: int64) -> float64;
+
+@extern fn clock() -> int64;
+
+@extern fn mktime(tm: struct tm*) -> int64;
+
+@extern fn localtime(timer: int64*) -> struct tm*;
+
+@extern fn gmtime(timer: int64*) -> struct tm*;
+
+@extern fn asctime(tm: struct tm*) -> uint8*;
+
+@extern fn ctime(timer: int64*) -> uint8*;
+
+@extern fn strftime(s: uint8*, max: uint64, format: uint8*, tm: struct tm*) -> uint64;

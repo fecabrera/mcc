@@ -1,0 +1,112 @@
+// Interface generated from math.mc by mcc -- do not edit.
+// Import this alongside the matching object file.
+
+@extern fn sin(x: float64) -> float64;
+
+@extern fn cos(x: float64) -> float64;
+
+@extern fn tan(x: float64) -> float64;
+
+@extern fn asin(x: float64) -> float64;
+
+@extern fn acos(x: float64) -> float64;
+
+@extern fn atan(x: float64) -> float64;
+
+@extern fn atan2(y: float64, x: float64) -> float64;
+
+@extern fn sinh(x: float64) -> float64;
+
+@extern fn cosh(x: float64) -> float64;
+
+@extern fn tanh(x: float64) -> float64;
+
+@extern fn asinh(x: float64) -> float64;
+
+@extern fn acosh(x: float64) -> float64;
+
+@extern fn atanh(x: float64) -> float64;
+
+@extern fn exp(x: float64) -> float64;
+
+@extern fn exp2(x: float64) -> float64;
+
+@extern fn expm1(x: float64) -> float64;
+
+@extern fn log(x: float64) -> float64;
+
+@extern fn log10(x: float64) -> float64;
+
+@extern fn log2(x: float64) -> float64;
+
+@extern fn log1p(x: float64) -> float64;
+
+@extern fn logb(x: float64) -> float64;
+
+@extern fn ilogb(x: float64) -> int32;
+
+@extern fn frexp(x: float64, exp: int32*) -> float64;
+
+@extern fn ldexp(x: float64, exp: int32) -> float64;
+
+@extern fn modf(x: float64, iptr: float64*) -> float64;
+
+@extern fn scalbn(x: float64, n: int32) -> float64;
+
+@extern fn pow(base: float64, exp: float64) -> float64;
+
+@extern fn sqrt(x: float64) -> float64;
+
+@extern fn cbrt(x: float64) -> float64;
+
+@extern fn hypot(x: float64, y: float64) -> float64;
+
+@extern fn fabs(x: float64) -> float64;
+
+@extern fn erf(x: float64) -> float64;
+
+@extern fn erfc(x: float64) -> float64;
+
+@extern fn lgamma(x: float64) -> float64;
+
+@extern fn tgamma(x: float64) -> float64;
+
+@extern fn ceil(x: float64) -> float64;
+
+@extern fn floor(x: float64) -> float64;
+
+@extern fn trunc(x: float64) -> float64;
+
+@extern fn round(x: float64) -> float64;
+
+@extern fn nearbyint(x: float64) -> float64;
+
+@extern fn rint(x: float64) -> float64;
+
+@extern fn lround(x: float64) -> int64;
+
+@extern fn llround(x: float64) -> int64;
+
+@extern fn lrint(x: float64) -> int64;
+
+@extern fn llrint(x: float64) -> int64;
+
+@extern fn fmod(x: float64, y: float64) -> float64;
+
+@extern fn remainder(x: float64, y: float64) -> float64;
+
+@extern fn remquo(x: float64, y: float64, quo: int32*) -> float64;
+
+@extern fn copysign(x: float64, y: float64) -> float64;
+
+@extern fn nextafter(x: float64, y: float64) -> float64;
+
+@extern fn nan(tagp: uint8*) -> float64;
+
+@extern fn fdim(x: float64, y: float64) -> float64;
+
+@extern fn fmax(x: float64, y: float64) -> float64;
+
+@extern fn fmin(x: float64, y: float64) -> float64;
+
+@extern fn fma(x: float64, y: float64, z: float64) -> float64;
