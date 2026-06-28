@@ -359,26 +359,35 @@ Grouped by scope.
       `typeof`-checked type discriminant, so the live member is recovered safely
       (`case type`). The element type of the [variadic](#functions-and-methods)
       pack's `slice<any>`. Depends on unions and typeof/typeid
-- [ ] `slice<T>` — a builtin non-owning view, `{ T* ptr; len }`, over a
-      contiguous run of `T`: runtime `len`, indexing, and `for … in`. It borrows
+- [~] `slice<T>` — a builtin non-owning view, `{ ptr: T*; length: uint64 }`, over a
+      contiguous run of `T`: runtime `length`, indexing, and `for … in`. It borrows
       and never allocates, distinct from a C array `T[]` (which stays length-less
       and decays to a bare pointer for the ABI). A 2-word struct, so not C-ABI by
-      value — across the C boundary pass `T*` plus a length instead.
-  - [ ] element-const axis — a `slice<const T>` is a read-only view (the
-        element-mutability distinction, like Rust's `&[T]` vs `&mut [T]`). A
-        `list<T>` borrows to a `slice<T>`; a `const list<T>` borrows to a
-        `slice<const T>`, so the conversion preserves immutability (and stays
-        sound if `const` ever deepens to the pointee). The read-only form is the
-        common one: the variadic pack is a `slice<const any>`, and a format
-        string is a `slice<const uint8>`
-  - [ ] borrowing in — a string/byte literal **adapts** to `slice<const uint8>`
-        from context at compile time (length baked in, the buffer still
-        NUL-terminated so the same literal also serves as `uint8*` for C), the
-        way an untyped constant takes its type from context. An owned value
-        (`struct string`, i.e. `list<uint8>`, or any `list<T>`/`T[N]`) borrows
-        **explicitly** with `as` — `str as slice<uint8>` reads `{ptr, len}` and
-        drops `capacity` (a new "borrow" form of `as`, since `as` rejects struct
-        casts today). Typed values convert explicitly; only literals adapt
+      value — across the C boundary pass `T*` plus a length instead. Built in
+      dependency-ordered stages:
+  - [x] **Stage 1 — the type + explicit borrows.** The builtin `slice<T>`
+        (`{ ptr: T*; length: uint64 }`) with `.length` and indexing `s[i]`.
+        Construction is an explicit `as` borrow from an owned `list<T>` or `T[N]` —
+        `xs as slice<T>` reads `{ptr, length}` and drops `capacity` (a new "borrow"
+        form of `as`, since `as` rejects struct casts today). Self-contained:
+        depends on nothing else here.
+  - [x] **Stage 2 — iteration.** `for … in` over a slice, its own builtin
+        iteration (walking `ptr` from `0` to `length`), with no library
+        `_it`/`_next` protocol. Depends on Stage 1.
+  - [ ] **Stage 3 — the element-const axis.** A `slice<const T>` is a read-only
+        view (the element-mutability distinction, like Rust's `&[T]` vs
+        `&mut [T]`): indexing yields a non-assignable element. A `list<T>`/`T[N]`
+        borrows to a `slice<T>`; a `const` one borrows to a `slice<const T>`, so
+        the conversion preserves immutability (and stays sound if `const` ever
+        deepens to the pointee). The read-only form is the common one: the
+        variadic pack is a `slice<const any>`, and a format string is a
+        `slice<const uint8>`. Depends on Stage 1.
+  - [ ] **Stage 4 — borrowing in (literal adaptation).** A string/byte literal
+        **adapts** to `slice<const uint8>` from context at compile time (length
+        baked in, the buffer still NUL-terminated so the same literal also serves
+        as `uint8*` for C), the way an untyped constant takes its type from
+        context. Typed owned values still convert **explicitly** with `as`
+        (Stage 1); only literals adapt. Depends on Stage 3.
 - [ ] `tuple<A, B, ...>` — a builtin heterogeneous, fixed-arity product: each
       position keeps its own statically-known type, accessed by position (`t.0`,
       `t.1`). For multiple return values

@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 (pre-1.0: new language/tooling features bump the minor version).
 
+## [Unreleased]
+
+### Added
+
+- **Slices** — `slice<T>`, a builtin non-owning view `{ ptr: T*; length: uint64 }`
+  over a contiguous run of `T`, with a runtime `.length`, indexing `s[i]`, and
+  native `for x in s` iteration. Constructed by an explicit borrow — `xs as
+  slice<T>` from an owned `list<T>` (reads `{data, length}`, drops `capacity`) or
+  a fixed array `T[N]` (`{&arr[0], N}`). See [Slices](docs/language.md#slices) and
+  [examples/slices.mc](examples/slices.mc).
+
 ## [0.2.0] - 2026-06-26
 
 ### Added

@@ -425,6 +425,10 @@ struct built with [`extends`](#structs) can reuse its base's by forwarding
 through an upcast. The `list`, `set`, `dict`, and `string` libraries all do
 this — see [examples/iteration.mc](examples/iteration.mc).
 
+A builtin [`slice<T>`](#slices) is the exception: it iterates natively, with no
+`_it`/`_next` of its own. `for x in s` (or `for x in &s`) walks the slice's
+`ptr` from index `0` up to `length`.
+
 `case` matches a value against a series of `when` arms, with an optional
 `else:` default. The subject is evaluated once, and there is **no
 fall-through** — a matching arm runs only its own statements and then the
@@ -543,6 +547,7 @@ before its `return`.
 | `float64`                                             | `double`                                                          |
 | `T*` (any type + `*`s)                                | pointer                                                           |
 | `T[N]` (fixed-size [array](#arrays))                  | `[N x T]`                                                         |
+| `slice<T>` (non-owning [view](#slices))               | `{ T*, i64 }`                                                     |
 | `fn(A) -> R` ([function pointer](#function-pointers)) | `R (A)*`                                                          |
 | `void`                                                | `void` (return type only; `void*` is not allowed -- use `uint8*`) |
 
@@ -666,6 +671,10 @@ let n = p as uint64;       // pointer <-> integer
 
 `as` binds tighter than binary operators: `a + b as int64` is
 `a + (b as int64)`.
+
+Casts between structs are rejected, with two exceptions: an
+[`extends`](#structs) value-upcast to a base struct, and a **borrow** to a
+[`slice<T>`](#slices) view (`xs as slice<T>` from an owned `list<T>` or `T[N]`).
 
 ## Pointers
 
@@ -835,6 +844,36 @@ few more rules:
   pointers; parenthesize for the other order.
 - Each `N` is a positive integer literal (`[]` only as the inferred outermost
   dimension).
+
+## Slices
+
+`slice<T>` is a builtin **non-owning view** over a contiguous run of `T`: a
+two-word value `{ ptr: T*; length: uint64 }`. It borrows storage it does not own
+— it never allocates — so the value it views must outlive it. A slice supports a
+runtime `.length`, indexing `s[i]` (reads and writes go straight through to the
+borrowed storage), and native [`for x in s`](#control-flow) iteration.
+
+A slice is constructed by an explicit **borrow** — the `as` cast applied to an
+owned value:
+
+```c
+let arr: int32[4];                 // a fixed array...
+let view = arr as slice<int32>;    // ...borrowed as { &arr[0], 4 }
+
+let nums: struct list<int32>;      // ...or an owned list<T>
+list_init(&nums, 8);
+let s = nums as slice<int32>;      // reads { data, length }, drops capacity
+```
+
+The source is either an owned `T[N]` (giving `{ &arr[0], N }`) or any struct
+laid out like a list — one with a `T*` `data` field and an integer `length`
+field, such as `list<T>` — which borrows to `{ data, length }`, ignoring any
+other fields (e.g. a list's `capacity`). The borrow is structural, not keyed to
+a particular type name. The element types must match. This is the one
+struct-producing `as` (ordinary struct casts are rejected). A slice is a plain value: it passes to and returns from
+functions by value (two words). Because it is two words it is **not** C-ABI by
+value — across a C boundary, pass a `T*` and a length separately instead. See
+[examples/slices.mc](examples/slices.mc).
 
 ## Structs
 

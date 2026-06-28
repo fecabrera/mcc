@@ -274,6 +274,10 @@ RAWPTR = pointer_to(TYPES["uint8"])
 # The type of a bare `null`: a pointer that adapts to any pointer type.
 NULLT = LangType("null", RAWPTR.ir, signed=False, pointee=TYPES["uint8"])
 
+# Builtin type names that are not in TYPES (they are generic or platform-
+# resolved) but are still reserved, so a user struct cannot shadow them.
+RESERVED_TYPE_NAMES = frozenset({"slice", "va_list"})
+
 POINTER_SIZE = 8  # bytes; native codegen targets 64-bit platforms
 
 # Compile-time facts about the target, exposed to source as the built-in
@@ -575,6 +579,23 @@ def is_struct(lang_type: LangType) -> bool:
         ``True`` if the type has a field list.
     """
     return lang_type.fields is not None
+
+
+def is_slice(lang_type: LangType) -> bool:
+    """Report whether a type is a builtin ``slice<T>`` view.
+
+    A slice is realized as an ordinary struct (so field access and ``sizeof``
+    reuse the struct machinery), tagged with the reserved template name
+    ``"slice"`` that only :meth:`CodeGen.slice_type` produces, so the name is an
+    unambiguous marker.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type is a ``slice<T>``.
+    """
+    return is_struct(lang_type) and lang_type.template == "slice"
 
 
 def is_valist(lang_type: LangType) -> bool:
@@ -1391,6 +1412,12 @@ class CodeGen:
             if ref.args:
                 raise LangError("type 'va_list' is not generic", line)
             base = self.valist(line)
+        elif ref.name == "slice":
+            if len(ref.args) != 1:
+                raise LangError(
+                    f"type 'slice' takes 1 type argument, got {len(ref.args)}", line
+                )
+            base = self.slice_type(self.lang_type(ref.args[0], line), line)
         elif (
             self.current_source,
             ref.name,
@@ -1577,6 +1604,42 @@ class CodeGen:
                 source=decl.source,
             )
         return base_type
+
+    def slice_type(self, element: LangType, line: int) -> LangType:
+        """Build (and intern) the builtin ``slice<T>`` view type for ``element``.
+
+        A slice is a 2-word, non-owning view ``{ ptr: T*; length: uint64 }`` over
+        a contiguous run of ``T``. It is realized as an ordinary struct -- so
+        field access, ``sizeof``, and by-value passing all reuse the struct
+        machinery -- tagged with the reserved template name ``"slice"`` (see
+        :func:`is_slice`). Instances are interned per element type, alongside the
+        user structs in ``struct_types``.
+
+        Args:
+            element: The element type ``T``.
+            line: Source line for diagnostics.
+
+        Returns:
+            The cached or newly built ``slice<T>`` ``LangType``.
+
+        Raises:
+            LangError: On ``slice<void>``.
+        """
+        if element is VOID:
+            raise LangError("cannot make a slice of void", line)
+        mangled = f"slice<{element}>"
+        if mangled in self.struct_types:
+            return self.struct_types[mangled]
+        fields = (("ptr", pointer_to(element)), ("length", UINT64))
+        identified = self.module.context.get_identified_type(mangled)
+        identified.set_body(*(ftype.ir for _, ftype in fields))
+        slice_t = LangType(
+            mangled, identified, signed=False, template="slice", args=(element,)
+        )
+        object.__setattr__(slice_t, "fields", fields)  # frozen; excluded from eq
+        object.__setattr__(slice_t, "elem_indices", (0, 1))
+        self.struct_types[mangled] = slice_t
+        return slice_t
 
     def instantiate_struct(
         self, decl: StructDecl, args: tuple[LangType, ...]
@@ -1789,7 +1852,7 @@ class CodeGen:
         self.flatten_conditionals()
         for decl in self.program.structs:
             self.current_source = decl.source
-            if decl.name in TYPES:
+            if decl.name in TYPES or decl.name in RESERVED_TYPE_NAMES:
                 raise LangError(f"type {decl.name!r} already defined", decl.line)
             if decl.static:
                 key = (decl.source, decl.name)
@@ -2819,6 +2882,9 @@ class CodeGen:
         struct_t = iterable.type
         while is_pointer(struct_t):
             struct_t = struct_t.pointee
+        if is_slice(struct_t):
+            self.gen_for_slice(stmt, iterable, struct_t)
+            return
         if not is_struct(struct_t):
             raise LangError(
                 "'for ... in' needs a struct iterable with '<struct>_it' and "
@@ -2875,6 +2941,81 @@ class CodeGen:
                 self.loops.pop()
             if not self.builder.block.is_terminated:
                 self.builder.branch(cond_bb)
+            self.builder.position_at_end(end_bb)
+        finally:
+            self.defer_stack.pop()
+            self.locals, self.scope_names = outer_locals, outer_names
+
+    def gen_for_slice(self, stmt: For, iterable: TypedValue, slice_t: LangType):
+        """Lower ``for x in s { body }`` over a builtin ``slice<T>``.
+
+        Unlike a library container, a slice iterates natively -- no
+        ``_it``/``_next`` -- walking its ``ptr`` from index ``0`` up to
+        ``length``::
+
+            { let i = 0; let x: T;
+              while (i < s.length) { x = s.ptr[i]; body; i = i + 1; } }
+
+        The index counter and the slice's pointer/length are compiler-held
+        temporaries; ``x`` lives in a fresh block scope, gone once the loop ends.
+        A ``continue`` runs through the step block, so it still advances ``i``.
+
+        Args:
+            stmt: The ``For`` node to lower.
+            iterable: The already-evaluated slice (or pointer(s) to one).
+            slice_t: The iterable's ``slice<T>`` type, pointers stripped.
+        """
+        # Materialize the slice value, loading through any pointers, then read
+        # its pointer and length once up front (the slice does not change shape
+        # mid-loop, so the bound is fixed at entry).
+        value, vtype = iterable.value, iterable.type
+        while is_pointer(vtype):
+            value = self.gen_load(value)
+            vtype = vtype.pointee
+        ptr = self.builder.extract_value(value, slice_t.elem_indices[0])
+        length = self.builder.extract_value(value, slice_t.elem_indices[1])
+        element = slice_t.fields[0][1].pointee
+
+        idx_slot = self.builder.alloca(UINT64.ir, name="for.idx")
+        self.builder.store(ir.Constant(UINT64.ir, 0), idx_slot)
+
+        # A fresh scope for the element variable and the loop's defers.
+        outer_locals, outer_names = dict(self.locals), self.scope_names
+        self.scope_names = set()
+        self.defer_stack.append([])
+        try:
+            x_slot = self.builder.alloca(element.ir, name=stmt.var)
+            if over_aligned(element):
+                x_slot.align = type_align(element)
+            self.bind_local(stmt.var, x_slot, element)
+
+            cond_bb = self.builder.append_basic_block("for.cond")
+            body_bb = self.builder.append_basic_block("for.body")
+            step_bb = self.builder.append_basic_block("for.step")
+            end_bb = self.builder.append_basic_block("for.end")
+            self.builder.branch(cond_bb)
+            self.builder.position_at_end(cond_bb)
+            idx = self.builder.load(idx_slot)
+            more = self.builder.icmp_unsigned("<", idx, length)
+            self.builder.cbranch(more, body_bb, end_bb)
+            self.builder.position_at_end(body_bb)
+            elem_addr = self.builder.gep(ptr, [idx])
+            self.builder.store(self.gen_load(elem_addr), x_slot)
+            # `continue` lands on the step block, so it advances `i` like a
+            # normal iteration; `break` exits to the end.
+            self.loops.append((step_bb, end_bb, len(self.defer_stack)))
+            try:
+                self.gen_block(stmt.body)
+            finally:
+                self.loops.pop()
+            if not self.builder.block.is_terminated:
+                self.builder.branch(step_bb)
+            self.builder.position_at_end(step_bb)
+            nxt = self.builder.add(
+                self.builder.load(idx_slot), ir.Constant(UINT64.ir, 1)
+            )
+            self.builder.store(nxt, idx_slot)
+            self.builder.branch(cond_bb)
             self.builder.position_at_end(end_bb)
         finally:
             self.defer_stack.pop()
@@ -3469,6 +3610,14 @@ class CodeGen:
                 integer.
         """
         base = self.gen_expr(base_expr)
+        if is_slice(base.type):
+            # A slice indexes through its `ptr` field into the borrowed run.
+            ptr = self.builder.extract_value(base.value, base.type.elem_indices[0])
+            element = base.type.fields[0][1].pointee
+            index = self.gen_expr(index_expr)
+            if not is_integer(index.type):
+                raise LangError(f"index must be an integer, not {index.type}", line)
+            return self.builder.gep(ptr, [index.value]), element
         if not is_pointer(base.type):
             raise LangError(f"cannot index a {base.type}", line)
         index = self.gen_expr(index_expr)
@@ -3672,7 +3821,9 @@ class CodeGen:
 
         Supports pointer/function-pointer bitcasts, pointer-integer conversions,
         integer truncation/extension (by signedness), integer-to-bool, and the
-        ``float64`` conversions. Struct casts are rejected.
+        ``float64`` conversions. A cast to ``slice<T>`` is a borrow (see
+        :meth:`gen_borrow_slice`); other struct casts are rejected, except the
+        ``extends`` value-upcast.
 
         Args:
             expr: The ``Cast`` node.
@@ -3683,8 +3834,13 @@ class CodeGen:
         Raises:
             LangError: On an unsupported conversion (e.g. involving a struct).
         """
-        tv = self.gen_expr(expr.value)
         target = self.lang_type(expr.type_name, expr.line)
+        if is_slice(target):
+            # A "borrow" cast: build a non-owning view over an owned list<T> or
+            # T[N]. Resolved before the operand is read, so an array keeps its
+            # static length instead of decaying to a bare pointer.
+            return self.gen_borrow_slice(expr.value, target, expr.line)
+        tv = self.gen_expr(expr.value)
         src = tv.type
         if src == target:
             return TypedValue(tv.value, target)
@@ -3731,6 +3887,104 @@ class CodeGen:
             convert = self.builder.fptosi if target.signed else self.builder.fptoui
             return TypedValue(convert(tv.value, target.ir), target)
         raise LangError(f"cannot cast {src} to {target}", expr.line)
+
+    def make_slice(self, target: LangType, ptr, length) -> TypedValue:
+        """Assemble a ``slice<T>`` value from a pointer and a length.
+
+        Args:
+            target: The ``slice<T>`` type to build.
+            ptr: The ``T*`` pointer to the borrowed run's first element.
+            length: The element count, an ``i64``.
+
+        Returns:
+            The assembled slice as a ``TypedValue``.
+        """
+        agg = ir.Constant(target.ir, None)
+        agg = self.builder.insert_value(agg, ptr, target.elem_indices[0])
+        agg = self.builder.insert_value(agg, length, target.elem_indices[1])
+        return TypedValue(agg, target)
+
+    def gen_borrow_slice(self, value_expr, target: LangType, line: int) -> TypedValue:
+        """Lower a borrow ``value as slice<T>`` into a non-owning view.
+
+        A fixed array ``T[N]`` borrows to ``{first-element pointer, N}`` (read
+        through its address, so the static length survives the array's usual
+        decay). An owned ``list<T>`` -- any struct with a ``T*`` ``data`` field
+        and an integer ``length`` -- borrows to ``{data, length}``, dropping its
+        ``capacity``. A ``slice<T>`` borrows to itself.
+
+        Args:
+            value_expr: The owned value being borrowed.
+            target: The ``slice<T>`` view type to produce.
+            line: Source line for diagnostics.
+
+        Returns:
+            The borrowed view as a ``TypedValue``.
+
+        Raises:
+            LangError: When the source cannot be borrowed as ``target`` (wrong
+                shape) or its element type does not match ``T``.
+        """
+        element = target.fields[0][1].pointee
+        # T[N]: take the first-element pointer and the static length, which would
+        # otherwise decay away once the array is read as a value.
+        src_t = self.lvalue_type(value_expr)
+        if src_t is not None and is_array(src_t):
+            addr, owner, _, _ = self.gen_addr(value_expr, line)
+            if owner.element != element:
+                raise LangError(
+                    f"cannot borrow {owner} as {target}: element type is "
+                    f"{owner.element}, not {element}",
+                    line,
+                )
+            ptr = self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
+            return self.make_slice(target, ptr, ir.Constant(UINT64.ir, owner.count))
+        src = self.gen_expr(value_expr)
+        owner, struct_val = src.type, src.value
+        if is_pointer(owner) and is_struct(owner.pointee):
+            owner = owner.pointee  # a list<T>* (or slice<T>*) borrows like the value
+            struct_val = self.gen_load(src.value)
+        if is_slice(owner):
+            if owner.fields[0][1].pointee != element:
+                raise LangError(f"cannot borrow {src.type} as {target}", line)
+            return TypedValue(struct_val, target)
+        if not is_struct(owner):
+            raise LangError(
+                f"cannot borrow {src.type} as {target}; borrow an owned list, "
+                "an array, or a matching slice",
+                line,
+            )
+        by_name = {name: i for i, (name, _) in enumerate(owner.fields)}
+        if "data" not in by_name or "length" not in by_name:
+            raise LangError(
+                f"cannot borrow {src.type} as {target}; expected the data/length "
+                "fields of an owned list",
+                line,
+            )
+        data_t = owner.fields[by_name["data"]][1]
+        length_t = owner.fields[by_name["length"]][1]
+        if not is_pointer(data_t) or data_t.pointee != element:
+            got = data_t.pointee if is_pointer(data_t) else data_t
+            raise LangError(
+                f"cannot borrow {src.type} as {target}: element type is "
+                f"{got}, not {element}",
+                line,
+            )
+        if not is_integer(length_t):
+            raise LangError(
+                f"cannot borrow {src.type} as {target}: 'length' is "
+                f"{length_t}, not an integer",
+                line,
+            )
+        ptr = self.builder.extract_value(struct_val, owner.elem_indices[by_name["data"]])
+        length = self.builder.extract_value(
+            struct_val, owner.elem_indices[by_name["length"]]
+        )
+        if length_t.ir.width < 64:
+            length = self.builder.zext(length, UINT64.ir)
+        elif length_t.ir.width > 64:
+            length = self.builder.trunc(length, UINT64.ir)
+        return self.make_slice(target, ptr, length)
 
     def string_global(self, text: str) -> ir.GlobalVariable:
         """Create a private constant global holding a string's bytes.

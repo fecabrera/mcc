@@ -34,6 +34,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [structs.mc](structs.mc) | structs, generic structs, `->` / `.`, `null`, struct literals, a hand-built linked list |
 | [struct_literals.mc](struct_literals.mc) | `struct Name { field = value, ... }` literals: omitted fields zeroed or set to a `= default`, free field order, generics (inferred type args), nesting, as args/returns/through a pointer |
 | [data_structures.mc](data_structures.mc) | the growable lib containers: `list<T>`, `stack<T>` (LIFO), `queue<T>` (FIFO ring buffer) |
+| [slices.mc](slices.mc) | the builtin `slice<T>` view: borrowing a `list<T>` or `T[N]` with `as`, `.length`, indexing, `for x in`, passing by value, writing through |
 | [pointers.mc](pointers.mc) | `import`, heap allocation, `&` `*` `[]`, `sizeof`, `as` casts |
 | [generics.mc](generics.mc) | type inference, generic recursion, multiple type parameters |
 | [fizzbuzz.mc](fizzbuzz.mc) | the classic, with `%` and an `else if` chain |
