@@ -204,15 +204,20 @@ def test_literal_cast_to_pointer():
 
 
 def test_string_array_borrows_as_slice():
+    # A uint8[N] is a NUL-terminated string, so the borrow drops the terminator:
+    # the slice spans the 3 text bytes, length 3, no trailing NUL.
     src = """
     fn main() -> int32 {
         let s: uint8[] = "abc";          // uint8[4]
+        let view = s as slice<uint8>;
+        let count: int32 = 0;
         let total: int32 = 0;
-        for c in s as slice<uint8> { total = total + (c as int32); }
-        return total;                    // 'a'+'b'+'c'+NUL = 97+98+99+0
+        for c in view { count = count + 1; total = total + (c as int32); }
+        return (view.length as int32) * 1000 + count * 100 + total;
     }
     """
-    assert run(src) == 294
+    # length 3, 3 iterations, 'a'+'b'+'c' = 294  ->  3*1000 + 3*100 + 294
+    assert run(src) == 3594
 
 
 def test_string_argument_still_works(capfd):

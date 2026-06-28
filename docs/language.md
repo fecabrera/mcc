@@ -870,8 +870,10 @@ The source is either an owned `T[N]` (giving `{ &arr[0], N }`) or any struct
 laid out like a list — one with a `T*` `data` field and an integer `length`
 field, such as `list<T>` — which borrows to `{ data, length }`, ignoring any
 other fields (e.g. a list's `capacity`). The borrow is structural, not keyed to
-a particular type name. The element types must match. This is the one
-struct-producing `as` (ordinary struct casts are rejected). A slice is a plain value: it passes to and returns from
+a particular type name. The element types must match. A `uint8[N]` is the one
+special case: as a NUL-terminated [string](#strings), its borrow drops the
+trailing terminator, so `length` is `N - 1` (the text, without the NUL). This is
+the one struct-producing `as` (ordinary struct casts are rejected). A slice is a plain value: it passes to and returns from
 functions by value (two words). Because it is two words it is **not** C-ABI by
 value — across a C boundary, pass a `T*` and a length separately instead. See
 [examples/slices.mc](examples/slices.mc).
@@ -1332,7 +1334,10 @@ let p: uint8* = "hi";          // decays: a pointer into the shared constant (no
 
 An owned `uint8[N]` binding can be mutated (`owned[0] = 'H'`), measured with
 [`len`](#arrays) (which counts the NUL — `len(owned)` is `3`), and
-[borrowed](#slices) as a `slice<uint8>`; the `uint8*` form keeps the old
+[borrowed](#slices) as a `slice<uint8>`. A `uint8[N]` is treated as a
+NUL-terminated string, so the borrow **drops the terminator**: the slice spans
+the text, with `length` one less than `len` (`"hi" as slice<uint8>` has
+`length == 2`, the buffer keeps its NUL). The `uint8*` form keeps the old
 pointer-to-constant behavior. An explicit `uint8[M]` must be large enough to
 hold the bytes (NUL included). (Borrowing a string *literal* directly as a
 `slice<const uint8>` is the separate [Stage 4](../README.md) "literal

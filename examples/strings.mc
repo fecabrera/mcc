@@ -35,14 +35,14 @@ fn main() -> int32 {
     println("first byte %d", first as int32);
 
     // An owned byte array borrows as a slice<uint8> (a { ptr, length } view),
-    // so it iterates natively. The view spans the NUL too, so stop one short.
+    // so it iterates natively. A uint8[N] is a NUL-terminated string, so the
+    // borrow drops the terminator: view.length is the text length (8, not 9).
     let bytes = "slice me";               // uint8[9]
     let view = bytes as slice<uint8>;
+    println("view.length %llu", view.length);   // 8
     print("bytes: ");
-    let i: uint64 = 0;
-    while (i < view.length - 1) {         // skip the trailing NUL
-        print("%c", view[i]);
-        i = i + 1;
+    for c in view {
+        print("%c", c);
     }
     println("");
 

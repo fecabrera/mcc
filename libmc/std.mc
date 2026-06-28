@@ -49,8 +49,8 @@ fn writechar(c: uint8) {
  * @param str: string to write
  */
 @inline
-fn writestr(const str: struct string) {
-    fwrite(str.data, sizeof(uint8), str.length, stdout);
+fn writestr(const str: slice<uint8>) {
+    fwrite(str.ptr, sizeof(uint8), str.length, stdout);
 }
 
 /**
@@ -59,7 +59,7 @@ fn writestr(const str: struct string) {
  * @param str: string to write
  */
 @inline
-fn writeln(const str: struct string) {
+fn writeln(const str: slice<uint8>) {
     writestr(str);
     writechar('\n');
 }

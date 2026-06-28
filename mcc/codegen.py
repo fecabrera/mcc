@@ -3942,9 +3942,12 @@ class CodeGen:
 
         A fixed array ``T[N]`` borrows to ``{first-element pointer, N}`` (read
         through its address, so the static length survives the array's usual
-        decay). An owned ``list<T>`` -- any struct with a ``T*`` ``data`` field
-        and an integer ``length`` -- borrows to ``{data, length}``, dropping its
-        ``capacity``. A ``slice<T>`` borrows to itself.
+        decay). A ``uint8[N]`` is treated as a NUL-terminated string, so its
+        borrow drops the trailing terminator -- length ``N - 1`` -- giving the
+        text without the NUL (the buffer keeps it, so it still serves as a
+        ``uint8*``). An owned ``list<T>`` -- any struct with a ``T*`` ``data``
+        field and an integer ``length`` -- borrows to ``{data, length}``,
+        dropping its ``capacity``. A ``slice<T>`` borrows to itself.
 
         Args:
             value_expr: The owned value being borrowed.
@@ -3971,7 +3974,10 @@ class CodeGen:
                     line,
                 )
             ptr = self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
-            return self.make_slice(target, ptr, ir.Constant(UINT64.ir, owner.count))
+            # A uint8[N] is a NUL-terminated string: drop the terminator so the
+            # view spans the text, not the trailing NUL.
+            length = owner.count - 1 if element is UINT8 else owner.count
+            return self.make_slice(target, ptr, ir.Constant(UINT64.ir, length))
         src = self.gen_expr(value_expr)
         owner, struct_val = src.type, src.value
         if is_pointer(owner) and is_struct(owner.pointee):

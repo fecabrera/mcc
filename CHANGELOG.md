@@ -26,7 +26,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   over a contiguous run of `T`, with a runtime `.length`, indexing `s[i]`, and
   native `for x in s` iteration. Constructed by an explicit borrow — `xs as
   slice<T>` from an owned `list<T>` (reads `{data, length}`, drops `capacity`) or
-  a fixed array `T[N]` (`{&arr[0], N}`). See [Slices](docs/language.md#slices) and
+  a fixed array `T[N]` (`{&arr[0], N}`). A `uint8[N]` is treated as a
+  NUL-terminated string, so its borrow drops the terminator (`length` is
+  `N - 1`). See [Slices](docs/language.md#slices) and
   [examples/slices.mc](examples/slices.mc).
 - **Constant-expression array sizes** — an array dimension may be any constant
   integer expression (`int32[N + 1]`, `uint8[2 * SIZE]`), not just a literal or a
@@ -48,7 +50,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   an owned binding now keeps its array type: `let s = "hi";` is a mutable
   `uint8[3]`, `let s: uint8[] = "hi";` infers the size, and `let s: uint8[8] =
   "hi";` zero-fills the rest. This makes `len(s)` / `len("hi")` work and lets a
-  string be borrowed as a `slice<uint8>`. Annotating `uint8*` keeps the old
+  string be borrowed as a `slice<uint8>` (the borrow drops the trailing NUL, so
+  the slice spans the text). Annotating `uint8*` keeps the old
   pointer-to-constant behavior (no copy). See [Strings](docs/language.md#strings).
 - **`string` is now `type string = list<uint8>`** — a transparent
   specialization with the same layout, so a `struct string*` upcasts to a
