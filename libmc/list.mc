@@ -1,4 +1,5 @@
 import "memory";
+import "range";
 
 /**
  * A growable, heap-backed list of T.
@@ -19,6 +20,39 @@ fn list_init<T>(self: struct list<T>*, capacity: uint64) {
     self->data = alloc<T>(capacity);
     self->length = 0;
     self->capacity = capacity;
+}
+
+/**
+ * Deep-copies src into a fresh list: initializes dst with src's capacity and
+ * appends every element of src, so the two share no storage afterward. dst must
+ * be uninitialized (or already destroyed) -- duplicating into a live list leaks
+ * its buffer.
+ *
+ * @param dst: uninitialized list to copy src into
+ * @param src: list to copy from
+ */
+fn list_duplicate<T>(dst: struct list<T>*, src: struct list<T>*) {
+    list_init(dst, src->capacity);
+    list_append(dst, src);
+}
+
+/**
+ * Builds a list from the first n elements of a raw array: initializes self with
+ * capacity n and appends each element, so the list owns a private copy and
+ * shares no storage with arr. self must be uninitialized (or already destroyed)
+ * -- building into a live list leaks its buffer.
+ *
+ * @param self: uninitialized list to build into
+ * @param arr:  source array to copy from
+ * @param n:    number of elements to copy from arr
+ */
+fn list_from_array<T>(self: struct list<T>*, arr: T*, n: uint64) {
+    list_init(self, n);
+
+    let r = struct range { end = n };
+    for i in &r {
+        list_push(self, arr[i]);
+    }
 }
 
 /**
@@ -79,12 +113,12 @@ fn list_set<T>(self: struct list<T>*, index: uint64, value: T) -> bool {
 }
 
 /**
- * Appends value to the end of the list, growing its storage if needed.
+ * Inserts value to the end of the list, growing its storage if needed.
  *
  * @param self:  list to append to
  * @param value: value to append
  */
-fn list_append<T>(self: struct list<T>*, value: T) {
+fn list_push<T>(self: struct list<T>*, value: T) {
     if (self->length == self->capacity)
         list_grow<T>(self);
 
@@ -93,8 +127,20 @@ fn list_append<T>(self: struct list<T>*, value: T) {
 }
 
 /**
+ * Appends another list to the end of the list, growing it if needed.
+ *
+ * @param self:  list to append to
+ * @param value: list to append
+ **/
+fn list_append<T>(self: struct list<T>*, items: struct list<T>*) {
+    for value in items {
+        list_push(self, value);
+    }
+}
+
+/**
  * Doubles the list's capacity, moving the existing elements.
- * Internal; called by list_append when storage runs out.
+ * Internal; called by list_push when storage runs out.
  *
  * @param self: list to grow
  */

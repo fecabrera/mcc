@@ -48,7 +48,7 @@ fn build_labels(n: uint64) {
         let label: uint8* = alloc<uint8>(2);
         label[0] = 'a' + i as uint8;
         label[1] = 0;
-        list_append(&labels, label);
+        list_push(&labels, label);
         i = i + 1;
     }
     println("built %llu labels", labels.length);

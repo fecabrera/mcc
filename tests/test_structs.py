@@ -257,7 +257,7 @@ def test_list_lib(tmp_path, capfd):
             list_init(floats, 1);
             let i: int32 = 0;
             while (i < 5) {
-                list_append(floats, i as float64 / 2.0);
+                list_push(floats, i as float64 / 2.0);
                 i = i + 1;
             }
             let v: float64 = 0.0;
@@ -285,9 +285,9 @@ def test_list_iterator(tmp_path, capfd):
         fn main() -> int32 {
             let xs: struct list<int32>;
             list_init(&xs, 2);
-            list_append(&xs, 10);
-            list_append(&xs, 20);
-            list_append(&xs, 30);          // grows past the initial capacity
+            list_push(&xs, 10);
+            list_push(&xs, 20);
+            list_push(&xs, 30);          // grows past the initial capacity
             defer list_destroy(&xs);
 
             let sum: int32 = 0;
@@ -319,9 +319,9 @@ def test_for_in_loop(tmp_path, capfd):
         fn main() -> int32 {
             let xs: struct list<int32>;
             list_init(&xs, 2);
-            list_append(&xs, 10);
-            list_append(&xs, 20);
-            list_append(&xs, 30);
+            list_push(&xs, 10);
+            list_push(&xs, 20);
+            list_push(&xs, 30);
             defer list_destroy(&xs);
 
             let sum: int32 = 0;
@@ -336,3 +336,77 @@ def test_for_in_loop(tmp_path, capfd):
     )
     assert run_path(main) == 0
     assert capfd.readouterr().out == "30\n"
+
+
+def test_list_append_concatenates(capfd):
+    run(
+        """
+        import "list";
+        import "libc/stdio";
+        fn main() -> int32 {
+            let a: struct list<int32>;
+            list_init(&a, 2);
+            list_push(&a, 1);
+            list_push(&a, 2);
+            let b: struct list<int32>;
+            list_init(&b, 2);
+            list_push(&b, 3);
+            list_push(&b, 4);
+            list_append(&a, &b);                    // a becomes [1, 2, 3, 4]
+            let sum: int32 = 0;
+            for v in &a { sum = sum + v; }
+            printf("%d %llu\\n", sum, a.length);    // 10 4
+            list_destroy(&a);
+            list_destroy(&b);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "10 4\n"
+
+
+def test_list_duplicate_deep_copies(capfd):
+    run(
+        """
+        import "list";
+        import "libc/stdio";
+        fn main() -> int32 {
+            let a: struct list<int32>;
+            list_init(&a, 4);
+            list_push(&a, 7);
+            list_push(&a, 8);
+            let b: struct list<int32>;
+            list_duplicate(&b, &a);                 // independent copy
+            list_set(&a, 0, 99);                    // mutate the original
+            let first: int32 = 0;
+            list_get(&b, 0, &first);                // copy is unaffected
+            printf("%d %llu\\n", first, b.length);  // 7 2
+            list_destroy(&a);
+            list_destroy(&b);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "7 2\n"
+
+
+def test_list_from_array_builds_a_private_copy(capfd):
+    run(
+        """
+        import "list";
+        import "libc/stdio";
+        fn main() -> int32 {
+            let raw: int32[3];
+            raw[0] = 5; raw[1] = 6; raw[2] = 7;
+            let xs: struct list<int32>;
+            list_from_array(&xs, &raw[0], 3);
+            raw[0] = 0;                             // the list owns its own copy
+            let sum: int32 = 0;
+            for v in &xs { sum = sum + v; }
+            printf("%d %llu\\n", sum, xs.length);   // 18 3
+            list_destroy(&xs);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "18 3\n"

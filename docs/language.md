@@ -890,7 +890,7 @@ Only a **typed** field value pins a parameter (and two typed fields that
 disagree are an error). An untyped constant doesn't anchor a parameter — a bare
 `struct pair { a = 0, b = "x" }` leaves `A` ambiguous, the same way `let a = 0`
 is, since the constant has no type of its own to deduce, only a default it would
-guess. It still *adapts* to a parameter another field has already fixed. A
+guess. It still _adapts_ to a parameter another field has already fixed. A
 parameter no typed field determines can't be inferred, so spell those cases out
 with explicit type arguments. A field whose own type is a struct takes a nested
 literal.
@@ -1079,7 +1079,7 @@ struct point { x: int32; y: int32; }
 type point_ref = struct point*;
 ```
 
-An alias is **transparent**, not a new distinct type: `callback` *is* the
+An alias is **transparent**, not a new distinct type: `callback` _is_ the
 function-pointer type it names, so a `callback` value and a matching
 `fn(int32, uint8**) -> int32` value are interchangeable without a cast. Pointer
 and array suffixes apply on top of the alias, so with `type bytes = uint8*;`,
@@ -1168,7 +1168,7 @@ file (however it was imported) is a compile error naming the owning file:
 
 ```c
 /**
- * Doubles the list's capacity. Internal; called by list_append.
+ * Doubles the list's capacity. Internal; called by list_push.
  */
 @private
 fn list_grow<T>(self: struct list<T>*) { ... }
@@ -1346,7 +1346,7 @@ the 32-bit `w` name, exactly as `%w` does in C inline asm:
 
 That second form, **`@asm fn`**, is sugar for a function whose body is a single
 `@asm(...)` expression over its parameters: the parameters are the inputs and
-the return type is the output. You do *not* write `ret` — the function's normal
+the return type is the output. You do _not_ write `ret` — the function's normal
 epilogue returns the value.
 
 A **`@clobbers(...)`** clause declares the registers and flags the asm touches

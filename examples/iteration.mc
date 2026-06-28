@@ -15,7 +15,7 @@ fn main() -> int32 {
 
     let i: int32 = 1;
     while (i <= 6) {
-        list_append(&nums, i * i);      // 1 4 9 16 25 36
+        list_push(&nums, i * i);      // 1 4 9 16 25 36
         i = i + 1;
     }
 

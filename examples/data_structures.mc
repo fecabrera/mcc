@@ -12,12 +12,26 @@ fn main() -> int32 {
     list_init(&nums, 2);
     let i: int32 = 0;
     while (i < 10) {
-        list_append(&nums, i * i);      // grows past the initial capacity of 2
+        list_push(&nums, i * i);      // one element; grows past the capacity of 2
         i = i + 1;
     }
     let value: int32 = 0;
     if (list_get(&nums, 6, &value))
-        println("array: length %llu, nums[6] = %d", nums.length, value);
+        println("list: length %llu, nums[6] = %d", nums.length, value);
+
+    // list_from_array builds an owned list by copying a raw array; list_append
+    // concatenates a whole list; list_duplicate makes an independent deep copy.
+    let seed: int32[3];
+    seed[0] = 100; seed[1] = 200; seed[2] = 300;
+    let more: struct list<int32>;
+    list_from_array(&more, &seed[0], 3);   // more = [100, 200, 300]
+    list_append(&nums, &more);             // append the whole list onto nums
+    let copy: struct list<int32>;
+    list_duplicate(&copy, &nums);          // independent deep copy
+    println("after append: nums.length %llu, copy.length %llu",
+            nums.length, copy.length);
+    list_destroy(&more);
+    list_destroy(&copy);
     list_destroy(&nums);
 
     // stack<T> -- LIFO: push and pop at the top (libmc/stack.mc).

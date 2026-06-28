@@ -15,7 +15,7 @@ const DEFAULT_STRING_CAPACITY = 10;
  * forwards to the matching `list_*` function. Each `string_*` wrapper is
  * `@inline`, so the indirection costs nothing once optimized.
  */
-struct string extends list<uint8>;
+type string = list<uint8>;
 
 /**
  * Prepares a string for use, reserving DEFAULT_STRING_CAPACITY bytes.
@@ -24,7 +24,7 @@ struct string extends list<uint8>;
  */
 @inline
 fn string_init(self: struct string*) {
-    list_init(self as struct list<uint8>*, DEFAULT_STRING_CAPACITY);
+    list_init(self, DEFAULT_STRING_CAPACITY);
 }
 
 /**
@@ -37,11 +37,8 @@ fn string_init(self: struct string*) {
  * @param src: string to copy from
  */
 fn string_duplicate(dst: struct string*, src: struct string*) {
-    list_init(dst as struct list<uint8>*, src->capacity);
-
-    for entry in src {
-        string_append(dst, entry);
-    }
+    list_init(dst, src->capacity);
+    string_append(dst, src);
 }
 
 /**
@@ -54,12 +51,13 @@ fn string_duplicate(dst: struct string*, src: struct string*) {
  * @param str:  source byte array to copy from
  * @param n:    number of bytes to copy from str
  */
-fn string_from_array(self: struct string*, str: uint8*, n: uint64) {
-    list_init(self as struct list<uint8>*, n);
-    
-    let r = struct range { end = n };
-    for i in &r {
-        string_append(self, str[i]);
+fn string_from_array(self: struct string*, str: uint8*) {
+    string_init(self);
+
+    let i: uint64 = 0;
+    until (str[i] == '\0') {
+        string_push(self, str[i]);
+        i = i + 1;
     }
 }
 
@@ -71,7 +69,7 @@ fn string_from_array(self: struct string*, str: uint8*, n: uint64) {
  */
 @inline
 fn string_destroy(self: struct string*) {
-    list_destroy(self as struct list<uint8>*);
+    list_destroy(self);
 }
 
 /**
@@ -81,7 +79,7 @@ fn string_destroy(self: struct string*) {
  */
 @inline
 fn string_reset(self: struct string*) {
-    list_reset(self as struct list<uint8>*);
+    list_reset(self);
 }
 
 /**
@@ -95,7 +93,7 @@ fn string_reset(self: struct string*) {
  */
 @inline
 fn string_get(self: struct string*, index: uint64, out: uint8*) -> bool {
-    return list_get(self as struct list<uint8>*, index, out);
+    return list_get(self, index, out);
 }
 
 /**
@@ -109,18 +107,29 @@ fn string_get(self: struct string*, index: uint64, out: uint8*) -> bool {
  */
 @inline
 fn string_set(self: struct string*, index: uint64, value: uint8) -> bool {
-    return list_set(self as struct list<uint8>*, index, value);
+    return list_set(self, index, value);
 }
 
 /**
- * Appends a byte to the end of the string, growing it if needed.
+ * Inserts a byte at the end of the string, growing it if needed.
  *
  * @param self:  string to append to
- * @param value: byte to append
+ * @param value: byte to push
  */
 @inline
-fn string_append(self: struct string*, value: uint8) {
-    list_append(self as struct list<uint8>*, value);
+fn string_push(self: struct string*, value: uint8) {
+    list_push(self, value);
+}
+
+/**
+ * Appends another string to the end of the string, growing it if needed.
+ *
+ * @param self:  string to append to
+ * @param value: string to append
+ **/
+@inline
+fn string_append(self: struct string*, str: struct string*) {
+    list_append(self, str);
 }
 
 /**
@@ -153,7 +162,7 @@ fn string_eq(self: struct string*, str: struct string*) -> bool {
  * A forward cursor over a string's bytes, produced by `string_it`. A
  * specialization of `list_iter<uint8>`, so it forwards to the list iterator.
  */
-struct string_iter extends list_iter<uint8>;
+type string_iter = list_iter<uint8>;
 
 /**
  * Begins an iteration over a string's bytes, front to back. Part of the
@@ -165,7 +174,7 @@ struct string_iter extends list_iter<uint8>;
  * @return an iterator positioned at the first byte
  */
 fn string_it(self: struct string*) -> struct string_iter {
-    return list_it(self as struct list<uint8>*) as struct string_iter;
+    return list_it(self);
 }
 
 /**
@@ -178,5 +187,5 @@ fn string_it(self: struct string*) -> struct string_iter {
  * @return true if a byte was produced, false once iteration is complete
  */
 fn string_next(it: struct string_iter*, out: uint8*) -> bool {
-    return list_next(it as struct list_iter<uint8>*, out);
+    return list_next(it, out);
 }
