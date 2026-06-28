@@ -62,14 +62,6 @@ jobs:
       - name: Install dependencies
         run: pipenv sync --dev
 
-      - name: Build the standard library (experimental)
-        # Builds the precompiled libmc.a/.so from the stdlib sources. Linking a
-        # program against it is not ready yet (exported symbols like errno/crc32
-        # collide with system symbols), so the stdlib is compiled from source
-        # for now; this step just guards that the precompiled build keeps
-        # working. See the roadmap: "Namespaced exported symbols".
-        run: pipenv run bash build.sh
-
       - name: Compile every example
         run: |
           for f in examples/*.mc; do
@@ -81,3 +73,31 @@ jobs:
         run: |
           pipenv run python -m mcc examples/baremetal/kernel.mc \
             --target aarch64-unknown-none-elf -o "$RUNNER_TEMP/kernel.o"
+
+  # The precompiled standard library is experimental: it builds, but linking a
+  # program against it is not ready (exported symbols like errno/crc32 collide
+  # with system symbols), so the stdlib is compiled from source for now. This
+  # job just guards that the precompiled build keeps working. See the roadmap:
+  # "Namespaced exported symbols".
+  stdlib:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pipenv
+
+      - name: Install pipenv
+        run: pip install pipenv
+
+      - name: Install dependencies
+        run: pipenv sync --dev
+
+      - name: Build the standard library
+        run: pipenv run bash build.sh
