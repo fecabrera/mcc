@@ -1,8 +1,9 @@
 import "std";
+import "range";
 
 fn main() -> int32 {
-    let i: int32 = 1;
-    while (i <= 20) {
+    let r = struct range<int32> { start = 1, end = 21 };
+    for i in &r {
         if (i % 15 == 0) {
             println("FizzBuzz");
         } else if (i % 3 == 0) {
@@ -12,7 +13,6 @@ fn main() -> int32 {
         } else {
             println("%d", i);
         }
-        i = i + 1;
     }
     return 0;
 }
