@@ -116,6 +116,7 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 | `--nostdlib`              | Do not put the bundled `libmc/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).                                                    |
 | `--target TRIPLE`         | Cross-compile for the given LLVM target triple, emitting an object file instead of a host executable.                                                                                         |
 | `--general-regs-only`     | Generate code that uses only general-purpose registers, never the floating-point/SIMD ones.                                                                                                   |
+| `--strict-align`          | Never emit unaligned memory accesses (gcc's `-mstrict-align`); needed for bare-metal targets running with the MMU off, where an unaligned wide load/store traps.                               |
 | `--freestanding`          | Don't assume a hosted C library, so LLVM won't rewrite standard-named calls (e.g. `printf("…\n")` → `puts`) into symbols a bare-metal program never defines. The `-ffreestanding` equivalent. |
 | `-D NAME[=VALUE]`         | Define a name for [`@if`](docs/language.md#conditional-compilation) conditions: `NAME` alone is `1`, `NAME=VALUE` sets an integer. Repeatable; a name with no `-D` reads as `0`.              |
 
@@ -129,6 +130,14 @@ registers — the equivalent of gcc's `-mgeneral-regs-only`. It stops the
 backend from quietly using a vector register (say, to copy a struct) in
 code that must not touch FP state, such as a kernel or an interrupt
 handler. Supported for aarch64, x86, and riscv targets.
+
+`--strict-align` forbids the backend from emitting unaligned memory accesses —
+the equivalent of gcc's `-mstrict-align`. It is needed for a bare-metal target
+brought up with the MMU off: until paging is enabled all RAM is treated as
+Device memory, where an unaligned wide load or store (which the backend would
+otherwise merge or generate freely) traps as an alignment fault. Both feature
+flags merge into the one `target-features` attribute LLVM honors per function,
+so they compose.
 
 `--freestanding` is the `-ffreestanding` equivalent: it tells LLVM there is
 no hosted C library, so its optimizer won't recognize standard-named
@@ -302,7 +311,8 @@ reference section.
 - [x] JIT execution (`--run`)
 - [x] LLVM IR output (`--emit-llvm`)
 - [x] Optimization levels `-O0`–`-O3`
-- [x] Cross-compilation (`--target`), `--general-regs-only`, `--nostdlib`, `-I`
+- [x] Cross-compilation (`--target`), `--general-regs-only`, `--strict-align`,
+      `--nostdlib`, `-I`
 - [x] Separate compilation across files
 - [x] Object-only compilation (`-c`) — emit a `.o` without linking
 - [x] [Interface files](docs/language.md#interface-files) — `--emit-interface`

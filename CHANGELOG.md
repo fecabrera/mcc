@@ -41,6 +41,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`range<T>` library** — a half-open `[start, end)` integer interval that
   supplies the iterator protocol, so `for i in &r` counts; generic over the
   integer width. See [examples/ranges.mc](examples/ranges.mc).
+- **`--strict-align`** — forbid the backend from emitting unaligned memory
+  accesses (gcc's `-mstrict-align`), for bare-metal targets running with the MMU
+  off where an unaligned wide load/store traps. Composes with
+  `--general-regs-only` (both merge into the one per-function `target-features`).
 
 ### Changed
 

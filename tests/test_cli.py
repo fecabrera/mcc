@@ -275,6 +275,23 @@ def test_general_regs_only_rejects_unknown_arch(tmp_path):
     assert "Traceback" not in result.stderr
 
 
+def test_strict_align_cross_compiles(tmp_path):
+    obj = tmp_path / "hello.o"
+    result = mcc(HELLO, "--target", "aarch64-unknown-none-elf",
+                 "--strict-align", "-o", obj)
+    assert result.returncode == 0, result.stderr
+    assert obj.read_bytes()[:4] == b"\x7fELF"
+
+
+def test_strict_align_with_general_regs_only(tmp_path):
+    # The two feature flags combine on one build.
+    obj = tmp_path / "hello.o"
+    result = mcc(HELLO, "--target", "aarch64-unknown-none-elf",
+                 "--general-regs-only", "--strict-align", "-o", obj)
+    assert result.returncode == 0, result.stderr
+    assert obj.read_bytes()[:4] == b"\x7fELF"
+
+
 def test_target_rejects_run():
     result = mcc(HELLO, "--target", "aarch64-unknown-none-elf", "--run")
     assert result.returncode == 1

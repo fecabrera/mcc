@@ -43,6 +43,10 @@ hello from bare-metal mcc
   [roadmap](../../README.md#roadmap).)
 - **`--target aarch64-unknown-none-elf`** — makes `mcc` emit an ELF object
   for the bare-metal triple instead of linking a host executable.
+  (For a target brought up with the MMU off, add
+  [`--strict-align`](../../README.md#usage): with paging disabled all RAM is
+  Device memory, where an unaligned wide load/store traps. This kernel stays
+  within aligned accesses, so it builds fine without it.)
 - **`-Ttext=0x40100000`** — the `virt` board's RAM starts at `0x40000000`
   (lower addresses are flash and MMIO, including the UART at
   `0x09000000`), so the kernel is linked — and the stack placed — in RAM.

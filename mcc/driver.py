@@ -302,6 +302,43 @@ GENERAL_REGS_ONLY_FEATURES = {
 }
 
 
+def general_regs_features(triple: str) -> str:
+    """Return the general-regs-only subtarget feature string for ``triple``.
+
+    Args:
+        triple: The LLVM target triple whose architecture selects the features.
+
+    Raises:
+        RuntimeError: When the architecture has no known general-regs-only
+            feature set.
+    """
+    arch = triple.split("-")[0]
+    features = GENERAL_REGS_ONLY_FEATURES.get(arch)
+    if features is None:
+        raise RuntimeError(f"--general-regs-only is not supported for target {arch!r}")
+    return features
+
+
+def apply_target_features(module: ir.Module, features: str) -> None:
+    """Tag every defined function in ``module`` with ``target-features``.
+
+    LLVM honors only one ``target-features`` attribute per function, so callers
+    must pass a single comma-joined feature string rather than tagging twice.
+    Extern declarations (no body) are left untouched.
+
+    Args:
+        module: The IR module to annotate, modified in place.
+        features: A comma-separated subtarget feature list (e.g.
+            ``"-fp-armv8,-neon,+strict-align"``).
+    """
+    attribute = f'"target-features"="{features}"'
+    for func in module.functions:
+        if func.blocks:  # a definition, not an extern declaration
+            # The attribute is a key=value string, which llvmlite's validated
+            # add() rejects; FunctionAttributes is a plain set, so add it raw.
+            set.add(func.attributes, attribute)
+
+
 def restrict_to_general_regs(module: ir.Module, triple: str) -> None:
     """Bar the FP/SIMD registers from every defined function in a module.
 
@@ -318,16 +355,7 @@ def restrict_to_general_regs(module: ir.Module, triple: str) -> None:
         RuntimeError: When the architecture has no known general-regs-only
             feature set.
     """
-    arch = triple.split("-")[0]
-    features = GENERAL_REGS_ONLY_FEATURES.get(arch)
-    if features is None:
-        raise RuntimeError(f"--general-regs-only is not supported for target {arch!r}")
-    attribute = f'"target-features"="{features}"'
-    for func in module.functions:
-        if func.blocks:  # a definition, not an extern declaration
-            # The attribute is a key=value string, which llvmlite's validated
-            # add() rejects; FunctionAttributes is a plain set, so add it raw.
-            set.add(func.attributes, attribute)
+    apply_target_features(module, general_regs_features(triple))
 
 
 def mark_freestanding(module: ir.Module) -> None:
@@ -353,7 +381,7 @@ def mark_freestanding(module: ir.Module) -> None:
 
 
 def build_native_module(module: ir.Module, opt_level: int, triple: str | None = None,
-                        general_regs_only: bool = False):
+                        general_regs_only: bool = False, strict_align: bool = False):
     """Verify and optimize an IR module for a target machine.
 
     Initializes the backend, attaches the target's triple and data layout,
@@ -367,6 +395,11 @@ def build_native_module(module: ir.Module, opt_level: int, triple: str | None = 
             bare metal), or ``None`` to build for the host.
         general_regs_only: When ``True``, bar the FP/SIMD registers via
             :func:`restrict_to_general_regs`.
+        strict_align: When ``True``, forbid the backend from emitting unaligned
+            memory accesses (the ``+strict-align`` feature, mcc's equivalent of
+            gcc's ``-mstrict-align``). Required for bare-metal targets with the
+            MMU off, where all RAM is Device memory and an unaligned wide load or
+            store traps as an alignment fault.
 
     Returns:
         A tuple ``(native, target_machine)`` of the parsed, verified, optimized
@@ -397,8 +430,15 @@ def build_native_module(module: ir.Module, opt_level: int, triple: str | None = 
         target_machine = llvm.Target.from_triple(triple).create_target_machine(opt=opt_level)
     module.triple = triple
     module.data_layout = str(target_machine.target_data)
+    # LLVM honors a single target-features attribute per function, so merge the
+    # requested feature sets into one comma-joined string before tagging.
+    features = []
     if general_regs_only:
-        restrict_to_general_regs(module, triple)
+        features.append(general_regs_features(triple))
+    if strict_align:
+        features.append("+strict-align")
+    if features:
+        apply_target_features(module, ",".join(features))
     native = llvm.parse_assembly(str(module))
     native.verify()
     if opt_level > 0:
@@ -529,6 +569,10 @@ def main() -> int:
     cli.add_argument("--general-regs-only", action="store_true",
                      help="generate code that uses only general-purpose registers, never "
                           "the floating-point/SIMD ones (like gcc's -mgeneral-regs-only)")
+    cli.add_argument("--strict-align", action="store_true",
+                     help="never emit unaligned memory accesses (like gcc's "
+                          "-mstrict-align); required for bare-metal targets with the MMU "
+                          "off, where unaligned wide loads/stores trap as alignment faults")
     cli.add_argument("--freestanding", action="store_true",
                      help="do not assume a hosted C library: stop LLVM from rewriting "
                           "standard-named calls such as printf into puts/putchar/etc. "
@@ -583,7 +627,7 @@ def main() -> int:
 
     try:
         native, target_machine = build_native_module(
-            module, args.O, args.target, args.general_regs_only)
+            module, args.O, args.target, args.general_regs_only, args.strict_align)
     except RuntimeError as err:
         print(f"mcc: error: {err}", file=sys.stderr)
         return 1
