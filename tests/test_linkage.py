@@ -83,5 +83,5 @@ def test_imported_static_global_is_linkonce(tmp_path):
         "fn main() -> int32 { bump(); return count(); }\n",
         search_paths=(tmp_path,),
     )
-    line = global_line(ir_text, "counter@lib")
+    line = global_line(ir_text, "counter.lib")
     assert "linkonce_odr" in line and "internal" not in line

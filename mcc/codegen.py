@@ -1021,7 +1021,7 @@ class CodeGen:
 
         Under separate compilation the global is copied into the defining
         object *and* every object that imports the module, so it must be
-        ``linkonce_odr`` in all of them: the mangled ``name@file`` symbol is
+        ``linkonce_odr`` in all of them: the mangled ``name.file`` symbol is
         identical across objects, so the linker merges the copies into a single
         instance. (``internal`` in any one object would leave that object with
         its own private storage, splitting the variable's state -- the bug this
@@ -1033,16 +1033,22 @@ class CodeGen:
     def static_base(self, name: str, source: str | None) -> str:
         """Mint a unique LLVM symbol for a file-scoped (``@static``) name.
 
+        The separator is ``.`` rather than ``@``: a ``.`` cannot appear in an
+        mcc identifier (so it never collides with a real name), and it is safe
+        in an ELF symbol, whereas ELF's ``ld`` reads ``@`` as the
+        symbol-versioning marker (``symbol@version``) and rejects a shared
+        library that exports one.
+
         Args:
             name: The source-level name.
             source: The defining file, used to build the symbol stem.
 
         Returns:
-            A unique symbol such as ``f@set``, disambiguated with a numeric
+            A unique symbol such as ``f.set``, disambiguated with a numeric
             suffix when needed.
         """
         stem = source.rsplit("/", 1)[-1].removesuffix(".mc") if source else "static"
-        base = candidate = f"{name}@{stem}"
+        base = candidate = f"{name}.{stem}"
         counter = 1
         while candidate in self.used_symbols:
             counter += 1
