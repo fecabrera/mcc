@@ -18,8 +18,10 @@ __pycache__/
 
 # Compiler output: intermediate objects and linked executables.
 *.o
-/app
-/kernel.elf
+*.mci
+*.a
+*.so
+*.dylib
 
 # mcc writes executables next to the source by default, so anything directly
 # in examples/ that is not a source file or the index is a build product. The

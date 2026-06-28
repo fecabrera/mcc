@@ -147,8 +147,8 @@ Generic functions can call themselves recursively. See
 Generic functions with the same name form an _overload set_, dispatched by
 parameter pattern — a call picks the most specific viable variant (`T*`
 beats `T`, `box<T>*` beats both). This is how libraries specialize by type
-shape: [lib/hash.mc](lib/hash.mc) hashes integer keys by value (splitmix64)
-and pointer keys by content (FNV-1a), and [lib/set.mc](lib/set.mc) simply
+shape: [libmc/hash.mc](libmc/hash.mc) hashes integer keys by value (splitmix64)
+and pointer keys by content (FNV-1a), and [libmc/set.mc](libmc/set.mc) simply
 calls `hash(key)`:
 
 ```c
@@ -697,7 +697,7 @@ implicitly coerces to it, which is why `free(nums)` works without a cast.
 String literals have type `uint8*`, so `"hi"[0]` is the byte `104`. There is
 no pointer arithmetic (`p + 1`); use `&p[1]`. See
 [examples/pointers.mc](examples/pointers.mc) and
-[lib/memory.mc](lib/memory.mc) for a generic typed allocator.
+[libmc/memory.mc](libmc/memory.mc) for a generic typed allocator.
 
 ## Function pointers
 
@@ -1010,9 +1010,9 @@ pointer, array, or function type is not a valid base.
 passed to and returned from functions, but not to variadic functions like
 printf — pass a pointer or a field instead. See
 [examples/structs.mc](examples/structs.mc) and the data structures built on
-them: the growable [lib/list.mc](lib/list.mc), the open-addressing hash
-table [lib/set.mc](lib/set.mc) (borrowing, identity-keyed), and the
-string-keyed [lib/dict.mc](lib/dict.mc), which owns copies of its keys and
+them: the growable [libmc/list.mc](libmc/list.mc), the open-addressing hash
+table [libmc/set.mc](libmc/set.mc) (borrowing, identity-keyed), and the
+string-keyed [libmc/dict.mc](libmc/dict.mc), which owns copies of its keys and
 compares them by content.
 
 ## Enums
@@ -1095,16 +1095,16 @@ several routes (or cyclically) is only loaded once.
 
 Imports resolve relative to the importing file first, then through the
 import search path: directories added with `-I`/`--import-path` (in order),
-and finally the project's [lib/](lib/) directory, which is on the path by
-default so the [standard library](lib/README.md) is importable by bare name.
-Pass `--nostdlib` to leave `lib/` off the path.
+and finally the project's [libmc/](libmc/) directory, which is on the path by
+default so the [standard library](libmc/README.md) is importable by bare name.
+Pass `--nostdlib` to leave `libmc/` off the path.
 
 ```c
-import "memory";       // found in lib/ via the search path
-import "libc/stdio";   // libc bindings, also in lib/
+import "memory";       // found in libmc/ via the search path
+import "libc/stdio";   // libc bindings, also in libmc/
 
 fn main() -> int32 {
-    let p = alloc<int32>(3);   // defined in lib/memory.mc
+    let p = alloc<int32>(3);   // defined in libmc/memory.mc
     ...
 }
 ```
@@ -1290,12 +1290,12 @@ fn digit_value(c: uint8) -> uint8 {
 ## Reaching libc
 
 To call into the C library, import a binding module from
-[lib/libc/](lib/libc/) — `import "libc/stdio";`, `import "libc/string";`, and
+[libmc/libc/](libmc/libc/) — `import "libc/stdio";`, `import "libc/string";`, and
 so on. These are ordinary [`@extern` declarations](#extern-declarations) for the
 C functions, covering most of the standard headers (the `printf`/`scanf`
 families, the `str*`/`mem*` functions, `malloc`/`qsort`/`strtol`, `FILE*`
 streams, math, time, errno, …); see the
-[standard library index](lib/README.md) for the full list.
+[standard library index](libmc/README.md) for the full list.
 
 ```c
 import "libc/stdio";
@@ -1393,5 +1393,5 @@ the [roadmap](../README.md#roadmap).
  */
 ```
 
-See the [standard library index](lib/README.md) for the modules under `lib/`,
+See the [standard library index](libmc/README.md) for the modules under `libmc/`,
 all written in this style.

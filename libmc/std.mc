@@ -38,6 +38,7 @@ fn println(format: uint8*, ...) {
  *
  * @param c: byte to write
  */
+@inline
 fn writechar(c: uint8) {
     putchar(c as int32);
 }
@@ -47,6 +48,7 @@ fn writechar(c: uint8) {
  *
  * @param str: string to write
  */
+@inline
 fn writestr(const str: struct string) {
     fwrite(str.data, sizeof(uint8), str.length, stdout);
 }
@@ -56,6 +58,7 @@ fn writestr(const str: struct string) {
  *
  * @param str: string to write
  */
+@inline
 fn writeln(const str: struct string) {
     writestr(str);
     writechar('\n');

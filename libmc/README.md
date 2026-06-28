@@ -1,8 +1,8 @@
 # Standard library
 
-The modules under `lib/` are on the import search path by default, so they are
+The modules under `libmc/` are on the import search path by default, so they are
 importable by bare name — `import "memory";`, `import "std";`,
-`import "hashing/md5";`. Pass `--nostdlib` to leave `lib/` off the path. Every
+`import "hashing/md5";`. Pass `--nostdlib` to leave `libmc/` off the path. Every
 function carries a doc comment; this page is the index.
 
 The `libc/` modules are `@extern` declarations for functions provided by the C

@@ -68,7 +68,7 @@ once after tapping.
 ### pip
 
 The compiler is a regular Python package that installs an `mcc` command and
-bundles the [standard library](lib/README.md):
+bundles the [standard library](libmc/README.md):
 
 ```bash
 pip install git+https://github.com/fecabrera/mcc
@@ -94,11 +94,11 @@ mcc examples/helloworld.mc              # compile to a native executable
 mcc examples/helloworld.mc -o hello     # choose the output name
 mcc examples/helloworld.mc --run        # JIT-compile and run immediately
 mcc examples/helloworld.mc --emit-llvm  # print the LLVM IR instead of compiling
-mcc lib/list.mc -c                      # compile to an object (.o), don't link
-mcc lib/list.mc --emit-interface        # write an importable .mci stub
+mcc libmc/list.mc -c                      # compile to an object (.o), don't link
+mcc libmc/list.mc --emit-interface        # write an importable .mci stub
 mcc examples/helloworld.mc -O3          # optimization level (0-3, default 2)
 mcc main.mc -I vendor -I deps           # extra import search paths
-mcc main.mc --nostdlib                  # don't put lib/ on the import path
+mcc main.mc --nostdlib                  # don't put libmc/ on the import path
 mcc main.mc --target aarch64-unknown-none-elf   # cross-compile to an object file
 mcc main.mc --general-regs-only         # never use FP/SIMD registers
 ```
@@ -113,7 +113,7 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 | `--run`                   | JIT-compile and run the program immediately instead of writing a file; its exit code becomes mcc's. Cannot be combined with `--target`.                                                       |
 | `--emit-llvm`             | Print the generated LLVM IR to stdout and exit, without compiling or linking.                                                                                                                 |
 | `-I`, `--import-path DIR` | Add a directory to the import search path. Repeatable; later paths are searched after earlier ones.                                                                                           |
-| `--nostdlib`              | Do not put the bundled `lib/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).                                                    |
+| `--nostdlib`              | Do not put the bundled `libmc/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).                                                    |
 | `--target TRIPLE`         | Cross-compile for the given LLVM target triple, emitting an object file instead of a host executable.                                                                                         |
 | `--general-regs-only`     | Generate code that uses only general-purpose registers, never the floating-point/SIMD ones.                                                                                                   |
 | `--freestanding`          | Don't assume a hosted C library, so LLVM won't rewrite standard-named calls (e.g. `printf("…\n")` → `puts`) into symbols a bare-metal program never defines. The `-ffreestanding` equivalent. |
@@ -136,7 +136,7 @@ functions and rewrite calls between them. At `-O2`, a `printf("done\n")`
 (constant string, no args) is otherwise turned into a `puts` call, and
 `printf("%c", c)` into `putchar` — synthesizing references to libc symbols a
 bare-metal program never defines. Pass it when building a kernel or any
-target with no libc. (`--nostdlib` only drops mcc's `lib/` from the import
+target with no libc. (`--nostdlib` only drops mcc's `libmc/` from the import
 path; it does not change this optimizer assumption.)
 
 ## Quickstart
@@ -185,7 +185,7 @@ to fizzbuzz and a prime sieve. See the [index](examples/README.md).
 
 ## Standard library
 
-The modules under [lib/](lib/) are on the import search path by default, so
+The modules under [libmc/](libmc/) are on the import search path by default, so
 they import by bare name. For everyday output, `import "std";` provides `print`
 and `println` — printf-style formatting, written in mcc on top of the libc
 bindings:
@@ -199,10 +199,10 @@ Alongside `std` are `memory` (typed `alloc`/`dealloc`), the
 `list`/`stack`/`queue`/`set`/`dict` containers, the `range` iterable, and the
 `hashing/*` functions.
 
-The [`libc/`](lib/libc/) modules are instead `@extern` bindings for the C
+The [`libc/`](libmc/libc/) modules are instead `@extern` bindings for the C
 library itself — `printf`, `malloc`, the `str*`/`mem*` functions, `FILE*`
 streams, and so on — for when you want C directly; see
-[Reaching libc](docs/language.md#reaching-libc). The [standard library index](lib/README.md)
+[Reaching libc](docs/language.md#reaching-libc). The [standard library index](libmc/README.md)
 lists every module.
 
 ## C ABI compatibility
@@ -210,7 +210,7 @@ lists every module.
 mcc follows the platform C ABI for **scalars and pointers**, so any function
 whose signature is built from them interoperates with C in both directions —
 call C from mcc with `@extern`, or expose mcc functions to a C linker. This is
-why the [libc bindings](lib/libc/) work directly:
+why the [libc bindings](libmc/libc/) work directly:
 
 | mcc type | C type |
 | --- | --- |
@@ -344,7 +344,7 @@ Grouped by scope.
   };
   ```
   Every piece already works (block expressions, `new<T>` in
-  [memory](lib/memory.mc), struct literals, deref-assign, whole-struct copy),
+  [memory](libmc/memory.mc), struct literals, deref-assign, whole-struct copy),
   so the only remaining work is the surface-syntax rewrite into the block above
   — no new codegen.
 
@@ -446,6 +446,12 @@ Grouped by scope.
       for linking (today the system `cc` on `PATH`)
 - [ ] Library output — compile to a static (`.a`) or shared (`.so`/`.dylib`)
       library, paired with the `.mci` interface so consumers can link against it
+- [ ] Namespaced exported symbols — emit mcc functions under a mangled/prefixed
+      symbol (the `@extern` libc bindings keep their real names via `@symbol`),
+      so a precompiled mcc library does not clash with libc/system symbols when
+      linked. Required for shipping the standard library precompiled: today
+      names like `errno` (a libSystem thread-local) and `crc32` (zlib) collide,
+      so the stdlib is compiled from source instead of linked as `libmc`
 - [ ] C header generation — emit a `.h` of the public surface (like
       `--emit-interface` does for `.mci`), so C code can call into an mcc library
 - [ ] C struct-passing ABI — classify by-value struct arguments and returns

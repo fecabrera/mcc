@@ -26,28 +26,30 @@ from mcc.parser import Parser
 
 
 def _find_stdlib() -> Path:
-    """Locate the bundled lib/ standard-library directory.
+    """Locate the standard-library *source* directory (``libmc/``).
 
-    The directory is importable by bare name (the "standard library") unless
-    ``--nostdlib`` is passed. It lives beside the package when installed as a
-    wheel (mcc/lib) and at the repo root in a source checkout (../lib); the
-    ``$MCC_STDLIB`` environment variable overrides both.
+    These are the ``.mc`` sources, imported by bare name (the "standard
+    library") unless ``--nostdlib`` is passed, and compiled in from source like
+    any other import. (Shipping the stdlib as a precompiled native library is a
+    planned change; see the roadmap.) It lives beside the package when installed
+    as a wheel (mcc/libmc) and at the repo root in a source checkout (../libmc);
+    the ``$MCC_STDLIB`` environment variable overrides both.
 
     Returns:
         The first candidate directory that exists, falling back to the
-        source-checkout path (../lib) when none is found yet.
+        source-checkout path (../libmc) when none is found yet.
     """
     override = os.environ.get("MCC_STDLIB")
     if override:
         return Path(override)
     here = Path(__file__).resolve().parent
-    for candidate in (here / "lib", here.parent / "lib"):
+    for candidate in (here / "libmc", here.parent / "libmc"):
         if candidate.is_dir():
             return candidate
-    return here.parent / "lib"
+    return here.parent / "libmc"
 
 
-STDLIB_DIR = _find_stdlib()
+STDLIB_DIR = _find_stdlib()  # the stdlib sources, compiled in from source
 
 
 def _stamp_conditionals(conditionals, source: str) -> None:

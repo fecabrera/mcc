@@ -3,11 +3,11 @@ import "list";
 import "stack";
 import "queue";
 
-// A tour of the growable container types in lib/. Each owns a heap buffer that
+// A tour of the growable container types in libmc/. Each owns a heap buffer that
 // doubles when it fills, so they all start small and grow as needed.
 
 fn main() -> int32 {
-    // list<T> -- a growable random-access sequence (lib/list.mc).
+    // list<T> -- a growable random-access sequence (libmc/list.mc).
     let nums: struct list<int32>;
     list_init(&nums, 2);
     let i: int32 = 0;
@@ -20,7 +20,7 @@ fn main() -> int32 {
         println("array: length %llu, nums[6] = %d", nums.length, value);
     list_destroy(&nums);
 
-    // stack<T> -- LIFO: push and pop at the top (lib/stack.mc).
+    // stack<T> -- LIFO: push and pop at the top (libmc/stack.mc).
     let chars: struct stack<uint8>;
     stack_init(&chars, 2);
     stack_push(&chars, 'a');
@@ -34,7 +34,7 @@ fn main() -> int32 {
     stack_destroy(&chars);
 
     // queue<T> -- FIFO ring buffer: push at the back, pop from the front
-    // (lib/queue.mc).
+    // (libmc/queue.mc).
     let q: struct queue<int32>;
     queue_init(&q, 2);
     i = 1;

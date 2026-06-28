@@ -209,7 +209,7 @@ def test_address_of_field(capfd):
 def test_memory_lib_copies(tmp_path, capfd):
     from pathlib import Path
 
-    lib_dir = Path(__file__).resolve().parents[1] / "lib"
+    lib_dir = Path(__file__).resolve().parents[1] / "libmc"
     main = tmp_path / "main.mc"
     main.write_text(
         f'import "{lib_dir / "memory"}";\n'
@@ -246,7 +246,7 @@ def test_memory_lib_copies(tmp_path, capfd):
 def test_list_lib(tmp_path, capfd):
     from pathlib import Path
 
-    lib_dir = Path(__file__).resolve().parents[1] / "lib"
+    lib_dir = Path(__file__).resolve().parents[1] / "libmc"
     main = tmp_path / "main.mc"
     main.write_text(
         f'import "{lib_dir / "list"}";\n'
@@ -276,7 +276,7 @@ def test_list_lib(tmp_path, capfd):
 def test_list_iterator(tmp_path, capfd):
     from pathlib import Path
 
-    lib_dir = Path(__file__).resolve().parents[1] / "lib"
+    lib_dir = Path(__file__).resolve().parents[1] / "libmc"
     main = tmp_path / "main.mc"
     main.write_text(
         f'import "{lib_dir / "list"}";\n'
@@ -310,7 +310,7 @@ def test_list_iterator(tmp_path, capfd):
 def test_for_in_loop(tmp_path, capfd):
     from pathlib import Path
 
-    lib_dir = Path(__file__).resolve().parents[1] / "lib"
+    lib_dir = Path(__file__).resolve().parents[1] / "libmc"
     main = tmp_path / "main.mc"
     main.write_text(
         f'import "{lib_dir / "list"}";\n'

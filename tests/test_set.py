@@ -4,7 +4,7 @@ from pathlib import Path
 
 from helpers import parse, run, run_path
 
-LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
+LIB_DIR = Path(__file__).resolve().parents[1] / "libmc"
 
 
 def splitmix64(key: int) -> int:

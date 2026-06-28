@@ -4,7 +4,7 @@ import "set";
 import "dict";
 
 // `for x in obj` walks anything that provides the `<struct>_it`/`<struct>_next`
-// protocol -- here the growable list from lib/list.mc (list_it/list_next).
+// protocol -- here the growable list from libmc/list.mc (list_it/list_next).
 // The element type is inferred from `<struct>_next`, the loop variable `x` is
 // scoped to the loop, and break/continue work as in any loop.
 
