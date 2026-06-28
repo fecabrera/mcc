@@ -1,7 +1,0 @@
-// Interface generated from pair.mc by mcc -- do not edit.
-// Import this alongside the matching object file.
-
-struct pair<K, V> {
-    key: K;
-    value: V;
-}

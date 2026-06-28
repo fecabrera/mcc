@@ -1,6 +1,0 @@
-// Interface generated from crc32.mc by mcc -- do not edit.
-// Import this alongside the matching object file.
-
-import "range";
-
-@extern fn crc32(data: uint8*, length: uint64) -> uint32;

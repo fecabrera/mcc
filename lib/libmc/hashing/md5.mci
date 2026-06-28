@@ -1,7 +1,0 @@
-// Interface generated from md5.mc by mcc -- do not edit.
-// Import this alongside the matching object file.
-
-import "memory";
-import "libc/math";
-
-@extern fn md5(data: uint8*, length: uint64, digest: uint8*);

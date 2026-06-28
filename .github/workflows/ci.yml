@@ -101,3 +101,14 @@ jobs:
 
       - name: Build the standard library
         run: pipenv run bash build.sh
+
+      # Retain the per-platform precompiled library as a downloadable workflow
+      # artifact (it is a build product, not checked into the repo).
+      - name: Upload the precompiled library
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmc-${{ matrix.os }}
+          path: |
+            lib/libmc.a
+            lib/libmc.so
+            lib/libmc/**/*.mci
