@@ -397,6 +397,15 @@ Grouped by scope.
         as `uint8*` for C), the way an untyped constant takes its type from
         context. Typed owned values still convert **explicitly** with `as`
         (Stage 1); only literals adapt. Depends on Stage 3.
+- [ ] builtin `range` — fold the standard-library [`range<T>`](docs/language.md)
+      into the compiler so a counting loop reads `for i in range(0, 5)` (or
+      `for i in range(5)`, `start` defaulting to 0) instead of constructing a
+      `struct range<T> { start = …, end = … }` and iterating `&r`. The bound type
+      is inferred from the arguments (so `i` takes their integer width). Because
+      the compiler owns the lowering, the loop is emitted directly — the counter's
+      init/compare/step inline, with no range struct built, no `range_it`/
+      `range_next` calls, and nothing to borrow — so the setup is done at compile
+      time with no runtime footprint. Subsumes the `range` library module
 - [ ] `tuple<A, B, ...>` — a builtin heterogeneous, fixed-arity product: each
       position keeps its own statically-known type, accessed by position (`t.0`,
       `t.1`). For multiple return values
