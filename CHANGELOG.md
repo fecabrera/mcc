@@ -8,6 +8,38 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Struct literals** — `struct Name { field = value, ... }`: omitted fields are
+  zeroed (or set to their declared default), fields may be given in any order,
+  and a literal works as an argument, a return value, or written through a
+  pointer. Generic type arguments are inferred from the field values
+  (`struct box { value = 5 }` infers `box<int32>`), anchored only by typed
+  values. See [Structs](docs/language.md#structs).
+- **Default field values** — `field: type = expr;` gives a struct field a
+  default, used both by struct literals that omit the field and by a bare
+  `let s: struct S;` declaration. See [Structs](docs/language.md#structs).
+- **Type aliases** — `type <name> = <type>;`, a transparent alias (not a new
+  distinct type) for builtins, pointers, function pointers, and structs;
+  `@private` / `@static` apply. See [Type aliases](docs/language.md#type-aliases).
+- **Slices** — `slice<T>`, a builtin non-owning view `{ ptr: T*; length: uint64 }`
+  over a contiguous run of `T`, with a runtime `.length`, indexing `s[i]`, and
+  native `for x in s` iteration. Constructed by an explicit borrow — `xs as
+  slice<T>` from an owned `list<T>` (reads `{data, length}`, drops `capacity`) or
+  a fixed array `T[N]` (`{&arr[0], N}`). See [Slices](docs/language.md#slices) and
+  [examples/slices.mc](examples/slices.mc).
+- **Constant-expression array sizes** — an array dimension may be any constant
+  integer expression (`int32[N + 1]`, `uint8[2 * SIZE]`), not just a literal or a
+  lone `const` name.
+- **`sizeof` of a variable** — `sizeof(v)` is the size of `v`'s type, so the type
+  need not be spelled out; the operand is never evaluated. See
+  [Pointers](docs/language.md#pointers).
+- **`new<T>()`** — a typed single-element heap allocator in the `memory` library,
+  alongside `alloc` / `resize` / `dealloc`.
+- **`range<T>` library** — a half-open `[start, end)` integer interval that
+  supplies the iterator protocol, so `for i in &r` counts; generic over the
+  integer width. See [examples/ranges.mc](examples/ranges.mc).
+
 ### Changed
 
 - **String literals are `uint8[N]` byte arrays** (NUL included) rather than bare
@@ -18,15 +50,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   "hi";` zero-fills the rest. This makes `len(s)` / `len("hi")` work and lets a
   string be borrowed as a `slice<uint8>`. Annotating `uint8*` keeps the old
   pointer-to-constant behavior (no copy). See [Strings](docs/language.md#strings).
-
-### Added
-
-- **Slices** — `slice<T>`, a builtin non-owning view `{ ptr: T*; length: uint64 }`
-  over a contiguous run of `T`, with a runtime `.length`, indexing `s[i]`, and
-  native `for x in s` iteration. Constructed by an explicit borrow — `xs as
-  slice<T>` from an owned `list<T>` (reads `{data, length}`, drops `capacity`) or
-  a fixed array `T[N]` (`{&arr[0], N}`). See [Slices](docs/language.md#slices) and
-  [examples/slices.mc](examples/slices.mc).
+- **`string` is now `type string = list<uint8>`** — a transparent
+  specialization with the same layout, so a `struct string*` upcasts to a
+  `struct list<uint8>*` and every `list` operation works on a string. The
+  list/string API distinguishes `push` (append one element) from `append`
+  (concatenate another whole list).
+- **The standard library moved to `libmc/`** and is now compiled from source
+  (previously `lib/`); `import "<module>"` by name is unchanged.
+- **File-scoped symbols are mangled with `.`** instead of `@`, so the emitted
+  names for `@static` / `@private` declarations read like `file.name`.
+- The compiler no longer prints a `wrote <output>` line on a successful compile.
 
 ## [0.2.0] - 2026-06-26
 
