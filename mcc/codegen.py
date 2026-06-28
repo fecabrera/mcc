@@ -3962,10 +3962,11 @@ class CodeGen:
                 shape) or its element type does not match ``T``.
         """
         element = target.fields[0][1].pointee
-        # T[N]: take the first-element pointer and the static length, which would
-        # otherwise decay away once the array is read as a value.
+        # T[N] (or a string literal, a uint8[N]): take the first-element pointer
+        # and the static length, which would otherwise decay away once the value
+        # is read. Reached through the address, so the array type survives.
         src_t = self.lvalue_type(value_expr)
-        if src_t is not None and is_array(src_t):
+        if isinstance(value_expr, StrLit) or (src_t is not None and is_array(src_t)):
             addr, owner, _, _ = self.gen_addr(value_expr, line)
             if owner.element != element:
                 raise LangError(

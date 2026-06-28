@@ -1339,10 +1339,10 @@ NUL-terminated string, so the borrow **drops the terminator**: the slice spans
 the text, with `length` one less than `len` (`"hi" as slice<uint8>` has
 `length == 2`, the buffer keeps its NUL). The `uint8*` form keeps the old
 pointer-to-constant behavior. An explicit `uint8[M]` must be large enough to
-hold the bytes (NUL included). (Borrowing a string *literal* directly as a
-`slice<const uint8>` is the separate [Stage 4](../README.md) "literal
-adaptation", not yet implemented — borrow the `uint8[N]` binding instead.) See
-[examples/strings.mc](../examples/strings.mc).
+hold the bytes (NUL included). A string literal can also be borrowed directly —
+`"hi" as slice<uint8>` — since it carries its array type; only the *implicit*
+adaptation to a `slice<const uint8>` from context (with no `as`) is still
+[planned](../README.md). See [examples/strings.mc](../examples/strings.mc).
 
 A character literal in single quotes is a `uint8` — the byte value of a
 single character, using the same escapes (`'a'`, `'\n'`, `'\0'`, `'\''`,

@@ -220,6 +220,20 @@ def test_string_array_borrows_as_slice():
     assert run(src) == 3594
 
 
+def test_string_literal_borrows_as_slice_directly():
+    # A string literal carries its array type, so it borrows without a binding;
+    # the NUL is dropped, so the slice spans the 5 text bytes.
+    src = """
+    fn main() -> int32 {
+        let view = "hello" as slice<uint8>;
+        let total: int32 = 0;
+        for c in view { total = total + (c as int32); }
+        return (view.length as int32) * 1000 + total;   // 5000 + 'h'+'e'+'l'+'l'+'o'
+    }
+    """
+    assert run(src) == 5000 + 104 + 101 + 108 + 108 + 111
+
+
 def test_string_argument_still_works(capfd):
     # A string literal in argument position decays to uint8*, as before.
     src = """
