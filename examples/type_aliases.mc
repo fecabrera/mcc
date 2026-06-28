@@ -47,15 +47,11 @@ fn main() -> int32 {
     println("bytes = %s", s);
 
     // Struct-pointer alias passed through.
-    let pt: struct point;
-    pt.x = 3;
-    pt.y = 4;
+    let pt = struct point { x = 3, y = 4 };
     println("dist2 = %d", dist2(&pt));
 
     // `type` used as a field name, with an alias-typed field beside it.
-    let t: struct tagged;
-    t.type = 7;
-    t.value = 42;
+    let t = struct tagged { type = 7, value = 42 };
     println("tagged { type = %d, value = %d }", t.type, t.value);
 
     return 0;

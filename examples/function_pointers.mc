@@ -49,9 +49,7 @@ fn main() -> int32 {
     println("op_for('-')(9, 2) = %d", op_for('-')(9, 2));
 
     // Calling a callback stored in a struct field, in place.
-    let b: struct button;
-    b.label = "press me";
-    b.on_press = loud;
+    let b = struct button { label = "press me", on_press = loud};
     println("%s -> %d", b.label, b.on_press(7));
 
     // The @static dispatch table, indexed and called in place.
