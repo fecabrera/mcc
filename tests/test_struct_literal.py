@@ -96,8 +96,10 @@ def test_generic_struct_literal_infers_type_args():
         struct pair<A, B> { a: A; b: B; }
         fn main() -> int32 {
             let n: int64 = 30;
-            let p = struct pair { a = n, b = 12 };   // A=int64, B inferred from 12
-            return (p.a + p.b) as int32;
+            let m: int32 = 12;
+            // A=int64, B=int32 -- both anchored by typed values, not guessed.
+            let p = struct pair { a = n, b = m };
+            return (p.a as int32) + p.b;
         }
     """
     assert run(source) == 42
@@ -128,6 +130,18 @@ def test_uninferable_parameter_is_rejected():
     source = """
         struct holder<T> { tag: int32; item: T; }
         fn f() { let h = struct holder { tag = 1 }; }
+    """
+    with pytest.raises(LangError, match="cannot infer type parameter.*T"):
+        compile_ir(source)
+
+
+def test_untyped_only_field_does_not_anchor_parameter():
+    # Regression: an untyped constant must not silently pick `int32` for T, the
+    # same ambiguity `let a = 0` raises -- only a typed value (or explicit type
+    # args) anchors a parameter. The constant still adapts once T is fixed.
+    source = """
+        struct box<T> { lo: T; hi: T; }
+        fn f() { let b = struct box { lo = 0, hi = 10 }; }
     """
     with pytest.raises(LangError, match="cannot infer type parameter.*T"):
         compile_ir(source)
@@ -177,8 +191,9 @@ def test_default_with_generic_and_inference():
     source = """
         struct range<T> { start: T = 0; end: T; }
         fn main() -> int32 {
-            let r = struct range { end = 5 };   // start defaults to 0; T from end
-            return (r.end - r.start) as int32;
+            let e: int32 = 5;
+            let r = struct range { end = e };   // start defaults to 0; T=int32 from end
+            return r.end - r.start;
         }
     """
     assert run(source) == 5

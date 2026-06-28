@@ -40,10 +40,13 @@ fn main() -> int32 {
     let pr = struct pair<int32, uint8*> { a = 42, b = "answer" };
     println("pair = (%d, %s)", pr.a, pr.b);
 
-    // ...or inferred from the field values, like a generic function call. Here
-    // A = int32 (from 7) and B = uint8* (from the string). An untyped constant
-    // adapts to the field type, just as in an assignment.
-    let pr2 = struct pair { a = 7, b = "inferred" };
+    // ...or inferred from the field values, like a generic function call. The
+    // types come from the *typed* values: A = int32 from `n`, B = uint8* from
+    // the string. A bare untyped constant like `7` can't anchor a type
+    // parameter -- that is the same ambiguity `let a = 0` is -- but it still
+    // adapts to a parameter another field has already fixed.
+    let n: int32 = 7;
+    let pr2 = struct pair { a = n, b = "inferred" };
     println("pair2 = (%d, %s)", pr2.a, pr2.b);
 
     // A field whose type is itself a struct takes a nested literal.

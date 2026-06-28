@@ -2315,10 +2315,15 @@ class CodeGen:
 
         Unifies each provided field's value type against the field's declared
         pattern -- ``start: T`` against an ``int32`` value binds ``T = int32`` --
-        the same way a generic function call infers from its arguments. Typed
-        fields bind first (and disagreements conflict); untyped constants then
-        fill any parameter still unbound without overriding a typed one, and
-        ``null`` never contributes.
+        the same way a generic function call infers from its arguments. Only
+        *typed* (non-adaptable) field values bind a parameter; an untyped
+        constant carries no real type (just a default it would adapt to), so
+        letting it anchor ``T`` would be the same forbidden guess as ``let a =
+        0``. It still adapts later, in :meth:`store_struct_field`, once a typed
+        field or explicit type argument has fixed the parameter. ``null`` never
+        contributes either. A parameter left unbound is an error, just as the
+        untyped ``let`` is ambiguous -- resolve it with explicit type args, a
+        typed field value, or (eventually) a declared default.
 
         Args:
             decl: The generic struct's declaration.
@@ -2339,14 +2344,14 @@ class CodeGen:
                 raise LangError(f"struct {decl.name!r} has no field {fname!r}", fline)
         bindings: dict[str, LangType] = {}
         context = f"struct literal {decl.name!r}"
-        for adaptable_pass in (False, True):
-            strict = not adaptable_pass
-            for fname, tv, fline in items:
-                if tv.adaptable == adaptable_pass and tv.type is not NULLT:
-                    self.unify(
-                        patterns[fname], tv.type, decl.type_params,
-                        bindings, strict, context, fline,
-                    )
+        for fname, tv, fline in items:
+            # Skip untyped constants (adaptable) and null: neither carries a type
+            # that may anchor a parameter -- only typed values bind it.
+            if not tv.adaptable and tv.type is not NULLT:
+                self.unify(
+                    patterns[fname], tv.type, decl.type_params,
+                    bindings, True, context, fline,
+                )
         missing = [t for t in decl.type_params if t not in bindings]
         if missing:
             raise LangError(

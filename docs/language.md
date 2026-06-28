@@ -884,12 +884,16 @@ let r = struct node<int32> { value = 1 };  // generic, type argument given
 
 A generic struct's type arguments may be given explicitly
 (`struct pair<int32, uint8*> { ... }`) or **inferred** from the field values,
-the same way a generic function call infers from its arguments — so
-`struct pair { a = 1, b = "x" }` deduces `A = int32`, `B = uint8*`. A typed
-field pins the parameter (and two typed fields that disagree are an error); an
-untyped constant fills a parameter no typed field determined. A parameter that
-no provided field mentions can't be inferred, so spell those cases out. A field
-whose own type is a struct takes a nested literal.
+the same way a generic function call infers from its arguments — so with a
+`n: int32`, `struct pair { a = n, b = "x" }` deduces `A = int32`, `B = uint8*`.
+Only a **typed** field value pins a parameter (and two typed fields that
+disagree are an error). An untyped constant doesn't anchor a parameter — a bare
+`struct pair { a = 0, b = "x" }` leaves `A` ambiguous, the same way `let a = 0`
+is, since the constant has no type of its own to deduce, only a default it would
+guess. It still *adapts* to a parameter another field has already fixed. A
+parameter no typed field determines can't be inferred, so spell those cases out
+with explicit type arguments. A field whose own type is a struct takes a nested
+literal.
 
 A field may declare a **default value** with `name: type = expr;`. When a struct
 literal omits that field, its default is used instead of zero (an explicit value
