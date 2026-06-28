@@ -362,10 +362,23 @@ Grouped by scope.
 - [ ] `slice<T>` — a builtin non-owning view, `{ T* ptr; len }`, over a
       contiguous run of `T`: runtime `len`, indexing, and `for … in`. It borrows
       and never allocates, distinct from a C array `T[]` (which stays length-less
-      and decays to a bare pointer for the ABI). A stack `T[N]` or a library
-      `list<T>` yields one, and the variadic pack is a `slice<any>`. A 2-word
-      struct, so not C-ABI by value — across the C boundary pass `T*` plus a
-      length instead
+      and decays to a bare pointer for the ABI). A 2-word struct, so not C-ABI by
+      value — across the C boundary pass `T*` plus a length instead.
+  - [ ] element-const axis — a `slice<const T>` is a read-only view (the
+        element-mutability distinction, like Rust's `&[T]` vs `&mut [T]`). A
+        `list<T>` borrows to a `slice<T>`; a `const list<T>` borrows to a
+        `slice<const T>`, so the conversion preserves immutability (and stays
+        sound if `const` ever deepens to the pointee). The read-only form is the
+        common one: the variadic pack is a `slice<const any>`, and a format
+        string is a `slice<const uint8>`
+  - [ ] borrowing in — a string/byte literal **adapts** to `slice<const uint8>`
+        from context at compile time (length baked in, the buffer still
+        NUL-terminated so the same literal also serves as `uint8*` for C), the
+        way an untyped constant takes its type from context. An owned value
+        (`struct string`, i.e. `list<uint8>`, or any `list<T>`/`T[N]`) borrows
+        **explicitly** with `as` — `str as slice<uint8>` reads `{ptr, len}` and
+        drops `capacity` (a new "borrow" form of `as`, since `as` rejects struct
+        casts today). Typed values convert explicitly; only literals adapt
 - [ ] `tuple<A, B, ...>` — a builtin heterogeneous, fixed-arity product: each
       position keeps its own statically-known type, accessed by position (`t.0`,
       `t.1`). For multiple return values
@@ -427,13 +440,17 @@ Grouped by scope.
         pointer instead of copied, so you get value semantics without
         hand-writing a pointer (see [const parameters](docs/language.md#const-parameters))
   - [ ] literal promotion: because the parameter is read-only, a literal
-        argument is promoted to its type at compile time — a string literal to a
-        `struct string`, say — so `fn println(const fmt: struct string, args...)`
-        accepts `println("{}", a)` directly
-- [ ] Native variadic arguments — `fn f(args: slice<any>)` (with `fn f(args...)`
-      as sugar): the caller boxes each argument into a caller-stack
-      [`any`](#structs-arrays-and-data-layout) and passes a
-      [`slice<any>`](#structs-arrays-and-data-layout) over them — allocation-free.
+        argument can be promoted to its type at compile time. (For string
+        formatting this is now done by a literal adapting to `slice<const uint8>`
+        — see [`slice<T>`](#structs-arrays-and-data-layout) — so `println("{}", a)`
+        needs no `struct string`.)
+- [ ] Native variadic arguments — `fn f(args: slice<const any>)` (with
+      `fn f(args...)` as sugar): a trailing `slice<const any>` parameter collects
+      the call's extra arguments, so `f(x, a, b, c)` (after `f`'s fixed
+      parameters) gathers `a, b, c` into `args`. The caller boxes each into a
+      caller-stack [`any`](#structs-arrays-and-data-layout) and passes a read-only
+      [`slice<const any>`](#structs-arrays-and-data-layout) over them —
+      allocation-free.
       The callee walks it with `for a in args` and a
       `case type (a) { when int32 n: … else: … }` type-switch (the open `any`
       universe makes the `else` required). This is the runtime, type-erased
@@ -472,16 +489,19 @@ Grouped by scope.
 #### Standard library
 
 - [ ] Formatted `print`/`println` — Rust/Python-style `{}` placeholders,
-      type-driven (no `%`-letters), written in mcc over native varargs; enables
-      compile-time format checking and per-struct `format` methods later:
-  - [ ] formatting over a `uint8*` format string with bare/sequential and
+      type-driven (no `%`-letters), written in mcc over the
+      [native variadic](#functions-and-methods) `slice<const any>`; enables
+      compile-time format checking and per-struct `format` methods later. The
+      signature is `fn println(format: slice<const uint8>, args: slice<const any>)`:
+      a string literal adapts to `format` at the call site (so `println("{}", a)`
+      works directly), and an owned `struct string` borrows in with
+      `str as slice<uint8>` — both via the
+      [`slice<T>`](#structs-arrays-and-data-layout) borrowing rules:
+  - [ ] formatting over the `slice<const uint8>` format with bare/sequential and
         positional placeholders (`"{d} {f} {x} {s}"`, `"{0:d} {1:f} {2:x} {3:s}"`),
         parsed at runtime
   - [ ] format modifiers — precision and zero-padded width (`.Nf`, `Nx`, `0Nx`,
         `0x0Nx`, `Ns`, and `sN`), e.g. `{.8f}`, `{08x}`, `{0x08x}`, `{20s}`, `{s20}`
-  - [ ] switch the parameter to `const fmt: struct string` once `const`
-        parameters land, so a string literal promotes to it at the call site
-        and the format can be parsed at compile time
 
 #### Tooling and C interop
 
