@@ -10,6 +10,7 @@ fn main() -> int32 {
     // list<T> -- a growable random-access sequence (libmc/list.mc).
     let nums: struct list<int32>;
     list_init(&nums, 2);
+
     let i: int32 = 0;
     while (i < 10) {
         list_push(&nums, i * i);      // one element; grows past the capacity of 2
@@ -23,13 +24,16 @@ fn main() -> int32 {
     // concatenates a whole list; list_duplicate makes an independent deep copy.
     let seed: int32[3];
     seed[0] = 100; seed[1] = 200; seed[2] = 300;
+    
     let more: struct list<int32>;
     list_from_array(&more, &seed[0], 3);   // more = [100, 200, 300]
     list_append(&nums, &more);             // append the whole list onto nums
+    
     let copy: struct list<int32>;
     list_duplicate(&copy, &nums);          // independent deep copy
     println("after append: nums.length %llu, copy.length %llu",
             nums.length, copy.length);
+    
     list_destroy(&more);
     list_destroy(&copy);
     list_destroy(&nums);
@@ -40,11 +44,14 @@ fn main() -> int32 {
     stack_push(&chars, 'a');
     stack_push(&chars, 'b');
     stack_push(&chars, 'c');
+    
     print("stack (LIFO): ");
+    
     until (stack_is_empty(&chars)) {
         print("%c ", stack_pop(&chars));  // c b a
     }
     println("");
+    
     stack_destroy(&chars);
 
     // queue<T> -- FIFO ring buffer: push at the back, pop from the front
@@ -56,12 +63,15 @@ fn main() -> int32 {
         queue_push(&q, i);               // grows past the initial capacity of 2
         i = i + 1;
     }
+
     println("queue: len %llu, front %d", queue_len(&q), queue_peek(&q));
     print("queue (FIFO): ");
+    
     until (queue_is_empty(&q)) {
         print("%d ", queue_pop(&q));      // 1 2 3 4 5
     }
     println("");
+    
     queue_destroy(&q);
 
     return 0;

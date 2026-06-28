@@ -10,12 +10,8 @@ fn max<T>(a: T, b: T) -> T {
 }
 
 fn clamp<T>(x: T, lo: T, hi: T) -> T {
-    if (x < lo) {
-        return lo;
-    }
-    if (x > hi) {
-        return hi;
-    }
+    if (x < lo) return lo;
+    if (x > hi) return hi;
     return x;
 }
 
