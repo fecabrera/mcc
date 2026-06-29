@@ -25,7 +25,7 @@
  (#any-of? @type.builtin
   "int8" "int16" "int32" "int64"
   "uint8" "uint16" "uint32" "uint64"
-  "char" "bool" "float64" "void" "va_list"))
+  "char" "byte" "bool" "float64" "void" "va_list"))
 
 ; --------------------------------------------------------------- functions
 (function_definition name: (identifier) @function)

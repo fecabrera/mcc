@@ -318,6 +318,12 @@ for _width in (8, 16, 32, 64):
 CHAR = LangType("char", ir.IntType(8), signed=False)
 TYPES["char"] = CHAR
 
+# `byte` is a transparent builtin alias for uint8 -- the raw one-byte unit of
+# memory. It reads as intent at a raw-memory boundary (copy_bytes, memcpy, the
+# allocators) without being a distinct type: it resolves to the interned uint8
+# object, so `byte` and `uint8` are interchangeable everywhere.
+TYPES["byte"] = TYPES["uint8"]
+
 INT32 = TYPES["int32"]
 INT64 = TYPES["int64"]
 UINT8 = TYPES["uint8"]

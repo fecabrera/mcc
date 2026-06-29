@@ -277,8 +277,9 @@ reference section.
 - [x] [`defer`](docs/language.md#defer) — statement and block forms, reverse order
 - [x] [Block expressions](docs/language.md#block-expressions) — `{ ...; emit v; }` as a
       value, with contained temporaries
-- [x] [Types](docs/language.md#types) — `int8`–`int64`, `uint8`–`uint64`, `char`, `bool`,
-      `float64`, `void`; untyped integer constants with range-checked adaptation
+- [x] [Types](docs/language.md#types) — `int8`–`int64`, `uint8`–`uint64` (with
+      `byte` a transparent alias for `uint8`), `char`, `bool`, `float64`, `void`;
+      untyped integer constants with range-checked adaptation
 - [x] [`char`](docs/language.md#strings) — a distinct one-byte text type
       (ABI-compatible with `uint8`, but a separate type) so a NUL-terminated
       string is told apart from a raw byte buffer. `'a'` literals default to

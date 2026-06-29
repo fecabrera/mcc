@@ -549,6 +549,7 @@ before its `return`.
 | `int8`, `int16`, `int32`, `int64`                     | `i8`, `i16`, `i32`, `i64` (signed)                                |
 | `uint8`, `uint16`, `uint32`, `uint64`                 | `i8`, `i16`, `i32`, `i64` (unsigned)                              |
 | `char` (one-byte [text](#strings); distinct from `uint8`) | `i8` (unsigned)                                              |
+| `byte` (transparent alias for `uint8`; the raw memory unit) | `i8` (unsigned)                                            |
 | `bool`                                                | `i1`                                                              |
 | `float64`                                             | `double`                                                          |
 | `T*` (any type + `*`s)                                | pointer                                                           |

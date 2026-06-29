@@ -30,7 +30,7 @@ fn println(format: char*, ...) {
     va_start(args, format);
     vprintf(format, args);
     va_end(args);
-    putchar('\n' as int32);   // char literals are uint8; putchar takes int32
+    putchar('\n' as int32);   // char literals are char; putchar takes int32
 }
 
 /**
@@ -50,7 +50,7 @@ fn writechar(const c: char) {
  */
 @inline
 fn writestr(const str: slice<const char>) {
-    fwrite(str.ptr as uint8*, sizeof(char), str.length, stdout);
+    fwrite(str.ptr as byte*, sizeof(char), str.length, stdout);
 }
 
 /**

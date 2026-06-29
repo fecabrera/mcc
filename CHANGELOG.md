@@ -47,6 +47,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   pointer, so libc still takes string literals. A `char[N]` borrows to a
   `slice<char>` that drops the trailing NUL (the text); a `uint8[N]` keeps every
   byte. See [Strings](docs/language.md#strings).
+- **`byte` type** — a transparent builtin alias for `uint8`, the raw one-byte
+  unit of memory. Unlike `char` it is not a distinct type: `byte` and `uint8`
+  values and pointers are interchangeable without a cast. The memory-handling
+  APIs now read in terms of it — the `memory` allocators and `set_bytes`, libc's
+  `malloc`/`calloc`/`realloc`/`free`, `memcpy`/`memmove`/`memset`/`memchr`/
+  `memcmp`, `qsort`/`bsearch`, and the raw stream buffers of
+  `fread`/`fwrite`/`setbuf`/`setvbuf`. See [Types](docs/language.md#types).
 - **Constant-expression array sizes** — an array dimension may be any constant
   integer expression (`int32[N + 1]`, `uint8[2 * SIZE]`), not just a literal or a
   lone `const` name.

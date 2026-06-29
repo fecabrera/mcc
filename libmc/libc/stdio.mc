@@ -305,7 +305,7 @@ struct FILE {}
  * @return the number of complete items read, which is fewer than count at end
  *         of file or on error
  */
-@extern fn fread(ptr: uint8*, size: uint64, count: uint64, stream: struct FILE*) -> uint64;
+@extern fn fread(ptr: byte*, size: uint64, count: uint64, stream: struct FILE*) -> uint64;
 
 /**
  * Writes count items of size bytes each from ptr to stream.
@@ -317,7 +317,7 @@ struct FILE {}
  *
  * @return the number of complete items written, fewer than count on error
  */
-@extern fn fwrite(ptr: uint8*, size: uint64, count: uint64, stream: struct FILE*) -> uint64;
+@extern fn fwrite(ptr: byte*, size: uint64, count: uint64, stream: struct FILE*) -> uint64;
 
 /***************************************
  * Stream positioning
@@ -488,7 +488,7 @@ struct FILE {}
  * @param stream: the stream to configure
  * @param buf:    a buffer of at least BUFSIZ bytes, or null for unbuffered
  */
-@extern fn setbuf(stream: struct FILE*, buf: uint8*);
+@extern fn setbuf(stream: struct FILE*, buf: byte*);
 
 /**
  * Sets the buffering mode and buffer for stream. Call before any I/O on stream.
@@ -500,7 +500,7 @@ struct FILE {}
  *
  * @return 0 on success, non-zero on failure
  */
-@extern fn setvbuf(stream: struct FILE*, buf: uint8*, mode: int32, size: uint64) -> int32;
+@extern fn setvbuf(stream: struct FILE*, buf: byte*, mode: int32, size: uint64) -> int32;
 
 /**
  * Clears the end-of-file and error indicators for stream.

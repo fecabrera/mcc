@@ -32,7 +32,7 @@ fn main() -> int32 {
     // A bare { } block is its own scope -- a place for a short-lived helper
     // and its cleanup, without leaking names into the rest of the function.
     {
-        let scratch: uint8* = alloc<uint8>(8);
+        let scratch: byte* = alloc<byte>(8);   // `byte` is the alias for uint8
         defer dealloc(scratch);
         scratch[0] = 'h';
         scratch[1] = 'i';

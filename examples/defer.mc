@@ -8,7 +8,7 @@ import "list";
 // unwinds in the opposite order of acquisition.
 
 fn process(n: int32) -> int32 {
-    let buffer: uint8* = alloc<uint8>(64);
+    let buffer: byte* = alloc<byte>(64);   // `byte` is the alias for uint8: raw memory
     defer dealloc(buffer);            // freed no matter which return we take
 
     if (n < 0) {
@@ -16,7 +16,7 @@ fn process(n: int32) -> int32 {
     }
 
     // A second resource: its defer runs before buffer's (reverse order).
-    let scratch: uint8* = alloc<uint8>(16);
+    let scratch: byte* = alloc<byte>(16);
     defer dealloc(scratch);
 
     buffer[0] = 'O';
@@ -31,7 +31,7 @@ fn process(n: int32) -> int32 {
 // `defer i = i + 1` that runs at the end of each loop pass -- then destroys the
 // array itself once the loop is done.
 fn build_labels(n: uint64) {
-    let labels: list<uint8*>;
+    let labels: list<byte*>;
     list_init(&labels, n);
     defer {
         let i: uint64 = 0;
@@ -45,8 +45,8 @@ fn build_labels(n: uint64) {
 
     let i: uint64 = 0;
     while (i < n) {
-        let label: uint8* = alloc<uint8>(2);
-        label[0] = ('a' as uint8) + (i as uint8);   // raw byte buffer
+        let label: byte* = alloc<byte>(2);
+        label[0] = ('a' as byte) + (i as byte);   // raw byte buffer
         label[1] = 0;
         list_push(&labels, label);
         i = i + 1;

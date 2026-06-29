@@ -17,7 +17,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return pointer to the storage, or null on failure
  */
-@extern fn malloc(size: uint64) -> uint8*;
+@extern fn malloc(size: uint64) -> byte*;
 
 /**
  * Allocates storage for count objects of size bytes each, zero-initialized.
@@ -27,7 +27,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return pointer to the storage, or null on failure
  */
-@extern fn calloc(count: uint64, size: uint64) -> uint8*;
+@extern fn calloc(count: uint64, size: uint64) -> byte*;
 
 /**
  * Resizes a previous allocation to size bytes, preserving its contents up to
@@ -38,7 +38,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return pointer to the resized storage (may differ from ptr), or null on failure
  */
-@extern fn realloc(ptr: uint8*, size: uint64) -> uint8*;
+@extern fn realloc(ptr: byte*, size: uint64) -> byte*;
 
 /**
  * Allocates size bytes aligned to alignment, which must be a power of two and a
@@ -49,7 +49,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return pointer to the aligned storage, or null on failure
  */
-@extern fn aligned_alloc(alignment: uint64, size: uint64) -> uint8*;
+@extern fn aligned_alloc(alignment: uint64, size: uint64) -> byte*;
 
 /**
  * Releases storage previously returned by malloc/calloc/realloc. Passing null
@@ -57,7 +57,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @param ptr: pointer to free
  */
-@extern fn free(ptr: uint8*);
+@extern fn free(ptr: byte*);
 
 /***************************************
  * Program termination
@@ -257,8 +257,8 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  * @param size:  size of each element in bytes
  * @param cmp:   compares two elements; returns <0, 0, or >0 (a < b, a == b, a > b)
  */
-@extern fn qsort(base: uint8*, count: uint64, size: uint64,
-                 cmp: fn(uint8*, uint8*) -> int32);
+@extern fn qsort(base: byte*, count: uint64, size: uint64,
+                 cmp: fn(byte*, byte*) -> int32);
 
 /**
  * Binary-searches a sorted array for key. The array has count elements of size
@@ -272,8 +272,8 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return pointer to a matching element, or null if none is found
  */
-@extern fn bsearch(key: uint8*, base: uint8*, count: uint64, size: uint64,
-                   cmp: fn(uint8*, uint8*) -> int32) -> uint8*;
+@extern fn bsearch(key: byte*, base: byte*, count: uint64, size: uint64,
+                   cmp: fn(byte*, byte*) -> int32) -> byte*;
 
 /***************************************
  * Environment

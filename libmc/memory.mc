@@ -132,7 +132,7 @@ fn zero<T>(dst: T*, n: uint64) {
  * @param n:     number of elements to fill
  */
 @inline
-fn set_bytes<T>(dst: T*, value: uint8, n: uint64) {
+fn set_bytes<T>(dst: T*, value: byte, n: uint64) {
     memset(dst, value as int32, n * sizeof(T));   // libc memset takes an int
 }
 

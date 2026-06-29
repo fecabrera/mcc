@@ -45,7 +45,7 @@ fn main() -> int32 {
     println("2 as float64     = %f", 2 as float64);
     println("3.99 as int32    = %d", 3.99 as int32);
     
-    let bytes = nums as uint8*;  // freed above; just demonstrating the cast
+    let bytes = nums as byte*;   // `byte` is the alias for uint8: raw memory
     let addr_is_zero = (0 as uint8*) as uint64 == 0;
     println("null addr test   = %d", addr_is_zero);
 
