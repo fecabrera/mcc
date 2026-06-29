@@ -883,6 +883,45 @@ functions by value (two words). Because it is two words it is **not** C-ABI by
 value — across a C boundary, pass a `T*` and a length separately instead. See
 [examples/slices.mc](examples/slices.mc).
 
+### Read-only slices
+
+`slice<const T>` is a **read-only** view — the element-mutability distinction
+(like Rust's `&[T]` versus `&mut [T]`). Indexing reads through as usual, but the
+element is not assignable: `s[i] = x` is a compile error. A loaded value is an
+independent copy, so it is freely mutable (`let v = s[0]; v = v + 1;` is fine),
+as is the variable of a `for x in s` loop.
+
+```c
+fn sum(s: slice<const int32>) -> int32 {   // promises not to write through s
+    let total: int32 = 0;
+    for v in s { total = total + v; }
+    return total;
+}
+```
+
+`const` only adds: a mutable `slice<T>` **widens** implicitly to its
+`slice<const T>` form (the two share one layout, so the value passes through
+unchanged), and a borrow of a mutable source may target either form. The reverse
+is forbidden — a read-only source borrows only to `slice<const T>`, never to a
+mutable `slice<T>`. A read-only source is a `slice<const T>`, a `const`
+[parameter](#functions), or a `const`-typed value:
+
+```c
+let xs: int32[3];
+let view = xs as slice<const int32>;   // mutable array -> read-only view
+let all  = xs as slice<int32>;         // ...or a mutable one
+let r: slice<const int32> = all;       // widening is implicit
+
+fn f(const xs: int32[3]) {
+    let ok  = xs as slice<const int32>;   // a const parameter stays read-only
+    // let no = xs as slice<int32>;       // error: would reopen a write path
+}
+```
+
+The same `const` qualifier applies to any type (`let pi: const float64 = 3.14;`
+is a variable that cannot be reassigned), but the read-only slice is its main
+use today.
+
 ## Structs
 
 `struct` declares an aggregate type; fields use the same `name: type;` form

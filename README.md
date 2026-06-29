@@ -394,14 +394,15 @@ Grouped by scope.
   - [x] **Stage 2 — iteration.** `for … in` over a slice, its own builtin
         iteration (walking `ptr` from `0` to `length`), with no library
         `_it`/`_next` protocol. Depends on Stage 1.
-  - [ ] **Stage 3 — the element-const axis.** A `slice<const T>` is a read-only
+  - [x] **Stage 3 — the element-const axis.** A `slice<const T>` is a read-only
         view (the element-mutability distinction, like Rust's `&[T]` vs
         `&mut [T]`): indexing yields a non-assignable element. A `list<T>`/`T[N]`
         borrows to a `slice<T>`; a `const` one borrows to a `slice<const T>`, so
         the conversion preserves immutability (and stays sound if `const` ever
-        deepens to the pointee). The read-only form is the common one: the
-        variadic pack is a `slice<const any>`, and a format string is a
-        `slice<const uint8>`. Depends on Stage 1.
+        deepens to the pointee). A mutable `slice<T>` also widens implicitly to
+        `slice<const T>`, so the read-only form is the common one — the place
+        the variadic pack's `slice<const any>` and a format string's
+        `slice<const uint8>` will land. Depends on Stage 1.
   - [ ] **Stage 4 — borrowing in (literal adaptation).** A string/byte literal
         **adapts** to `slice<const uint8>` from context at compile time (length
         baked in, the buffer still NUL-terminated so the same literal also serves

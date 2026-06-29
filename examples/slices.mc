@@ -25,6 +25,17 @@ fn double_all(xs: slice<int32>) {
     }
 }
 
+// slice<const T> is a read-only view: indexing reads through, but `xs[i] = ...`
+// would not compile. The signature documents that this never writes. A loaded
+// element is a plain copy, so `largest` below is freely mutable.
+fn largest(xs: slice<const int32>) -> int32 {
+    let best: int32 = xs[0];
+    for x in xs {
+        if (x > best) { best = x; }
+    }
+    return best;
+}
+
 fn main() -> int32 {
     // Borrow a fixed array T[N]: `as slice<T>` reads {&arr[0], N}.
     let arr: int32[4];
@@ -38,6 +49,14 @@ fn main() -> int32 {
     // The slice borrows the array, so writes through it are visible in arr.
     double_all(view);
     println("after double_all: arr[0] %d, arr[3] %d", arr[0], arr[3]);  // 2, 8
+
+    // A mutable slice<int32> widens implicitly to the read-only slice<const T>
+    // form, so `view` passes straight to a function that takes slice<const int32>.
+    println("largest %d", largest(view));    // 8
+
+    // ...or borrow a read-only view directly.
+    let readonly = arr as slice<const int32>;
+    println("readonly largest %d", largest(readonly));
 
     // Borrow an owned list<T>: `as slice<T>` reads {data, length} and drops
     // the list's capacity. The slice tracks the elements, not the list object.

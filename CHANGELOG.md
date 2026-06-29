@@ -30,6 +30,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   NUL-terminated string, so its borrow drops the terminator (`length` is
   `N - 1`). See [Slices](docs/language.md#slices) and
   [examples/slices.mc](examples/slices.mc).
+- **Read-only slices** — `slice<const T>`, the element-mutability axis: indexing
+  yields a non-assignable element (`s[i] = x` is rejected), while a loaded value
+  or `for`-loop variable is a mutable copy. A mutable `slice<T>` widens
+  implicitly to `slice<const T>`, and a borrow of a mutable source may target
+  either; a read-only source (a `slice<const T>`, a `const` parameter, or a
+  `const`-typed value) borrows only to `slice<const T>`, preserving immutability.
+  `const` is a general type qualifier (`let pi: const float64 = 3.14;`). See
+  [Read-only slices](docs/language.md#read-only-slices) and
+  [examples/slices.mc](examples/slices.mc).
 - **Constant-expression array sizes** — an array dimension may be any constant
   integer expression (`int32[N + 1]`, `uint8[2 * SIZE]`), not just a literal or a
   lone `const` name.

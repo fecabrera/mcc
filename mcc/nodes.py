@@ -27,6 +27,8 @@ class TypeRef:
             entry names an integer ``const``; anything more complex is kept as
             its expression node. All are resolved to a positive integer during
             code generation.
+        const: A leading ``const`` qualifier -- a read-only type, as in the
+            element of a ``slice<const T>``.
     """
 
     name: str
@@ -35,13 +37,14 @@ class TypeRef:
     params: list["TypeRef"] | None = None  # set for fn(...) -> ret types
     ret: "TypeRef | None" = None
     dims: list = field(default_factory=list)  # array sizes, outermost first
+    const: bool = False  # a leading `const` read-only qualifier
 
     def __str__(self) -> str:
         """Render the type back to its source spelling.
 
         Returns:
-            The type as it would be written, including generic arguments,
-            trailing ``*``, and array dimensions.
+            The type as it would be written, including a leading ``const``,
+            generic arguments, trailing ``*``, and array dimensions.
         """
         if self.params is not None:
             text = (
@@ -52,7 +55,7 @@ class TypeRef:
             if self.args:
                 text += "<" + ", ".join(str(a) for a in self.args) + ">"
         dims = "".join(f"[{render_dim(d)}]" for d in self.dims)
-        return text + "*" * self.stars + dims
+        return ("const " if self.const else "") + text + "*" * self.stars + dims
 
 
 def render_dim(d) -> str:

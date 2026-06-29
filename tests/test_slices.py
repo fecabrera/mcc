@@ -198,3 +198,187 @@ def test_borrow_non_container_is_rejected():
             }
             """
         )
+
+
+# ----------------------------------------------- the element-const axis (Stage 3)
+
+
+def test_const_slice_type_parses():
+    (func,) = parse("fn f(s: slice<const uint8>) {}").functions
+    t = func.params[0][1]
+    assert t.name == "slice"
+    assert t.args == [TypeRef("uint8", const=True)]
+    assert str(t) == "slice<const uint8>"
+
+
+def test_read_and_iterate_const_slice():
+    source = """
+    fn sum(s: slice<const int32>) -> int32 {
+        let total: int32 = 0;
+        for v in s { total = total + v; }
+        return total;
+    }
+    fn main() -> int32 {
+        let xs: int32[3];
+        xs[0] = 1; xs[1] = 2; xs[2] = 3;
+        return sum(xs as slice<const int32>);   // 6
+    }
+    """
+    assert run(source) == 6
+
+
+def test_mutable_slice_widens_to_const_argument():
+    # A mutable slice<int32> passes where slice<const int32> is expected.
+    source = """
+    fn first(s: slice<const int32>) -> int32 { return s[0]; }
+    fn main() -> int32 {
+        let xs: int32[2];
+        xs[0] = 42; xs[1] = 0;
+        let m = xs as slice<int32>;
+        return first(m);
+    }
+    """
+    assert run(source) == 42
+
+
+def test_mutable_slice_widens_on_assignment():
+    source = """
+    fn main() -> int32 {
+        let xs: int32[2];
+        xs[0] = 7; xs[1] = 0;
+        let m = xs as slice<int32>;
+        let r: slice<const int32> = m;   // implicit widen
+        return r[0];
+    }
+    """
+    assert run(source) == 7
+
+
+def test_write_through_const_slice_is_rejected():
+    with pytest.raises(LangError, match="read-only slice<const T>"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let xs: int32[2];
+                xs[0] = 1; xs[1] = 2;
+                let s = xs as slice<const int32>;
+                s[0] = 9;
+                return 0;
+            }
+            """
+        )
+
+
+def test_dropping_const_in_borrow_is_rejected():
+    with pytest.raises(LangError, match="read-only.*as the mutable"):
+        compile_ir(
+            """
+            fn bad(s: slice<const int32>) -> int32 {
+                let m = s as slice<int32>;   // would reopen a write path
+                return 0;
+            }
+            """
+        )
+
+
+def test_const_parameter_borrows_only_read_only():
+    # A const parameter is read-only, so it cannot borrow to a mutable slice.
+    with pytest.raises(LangError, match="read-only.*as the mutable"):
+        compile_ir(
+            """
+            fn f(const xs: int32[3]) -> int32 {
+                let s = xs as slice<int32>;
+                return 0;
+            }
+            """
+        )
+
+
+def test_const_parameter_borrows_to_const_slice():
+    # ...but borrowing it as a read-only slice is fine.
+    compile_ir(
+        """
+        fn f(const xs: int32[3]) -> int32 {
+            let s = xs as slice<const int32>;
+            return s[0];
+        }
+        """
+    )
+
+
+def test_element_read_from_const_slice_is_mutable():
+    # A loaded element is an independent copy, so it is freely assignable.
+    source = """
+    fn main() -> int32 {
+        let xs: int32[2];
+        xs[0] = 10; xs[1] = 20;
+        let s = xs as slice<const int32>;
+        let c = s[0];
+        c = c + 5;
+        return c;   // 15
+    }
+    """
+    assert run(source) == 15
+
+
+def test_for_variable_over_const_slice_is_mutable():
+    source = """
+    fn main() -> int32 {
+        let xs: int32[3];
+        xs[0] = 1; xs[1] = 2; xs[2] = 3;
+        let s = xs as slice<const int32>;
+        let total: int32 = 0;
+        for v in s {
+            v = v * 2;            // the loop variable is a mutable copy
+            total = total + v;
+        }
+        return total;            // 2+4+6
+    }
+    """
+    assert run(source) == 12
+
+
+def test_const_uint8_slice_drops_nul_terminator():
+    # A read-only byte view of a string still drops the trailing NUL.
+    source = """
+    fn main() -> int32 {
+        let s = "hello" as slice<const uint8>;
+        return s.length as int32;   // 5, not 6
+    }
+    """
+    assert run(source) == 5
+
+
+def test_const_local_cannot_be_reassigned():
+    with pytest.raises(LangError, match="read-only variable"):
+        compile_ir("fn main() -> int32 { let x: const int32 = 5; x = 6; return 0; }")
+
+
+def test_const_local_initializes_from_mutable_value():
+    source = "fn main() -> int32 { let x: const int32 = 41; return x + 1; }"
+    assert run(source) == 42
+
+
+def test_const_slice_element_type_mismatch_is_rejected():
+    with pytest.raises(LangError, match="element type"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let xs: int64[2];
+                let s = xs as slice<const int32>;   // int64 elements, not int32
+                return 0;
+            }
+            """
+        )
+
+
+def test_slice_and_const_slice_are_distinct_types():
+    # slice<T> and slice<const T> share a layout but are different types: the
+    # const form will not coerce back to the mutable one.
+    with pytest.raises(LangError, match="read-only.*as the mutable"):
+        compile_ir(
+            """
+            fn take_mut(s: slice<int32>) -> int32 { return s[0]; }
+            fn f(s: slice<const int32>) -> int32 { return take_mut(s as slice<int32>); }
+            """
+        )

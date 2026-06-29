@@ -102,6 +102,13 @@ class LangType:
             function types match.
         element: Element type of a fixed-size array, else ``None``.
         count: Length of a fixed-size array, else ``None``.
+        const: ``True`` for a read-only ``const T`` view -- IR-identical to
+            ``T``, but a distinct type whose lvalue cannot be assigned to. The
+            element-mutability axis of a ``slice<const T>``.
+        mutable: For a ``const`` type, its original mutable ``T`` (the exact
+            interned object), so :func:`strip_const` restores it by identity --
+            keeping the many ``is FLOAT64``/``is UINT8`` checks valid on a value
+            read out of a ``const`` lvalue. ``None`` for a mutable type.
     """
 
     name: str
@@ -118,6 +125,8 @@ class LangType:
     signature: tuple | None = None
     element: "LangType | None" = None
     count: int | None = None
+    const: bool = False
+    mutable: "LangType | None" = field(default=None, compare=False)
 
     def __str__(self) -> str:
         """Return the type's source-level name."""
@@ -210,6 +219,44 @@ def pointer_to(lang_type: LangType) -> LangType:
     return LangType(
         lang_type.name + "*", lang_type.ir.as_pointer(), signed=False, pointee=lang_type
     )
+
+
+def const_of(lang_type: LangType) -> LangType:
+    """Return the read-only ``const T`` form of a type (idempotent).
+
+    The result is IR-identical to ``lang_type`` -- ``const`` is a source-level
+    distinction only -- but a distinct ``LangType`` whose lvalues are not
+    assignable. Used for the element of a ``slice<const T>``.
+
+    Args:
+        lang_type: The type to qualify.
+
+    Returns:
+        The ``const`` form, or ``lang_type`` unchanged if already ``const``.
+    """
+    if lang_type.const:
+        return lang_type
+    return dataclasses_replace(
+        lang_type, name=f"const {lang_type.name}", const=True, mutable=lang_type
+    )
+
+
+def strip_const(lang_type: LangType) -> LangType:
+    """Return the mutable form of a type, dropping any ``const`` qualifier.
+
+    A value loaded out of a ``const`` lvalue is an independent copy, so it sheds
+    the read-only qualifier; the loop variable of ``for x in slice<const T>`` is
+    likewise a mutable copy. The result is the exact original mutable type (see
+    :attr:`LangType.mutable`), so identity checks against the interned built-ins
+    still hold.
+
+    Args:
+        lang_type: The type to unqualify.
+
+    Returns:
+        The mutable form, or ``lang_type`` unchanged if not ``const``.
+    """
+    return lang_type.mutable if lang_type.const else lang_type
 
 
 def function_type(ret: LangType, params: tuple, variadic: bool = False) -> LangType:
@@ -1461,6 +1508,8 @@ class CodeGen:
                 self.current_source = outer_source
         else:
             raise LangError(f"unknown type {ref.name!r}", line)
+        if ref.const:
+            base = const_of(base)
         if ref.stars and base is VOID:
             raise LangError("no void pointers; use uint8* for raw memory", line)
         for _ in range(ref.stars):
@@ -1621,8 +1670,13 @@ class CodeGen:
         :func:`is_slice`). Instances are interned per element type, alongside the
         user structs in ``struct_types``.
 
+        ``slice<T>`` and ``slice<const T>`` are distinct types (the element-const
+        axis) but share one LLVM layout: ``const`` is IR-identical to ``T``, so
+        the identified type is keyed by the mutable element. A mutable slice then
+        flows into its read-only form with no conversion (see :meth:`coerce`).
+
         Args:
-            element: The element type ``T``.
+            element: The element type ``T`` (possibly ``const T``).
             line: Source line for diagnostics.
 
         Returns:
@@ -1631,14 +1685,19 @@ class CodeGen:
         Raises:
             LangError: On ``slice<void>``.
         """
-        if element is VOID:
+        if strip_const(element) == VOID:
             raise LangError("cannot make a slice of void", line)
         mangled = f"slice<{element}>"
         if mangled in self.struct_types:
             return self.struct_types[mangled]
         fields = (("ptr", pointer_to(element)), ("length", UINT64))
-        identified = self.module.context.get_identified_type(mangled)
-        identified.set_body(*(ftype.ir for _, ftype in fields))
+        # Key the LLVM layout by the mutable element so slice<T> and
+        # slice<const T> share one identified type; body it only on first sight.
+        identified = self.module.context.get_identified_type(
+            f"slice<{strip_const(element)}>"
+        )
+        if identified.is_opaque:
+            identified.set_body(*(ftype.ir for _, ftype in fields))
         slice_t = LangType(
             mangled, identified, signed=False, template="slice", args=(element,)
         )
@@ -2499,6 +2558,19 @@ class CodeGen:
             return TypedValue(ir.Constant(expected.ir, None), expected)
         if expected == RAWPTR and is_pointer(tv.type):
             return TypedValue(self.builder.bitcast(tv.value, RAWPTR.ir), RAWPTR)
+        # A value initializes a read-only `const T` target by adding const; the
+        # representation is unchanged, so the value passes through retyped.
+        if expected.const and strip_const(expected) == tv.type:
+            return TypedValue(tv.value, expected)
+        # A mutable slice<T> widens to its read-only slice<const T> form: adding
+        # const is always safe, and the two share one LLVM layout, so the value
+        # passes through unchanged. (Never the reverse -- that would drop const.)
+        if (
+            is_slice(expected)
+            and is_slice(tv.type)
+            and expected.args[0] == const_of(tv.type.args[0])
+        ):
+            return TypedValue(tv.value, expected)
         raise LangError(f"{context}: expected {expected}, got {tv.type}", line)
 
     def widen_operand(
@@ -2730,6 +2802,10 @@ class CodeGen:
                     f"cannot assign to const parameter {stmt.name!r}", stmt.line
                 )
             slot, var_type, volatile = self.var_addr(stmt.name, stmt.line)
+            if var_type.const:
+                raise LangError(
+                    f"cannot assign to read-only variable {stmt.name!r}", stmt.line
+                )
             tv = self.coerce(
                 self.gen_expr(stmt.value),
                 var_type,
@@ -2841,6 +2917,12 @@ class CodeGen:
             ptr = self.gen_expr(stmt.ptr)
             if not is_pointer(ptr.type):
                 raise LangError(f"cannot dereference a {ptr.type}", stmt.line)
+            if ptr.type.pointee.const:
+                raise LangError(
+                    "cannot assign through a pointer to a read-only "
+                    f"{ptr.type.pointee}",
+                    stmt.line,
+                )
             value = self.coerce(
                 self.gen_expr(stmt.value),
                 ptr.type.pointee,
@@ -2855,6 +2937,10 @@ class CodeGen:
                     "cannot assign to an element of a const parameter", stmt.line
                 )
             addr, element = self.gen_index_addr(stmt.base, stmt.index, stmt.line)
+            if element.const:
+                raise LangError(
+                    "cannot assign through a read-only slice<const T>", stmt.line
+                )
             value = self.coerce(
                 self.gen_expr(stmt.value), element, stmt.line, "assignment to element"
             )
@@ -3001,7 +3087,9 @@ class CodeGen:
             vtype = vtype.pointee
         ptr = self.builder.extract_value(value, slice_t.elem_indices[0])
         length = self.builder.extract_value(value, slice_t.elem_indices[1])
-        element = slice_t.fields[0][1].pointee
+        # The loop variable is a fresh copy of each element, so it is mutable
+        # even when iterating a slice<const T>.
+        element = strip_const(slice_t.fields[0][1].pointee)
 
         idx_slot = self.builder.alloca(UINT64.ir, name="for.idx")
         self.builder.store(ir.Constant(UINT64.ir, 0), idx_slot)
@@ -3429,7 +3517,9 @@ class CodeGen:
 
         An array decays to a pointer to its first element (C array-to-pointer
         decay), so indexing, passing it as a pointer argument, and assigning it
-        all go through the pointer; every other type is loaded normally.
+        all go through the pointer; every other type is loaded normally. A loaded
+        value is an independent copy, so it sheds any ``const`` qualifier: only
+        the lvalue (a write target, e.g. ``s[i]``) stays read-only.
 
         Args:
             addr: The address to read.
@@ -3445,7 +3535,8 @@ class CodeGen:
             first = self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
             return TypedValue(first, pointer_to(lang_type.element))
         return TypedValue(
-            self.gen_load(addr, align=align, volatile=volatile, name=name), lang_type
+            self.gen_load(addr, align=align, volatile=volatile, name=name),
+            strip_const(lang_type),
         )
 
     def var_addr(self, name: str, line: int) -> tuple[ir.Value, LangType, bool]:
@@ -3937,6 +4028,41 @@ class CodeGen:
         agg = self.builder.insert_value(agg, length, target.elem_indices[1])
         return TypedValue(agg, target)
 
+    def check_borrow_element(
+        self, src_elem: LangType, value_expr, src_label: str, target: LangType, line: int
+    ):
+        """Validate a borrow source's element against the target slice's element.
+
+        The underlying element types must match. ``const`` may only be *added* --
+        a mutable source borrows to a ``slice<const T>`` (read-only is the safe,
+        common view) -- never dropped: a read-only source (a ``const`` element,
+        or a ``const`` parameter/variable) cannot become a mutable ``slice<T>``,
+        which would reopen a write path.
+
+        Args:
+            src_elem: The source's element type (possibly ``const``).
+            value_expr: The borrowed expression, to detect a ``const`` parameter.
+            src_label: How to name the source in an error message.
+            target: The ``slice<T>`` being produced.
+            line: Source line for diagnostics.
+
+        Raises:
+            LangError: On an element-type mismatch or a const-dropping borrow.
+        """
+        target_elem = target.fields[0][1].pointee
+        if strip_const(src_elem) != strip_const(target_elem):
+            raise LangError(
+                f"cannot borrow {src_label} as {target}: element type is "
+                f"{strip_const(src_elem)}, not {strip_const(target_elem)}",
+                line,
+            )
+        if (src_elem.const or self.writes_const(value_expr)) and not target_elem.const:
+            raise LangError(
+                f"cannot borrow read-only {src_label} as the mutable {target}; "
+                f"borrow as slice<{const_of(strip_const(target_elem))}>",
+                line,
+            )
+
     def gen_borrow_slice(self, value_expr, target: LangType, line: int) -> TypedValue:
         """Lower a borrow ``value as slice<T>`` into a non-owning view.
 
@@ -3949,6 +4075,11 @@ class CodeGen:
         field and an integer ``length`` -- borrows to ``{data, length}``,
         dropping its ``capacity``. A ``slice<T>`` borrows to itself.
 
+        A mutable source may borrow to its read-only ``slice<const T>`` form
+        (adding ``const`` is safe); a read-only source -- a ``const`` element or
+        a ``const`` parameter/variable -- borrows only to ``slice<const T>``, so
+        the conversion preserves immutability (see :meth:`check_borrow_element`).
+
         Args:
             value_expr: The owned value being borrowed.
             target: The ``slice<T>`` view type to produce.
@@ -3959,7 +4090,8 @@ class CodeGen:
 
         Raises:
             LangError: When the source cannot be borrowed as ``target`` (wrong
-                shape) or its element type does not match ``T``.
+                shape), its element type does not match ``T``, or a read-only
+                source would borrow to a mutable slice.
         """
         element = target.fields[0][1].pointee
         # T[N] (or a string literal, a uint8[N]): take the first-element pointer
@@ -3968,16 +4100,12 @@ class CodeGen:
         src_t = self.lvalue_type(value_expr)
         if isinstance(value_expr, StrLit) or (src_t is not None and is_array(src_t)):
             addr, owner, _, _ = self.gen_addr(value_expr, line)
-            if owner.element != element:
-                raise LangError(
-                    f"cannot borrow {owner} as {target}: element type is "
-                    f"{owner.element}, not {element}",
-                    line,
-                )
+            self.check_borrow_element(owner.element, value_expr, str(owner), target, line)
             ptr = self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
             # A uint8[N] is a NUL-terminated string: drop the terminator so the
             # view spans the text, not the trailing NUL.
-            length = owner.count - 1 if element is UINT8 else owner.count
+            is_bytes = strip_const(element) == UINT8
+            length = owner.count - 1 if is_bytes else owner.count
             return self.make_slice(target, ptr, ir.Constant(UINT64.ir, length))
         src = self.gen_expr(value_expr)
         owner, struct_val = src.type, src.value
@@ -3985,8 +4113,11 @@ class CodeGen:
             owner = owner.pointee  # a list<T>* (or slice<T>*) borrows like the value
             struct_val = self.gen_load(src.value)
         if is_slice(owner):
-            if owner.fields[0][1].pointee != element:
-                raise LangError(f"cannot borrow {src.type} as {target}", line)
+            # slice<T> and slice<const T> share one LLVM layout, so the value
+            # passes through unchanged once the element check allows the borrow.
+            self.check_borrow_element(
+                owner.fields[0][1].pointee, value_expr, str(src.type), target, line
+            )
             return TypedValue(struct_val, target)
         if not is_struct(owner):
             raise LangError(
@@ -4003,13 +4134,13 @@ class CodeGen:
             )
         data_t = owner.fields[by_name["data"]][1]
         length_t = owner.fields[by_name["length"]][1]
-        if not is_pointer(data_t) or data_t.pointee != element:
-            got = data_t.pointee if is_pointer(data_t) else data_t
+        if not is_pointer(data_t):
             raise LangError(
                 f"cannot borrow {src.type} as {target}: element type is "
-                f"{got}, not {element}",
+                f"{data_t}, not {strip_const(element)}",
                 line,
             )
+        self.check_borrow_element(data_t.pointee, value_expr, str(src.type), target, line)
         if not is_integer(length_t):
             raise LangError(
                 f"cannot borrow {src.type} as {target}: 'length' is "

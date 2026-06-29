@@ -471,7 +471,8 @@ class Parser:
         grouping so a ``*`` can bind outside a function type. The ``struct``
         keyword is optional (C habit); struct-ness is resolved later by name. A
         trailing ``[N]`` makes a fixed-size array, so ``int32[10]`` is ten
-        int32s.
+        int32s. A leading ``const`` makes a read-only type, as in the element
+        of a ``slice<const T>``.
 
         Args:
             greedy_stars: When ``True``, take every following ``*`` as pointer
@@ -484,6 +485,14 @@ class Parser:
         Raises:
             LangError: On a pointer to an array type, or other malformed type.
         """
+        if self.cur.kind == "const":
+            # A `const T` read-only qualifier (the element of a slice<const T>).
+            # Binds to the whole following type ref; the qualifier rides on the
+            # resulting TypeRef.
+            self.advance()
+            ref = self.parse_type_ref(greedy_stars)
+            ref.const = True
+            return ref
         if self.cur.kind == "fn":
             return self.parse_fn_type(greedy_stars)
         if self.cur.kind == "(":
