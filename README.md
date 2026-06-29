@@ -157,18 +157,18 @@ generic, `defer`, control flow, and the standard library:
 ```c
 import "std";        // print / println, from the standard library
 
-struct point { x: int32; y: int32; }
+struct point {
+    x: int32;
+    y: int32;
+}
 
 // Generic and @inline: stamped out per call type, folded into the caller.
 @inline fn max<T>(a: T, b: T) -> T {
-    if (a > b) return a;
-    return b;
+    return a > b ? a : b;
 }
 
 fn main() -> int32 {
-    let p: struct point;        // declare, then fill the fields
-    p.x = 3;
-    p.y = 7;
+    let p = struct point { x = 3, y = 7 };
 
     let hi = max(p.x, p.y);     // type inferred: int32
     println("max = %d", hi);
@@ -176,7 +176,9 @@ fn main() -> int32 {
     let i: int32 = 0;
     while (i < hi) {
         defer i = i + 1;            // runs at the end of every iteration
-        if (i % 2 == 0) { println("%d is even", i); }
+        if (i % 2 == 0) {
+            println("%d is even", i);
+        }
     }
     return 0;
 }
@@ -201,7 +203,11 @@ bindings:
 
 ```c
 import "std";
-fn main() -> int32 { println("answer = %d", 42); return 0; }
+
+fn main() -> int32 {
+    println("answer = %d", 42);
+    return 0;
+}
 ```
 
 Alongside `std` are `memory` (typed `alloc`/`dealloc`), the
@@ -382,7 +388,7 @@ Grouped by scope.
       `typeof`-checked type discriminant, so the live member is recovered safely
       (`case type`). The element type of the [variadic](#functions-and-methods)
       pack's `slice<any>`. Depends on unions and typeof/typeid
-- [~] `slice<T>` — a builtin non-owning view, `{ ptr: T*; length: uint64 }`, over a
+- [ ] `slice<T>` — a builtin non-owning view, `{ ptr: T*; length: uint64 }`, over a
       contiguous run of `T`: runtime `length`, indexing, and `for … in`. It borrows
       and never allocates, distinct from a C array `T[]` (which stays length-less
       and decays to a bare pointer for the ABI). A 2-word struct, so not C-ABI by
