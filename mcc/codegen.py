@@ -5380,6 +5380,14 @@ class CodeGen:
             self.hidden_ref[mangled] = hidden
             self.instances[key] = mangled
             self.gen_function(func, fn, ret, params)
+        except LangError as err:
+            # An error inside the body belongs to the template's file, not the
+            # caller's -- attribute it here, where current_source still points at
+            # the instance being generated (the top level otherwise blames the
+            # root module for a line in an imported library).
+            if err.source is None:
+                err.source = self.current_source
+            raise
         finally:
             (
                 self.builder,
