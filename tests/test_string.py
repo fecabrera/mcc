@@ -204,12 +204,12 @@ def test_literal_cast_to_pointer():
 
 
 def test_string_array_borrows_as_slice():
-    # A uint8[N] is a NUL-terminated string, so the borrow drops the terminator:
+    # A char[N] is NUL-terminated text, so the borrow drops the terminator:
     # the slice spans the 3 text bytes, length 3, no trailing NUL.
     src = """
     fn main() -> int32 {
-        let s: uint8[] = "abc";          // uint8[4]
-        let view = s as slice<uint8>;
+        let s: char[] = "abc";           // char[4]
+        let view = s as slice<char>;
         let count: int32 = 0;
         let total: int32 = 0;
         for c in view { count = count + 1; total = total + (c as int32); }
@@ -221,11 +221,11 @@ def test_string_array_borrows_as_slice():
 
 
 def test_string_literal_borrows_as_slice_directly():
-    # A string literal carries its array type, so it borrows without a binding;
+    # A string literal carries its char[N] type, so it borrows without a binding;
     # the NUL is dropped, so the slice spans the 5 text bytes.
     src = """
     fn main() -> int32 {
-        let view = "hello" as slice<uint8>;
+        let view = "hello" as slice<char>;
         let total: int32 = 0;
         for c in view { total = total + (c as int32); }
         return (view.length as int32) * 1000 + total;   // 5000 + 'h'+'e'+'l'+'l'+'o'
@@ -234,8 +234,25 @@ def test_string_literal_borrows_as_slice_directly():
     assert run(src) == 5000 + 104 + 101 + 108 + 108 + 111
 
 
+def test_uint8_array_borrow_keeps_every_byte():
+    # A uint8[N] is a raw byte buffer, not text: its slice keeps every byte,
+    # including a trailing NUL (no string stopgap).
+    src = """
+    fn main() -> int32 {
+        let s: uint8[3];
+        s[0] = 1; s[1] = 2; s[2] = 3;
+        let view = s as slice<uint8>;
+        let total: int32 = 0;
+        for b in view { total = total + (b as int32); }
+        return (view.length as int32) * 1000 + total;   // 3000 + 6
+    }
+    """
+    assert run(src) == 3006
+
+
 def test_string_argument_still_works(capfd):
-    # A string literal in argument position decays to uint8*, as before.
+    # A string literal in argument position decays to char*, which coerces to
+    # uint8* like any pointer, so the libc string functions still take it.
     src = """
     import "libc/stdio";
     fn shout(msg: uint8*) { printf("%s!\\n", msg); }

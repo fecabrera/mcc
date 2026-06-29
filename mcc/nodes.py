@@ -627,7 +627,7 @@ class IntLit:
 
 @dataclass
 class CharLit:
-    """A character literal: ``'a'``, ``'\\n'``, ``'\\0'`` -- a one-byte ``uint8``.
+    """A character literal: ``'a'``, ``'\\n'``, ``'\\0'`` -- a one-byte ``char``.
 
     Attributes:
         value: The byte value of the character.

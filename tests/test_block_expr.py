@@ -188,7 +188,7 @@ def test_emit_null_in_a_general_block_needs_a_type():
 
 
 def test_mismatched_emit_types_are_rejected():
-    with pytest.raises(LangError, match="emit: expected int32, got uint8"):
+    with pytest.raises(LangError, match="emit: expected int32, got char\\*"):
         compile_ir(
             'fn main() -> int32 {\n'
             '    let x: int32 = { if (true) { emit 1; } emit "s"; };\n'

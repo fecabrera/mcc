@@ -548,6 +548,7 @@ before its `return`.
 | ----------------------------------------------------- | ----------------------------------------------------------------- |
 | `int8`, `int16`, `int32`, `int64`                     | `i8`, `i16`, `i32`, `i64` (signed)                                |
 | `uint8`, `uint16`, `uint32`, `uint64`                 | `i8`, `i16`, `i32`, `i64` (unsigned)                              |
+| `char` (one-byte [text](#strings); distinct from `uint8`) | `i8` (unsigned)                                              |
 | `bool`                                                | `i1`                                                              |
 | `float64`                                             | `double`                                                          |
 | `T*` (any type + `*`s)                                | pointer                                                           |
@@ -571,6 +572,11 @@ no silent truncation. Constant integer arithmetic folds at compile time and
 stays untyped, widening as needed (`1 + 5000000000` is `int64`;
 `10 * sizeof(int64)` is `uint64` because `sizeof` is typed; `2 + 3` is
 still untyped).
+
+A [character literal](#strings) (`'a'`) is likewise an untyped constant, but one
+that **defaults to [`char`](#strings)** when no context constrains it (so
+`let c = 'a';` is a `char`, not an error), while still adapting to a
+`uint8`/integer slot when one is expected (`let b: uint8 = 'a';`).
 
 The one implicit conversion between typed values is **lossless widening inside
 an expression**: when a binary operator combines two integers of the **same
@@ -708,8 +714,8 @@ C — so you need not spell the type out. The operand is never evaluated, so it
 has no side effects and folds to the same constant. `uint8*` doubles as the
 raw-memory pointer (C's `void*`): any pointer
 implicitly coerces to it, which is why `free(nums)` works without a cast.
-A [string literal](#strings) is a `uint8[N]` array that decays to a `uint8*`
-here, so `"hi"[0]` is the byte `104`. There is
+A [string literal](#strings) is a `char[N]` array that decays to a `char*`
+(which coerces to `uint8*`), so `"hi"[0]` is the byte `104`. There is
 no pointer arithmetic (`p + 1`); use `&p[1]`. See
 [examples/pointers.mc](examples/pointers.mc) and
 [libmc/memory.mc](libmc/memory.mc) for a generic typed allocator.
@@ -875,10 +881,11 @@ The source is either an owned `T[N]` (giving `{ &arr[0], N }`) or any struct
 laid out like a list — one with a `T*` `data` field and an integer `length`
 field, such as `list<T>` — which borrows to `{ data, length }`, ignoring any
 other fields (e.g. a list's `capacity`). The borrow is structural, not keyed to
-a particular type name. The element types must match. A `uint8[N]` is the one
-special case: as a NUL-terminated [string](#strings), its borrow drops the
-trailing terminator, so `length` is `N - 1` (the text, without the NUL). This is
-the one struct-producing `as` (ordinary struct casts are rejected). A slice is a plain value: it passes to and returns from
+a particular type name. The element types must match. A `char[N]` is the one
+special case: as NUL-terminated [text](#strings), its borrow drops the trailing
+terminator, so `length` is `N - 1` (the text, without the NUL); a `uint8[N]` raw
+buffer keeps every byte. This is the one struct-producing `as` (ordinary struct
+casts are rejected). A slice is a plain value: it passes to and returns from
 functions by value (two words). Because it is two words it is **not** C-ABI by
 value — across a C boundary, pass a `T*` and a length separately instead. See
 [examples/slices.mc](examples/slices.mc).
@@ -1357,44 +1364,53 @@ the emitted symbol changes.
 
 ## Strings
 
-A string literal is a NUL-terminated [byte array](#arrays) `uint8[N]`, where `N`
-counts the trailing NUL (`"hi"` is `uint8[3]`). Stored in a constant, the bytes
-stay a valid C string, so the array **decays to a `uint8*`** wherever a pointer
-is used — passed to a function, returned, compared, or indexed (`"hi"[0]` is
-`104`) — just like any other array. There is no separate `string` type. They
-support C's simple escape sequences — `\a` `\b` `\f` `\n` `\r` `\t` `\v`, the
-quotes `\'` `\"`, `\\`, `\?`, and `\0` for NUL — plus `\e` for ESC (a GCC/Clang
-extension, handy for ANSI terminal codes). Any other escape keeps the bare
-character.
+`char` is a distinct one-byte **text** type: ABI-identical to `uint8` (an
+unsigned byte), but a separate type, so a NUL-terminated string is told apart
+from a raw byte buffer. A string literal is a NUL-terminated [array](#arrays)
+`char[N]`, where `N` counts the trailing NUL (`"hi"` is `char[3]`). Stored in a
+constant, the bytes stay a valid C string, so the array **decays to a `char*`**
+wherever a pointer is used — passed to a function, returned, compared, or indexed
+(`"hi"[0]` is `104`) — just like any other array. `char*` coerces to `uint8*`
+like any pointer, so the libc string functions still take a string literal
+directly. Literals support C's simple escape sequences — `\a` `\b` `\f` `\n` `\r`
+`\t` `\v`, the quotes `\'` `\"`, `\\`, `\?`, and `\0` for NUL — plus `\e` for ESC
+(a GCC/Clang extension, handy for ANSI terminal codes). Any other escape keeps
+the bare character.
 
 Because the literal carries its array type, the choice at a `let` is yours:
 
 ```c
-let owned = "hi";              // uint8[3]: an owned, mutable copy of the bytes
-let owned2: uint8[] = "hi";    // same, size inferred from the literal
-let buf: uint8[8] = "hi";      // a larger owned buffer, zero-filled past "hi\0"
-let p: uint8* = "hi";          // decays: a pointer into the shared constant (no copy)
+let owned = "hi";              // char[3]: an owned, mutable copy of the bytes
+let owned2: char[] = "hi";     // same, size inferred from the literal
+let buf: char[8] = "hi";       // a larger owned buffer, zero-filled past "hi\0"
+let p: char* = "hi";           // decays: a pointer into the shared constant (no copy)
+let raw: uint8[] = "hi";       // also fine: the same bytes, as a raw buffer
 ```
 
-An owned `uint8[N]` binding can be mutated (`owned[0] = 'H'`), measured with
+An owned `char[N]` binding can be mutated (`owned[0] = 'H'`), measured with
 [`len`](#arrays) (which counts the NUL — `len(owned)` is `3`), and
-[borrowed](#slices) as a `slice<uint8>`. A `uint8[N]` is treated as a
-NUL-terminated string, so the borrow **drops the terminator**: the slice spans
-the text, with `length` one less than `len` (`"hi" as slice<uint8>` has
-`length == 2`, the buffer keeps its NUL). The `uint8*` form keeps the old
-pointer-to-constant behavior. An explicit `uint8[M]` must be large enough to
-hold the bytes (NUL included). A string literal can also be borrowed directly —
-`"hi" as slice<uint8>` — since it carries its array type; only the *implicit*
-adaptation to a `slice<const uint8>` from context (with no `as`) is still
-[planned](../README.md). See [examples/strings.mc](../examples/strings.mc).
+[borrowed](#slices) as a `slice<char>`. A `char[N]` is NUL-terminated text, so
+the borrow **drops the terminator**: the slice spans the text, with `length` one
+less than `len` (`"hi" as slice<char>` has `length == 2`, the buffer keeps its
+NUL). A `uint8[N]`, by contrast, is a raw byte buffer: its `slice<uint8>` keeps
+**every** byte (`['a','b','c'] as a uint8[3]` borrows to `length == 3`). The
+`char*` form keeps the pointer-to-constant behavior. An explicit `char[M]`/
+`uint8[M]` must be large enough to hold the bytes (NUL included). A string
+literal can also be borrowed directly — `"hi" as slice<char>` — since it carries
+its array type; only the *implicit* adaptation to a `slice<const char>` from
+context (with no `as`) is still [planned](../README.md). See
+[examples/strings.mc](../examples/strings.mc).
 
-A character literal in single quotes is a `uint8` — the byte value of a
-single character, using the same escapes (`'a'`, `'\n'`, `'\0'`, `'\''`,
-`'\\'`). Being a plain byte, it indexes, compares, and does arithmetic like
-any other `uint8`:
+A character literal in single quotes is a `char` — the byte value of a single
+character, using the same escapes (`'a'`, `'\n'`, `'\0'`, `'\''`, `'\\'`). Like
+an integer literal, it is an untyped constant: it **defaults to `char`** but
+adapts to a `uint8`/integer slot from context (`let b: uint8 = 'a';` is fine). A
+`char` *value*, though, stays distinct — converting it to `uint8` (or back) needs
+an explicit `as`. Being a one-byte text value, `char` indexes, compares, and does
+arithmetic:
 
 ```c
-fn digit_value(c: uint8) -> uint8 {
+fn digit_value(c: char) -> char {
     return c - '0';      // '7' - '0' == 7
 }
 ```

@@ -172,7 +172,7 @@ def test_generic_keys_and_values(tmp_path, capfd):
             // pointer keys (hashed via ptrtoint)
             let names = alloc<struct set<uint8*, int32>>(1);
             set_init(names, 8);
-            let hello = "hello";
+            let hello: uint8* = "hello";   // a uint8* key, matching set<uint8*, _>
             set_set(names, hello, 42);
             let found: int32 = 0;
             if (set_get(names, hello, &found))

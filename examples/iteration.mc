@@ -58,7 +58,7 @@ fn main() -> int32 {
     // A dict iterates the same way: a string key and the value, per entry.
     // Each x.key borrows the dict's own copy of the key, valid until the dict
     // changes.
-    let cmds: dict<uint8*>;
+    let cmds: dict<char*>;
     dict_init(&cmds, 2);
     defer dict_destroy(&cmds);
 

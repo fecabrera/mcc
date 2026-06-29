@@ -251,7 +251,7 @@ def test_literal_length_must_match():
 
 
 def test_element_type_is_checked():
-    with pytest.raises(LangError, match="array element: expected int32, got uint8"):
+    with pytest.raises(LangError, match="array element: expected int32, got char\\*"):
         compile_ir('fn main() -> int32 { let a: int32[2] = ["x", "y"]; return 0; }')
 
 

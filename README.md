@@ -327,15 +327,18 @@ Grouped by scope.
 
 #### Types and generics
 
-- [ ] `char` — a distinct one-byte text type (ABI-compatible with `uint8`, but a
+- [x] `char` — a distinct one-byte text type (ABI-compatible with `uint8`, but a
       separate type) so a NUL-terminated string is told apart from a raw byte
       buffer. Character literals (`'a'`) and string literals (`"hi"` as
       `char[N]`) become `char`/`char`-arrays, and a `char[N]` borrows to a
       `slice<char>` that **drops the trailing NUL** (the string text), while a
-      `uint8[N]` stays raw bytes whose `slice<uint8>` keeps every byte. Removes
-      today's stopgap where *every* `uint8[N]` is assumed NUL-terminated on
+      `uint8[N]` stays raw bytes whose `slice<uint8>` keeps every byte. A `char`
+      literal is an untyped constant that defaults to `char` but adapts to a
+      `uint8`/integer slot; a `char` *value* needs an explicit `as` (and `char*`
+      coerces to `uint8*` like any pointer, so libc still takes string literals).
+      Removed the stopgap where *every* `uint8[N]` was assumed NUL-terminated on
       [borrow](#structs-arrays-and-data-layout) (so `['a','b','c'] as
-      slice<uint8>` wrongly drops `'c'`)
+      slice<uint8>` no longer wrongly drops `'c'`)
 - [ ] `typeof(expr)` — use an expression's static type in a type position,
       including in an alias: `type t = typeof(var);`
 - [ ] Generic type parameters:

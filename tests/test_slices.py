@@ -338,11 +338,11 @@ def test_for_variable_over_const_slice_is_mutable():
     assert run(source) == 12
 
 
-def test_const_uint8_slice_drops_nul_terminator():
-    # A read-only byte view of a string still drops the trailing NUL.
+def test_const_char_slice_drops_nul_terminator():
+    # A read-only text view of a string still drops the trailing NUL.
     source = """
     fn main() -> int32 {
-        let s = "hello" as slice<const uint8>;
+        let s = "hello" as slice<const char>;
         return s.length as int32;   // 5, not 6
     }
     """

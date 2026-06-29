@@ -117,7 +117,7 @@ def test_dangling_else_belongs_to_the_case_not_the_inner_if():
 
 
 def test_when_value_must_match_the_subject_type():
-    with pytest.raises(LangError, match="when value: expected int32, got uint8\\*"):
+    with pytest.raises(LangError, match="when value: expected int32, got char\\*"):
         compile_ir('fn main() { let n: int32 = 1; case (n) { when "x": f(); } }')
 
 
@@ -181,5 +181,5 @@ def test_each_listed_value_is_checked():
 
 
 def test_listed_value_must_match_the_subject_type():
-    with pytest.raises(LangError, match="when value: expected int32, got uint8\\*"):
+    with pytest.raises(LangError, match="when value: expected int32, got char\\*"):
         compile_ir('fn main() { let n: int32 = 1; case (n) { when 1, "x": f(); } }')

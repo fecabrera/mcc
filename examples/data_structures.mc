@@ -39,7 +39,7 @@ fn main() -> int32 {
     list_destroy(&nums);
 
     // stack<T> -- LIFO: push and pop at the top (libmc/stack.mc).
-    let chars: struct stack<uint8>;
+    let chars: struct stack<char>;
     stack_init(&chars, 2);
     stack_push(&chars, 'a');
     stack_push(&chars, 'b');

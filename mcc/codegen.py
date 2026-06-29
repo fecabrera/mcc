@@ -311,13 +311,23 @@ for _width in (8, 16, 32, 64):
     TYPES[f"int{_width}"] = LangType(f"int{_width}", ir.IntType(_width), signed=True)
     TYPES[f"uint{_width}"] = LangType(f"uint{_width}", ir.IntType(_width), signed=False)
 
+# `char` is a distinct one-byte text type: ABI-identical to uint8 (an unsigned
+# i8), but a separate type, so a NUL-terminated string (char) is told apart from
+# a raw byte buffer (uint8). Character/string literals are char/char[N], and a
+# char[N] borrows to a slice<char> that drops the trailing NUL.
+CHAR = LangType("char", ir.IntType(8), signed=False)
+TYPES["char"] = CHAR
+
 INT32 = TYPES["int32"]
 INT64 = TYPES["int64"]
 UINT8 = TYPES["uint8"]
 UINT64 = TYPES["uint64"]
-# uint8* doubles as the "raw memory" pointer (C's void*/char*); string
-# literals have this type, and any pointer implicitly coerces to it.
+# uint8* doubles as the "raw memory" pointer (C's void*/char*); any pointer
+# implicitly coerces to it.
 RAWPTR = pointer_to(TYPES["uint8"])
+# char* -- the decayed form of a string literal; coerces to uint8* like any
+# pointer, so it still serves the libc string functions.
+CHARPTR = pointer_to(CHAR)
 # The type of a bare `null`: a pointer that adapts to any pointer type.
 NULLT = LangType("null", RAWPTR.ir, signed=False, pointee=TYPES["uint8"])
 
@@ -2534,9 +2544,11 @@ class CodeGen:
         # same-type early return below. Their type is only a default placeholder
         # (the narrowest of int32/int64/uint64 that fits the value), so a value
         # too big for `expected` must be caught here -- even when the types match
-        # -- or it silently truncates at IR emission.
+        # -- or it silently truncates at IR emission. A `char` *constant* adapts
+        # the same way (a one-byte literal landing in a uint8/int slot); a char
+        # *variable* is not a constant, so it stays strict (an explicit `as`).
         if (
-            tv.adaptable
+            (tv.adaptable or tv.type == CHAR)
             and isinstance(tv.value, ir.Constant)
             and is_integer(tv.type)
             and is_integer(expected)
@@ -3424,7 +3436,7 @@ class CodeGen:
         if isinstance(expr, IntLit):
             return adaptable_int(expr.value)
         if isinstance(expr, CharLit):
-            return TypedValue(ir.Constant(UINT8.ir, expr.value), UINT8)
+            return TypedValue(ir.Constant(CHAR.ir, expr.value), CHAR)
         if isinstance(expr, FloatLit):
             return TypedValue(ir.Constant(FLOAT64.ir, expr.value), FLOAT64)
         if isinstance(expr, BoolLit):
@@ -4102,10 +4114,11 @@ class CodeGen:
             addr, owner, _, _ = self.gen_addr(value_expr, line)
             self.check_borrow_element(owner.element, value_expr, str(owner), target, line)
             ptr = self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
-            # A uint8[N] is a NUL-terminated string: drop the terminator so the
-            # view spans the text, not the trailing NUL.
-            is_bytes = strip_const(element) == UINT8
-            length = owner.count - 1 if is_bytes else owner.count
+            # A char[N] is NUL-terminated text: drop the terminator so the view
+            # spans the string, not the trailing NUL. A uint8[N] is a raw byte
+            # buffer, kept whole.
+            is_text = strip_const(element) == CHAR
+            length = owner.count - 1 if is_text else owner.count
             return self.make_slice(target, ptr, ir.Constant(UINT64.ir, length))
         src = self.gen_expr(value_expr)
         owner, struct_val = src.type, src.value
@@ -4169,18 +4182,18 @@ class CodeGen:
         return bytearray(text.encode("utf8") + b"\0")
 
     def string_array_type(self, text: str) -> LangType:
-        """The ``uint8[N]`` array type a string literal denotes.
+        """The ``char[N]`` array type a string literal denotes.
 
         ``N`` counts the trailing NUL, so the bytes stay a valid C string when
-        the array decays to a ``uint8*``.
+        the array decays to a ``char*``.
 
         Args:
             text: The string contents.
 
         Returns:
-            The ``uint8[N]`` ``LangType``.
+            The ``char[N]`` ``LangType``.
         """
-        return list_of(UINT8, len(self.string_data(text)))
+        return list_of(CHAR, len(self.string_data(text)))
 
     def string_global(self, text: str) -> ir.GlobalVariable:
         """Create a private constant global holding a string's bytes.
@@ -4203,16 +4216,20 @@ class CodeGen:
         return glob
 
     def gen_string(self, text: str) -> TypedValue:
-        """Emit a ``uint8*`` pointing at a string literal's bytes.
+        """Emit a ``char*`` pointing at a string literal's bytes.
+
+        A string literal is a ``char[N]``; read as a value it decays to a
+        ``char*`` (which coerces to ``uint8*`` like any pointer, so the libc
+        string functions still take it).
 
         Args:
             text: The string contents.
 
         Returns:
-            A ``RAWPTR`` (``uint8*``) ``TypedValue`` to the string's first byte.
+            A ``char*`` ``TypedValue`` to the string's first byte.
         """
         return TypedValue(
-            self.builder.bitcast(self.string_global(text), RAWPTR.ir), RAWPTR
+            self.builder.bitcast(self.string_global(text), CHARPTR.ir), CHARPTR
         )
 
     def const_string(self, text: str) -> ir.Constant:
@@ -4231,9 +4248,9 @@ class CodeGen:
     def string_array_let_type(self, declared: LangType, text: str, line: int) -> LangType:
         """Validate an array type a string-literal ``let`` is bound to.
 
-        The element type must be ``uint8`` and the array must be large enough to
-        hold the literal's bytes (its NUL included); a larger ``uint8[M]`` is
-        zero-filled past the string.
+        The element type must be ``char`` (text) or ``uint8`` (raw bytes), and
+        the array must be large enough to hold the literal's bytes (its NUL
+        included); a larger ``[M]`` is zero-filled past the string.
 
         Args:
             declared: The resolved array type the literal is bound to.
@@ -4244,13 +4261,13 @@ class CodeGen:
             ``declared`` unchanged, once validated.
 
         Raises:
-            LangError: When the element type is not ``uint8`` or the array is too
-                small to hold the string.
+            LangError: When the element type is not ``char``/``uint8`` or the
+                array is too small to hold the string.
         """
-        if declared.element is not UINT8:
+        if declared.element not in (CHAR, UINT8):
             raise LangError(
-                f"a string literal initializes a uint8 array or a uint8*, "
-                f"not a {declared}",
+                f"a string literal initializes a char/uint8 array or a "
+                f"char*/uint8*, not a {declared}",
                 line,
             )
         need = len(self.string_data(text))
@@ -4349,11 +4366,14 @@ class CodeGen:
                     for e in expr.elements
                 ],
             )
-        if isinstance(expr, StrLit) and expected == RAWPTR:
-            return self.const_string(expr.value)
+        if isinstance(expr, StrLit) and expected in (CHARPTR, RAWPTR):
+            # A char*/uint8* static initialized from a string literal: a constant
+            # pointer to the shared bytes (the IR pointer is i8* either way).
+            ptr = self.const_string(expr.value)
+            return ptr if expected == CHARPTR else ptr.bitcast(expected.ir)
         if isinstance(expr, StrLit) and is_array(expected):
-            # A uint8[N] initialized from a string literal: the bytes inline,
-            # zero-filled past the string (an oversize buffer).
+            # A char[N]/uint8[N] initialized from a string literal: the bytes
+            # inline, zero-filled past the string (an oversize buffer).
             self.string_array_let_type(expected, expr.value, line)
             data = self.string_data(expr.value)
             data.extend(b"\0" * (expected.count - len(data)))
@@ -4386,7 +4406,7 @@ class CodeGen:
             The literal as a ``TypedValue``.
         """
         if isinstance(expr, CharLit):
-            return TypedValue(ir.Constant(UINT8.ir, expr.value), UINT8)
+            return TypedValue(ir.Constant(CHAR.ir, expr.value), CHAR)
         return adaptable_int(expr.value)
 
     def eval_const(self, expr, line: int) -> TypedValue:
@@ -4410,7 +4430,7 @@ class CodeGen:
         if isinstance(expr, IntLit):
             return adaptable_int(expr.value)
         if isinstance(expr, CharLit):
-            return TypedValue(ir.Constant(UINT8.ir, expr.value), UINT8)
+            return TypedValue(ir.Constant(CHAR.ir, expr.value), CHAR)
         if isinstance(expr, FloatLit):
             return TypedValue(ir.Constant(FLOAT64.ir, expr.value), FLOAT64)
         if isinstance(expr, BoolLit):
@@ -4418,7 +4438,7 @@ class CodeGen:
         if isinstance(expr, NullLit):
             return TypedValue(ir.Constant(RAWPTR.ir, None), NULLT, adaptable=True)
         if isinstance(expr, StrLit):
-            return TypedValue(self.const_string(expr.value), RAWPTR)
+            return TypedValue(self.const_string(expr.value), CHARPTR)
         if isinstance(expr, SizeOf):
             size = type_size(self.lang_type(expr.type_name, line))
             return TypedValue(ir.Constant(UINT64.ir, size), UINT64)
@@ -4485,8 +4505,12 @@ class CodeGen:
             return tv
         if tv.type is NULLT and (is_pointer(expected) or is_function(expected)):
             return TypedValue(ir.Constant(expected.ir, None), expected)
+        # A char*/any pointer constant coerces to uint8* (raw memory), so a
+        # string literal still initializes a uint8* const.
+        if expected == RAWPTR and is_pointer(tv.type):
+            return TypedValue(tv.value.bitcast(RAWPTR.ir), RAWPTR)
         if (
-            tv.adaptable
+            (tv.adaptable or tv.type == CHAR)
             and is_integer(tv.type)
             and is_integer(expected)
             and isinstance(tv.value.constant, int)

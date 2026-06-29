@@ -26,9 +26,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   over a contiguous run of `T`, with a runtime `.length`, indexing `s[i]`, and
   native `for x in s` iteration. Constructed by an explicit borrow — `xs as
   slice<T>` from an owned `list<T>` (reads `{data, length}`, drops `capacity`) or
-  a fixed array `T[N]` (`{&arr[0], N}`). A `uint8[N]` is treated as a
-  NUL-terminated string, so its borrow drops the terminator (`length` is
-  `N - 1`). See [Slices](docs/language.md#slices) and
+  a fixed array `T[N]` (`{&arr[0], N}`). A `char[N]` is NUL-terminated text, so
+  its borrow drops the terminator (`length` is `N - 1`); a `uint8[N]` raw buffer
+  keeps every byte. See [Slices](docs/language.md#slices) and
   [examples/slices.mc](examples/slices.mc).
 - **Read-only slices** — `slice<const T>`, the element-mutability axis: indexing
   yields a non-assignable element (`s[i] = x` is rejected), while a loaded value
@@ -39,6 +39,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `const` is a general type qualifier (`let pi: const float64 = 3.14;`). See
   [Read-only slices](docs/language.md#read-only-slices) and
   [examples/slices.mc](examples/slices.mc).
+- **`char` type** — a distinct one-byte text type, ABI-identical to `uint8` (an
+  unsigned byte) but a separate type, so NUL-terminated text is told apart from a
+  raw byte buffer. Character literals (`'a'`) are untyped constants that default
+  to `char` but adapt to a `uint8`/integer slot; a `char` *value* needs an
+  explicit `as` to become a `uint8`. `char*` coerces to `uint8*` like any
+  pointer, so libc still takes string literals. A `char[N]` borrows to a
+  `slice<char>` that drops the trailing NUL (the text); a `uint8[N]` keeps every
+  byte. See [Strings](docs/language.md#strings).
 - **Constant-expression array sizes** — an array dimension may be any constant
   integer expression (`int32[N + 1]`, `uint8[2 * SIZE]`), not just a literal or a
   lone `const` name.
@@ -57,15 +65,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- **String literals are `uint8[N]` byte arrays** (NUL included) rather than bare
-  `uint8*`. They still decay to a `uint8*` wherever a pointer is used (call
-  arguments, returns, comparisons, indexing), so existing code is unaffected, but
-  an owned binding now keeps its array type: `let s = "hi";` is a mutable
-  `uint8[3]`, `let s: uint8[] = "hi";` infers the size, and `let s: uint8[8] =
-  "hi";` zero-fills the rest. This makes `len(s)` / `len("hi")` work and lets a
-  string be borrowed as a `slice<uint8>` (the borrow drops the trailing NUL, so
-  the slice spans the text). Annotating `uint8*` keeps the old
-  pointer-to-constant behavior (no copy). See [Strings](docs/language.md#strings).
+- **String literals are `char[N]` arrays** (NUL included) rather than bare
+  `uint8*`. They decay to a `char*` (which coerces to `uint8*` like any pointer)
+  wherever a pointer is used (call arguments, returns, comparisons, indexing), so
+  existing libc code is unaffected, but an owned binding keeps its array type:
+  `let s = "hi";` is a mutable `char[3]`, `let s: char[] = "hi";` infers the
+  size, and `let s: char[8] = "hi";` zero-fills the rest (a `uint8[N]` annotation
+  still accepts the same bytes as a raw buffer). This makes `len(s)` / `len("hi")`
+  work and lets a string be borrowed as a `slice<char>` (the borrow drops the
+  trailing NUL, so the slice spans the text). Annotating `char*`/`uint8*` keeps
+  the pointer-to-constant behavior (no copy). See
+  [Strings](docs/language.md#strings).
 - **`string` is now `type string = list<uint8>`** — a transparent
   specialization with the same layout, so a `struct string*` upcasts to a
   `struct list<uint8>*` and every `list` operation works on a string. The
