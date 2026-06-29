@@ -182,6 +182,7 @@ fn string_eq(self: struct string*, str: struct string*) -> bool {
  *
  * @return an iterator positioned at the first byte
  */
+@inline
 fn string_it(self: struct string*) -> struct iterator<struct string> {
     return list_it(self);
 }
@@ -195,6 +196,7 @@ fn string_it(self: struct string*) -> struct iterator<struct string> {
  *
  * @return true if a byte was produced, false once iteration is complete
  */
+@inline
 fn string_next(it: struct iterator<struct string>*, out: char*) -> bool {
     return list_next(it, out);
 }

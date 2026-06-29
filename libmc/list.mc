@@ -5,9 +5,7 @@ import "iteration/iterator";
 /**
  * A growable, heap-backed list of T.
  */
-struct list<T> {
-    data: T*;
-    length: uint64;
+struct list<T> extends slice<T> {
     capacity: uint64;
 }
 

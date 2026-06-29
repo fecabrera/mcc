@@ -50,7 +50,7 @@ fn writechar(const c: char) {
  */
 @inline
 fn writestr(const str: slice<const char>) {
-    fwrite(str.ptr as byte*, sizeof(char), str.length, stdout);
+    fwrite(str.data as byte*, sizeof(char), str.length, stdout);
 }
 
 /**
