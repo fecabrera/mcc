@@ -62,8 +62,12 @@ fn main() -> int32 {
     // the list's capacity. The slice tracks the elements, not the list object.
     let nums: struct list<int32>;
     list_init(&nums, 2);
+    
     let n: int32 = 1;
-    while (n <= 5) { list_push(&nums, n * n); n = n + 1; }   // 1 4 9 16 25
+    while (n <= 5) {
+        list_push(&nums, n * n);
+        n = n + 1;                        // 1 4 9 16 25
+    }
 
     let s = nums as slice<int32>;
     print("list view: ");
