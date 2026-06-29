@@ -39,6 +39,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `const` is a general type qualifier (`let pi: const float64 = 3.14;`). See
   [Read-only slices](docs/language.md#read-only-slices) and
   [examples/slices.mc](examples/slices.mc).
+- **String-literal slice adaptation** — a string literal now *adapts* to a
+  `slice<char>` (or `slice<const char>`) from context with no `as`, the way an
+  untyped constant takes its type: at a function argument (including a
+  `const`-by-reference slice parameter, so `writeln("hi")` works), a `let` slot,
+  or a `return`. The borrow drops the trailing NUL; only literals adapt — a typed
+  value still needs the explicit `as`. See [Strings](docs/language.md#strings).
 - **`char` type** — a distinct one-byte text type, ABI-identical to `uint8` (an
   unsigned byte) but a separate type, so NUL-terminated text is told apart from a
   raw byte buffer. Character literals (`'a'`) are untyped constants that default

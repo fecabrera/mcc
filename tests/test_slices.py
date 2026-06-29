@@ -418,3 +418,87 @@ def test_slice_and_const_slice_are_distinct_types():
             fn f(s: slice<const int32>) -> int32 { return take_mut(s as slice<int32>); }
             """
         )
+
+
+# ----------------------------------------- string-literal borrow-in (Stage 4)
+
+
+def test_string_literal_adapts_to_const_char_slice_argument():
+    # A string literal adapts to a slice<const char> parameter without an `as`;
+    # the borrow drops the trailing NUL (the text).
+    source = """
+    fn count(s: slice<const char>) -> int32 { return s.length as int32; }
+    fn main() -> int32 { return count("hello"); }   // 5, not 6
+    """
+    assert run(source) == 5
+
+
+def test_string_literal_adapts_to_mutable_char_slice_argument():
+    source = """
+    fn count(s: slice<char>) -> int32 { return s.length as int32; }
+    fn main() -> int32 { return count("hello world"); }   // 11
+    """
+    assert run(source) == 11
+
+
+def test_string_literal_adapts_in_let():
+    source = """
+    fn main() -> int32 {
+        let m: slice<char> = "hello world";
+        let c: slice<const char> = "hi";
+        return (m.length as int32) * 100 + (c.length as int32);   // 1102
+    }
+    """
+    assert run(source) == 1102
+
+
+def test_string_literal_adapts_in_return():
+    source = """
+    fn label() -> slice<const char> { return "abcd"; }
+    fn main() -> int32 { return label().length as int32; }   // 4
+    """
+    assert run(source) == 4
+
+
+def test_adapted_slice_indexes_the_text():
+    source = """
+    fn first(s: slice<const char>) -> int32 { return s[0] as int32; }
+    fn main() -> int32 { return first("A"); }   // 65
+    """
+    assert run(source) == 65
+
+
+def test_string_literal_does_not_adapt_to_uint8_slice():
+    # A string literal is char[N], so it does not adapt to a byte slice; that
+    # would need an explicit, raw view.
+    with pytest.raises(LangError, match="expected slice<const uint8>"):
+        compile_ir(
+            """
+            fn n(s: slice<const uint8>) -> int32 { return 0; }
+            fn main() -> int32 { return n("hi"); }
+            """
+        )
+
+
+def test_typed_value_still_needs_explicit_borrow():
+    # Only literals adapt; a typed char array still converts with `as`.
+    with pytest.raises(LangError, match="expected slice<const char>, got char\\*"):
+        compile_ir(
+            """
+            fn n(s: slice<const char>) -> int32 { return 0; }
+            fn main() -> int32 {
+                let owned = "hi";        // char[3]
+                return n(owned);         // no implicit borrow of a typed value
+            }
+            """
+        )
+
+
+def test_string_literal_adapts_to_const_slice_parameter():
+    # A `const slice<const char>` parameter is passed by hidden reference; a
+    # string literal must still adapt (the borrowed view is spilled to a temp).
+    source = """
+    fn shout(const s: slice<const char>) -> int32 { return s.length as int32; }
+    fn main() -> int32 { return shout("hello world"); }   // 11
+    """
+    assert run(source) == 11

@@ -1398,9 +1398,12 @@ NUL). A `uint8[N]`, by contrast, is a raw byte buffer: its `slice<uint8>` keeps
 `char*` form keeps the pointer-to-constant behavior. An explicit `char[M]`/
 `uint8[M]` must be large enough to hold the bytes (NUL included). A string
 literal can also be borrowed directly — `"hi" as slice<char>` — since it carries
-its array type; only the *implicit* adaptation to a `slice<const char>` from
-context (with no `as`) is still [planned](../README.md). See
-[examples/strings.mc](../examples/strings.mc).
+its array type, and it **adapts** to a `slice<char>`/`slice<const char>` from
+context with no `as` at all (the way an untyped constant takes its type): at a
+function argument (including a `const`-by-reference slice parameter, so
+`writeln("hi")` works), a `let` slot, or a `return`. The borrow drops the NUL,
+and only *literals* adapt — a typed owned value still needs the explicit `as`.
+See [examples/strings.mc](../examples/strings.mc).
 
 A character literal in single quotes is a `char` — the byte value of a single
 character, using the same escapes (`'a'`, `'\n'`, `'\0'`, `'\''`, `'\\'`). Like

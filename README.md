@@ -411,12 +411,15 @@ Grouped by scope.
         `slice<const T>`, so the read-only form is the common one — the place
         the variadic pack's `slice<const any>` and a format string's
         `slice<const uint8>` will land. Depends on Stage 1.
-  - [ ] **Stage 4 — borrowing in (literal adaptation).** A string/byte literal
-        **adapts** to `slice<const uint8>` from context at compile time (length
-        baked in, the buffer still NUL-terminated so the same literal also serves
-        as `uint8*` for C), the way an untyped constant takes its type from
-        context. Typed owned values still convert **explicitly** with `as`
-        (Stage 1); only literals adapt. Depends on Stage 3.
+  - [x] **Stage 4 — borrowing in (literal adaptation).** A string literal
+        **adapts** to a `slice<char>` (or `slice<const char>`) from context at
+        compile time (length baked in, the NUL dropped; the buffer stays
+        NUL-terminated so the same literal also serves as `char*`/`uint8*` for
+        C), the way an untyped constant takes its type from context — at a
+        function argument (including a `const`-by-hidden-reference slice
+        parameter, so `writeln("hi")` just works), a `let` slot, or a `return`.
+        Typed owned values still convert **explicitly** with `as` (Stage 1);
+        only literals adapt. Depends on Stage 3.
 - [ ] builtin `range` — fold the standard-library [`range<T>`](docs/language.md)
       into the compiler so a counting loop reads `for i in range(0, 5)` (or
       `for i in range(5)`, `start` defaulting to 0) instead of constructing a

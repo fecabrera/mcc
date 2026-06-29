@@ -2688,13 +2688,16 @@ class CodeGen:
             else:
                 # Evaluate the result before the defers run, so a defer that
                 # frees a buffer cannot clobber what is being returned.
-                tv = self.gen_expr(stmt.value)
-                if tv.type is VOID:
-                    # `return f();` where f is void: there is no void value to
-                    # return (matching `let x = f();`). Call f as a statement
-                    # and use a bare `return;` instead.
-                    raise LangError("cannot return a void value", stmt.line)
-                tv = self.coerce(tv, self.ret_type, stmt.line, "return value")
+                if self.str_literal_adapts(stmt.value, self.ret_type):
+                    tv = self.gen_borrow_slice(stmt.value, self.ret_type, stmt.line)
+                else:
+                    tv = self.gen_expr(stmt.value)
+                    if tv.type is VOID:
+                        # `return f();` where f is void: there is no void value to
+                        # return (matching `let x = f();`). Call f as a statement
+                        # and use a bare `return;` instead.
+                        raise LangError("cannot return a void value", stmt.line)
+                    tv = self.coerce(tv, self.ret_type, stmt.line, "return value")
                 self.run_defers_through(0)
                 if not self.builder.block.is_terminated:
                     self.builder.ret(tv.value)
@@ -2784,6 +2787,14 @@ class CodeGen:
                     self.store_string_literal(
                         slot, stmt.value.value, declared, stmt.line
                     )
+                    self.bind_local(stmt.name, slot, declared)
+                    return
+                if self.str_literal_adapts(stmt.value, declared):
+                    # `let s: slice<char> = "..."`: the literal adapts to a char
+                    # slice (Stage 4), borrowing the constant's bytes (NUL dropped).
+                    tv = self.gen_borrow_slice(stmt.value, declared, stmt.line)
+                    slot = self.builder.alloca(declared.ir, name=stmt.name)
+                    self.builder.store(tv.value, slot)
                     self.bind_local(stmt.name, slot, declared)
                     return
             tv = self.gen_expr(stmt.value)
@@ -4081,6 +4092,31 @@ class CodeGen:
                 line,
             )
 
+    def str_literal_adapts(self, expr, expected: LangType) -> bool:
+        """Whether a string literal adapts to ``expected`` without an ``as``.
+
+        Stage 4 "borrow-in": a string literal (a ``char[N]``) implicitly adapts
+        to a ``slice<char>`` (or its read-only ``slice<const char>`` form) from
+        context -- a function argument, a ``let``/return slot -- the way an
+        untyped constant takes its type from context. The borrow drops the
+        trailing NUL (the text), and the global stays NUL-terminated so the same
+        literal still serves as a ``char*``/``uint8*`` for C. This is the
+        implicit form of the Stage 1 ``"..." as slice<char>`` borrow.
+
+        Args:
+            expr: The argument/initializer expression.
+            expected: The type the context expects.
+
+        Returns:
+            ``True`` if ``expr`` is a string literal and ``expected`` is a
+            ``slice<char>`` or ``slice<const char>``.
+        """
+        return (
+            isinstance(expr, StrLit)
+            and is_slice(expected)
+            and strip_const(expected.args[0]) == CHAR
+        )
+
     def gen_borrow_slice(self, value_expr, target: LangType, line: int) -> TypedValue:
         """Lower a borrow ``value as slice<T>`` into a non-owning view.
 
@@ -4972,12 +5008,19 @@ class CodeGen:
             )
         args = []
         for i, arg_expr in enumerate(arg_exprs):
+            context = f"argument {i + 1} of {label}"
+            if i < len(params) and self.str_literal_adapts(arg_expr, params[i]):
+                # A string literal adapts to a char slice from the parameter type
+                # (Stage 4). A `const` slice parameter is passed by hidden
+                # reference, so spill the borrowed view to a temporary first.
+                tv = self.gen_borrow_slice(arg_expr, params[i], line)
+                if i in hidden:
+                    args.append(self.spill_to_temp(tv, params[i], line, context))
+                else:
+                    args.append(tv.value)
+                continue
             if i in hidden:
-                args.append(
-                    self.hidden_ref_arg(
-                        arg_expr, params[i], line, f"argument {i + 1} of {label}"
-                    )
-                )
+                args.append(self.hidden_ref_arg(arg_expr, params[i], line, context))
                 continue
             if i < len(params) and is_valist(params[i]):
                 # A va_list is handed over in its platform-specific passed form,
