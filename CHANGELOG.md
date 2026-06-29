@@ -77,6 +77,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   names for `@static` / `@private` declarations read like `file.name`.
 - The compiler no longer prints a `wrote <output>` line on a successful compile.
 
+### Fixed
+
+- A compile error raised while generating a generic function instance is now
+  attributed to the template's own file, not the root module. Previously an error
+  on a line inside an imported library (e.g. a failed type-parameter inference in
+  a `for ... in` over a generic container) was blamed on the file being compiled.
+
 ## [0.2.0] - 2026-06-26
 
 ### Added
