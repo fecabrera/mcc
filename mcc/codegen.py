@@ -4122,12 +4122,14 @@ class CodeGen:
 
         A fixed array ``T[N]`` borrows to ``{first-element pointer, N}`` (read
         through its address, so the static length survives the array's usual
-        decay). A ``uint8[N]`` is treated as a NUL-terminated string, so its
-        borrow drops the trailing terminator -- length ``N - 1`` -- giving the
-        text without the NUL (the buffer keeps it, so it still serves as a
-        ``uint8*``). An owned ``list<T>`` -- any struct with a ``T*`` ``data``
-        field and an integer ``length`` -- borrows to ``{data, length}``,
-        dropping its ``capacity``. A ``slice<T>`` borrows to itself.
+        decay). A ``char[N]`` is NUL-terminated text, so its borrow drops the
+        trailing terminator -- length ``N - 1`` -- giving the text without the
+        NUL (the buffer keeps it, so it still serves as a ``char*``); a
+        ``uint8[N]`` raw buffer keeps every byte. A ``slice<T>`` borrows to
+        itself, and any struct that ``extends slice<T>`` (such as an owned
+        ``list<T>``) borrows to its leading ``slice<T>`` -- the struct-prefix
+        relationship, so no field name is assumed -- dropping the extra fields
+        (a list's ``capacity``).
 
         A mutable source may borrow to its read-only ``slice<const T>`` form
         (adding ``const`` is safe); a read-only source -- a ``const`` element or
@@ -4167,50 +4169,28 @@ class CodeGen:
         if is_pointer(owner) and is_struct(owner.pointee):
             owner = owner.pointee  # a list<T>* (or slice<T>*) borrows like the value
             struct_val = self.gen_load(src.value)
-        if is_slice(owner):
-            # slice<T> and slice<const T> share one LLVM layout, so the value
-            # passes through unchanged once the element check allows the borrow.
+        # The source borrows to the slice when it *is* a slice<T> or *extends*
+        # one (as list<T> does): its leading fields are then exactly that slice.
+        # The check is by struct compatibility -- the slice<T> is the layout
+        # prefix of the source (:meth:`is_struct_prefix`) -- so it follows the
+        # `extends` chain without hardcoding any field names. The element may
+        # gain `const` (see :meth:`check_borrow_element`); const shares the
+        # layout, so the leading {ptr, length} transfer straight across.
+        prefix = self.slice_type(strip_const(element), line)
+        if is_slice(owner) or self.is_struct_prefix(prefix, owner):
             self.check_borrow_element(
                 owner.fields[0][1].pointee, value_expr, str(src.type), target, line
             )
-            return TypedValue(struct_val, target)
-        if not is_struct(owner):
-            raise LangError(
-                f"cannot borrow {src.type} as {target}; borrow an owned list, "
-                "an array, or a matching slice",
-                line,
-            )
-        by_name = {name: i for i, (name, _) in enumerate(owner.fields)}
-        if "data" not in by_name or "length" not in by_name:
-            raise LangError(
-                f"cannot borrow {src.type} as {target}; expected the data/length "
-                "fields of an owned list",
-                line,
-            )
-        data_t = owner.fields[by_name["data"]][1]
-        length_t = owner.fields[by_name["length"]][1]
-        if not is_pointer(data_t):
-            raise LangError(
-                f"cannot borrow {src.type} as {target}: element type is "
-                f"{data_t}, not {strip_const(element)}",
-                line,
-            )
-        self.check_borrow_element(data_t.pointee, value_expr, str(src.type), target, line)
-        if not is_integer(length_t):
-            raise LangError(
-                f"cannot borrow {src.type} as {target}: 'length' is "
-                f"{length_t}, not an integer",
-                line,
-            )
-        ptr = self.builder.extract_value(struct_val, owner.elem_indices[by_name["data"]])
-        length = self.builder.extract_value(
-            struct_val, owner.elem_indices[by_name["length"]]
+            if is_slice(owner):
+                return TypedValue(struct_val, target)
+            ptr = self.builder.extract_value(struct_val, owner.elem_indices[0])
+            length = self.builder.extract_value(struct_val, owner.elem_indices[1])
+            return self.make_slice(target, ptr, length)
+        raise LangError(
+            f"cannot borrow {src.type} as {target}; borrow an array, a slice, or "
+            "a value that extends slice<T> (such as an owned list<T>)",
+            line,
         )
-        if length_t.ir.width < 64:
-            length = self.builder.zext(length, UINT64.ir)
-        elif length_t.ir.width > 64:
-            length = self.builder.trunc(length, UINT64.ir)
-        return self.make_slice(target, ptr, length)
 
     def string_data(self, text: str) -> bytearray:
         """The bytes a string literal occupies: its UTF-8 plus a NUL terminator.

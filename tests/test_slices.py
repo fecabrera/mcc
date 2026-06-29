@@ -386,7 +386,8 @@ def test_generic_infers_through_const_slice_element():
         xs[0] = 4; xs[1] = 5; xs[2] = 6;
         let dst: struct list<int32>;
         copy_first(&dst, xs as slice<const int32>);   // T = int32, not const int32
-        let got = (dst.length as int32) + dst.data[0];
+        let view = dst as slice<int32>;
+        let got = (view.length as int32) + view[0];
         list_destroy(&dst);
         return got;   // 3 + 4
     }
