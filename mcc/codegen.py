@@ -5072,6 +5072,12 @@ class CodeGen:
             if not is_pointer(peeled):
                 return
             peeled = peeled.pointee
+        if pattern.const:
+            # A `const T` pattern infers T from the actual's underlying type: the
+            # const is a qualifier on the pattern, and a mutable argument widens
+            # in. So `slice<const T>` against slice<const uint8> -- or against a
+            # mutable slice<uint8> -- both bind T = uint8.
+            peeled = strip_const(peeled)
         if pattern.name in type_params and not pattern.args:
             bound = bindings.get(pattern.name)
             if bound is None:

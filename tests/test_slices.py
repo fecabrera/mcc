@@ -372,6 +372,42 @@ def test_const_slice_element_type_mismatch_is_rejected():
         )
 
 
+def test_generic_infers_through_const_slice_element():
+    # A `const T` parameter pattern infers T from the element's underlying type,
+    # consistent with another parameter that fixes T mutably (here via list<T>*).
+    source = """
+    import "list";
+    fn copy_first<T>(self: struct list<T>*, const arr: slice<const T>) {
+        list_init(self, arr.length);
+        for el in arr { list_push(self, el); }
+    }
+    fn main() -> int32 {
+        let xs: int32[3];
+        xs[0] = 4; xs[1] = 5; xs[2] = 6;
+        let dst: struct list<int32>;
+        copy_first(&dst, xs as slice<const int32>);   // T = int32, not const int32
+        let got = (dst.length as int32) + dst.data[0];
+        list_destroy(&dst);
+        return got;   // 3 + 4
+    }
+    """
+    assert run(source) == 7
+
+
+def test_generic_const_slice_accepts_mutable_argument():
+    # A mutable slice<int32> widens into a `slice<const T>` parameter, binding
+    # T = int32 from the underlying element.
+    source = """
+    fn first<T>(s: slice<const T>) -> T { return s[0]; }
+    fn main() -> int32 {
+        let xs: int32[2];
+        xs[0] = 99; xs[1] = 0;
+        return first(xs as slice<int32>);
+    }
+    """
+    assert run(source) == 99
+
+
 def test_slice_and_const_slice_are_distinct_types():
     # slice<T> and slice<const T> share a layout but are different types: the
     # const form will not coerce back to the mutable one.
