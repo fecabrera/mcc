@@ -90,7 +90,7 @@ def test_variadic_redeclaration_of_a_header_function_collapses():
     source = """
     import "libc/stdio";
     @extern
-    fn printf(fmt: uint8*, ...) -> int32;
+    fn printf(fmt: char*, ...) -> int32;
     fn main() -> int32 { return printf("four") - 4; }
     """
     assert run(source) == 0

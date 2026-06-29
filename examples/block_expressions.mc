@@ -18,7 +18,7 @@ fn pack(hi: uint32, lo: uint32) -> uint64 {
 
 // `emit` is to a block what `return` is to a function: it must emit on the
 // path that reaches the end, so branch-only emits need a trailing one.
-fn classify(n: int32) -> uint8* {
+fn classify(n: int32) -> char* {
     return {
         if (n == 0) { emit "zero"; }
         if (n < 0)  { emit "negative"; }

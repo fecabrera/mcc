@@ -7,8 +7,8 @@ import "libc/stdio";   // printf/puts and @extern fn vsnprintf(..., args: va_lis
 // va_start(ap, fmt) initializes the cursor (naming the parameter just before
 // the ...), and va_end(ap) releases it. va_list is opaque and its layout is
 // chosen for the target platform.
-fn logf(level: uint8*, fmt: uint8*, ...) -> int32 {
-    let buf: uint8[256];
+fn logf(level: char*, fmt: char*, ...) -> int32 {
+    let buf: char[256];
     let ap: va_list;
     va_start(ap, fmt);
     let n = vsnprintf(&buf[0], 256, fmt, ap);

@@ -81,7 +81,7 @@ def test_libc_stdio_streams(tmp_path):
         "    fclose(f);\n"
         '    let g = fopen(path, "r");\n'
         "    if (g == null) { return 2; }\n"
-        "    let buf: uint8[64];\n"
+        "    let buf: char[64];\n"
         "    fgets(&buf[0], 64 as int32, g);\n"
         "    fclose(g);\n"
         '    fprintf(stdout, "read %s", &buf[0]);\n'
@@ -111,7 +111,7 @@ def test_libc_stdlib_string_bindings(tmp_path):
         "    xs[0] = 4; xs[1] = 2; xs[2] = 3; xs[3] = 1;\n"
         "    qsort(&xs[0] as uint8*, 4 as uint64, 4 as uint64, cmp);\n"
         '    let v = strtol("2a", null, 16 as int32);\n'
-        "    let buf: uint8[16];\n"
+        "    let buf: char[16];\n"
         '    strcpy(&buf[0], "ab");\n'
         '    strcat(&buf[0], "cd");\n'
         '    printf("%d%d%d%d %lld %s %d\\n", xs[0], xs[1], xs[2], xs[3], v,\n'
@@ -139,7 +139,7 @@ def test_libc_errno_and_time(tmp_path):
         "    set_errno(0 as int32);\n"
         '    fopen("/no/such/file", "r");\n'
         "    let t = 0 as int64;\n"
-        "    let buf: uint8[32];\n"
+        "    let buf: char[32];\n"
         '    strftime(&buf[0], 32 as uint64, "%Y-%m-%d", gmtime(&t));\n'
         '    printf("%d %s %d\\n", (errno() != 0) as int32, &buf[0], DBL_DIG);\n'
         "    return 0;\n"

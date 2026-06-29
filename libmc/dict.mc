@@ -15,7 +15,7 @@ enum dict_entry_state: uint8 {
 
 /**
  * One slot in a dict's backing array. A specialization of
- * `set_entry<uint8*, V>` (string keys), so it inherits the pair's key/value and
+ * `set_entry<char*, V>` (string keys), so it inherits the pair's key/value and
  * the slot state field.
  *
  * @field key:   owned, heap-allocated copy of the NUL-terminated key string;
@@ -23,7 +23,7 @@ enum dict_entry_state: uint8 {
  * @field value: associated value; valid only when state == OCCUPIED
  * @field state: slot lifecycle — EMPTY (0), OCCUPIED (1), or TOMBSTONE (2)
  */
-struct dict_entry<V> extends set_entry<uint8*, V>;
+struct dict_entry<V> extends set_entry<char*, V>;
 
 /**
  * Open-addressing hash map from NUL-terminated string keys to V values.
@@ -51,7 +51,7 @@ struct dict<V> {
  * @return true if the contents are equal
  */
 @private
-fn str_eq(a: uint8*, b: uint8*) -> bool {
+fn str_eq(a: char*, b: char*) -> bool {
     let i: uint64 = 0;
     while (a[i] == b[i]) {
         if (a[i] == 0)
@@ -69,9 +69,9 @@ fn str_eq(a: uint8*, b: uint8*) -> bool {
  * @return owned copy; release with dealloc
  */
 @private
-fn str_clone(s: uint8*) -> uint8* {
+fn str_clone(s: char*) -> char* {
     let n = strlen(s) + 1;
-    let copy = alloc<uint8>(n);
+    let copy = alloc<char>(n);
     copy_bytes(copy, s, n);
     return copy;
 }
@@ -121,7 +121,7 @@ fn dict_destroy<V>(self: struct dict<V>*) {
  * @param key:   string key; the caller keeps ownership
  * @param value: value to associate with key
  */
-fn dict_set<V>(self: struct dict<V>*, key: uint8*, value: V) {
+fn dict_set<V>(self: struct dict<V>*, key: char*, value: V) {
     if (self->length * 10 >= self->capacity * 7)
         dict_grow(self);
 
@@ -161,7 +161,7 @@ fn dict_set<V>(self: struct dict<V>*, key: uint8*, value: V) {
  *
  * @return true if key was found, false otherwise
  */
-fn dict_get<V>(self: struct dict<V>*, key: uint8*, out: V*) -> bool {
+fn dict_get<V>(self: struct dict<V>*, key: char*, out: V*) -> bool {
     let slot = hash(key) % self->capacity;
 
     while (self->entries[slot].state != dict_entry_state::EMPTY) {
@@ -184,7 +184,7 @@ fn dict_get<V>(self: struct dict<V>*, key: uint8*, out: V*) -> bool {
  * @param self: dict to remove from
  * @param key:  string key to remove
  */
-fn dict_remove<V>(self: struct dict<V>*, key: uint8*) {
+fn dict_remove<V>(self: struct dict<V>*, key: char*) {
     let slot = hash(key) % self->capacity;
 
     while (self->entries[slot].state != dict_entry_state::EMPTY) {
@@ -267,13 +267,13 @@ fn dict_it<V>(self: struct dict<V>*) -> struct iterator<struct dict<V>> {
  *
  * @return true if a pair was produced, false once iteration is complete
  */
-fn dict_next<V>(it: struct iterator<struct dict<V>>*, out: struct pair<uint8*, V>*) -> bool {
+fn dict_next<V>(it: struct iterator<struct dict<V>>*, out: struct pair<char*, V>*) -> bool {
     while (it->idx < it->obj->capacity) {
         let entry = it->obj->entries[it->idx];
         defer it->idx = it->idx + 1;
 
         if (entry.state == dict_entry_state::OCCUPIED) {
-            *out = entry as struct pair<uint8*, V>;
+            *out = entry as struct pair<char*, V>;
             return true;
         }
     }

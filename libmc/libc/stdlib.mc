@@ -139,7 +139,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return parsed value; 0 if no digits are found
  */
-@extern fn atoi(str: uint8*) -> int32;
+@extern fn atoi(str: char*) -> int32;
 
 /**
  * Same as atoi but returns long.
@@ -148,7 +148,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return parsed value; 0 if no digits are found
  */
-@extern fn atol(str: uint8*) -> int64;
+@extern fn atol(str: char*) -> int64;
 
 /**
  * Same as atoi but returns long long.
@@ -157,7 +157,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return parsed value; 0 if no digits are found
  */
-@extern fn atoll(str: uint8*) -> int64;
+@extern fn atoll(str: char*) -> int64;
 
 /**
  * Converts the initial portion of str to a double, skipping leading whitespace.
@@ -166,7 +166,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return parsed value; 0.0 if no conversion can be performed
  */
-@extern fn atof(str: uint8*) -> float64;
+@extern fn atof(str: char*) -> float64;
 
 /**
  * Converts the initial portion of str to a long, in the given base (2..36, or 0
@@ -179,7 +179,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return parsed value; 0 if no conversion can be performed
  */
-@extern fn strtol(str: uint8*, endptr: uint8**, base: int32) -> int64;
+@extern fn strtol(str: char*, endptr: char**, base: int32) -> int64;
 
 /**
  * Like strtol, but returns long long.
@@ -190,7 +190,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return parsed value; 0 if no conversion can be performed
  */
-@extern fn strtoll(str: uint8*, endptr: uint8**, base: int32) -> int64;
+@extern fn strtoll(str: char*, endptr: char**, base: int32) -> int64;
 
 /**
  * Like strtol, but returns unsigned long.
@@ -201,7 +201,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return parsed value; 0 if no conversion can be performed
  */
-@extern fn strtoul(str: uint8*, endptr: uint8**, base: int32) -> uint64;
+@extern fn strtoul(str: char*, endptr: char**, base: int32) -> uint64;
 
 /**
  * Like strtol, but returns unsigned long long.
@@ -212,7 +212,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return parsed value; 0 if no conversion can be performed
  */
-@extern fn strtoull(str: uint8*, endptr: uint8**, base: int32) -> uint64;
+@extern fn strtoull(str: char*, endptr: char**, base: int32) -> uint64;
 
 /**
  * Converts the initial portion of str to a double, reporting where parsing
@@ -223,7 +223,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return parsed value; 0.0 if no conversion can be performed
  */
-@extern fn strtod(str: uint8*, endptr: uint8**) -> float64;
+@extern fn strtod(str: char*, endptr: char**) -> float64;
 
 /***************************************
  * Pseudo-random numbers
@@ -286,7 +286,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @return pointer to its value, or null if the variable is not set
  */
-@extern fn getenv(name: uint8*) -> uint8*;
+@extern fn getenv(name: char*) -> char*;
 
 /**
  * Passes command to the host command processor (a shell). A null command tests
@@ -297,4 +297,4 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  * @return the command's termination status, or (for a null command) non-zero
  *         if a processor is available
  */
-@extern fn system(command: uint8*) -> int32;
+@extern fn system(command: char*) -> int32;

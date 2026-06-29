@@ -3,8 +3,8 @@ import "std";
 // `case` matches a value against a series of `when` arms, with an optional
 // `else:` default. There is no fall-through: a matching arm runs only its
 // own statements and then the case is done.
-fn name_of(digit: int32) -> uint8* {
-    let label: uint8* = "many";
+fn name_of(digit: int32) -> char* {
+    let label: char* = "many";
     case (digit) {
         when 0: label = "zero";
         when 1: label = "one";
@@ -14,10 +14,10 @@ fn name_of(digit: int32) -> uint8* {
     return label;
 }
 
-// The subject can be any type comparable with `==`, including uint8
+// The subject can be any type comparable with `==`, including `char`
 // characters. `when` values may be any expression of the subject's type.
-fn kind_of(c: uint8) -> uint8* {
-    let label: uint8* = "other";
+fn kind_of(c: char) -> char* {
+    let label: char* = "other";
     case (c) {
         when '0': label = "zero-char";
         when ' ': label = "space";
@@ -27,8 +27,8 @@ fn kind_of(c: uint8) -> uint8* {
 
 // A `when` arm may list several comma-separated values and matches if the
 // subject equals any of them -- handy for grouping cases that share a body.
-fn classify(c: uint8) -> uint8* {
-    let label: uint8* = "consonant";
+fn classify(c: char) -> char* {
+    let label: char* = "consonant";
     case (c) {
         when 'a', 'e', 'i', 'o', 'u':      label = "vowel";
         when '0', '1', '2', '3', '4',
@@ -61,7 +61,7 @@ fn main() -> int32 {
     println("'0' -> %s, ' ' -> %s", kind_of('0'), kind_of(' '));
 
     // One arm per group, each covering several characters at once.
-    let text: uint8* = "i9 x";
+    let text: char* = "i9 x";
     let j: uint64 = 0;
     while (text[j] != '\0') {
         println("'%c' is a %s", text[j], classify(text[j]));

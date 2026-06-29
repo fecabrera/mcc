@@ -13,7 +13,7 @@ fn apply(op: fn(int32, int32) -> int32, x: int32, y: int32) -> int32 {
 
 // A function pointer can be returned, too. Here a default is picked and a
 // case overrides it for specific inputs.
-fn op_for(symbol: uint8) -> fn(int32, int32) -> int32 {
+fn op_for(symbol: char) -> fn(int32, int32) -> int32 {
     let op: fn(int32, int32) -> int32 = add;
     case (symbol) {
         when '-': op = sub;
@@ -23,7 +23,7 @@ fn op_for(symbol: uint8) -> fn(int32, int32) -> int32 {
 
 // A struct holding a callback -- the basis of vtables and event handlers.
 struct button {
-    label: uint8*;
+    label: char*;
     on_press: fn(int32) -> int32;
 }
 

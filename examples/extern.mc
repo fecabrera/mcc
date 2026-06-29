@@ -2,19 +2,19 @@
 // another object linked into the program: give the signature and end with `;`.
 // The libmc/libc/ modules are ready-made @extern bindings (import "libc/stdio";);
 // declare your own here when you need something they do not cover.
-@extern fn strlen(s: uint8*) -> uint64;
+@extern fn strlen(s: char*) -> uint64;
 @extern fn putchar(c: int32) -> int32;
 
 // A trailing `...` declares a C-style variadic function, like printf or a
 // kernel's printk. Extra arguments follow C promotion rules.
-@extern fn printf(fmt: uint8*, ...) -> int32;
+@extern fn printf(fmt: char*, ...) -> int32;
 
 // snprintf writes into a buffer; with a null buffer and size 0 it just
 // returns how many bytes the formatted string would need.
-@extern fn snprintf(buf: uint8*, n: uint64, fmt: uint8*, ...) -> int32;
+@extern fn snprintf(buf: char*, n: uint64, fmt: char*, ...) -> int32;
 
 fn main() -> int32 {
-    let msg: uint8* = "hello, extern";
+    let msg: char* = "hello, extern";
     printf("strlen(\"%s\") = %llu\n", msg, strlen(msg));
 
     // The variadic snprintf, measuring a formatted string's length.

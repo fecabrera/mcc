@@ -17,7 +17,7 @@ def test_iteration_visits_all_entries():
             dict_set(d, "b", 20);
             dict_set(d, "c", 30);
             let it = dict_it<uint64>(d);
-            let p: struct pair<uint8*, uint64>;
+            let p: struct pair<char*, uint64>;
             let total: uint64 = 0;
             while (dict_next<uint64>(&it, &p)) { total = total + p.value; }
             return total as int32;
@@ -87,11 +87,11 @@ def test_dict_owns_key_copies(tmp_path, capfd):
             let d = alloc<struct dict<int32>>(1);
             dict_init(d, 2);
 
-            let scratch = alloc<uint8>(3);
+            let scratch = alloc<char>(3);
             let i: int32 = 0;
             while (i < 100) {
-                scratch[0] = (65 + i / 10) as uint8;
-                scratch[1] = (65 + i % 10) as uint8;
+                scratch[0] = (65 + i / 10) as char;
+                scratch[1] = (65 + i % 10) as char;
                 scratch[2] = 0;
                 dict_set(d, scratch, i * 7);
                 i = i + 1;
@@ -103,8 +103,8 @@ def test_dict_owns_key_copies(tmp_path, capfd):
             let v: int32 = 0;
             i = 0;
             while (i < 100) {
-                scratch[0] = (65 + i / 10) as uint8;
-                scratch[1] = (65 + i % 10) as uint8;
+                scratch[0] = (65 + i / 10) as char;
+                scratch[1] = (65 + i % 10) as char;
                 scratch[2] = 0;
                 if (!dict_get(d, scratch, &v))
                     errors = errors + 1;

@@ -35,7 +35,7 @@ fn main() -> int32 {
     // A declaration may omit the initializer if it has a type annotation.
     // Like a C local, it holds garbage until assigned -- useful when the
     // value is decided by branches.
-    let parity: uint8*;
+    let parity: char*;
     if (answer % 2 == 0) {
         parity = "even";
     } else {

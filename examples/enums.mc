@@ -12,7 +12,7 @@ enum Color: int32 {
 
 // The enum's name is also a type, aliasing the underlying type. It can annotate
 // parameters, returns, variables, struct fields, and arrays.
-fn name_of(c: Color) -> uint8* {
+fn name_of(c: Color) -> char* {
     case (c) {
         when Color::Red:   return "red";
         when Color::Green: return "green";
@@ -30,7 +30,7 @@ enum Flags: uint64 {
 }
 
 // ...and an enum whose members are strings.
-enum Msg: uint8* {
+enum Msg: char* {
     Hi  = "hello",
     Bye = "goodbye",
 }

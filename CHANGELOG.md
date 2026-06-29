@@ -76,11 +76,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   trailing NUL, so the slice spans the text). Annotating `char*`/`uint8*` keeps
   the pointer-to-constant behavior (no copy). See
   [Strings](docs/language.md#strings).
-- **`string` is now `type string = list<uint8>`** — a transparent
+- **`string` is now `type string = list<char>`** — a transparent
   specialization with the same layout, so a `struct string*` upcasts to a
-  `struct list<uint8>*` and every `list` operation works on a string. The
+  `struct list<char>*` and every `list` operation works on a string. The
   list/string API distinguishes `push` (append one element) from `append`
   (concatenate another whole list).
+- **Standard-library and libc string APIs adopt `char`** — `dict` keys are now
+  `char*`, the libc bindings that carry text (`strcpy`/`strlen`/`strcmp`/
+  `printf`/`fgets`/`getenv`/`strftime`, …) take and return `char*`, and `std`'s
+  `print`/`writestr`/`writeln` follow suit. Raw-byte and stream operations stay
+  `uint8` — `memcpy`/`memset`, `fread`/`fwrite`, and the hashing functions.
+  Because `uint8*` does not coerce to `char*`, a buffer handed to a libc string
+  function must now be a `char[N]`/`char*` (or an explicit cast); string literals
+  are unaffected.
 - **The standard library moved to `libmc/`** and is now compiled from source
   (previously `lib/`); `import "<module>"` by name is unchanged.
 - **File-scoped symbols are mangled with `.`** instead of `@`, so the emitted

@@ -1,4 +1,4 @@
-"""libmc/string.mc: a byte string, `type string = list<uint8>`.
+"""libmc/string.mc: a text string, `type string = list<char>`.
 
 Exercises the @inline list wrappers (string_push/string_append/string_get/...,
 which forward straight to the list_* functions through the transparent alias)
@@ -22,10 +22,10 @@ def test_base_operations(capfd):
             string_push(&s, 'h');
             string_push(&s, 'i');
             string_set(&s, 0, 'H');
-            let c: uint8;
+            let c: char;
             string_get(&s, 1, &c);
             printf("len=%llu first_then_second=", s.length);   // inherited field
-            let f: uint8;
+            let f: char;
             string_get(&s, 0, &f);
             printf("%c%c\\n", f, c);
             string_destroy(&s);

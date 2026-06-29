@@ -12,7 +12,7 @@ const DIGITS = 10;
 // A static lookup table built from an array literal. The outer dimension is
 // left as [] and inferred from the literal; @static initializers must be
 // constant, so the strings live in read-only data.
-@static let cmds: uint8*[][2] = [
+@static let cmds: char*[][2] = [
     ["help", "show this help"],
     ["quit", "exit the program"],
     ["ls",   "list the files"],

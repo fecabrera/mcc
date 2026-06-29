@@ -1,4 +1,4 @@
-const CHAR_BIT = sizeof(uint8);
+const CHAR_BIT = sizeof(char);
 
 const SCHAR_MAX = 127;
 const SCHAR_MIN = (-SCHAR_MAX - 1);

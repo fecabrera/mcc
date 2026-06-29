@@ -59,7 +59,7 @@ struct FILE {}
  *
  * @return number of characters written
  */
-@extern fn printf(format: uint8*, ...) -> int32;
+@extern fn printf(format: char*, ...) -> int32;
 
 /**
  * Like printf, but takes a pre-initialized va_list instead of variadic arguments.
@@ -69,7 +69,7 @@ struct FILE {}
  *
  * @return number of characters written
  */
-@extern fn vprintf(format: uint8*, args: va_list) -> int32;
+@extern fn vprintf(format: char*, args: va_list) -> int32;
 
 /**
  * Formats a string into str using a printf-style format.
@@ -84,7 +84,7 @@ struct FILE {}
  *
  * @return number of characters written, not including the null terminator
  */
-@extern fn sprintf(str: uint8*, format: uint8*, ...) -> int32;
+@extern fn sprintf(str: char*, format: char*, ...) -> int32;
 
 /**
  * Like sprintf, but writes at most size-1 characters plus a NUL terminator,
@@ -98,7 +98,7 @@ struct FILE {}
  * @return number of characters that would have been written (excluding the
  *         NUL), which may exceed size-1 if the output was truncated
  */
-@extern fn snprintf(str: uint8*, size: uint64, format: uint8*, ...) -> int32;
+@extern fn snprintf(str: char*, size: uint64, format: char*, ...) -> int32;
 
 /**
  * Formats a string into str using a printf-style format and a pre-initialized va_list.
@@ -113,7 +113,7 @@ struct FILE {}
  *
  * @return number of characters written, not including the null terminator
  */
-@extern fn vsprintf(str: uint8*, format: uint8*, args: va_list) -> int32;
+@extern fn vsprintf(str: char*, format: char*, args: va_list) -> int32;
 
 /**
  * Like vsprintf, but writes at most size-1 characters plus a NUL terminator,
@@ -127,7 +127,7 @@ struct FILE {}
  * @return number of characters that would have been written (excluding the
  *         NUL), which may exceed size-1 if the output was truncated
  */
-@extern fn vsnprintf(str: uint8*, size: uint64, format: uint8*, args: va_list) -> int32;
+@extern fn vsnprintf(str: char*, size: uint64, format: char*, args: va_list) -> int32;
 
 /***************************************
  * Formatted input
@@ -143,7 +143,7 @@ struct FILE {}
  * @return number of items successfully assigned, or EOF on input failure
  *         before any conversion
  */
-@extern fn scanf(format: uint8*, ...) -> int32;
+@extern fn scanf(format: char*, ...) -> int32;
 
 /**
  * Like scanf, but reads from the null-terminated string str instead of stdin.
@@ -155,7 +155,7 @@ struct FILE {}
  * @return number of items successfully assigned, or EOF if the end of the
  *         string is reached before any conversion
  */
-@extern fn sscanf(str: uint8*, format: uint8*, ...) -> int32;
+@extern fn sscanf(str: char*, format: char*, ...) -> int32;
 
 /**
  * Like scanf, but takes a pre-initialized va_list of pointers.
@@ -166,7 +166,7 @@ struct FILE {}
  * @return number of items successfully assigned, or EOF on input failure
  *         before any conversion
  */
-@extern fn vscanf(format: uint8*, args: va_list) -> int32;
+@extern fn vscanf(format: char*, args: va_list) -> int32;
 
 /**
  * Like sscanf, but takes a pre-initialized va_list of pointers.
@@ -178,7 +178,7 @@ struct FILE {}
  * @return number of items successfully assigned, or EOF if the end of the
  *         string is reached before any conversion
  */
-@extern fn vsscanf(str: uint8*, format: uint8*, args: va_list) -> int32;
+@extern fn vsscanf(str: char*, format: char*, args: va_list) -> int32;
 
 /***************************************
  * Character input/output
@@ -208,7 +208,7 @@ struct FILE {}
  *
  * @return a non-negative value on success, or EOF on error
  */
-@extern fn puts(str: uint8*) -> int32;
+@extern fn puts(str: char*) -> int32;
 
 /***************************************
  * File operations
@@ -221,7 +221,7 @@ struct FILE {}
  *
  * @return 0 on success, non-zero on failure
  */
-@extern fn remove(filename: uint8*) -> int32;
+@extern fn remove(filename: char*) -> int32;
 
 /**
  * Renames a file, moving it across directories if necessary.
@@ -231,7 +231,7 @@ struct FILE {}
  *
  * @return 0 on success, non-zero on failure
  */
-@extern fn rename(old_name: uint8*, new_name: uint8*) -> int32;
+@extern fn rename(old_name: char*, new_name: char*) -> int32;
 
 /***************************************
  * Error reporting
@@ -243,7 +243,7 @@ struct FILE {}
  *
  * @param str: message prefix; if null or empty, only the error description is written
  */
-@extern fn perror(str: uint8*);
+@extern fn perror(str: char*);
 
 /***************************************
  * Opening and closing streams
@@ -257,7 +257,7 @@ struct FILE {}
  *
  * @return a stream on success, or null on failure (see errno)
  */
-@extern fn fopen(filename: uint8*, mode: uint8*) -> struct FILE*;
+@extern fn fopen(filename: char*, mode: char*) -> struct FILE*;
 
 /**
  * Reopens stream with a new file and/or mode, reusing the stream object.
@@ -269,7 +269,7 @@ struct FILE {}
  *
  * @return stream on success, or null on failure
  */
-@extern fn freopen(filename: uint8*, mode: uint8*, stream: struct FILE*) -> struct FILE*;
+@extern fn freopen(filename: char*, mode: char*, stream: struct FILE*) -> struct FILE*;
 
 /**
  * Flushes and closes a stream, releasing its resources.
@@ -416,7 +416,7 @@ struct FILE {}
  *
  * @return str on success, or null at end of file before any character or on error
  */
-@extern fn fgets(str: uint8*, size: int32, stream: struct FILE*) -> uint8*;
+@extern fn fgets(str: char*, size: int32, stream: struct FILE*) -> char*;
 
 /**
  * Writes the null-terminated string str to stream (no newline is added).
@@ -426,7 +426,7 @@ struct FILE {}
  *
  * @return a non-negative value on success, or EOF on error
  */
-@extern fn fputs(str: uint8*, stream: struct FILE*) -> int32;
+@extern fn fputs(str: char*, stream: struct FILE*) -> int32;
 
 /***************************************
  * Stream formatted input/output
@@ -441,7 +441,7 @@ struct FILE {}
  *
  * @return number of characters written, or a negative value on error
  */
-@extern fn fprintf(stream: struct FILE*, format: uint8*, ...) -> int32;
+@extern fn fprintf(stream: struct FILE*, format: char*, ...) -> int32;
 
 /**
  * Like fprintf, but takes a pre-initialized va_list instead of variadic arguments.
@@ -452,7 +452,7 @@ struct FILE {}
  *
  * @return number of characters written, or a negative value on error
  */
-@extern fn vfprintf(stream: struct FILE*, format: uint8*, args: va_list) -> int32;
+@extern fn vfprintf(stream: struct FILE*, format: char*, args: va_list) -> int32;
 
 /**
  * Reads formatted input from stream, storing converted values through the
@@ -464,7 +464,7 @@ struct FILE {}
  *
  * @return number of items assigned, or EOF on input failure before any conversion
  */
-@extern fn fscanf(stream: struct FILE*, format: uint8*, ...) -> int32;
+@extern fn fscanf(stream: struct FILE*, format: char*, ...) -> int32;
 
 /**
  * Like fscanf, but takes a pre-initialized va_list of pointers.
@@ -475,7 +475,7 @@ struct FILE {}
  *
  * @return number of items assigned, or EOF on input failure before any conversion
  */
-@extern fn vfscanf(stream: struct FILE*, format: uint8*, args: va_list) -> int32;
+@extern fn vfscanf(stream: struct FILE*, format: char*, args: va_list) -> int32;
 
 /***************************************
  * Stream buffering and state

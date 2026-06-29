@@ -12,7 +12,7 @@
  *
  * @return dest
  */
-@extern fn strcpy(dest: uint8*, src: uint8*) -> uint8*;
+@extern fn strcpy(dest: char*, src: char*) -> char*;
 
 /**
  * Copies at most count characters from src into dest. If src is shorter than count,
@@ -24,7 +24,7 @@
  *
  * @return dest
  */
-@extern fn strncpy(dest: uint8*, src: uint8*, count: uint64) -> uint8*;
+@extern fn strncpy(dest: char*, src: char*, count: uint64) -> char*;
 
 /**
  * Appends the null-terminated string src to the end of dest, overwriting dest's
@@ -36,7 +36,7 @@
  *
  * @return dest
  */
-@extern fn strcat(dest: uint8*, src: uint8*) -> uint8*;
+@extern fn strcat(dest: char*, src: char*) -> char*;
 
 /**
  * Appends at most count characters from src to the end of dest, then adds a
@@ -48,7 +48,7 @@
  *
  * @return dest
  */
-@extern fn strncat(dest: uint8*, src: uint8*, count: uint64) -> uint8*;
+@extern fn strncat(dest: char*, src: char*, count: uint64) -> char*;
 
 /***************************************
  * String examination
@@ -61,7 +61,7 @@
  *
  * @return Number of characters in str.
  */
-@extern fn strlen(str: uint8*) -> uint64;
+@extern fn strlen(str: char*) -> uint64;
 
 /**
  * Returns the length of str, but reads at most count bytes. Unlike strlen, will not read past count
@@ -72,7 +72,7 @@
  *
  * @return number of characters before the null terminator, or count if none found
  */
-@extern fn strnlen(str: uint8*, count: uint64) -> uint64;
+@extern fn strnlen(str: char*, count: uint64) -> uint64;
 
 /**
  * Compares two null-terminated strings lexicographically.
@@ -82,7 +82,7 @@
  *
  * @return Negative if lhs < rhs, zero if equal, positive if lhs > rhs.
  */
-@extern fn strcmp(lhs: uint8*, rhs: uint8*) -> int32;
+@extern fn strcmp(lhs: char*, rhs: char*) -> int32;
 
 /**
  * Compares at most count characters of two null-terminated strings lexicographically.
@@ -93,7 +93,7 @@
  *
  * @return Negative if lhs < rhs, zero if equal or count is zero, positive if lhs > rhs.
  */
-@extern fn strncmp(lhs: uint8*, rhs: uint8*, count: uint64) -> int32;
+@extern fn strncmp(lhs: char*, rhs: char*, count: uint64) -> int32;
 
 /**
  * Compares two null-terminated strings according to the current locale's
@@ -104,7 +104,7 @@
  *
  * @return Negative if lhs < rhs, zero if equal, positive if lhs > rhs.
  */
-@extern fn strcoll(lhs: uint8*, rhs: uint8*) -> int32;
+@extern fn strcoll(lhs: char*, rhs: char*) -> int32;
 
 /**
  * Transforms src into a form such that comparing two transformed strings with
@@ -118,7 +118,7 @@
  * @return the length of the transformed string, excluding the null terminator;
  *         if it is >= count, the contents of dest are indeterminate
  */
-@extern fn strxfrm(dest: uint8*, src: uint8*, count: uint64) -> uint64;
+@extern fn strxfrm(dest: char*, src: char*, count: uint64) -> uint64;
 
 /***************************************
  * String searching
@@ -133,7 +133,7 @@
  *
  * @return pointer to the first match, or null if ch does not occur
  */
-@extern fn strchr(str: uint8*, ch: int32) -> uint8*;
+@extern fn strchr(str: char*, ch: int32) -> char*;
 
 /**
  * Finds the last occurrence of ch (as an unsigned char) in the null-terminated
@@ -144,7 +144,7 @@
  *
  * @return pointer to the last match, or null if ch does not occur
  */
-@extern fn strrchr(str: uint8*, ch: int32) -> uint8*;
+@extern fn strrchr(str: char*, ch: int32) -> char*;
 
 /**
  * Finds the first occurrence of the substring needle in haystack. An empty
@@ -155,7 +155,7 @@
  *
  * @return pointer to the start of the first match, or null if not found
  */
-@extern fn strstr(haystack: uint8*, needle: uint8*) -> uint8*;
+@extern fn strstr(haystack: char*, needle: char*) -> char*;
 
 /**
  * Returns the length of the initial run of str made up entirely of characters
@@ -166,7 +166,7 @@
  *
  * @return number of leading characters that are all in accept
  */
-@extern fn strspn(str: uint8*, accept: uint8*) -> uint64;
+@extern fn strspn(str: char*, accept: char*) -> uint64;
 
 /**
  * Returns the length of the initial run of str made up entirely of characters
@@ -177,7 +177,7 @@
  *
  * @return number of leading characters before the first one in reject
  */
-@extern fn strcspn(str: uint8*, reject: uint8*) -> uint64;
+@extern fn strcspn(str: char*, reject: char*) -> uint64;
 
 /**
  * Finds the first character in str that is also in accept.
@@ -187,7 +187,7 @@
  *
  * @return pointer to the first matching character, or null if none match
  */
-@extern fn strpbrk(str: uint8*, accept: uint8*) -> uint8*;
+@extern fn strpbrk(str: char*, accept: char*) -> char*;
 
 /**
  * Splits a string into tokens separated by any character in delim. The first
@@ -199,7 +199,7 @@
  *
  * @return pointer to the next token, or null when there are no more
  */
-@extern fn strtok(str: uint8*, delim: uint8*) -> uint8*;
+@extern fn strtok(str: char*, delim: char*) -> char*;
 
 /***************************************
  * Character array manipulation
@@ -276,4 +276,4 @@
  *
  * @return pointer to a static, null-terminated description string
  */
-@extern fn strerror(errnum: int32) -> uint8*;
+@extern fn strerror(errnum: int32) -> char*;

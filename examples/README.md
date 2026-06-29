@@ -12,7 +12,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [variables.mc](variables.mc) | `let`, type inference, annotations, every integer width, mutation, uninitialized `let x: T;` |
 | [constants.mc](constants.mc) | `const` compile-time constants, constant expressions, sizing arrays, string consts |
 | [conditional.mc](conditional.mc) | `@if` / `@else` compile-time selection over `TARGET_OS` / `TARGET_ARCH`, `@symbol` per platform |
-| [literals.mc](literals.mc) | hexadecimal integer literals, `uint8` character literals and escapes |
+| [literals.mc](literals.mc) | hexadecimal integer literals, `char` character literals and escapes |
 | [arithmetic.mc](arithmetic.mc) | operators, precedence, comparisons, `!`, float math, `abs` |
 | [control_flow.mc](control_flow.mc) | `if` / `else if` / `else`, integer conditions, `and` / `or`, `while`, `until`, nested loops, `break` / `continue` |
 | [case_when.mc](case_when.mc) | `case` / `when` / `else:` with no fall-through, integer and character subjects, multi-value arms |
@@ -27,7 +27,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [type_aliases.mc](type_aliases.mc) | `type <name> = <type>;` transparent aliases for builtins, pointers, function pointers, and structs; `type` as an identifier |
 | [arrays.mc](arrays.mc) | fixed-size `T[N]` arrays (`N` a constant expression), indexing, `sizeof`, pointer decay, multi-dim, a `@static` buffer |
 | [io.mc](io.mc) | printf format specifiers, `puts`, `putchar`, string escapes |
-| [strings.mc](strings.mc) | string literals as `uint8[N]` byte arrays (NUL counted): owned vs `uint8*`, inferred/oversize sizes, decay, mutation, `len`, indexing, borrowing as `slice<uint8>` |
+| [strings.mc](strings.mc) | string literals as `char[N]` text arrays (NUL counted): owned vs `char*`, inferred/oversize sizes, decay, mutation, `len`, indexing, borrowing as `slice<char>`; contrast with a raw `uint8[N]` byte buffer |
 | [unsigned.mc](unsigned.mc) | unsigned division/comparison semantics, zero-extension |
 | [extern.mc](extern.mc) | `@extern` functions (including variadic `...`), interfacing with libc |
 | [inline_asm.mc](inline_asm.mc) | `@asm fn` and the `@asm(...)` expression, `$out`/`$N` operands and `:w` register modifiers, gated by `@if` on `TARGET_ARCH` |

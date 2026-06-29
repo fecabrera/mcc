@@ -10,7 +10,7 @@ import "libc/stdio";
  * @param format: printf-style format string (stb_sprintf grammar; floats disabled)
  * @param ...:    variadic arguments matching the format specifiers
  */
-fn print(format: uint8*, ...) {
+fn print(format: char*, ...) {
     let args: va_list;
     va_start(args, format);
     vprintf(format, args);
@@ -25,7 +25,7 @@ fn print(format: uint8*, ...) {
  * @param format: printf-style format string (stb_sprintf grammar; floats disabled)
  * @param ...:    variadic arguments matching the format specifiers
  */
-fn println(format: uint8*, ...) {
+fn println(format: char*, ...) {
     let args: va_list;
     va_start(args, format);
     vprintf(format, args);
@@ -39,7 +39,7 @@ fn println(format: uint8*, ...) {
  * @param c: byte to write
  */
 @inline
-fn writechar(const c: uint8) {
+fn writechar(const c: char) {
     putchar(c as int32);
 }
 
@@ -49,8 +49,8 @@ fn writechar(const c: uint8) {
  * @param str: string to write
  */
 @inline
-fn writestr(const str: slice<const uint8>) {
-    fwrite(str.ptr, sizeof(uint8), str.length, stdout);
+fn writestr(const str: slice<const char>) {
+    fwrite(str.ptr as uint8*, sizeof(char), str.length, stdout);
 }
 
 /**
@@ -59,7 +59,7 @@ fn writestr(const str: slice<const uint8>) {
  * @param str: string to write
  */
 @inline
-fn writeln(const str: slice<const uint8>) {
+fn writeln(const str: slice<const char>) {
     writestr(str);
     writechar('\n');
 }

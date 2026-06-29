@@ -26,7 +26,7 @@ struct tm {
     tm_yday: int32;    // days since January 1 [0, 365]
     tm_isdst: int32;   // daylight saving: >0 in effect, 0 not, <0 unknown
     tm_gmtoff: int64;  // offset from UTC in seconds (BSD/glibc extension)
-    tm_zone: uint8*;   // timezone abbreviation (BSD/glibc extension)
+    tm_zone: char*;   // timezone abbreviation (BSD/glibc extension)
 }
 
 /***************************************
@@ -101,7 +101,7 @@ struct tm {
  *
  * @return pointer to a static string (overwritten by later calls)
  */
-@extern fn asctime(tm: struct tm*) -> uint8*;
+@extern fn asctime(tm: struct tm*) -> char*;
 
 /**
  * Equivalent to asctime(localtime(timer)): a fixed 26-character local-time
@@ -111,7 +111,7 @@ struct tm {
  *
  * @return pointer to a static string (overwritten by later calls)
  */
-@extern fn ctime(timer: int64*) -> uint8*;
+@extern fn ctime(timer: int64*) -> char*;
 
 /**
  * Formats tm into s according to format (strftime conversion specifiers such as
@@ -124,4 +124,4 @@ struct tm {
  *
  * @return number of bytes written (excluding the NUL), or 0 if it did not fit
  */
-@extern fn strftime(s: uint8*, max: uint64, format: uint8*, tm: struct tm*) -> uint64;
+@extern fn strftime(s: char*, max: uint64, format: char*, tm: struct tm*) -> uint64;

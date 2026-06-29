@@ -13,22 +13,23 @@ fn main() -> int32 {
     let ten: int32 = 010;
     println("010 = %d", ten);
 
-    // Character literals are uint8 -- the byte value of one character, with
-    // the same escapes as strings ('a', '\n', '\0', '\'', '\\').
-    let a: uint8 = 'A';
-    let newline: uint8 = '\n';
-    println("'A' = %d, '\\n' = %d", a, newline);
+    // A character literal is an untyped constant that defaults to the one-byte
+    // `char` text type, with the same escapes as strings ('a', '\n', '\0',
+    // '\'', '\\'). It also adapts to an integer slot when the value fits.
+    let a: char = 'A';
+    let newline: char = '\n';
+    println("'A' = %d, '\\n' = %d", a as int32, newline as int32);
 
-    // Being a plain byte, a character does arithmetic and comparison like any
-    // uint8 -- here, converting a digit character to its value.
-    let digit: uint8 = '7';
-    println("'7' - '0' = %d", digit - '0');
+    // A char does arithmetic and comparison against other char literals --
+    // here, converting a digit character to its value.
+    let digit: char = '7';
+    println("'7' - '0' = %d", (digit - '0') as int32);
 
-    // Walk a string, classifying each byte against character literals.
-    let text: uint8* = "Hi 9!";
+    // Walk a string (a char*), classifying each char against character literals.
+    let text: char* = "Hi 9!";
     let i: uint64 = 0;
     while (text[i] != '\0') {
-        let c: uint8 = text[i];
+        let c: char = text[i];
         if (c >= '0') {
             if (c <= '9') {
                 println("%c is a digit", c);

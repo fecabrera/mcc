@@ -11,12 +11,12 @@ const DEFAULT_STRING_CAPACITY = 10;
 /**
  * A growable, heap-backed byte string.
  *
- * `string` is a specialization of `list<uint8>` (same fields and layout), so a
- * `struct string*` upcasts to a `struct list<uint8>*` and every operation
+ * `string` is a specialization of `list<char>` (same fields and layout), so a
+ * `struct string*` upcasts to a `struct list<char>*` and every operation
  * forwards to the matching `list_*` function. Each `string_*` wrapper is
  * `@inline`, so the indirection costs nothing once optimized.
  */
-type string = list<uint8>;
+type string = list<char>;
 
 /**
  * Prepares a string for use, reserving DEFAULT_STRING_CAPACITY bytes.
@@ -52,7 +52,7 @@ fn string_duplicate(dst: struct string*, src: struct string*) {
  * @param str:  source byte array to copy from
  * @param n:    number of bytes to copy from str
  */
-fn string_from_array(self: struct string*, str: uint8*) {
+fn string_from_array(self: struct string*, str: char*) {
     string_init(self);
 
     let i: uint64 = 0;
@@ -66,13 +66,13 @@ fn string_from_array(self: struct string*, str: uint8*) {
  * Builds a string by copying a borrowed run of bytes: initializes self and
  * appends every byte of the slice, so the string owns a private copy. self must
  * be uninitialized (or already destroyed). A string literal borrows in directly
- * (`str as slice<uint8>`), which drops the literal's trailing NUL.
+ * (`str as slice<char>`), which drops the literal's trailing NUL.
  *
  * @param self: uninitialized string to build into
  * @param str:  byte slice to copy from
  */
 @inline
-fn string_from_slice(self: struct string*, const str: slice<uint8>) {
+fn string_from_slice(self: struct string*, const str: slice<char>) {
     list_from_slice(self, str);
 }
 
@@ -107,7 +107,7 @@ fn string_reset(self: struct string*) {
  * @return true if index is in bounds, false otherwise
  */
 @inline
-fn string_get(self: struct string*, index: uint64, out: uint8*) -> bool {
+fn string_get(self: struct string*, index: uint64, out: char*) -> bool {
     return list_get(self, index, out);
 }
 
@@ -121,7 +121,7 @@ fn string_get(self: struct string*, index: uint64, out: uint8*) -> bool {
  * @return true if index is in bounds, false otherwise
  */
 @inline
-fn string_set(self: struct string*, index: uint64, value: uint8) -> bool {
+fn string_set(self: struct string*, index: uint64, value: char) -> bool {
     return list_set(self, index, value);
 }
 
@@ -132,7 +132,7 @@ fn string_set(self: struct string*, index: uint64, value: uint8) -> bool {
  * @param value: byte to push
  */
 @inline
-fn string_push(self: struct string*, value: uint8) {
+fn string_push(self: struct string*, value: char) {
     list_push(self, value);
 }
 
@@ -195,6 +195,6 @@ fn string_it(self: struct string*) -> struct iterator<struct string> {
  *
  * @return true if a byte was produced, false once iteration is complete
  */
-fn string_next(it: struct iterator<struct string>*, out: uint8*) -> bool {
+fn string_next(it: struct iterator<struct string>*, out: char*) -> bool {
     return list_next(it, out);
 }

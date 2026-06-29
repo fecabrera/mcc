@@ -14,10 +14,10 @@ from helpers import compile_ir, parse, run
 # A forwarding wrapper used by several tests.
 WRAPPER = r"""
 import "libc/stdio";
-@extern fn vsnprintf(str: uint8*, size: uint64, format: uint8*, args: va_list) -> int32;
+@extern fn vsnprintf(str: char*, size: uint64, format: char*, args: va_list) -> int32;
 
-fn logf(fmt: uint8*, ...) -> int32 {
-    let buf: uint8[256];
+fn logf(fmt: char*, ...) -> int32 {
+    let buf: char[256];
     let ap: va_list;
     va_start(ap, fmt);
     let n = vsnprintf(&buf[0], 256, fmt, ap);
@@ -33,16 +33,16 @@ fn logf(fmt: uint8*, ...) -> int32 {
 # va_lists once mistyped this by a pointer level.
 PARAM_WRAPPER = r"""
 import "libc/stdio";
-@extern fn vsnprintf(str: uint8*, size: uint64, format: uint8*, args: va_list) -> int32;
+@extern fn vsnprintf(str: char*, size: uint64, format: char*, args: va_list) -> int32;
 
-fn vlogf(fmt: uint8*, ap: va_list) -> int32 {
-    let buf: uint8[256];
+fn vlogf(fmt: char*, ap: va_list) -> int32 {
+    let buf: char[256];
     let n = vsnprintf(&buf[0], 256, fmt, ap);
     puts(&buf[0]);
     return n;
 }
 
-fn logf(fmt: uint8*, ...) -> int32 {
+fn logf(fmt: char*, ...) -> int32 {
     let ap: va_list;
     va_start(ap, fmt);
     let n = vlogf(fmt, ap);
