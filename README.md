@@ -377,6 +377,8 @@ Grouped by scope.
         like `linux_dirent64`'s `d_name[]` (today needs the `T[1]` "struct hack")
   - [ ] `offsetof(struct S, field)` — the byte offset of a field as a constant
         (today only `sizeof`, which includes trailing padding)
+  - [ ] `alignof(T)` — the alignment requirement of a type as a constant, for
+        laying out buffers and matching the C ABI (today only `sizeof`)
 - [ ] Unions — `union Name { i: int64; f: float64; p: void*; }`, members
       sharing one storage (size of the largest, all at offset 0), for C-layout
       interop (`epoll_data`, `sigval`, most syscall structs embed a union) and
@@ -479,7 +481,7 @@ Grouped by scope.
         emit tmp;
     };
     ```
-- [~] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
+- [ ] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
   the callee promises not to mutate:
   - [x] pass by hidden reference: a large value (a struct) is passed by a hidden
         pointer instead of copied, so you get value semantics without
@@ -504,6 +506,12 @@ Grouped by scope.
       later path. Depends on any, slice, and typeof/typeid.
 - [ ] C `va_arg` interop — read individual arguments from a C-ABI `va_list`
       in mcc (today a `va_list` can only be forwarded to a C `v*` function)
+- [ ] `@noreturn` and `unreachable` — `@noreturn` marks a function that never
+      returns (`exit`, `abort`, an infinite loop), so a call needs no dummy
+      return after it and the backend drops the dead path; `unreachable` is a
+      statement asserting a path is never reached (lowering to LLVM
+      `unreachable`), for the fall-through of an exhaustive `case` or an
+      impossible branch
 
 #### Metaprogramming and builtins
 
@@ -568,6 +576,9 @@ Grouped by scope.
       so the stdlib is compiled from source instead of linked as `libmc`
 - [ ] C header generation — emit a `.h` of the public surface (like
       `--emit-interface` does for `.mci`), so C code can call into an mcc library
+- [ ] Assembly output — `--emit-asm` (`-S`) to write target `.s` assembly text
+      (alongside `--emit-llvm` for IR and `-c` for an object), for inspection or
+      handing to an external assembler
 - [ ] C struct-passing ABI — classify by-value struct arguments and returns
       into registers/`byval`/`sret` per the platform ABI, so structs cross the
       C boundary correctly (today only scalars and pointers are ABI-compatible;
