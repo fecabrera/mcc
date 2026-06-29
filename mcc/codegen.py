@@ -1679,7 +1679,7 @@ class CodeGen:
     def slice_type(self, element: LangType, line: int) -> LangType:
         """Build (and intern) the builtin ``slice<T>`` view type for ``element``.
 
-        A slice is a 2-word, non-owning view ``{ ptr: T*; length: uint64 }`` over
+        A slice is a 2-word, non-owning view ``{ data: T*; length: uint64 }`` over
         a contiguous run of ``T``. It is realized as an ordinary struct -- so
         field access, ``sizeof``, and by-value passing all reuse the struct
         machinery -- tagged with the reserved template name ``"slice"`` (see
@@ -1706,7 +1706,7 @@ class CodeGen:
         mangled = f"slice<{element}>"
         if mangled in self.struct_types:
             return self.struct_types[mangled]
-        fields = (("ptr", pointer_to(element)), ("length", UINT64))
+        fields = (("data", pointer_to(element)), ("length", UINT64))
         # Key the LLVM layout by the mutable element so slice<T> and
         # slice<const T> share one identified type; body it only on first sight.
         identified = self.module.context.get_identified_type(
@@ -3092,11 +3092,11 @@ class CodeGen:
         """Lower ``for x in s { body }`` over a builtin ``slice<T>``.
 
         Unlike a library container, a slice iterates natively -- no
-        ``_it``/``_next`` -- walking its ``ptr`` from index ``0`` up to
+        ``_it``/``_next`` -- walking its ``data`` from index ``0`` up to
         ``length``::
 
             { let i = 0; let x: T;
-              while (i < s.length) { x = s.ptr[i]; body; i = i + 1; } }
+              while (i < s.length) { x = s.data[i]; body; i = i + 1; } }
 
         The index counter and the slice's pointer/length are compiler-held
         temporaries; ``x`` lives in a fresh block scope, gone once the loop ends.
@@ -3764,7 +3764,7 @@ class CodeGen:
         """
         base = self.gen_expr(base_expr)
         if is_slice(base.type):
-            # A slice indexes through its `ptr` field into the borrowed run.
+            # A slice indexes through its `data` field into the borrowed run.
             ptr = self.builder.extract_value(base.value, base.type.elem_indices[0])
             element = base.type.fields[0][1].pointee
             index = self.gen_expr(index_expr)
@@ -4175,7 +4175,7 @@ class CodeGen:
         # prefix of the source (:meth:`is_struct_prefix`) -- so it follows the
         # `extends` chain without hardcoding any field names. The element may
         # gain `const` (see :meth:`check_borrow_element`); const shares the
-        # layout, so the leading {ptr, length} transfer straight across.
+        # layout, so the leading {data, length} transfer straight across.
         prefix = self.slice_type(strip_const(element), line)
         if is_slice(owner) or self.is_struct_prefix(prefix, owner):
             self.check_borrow_element(

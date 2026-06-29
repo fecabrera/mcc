@@ -861,7 +861,7 @@ few more rules:
 ## Slices
 
 `slice<T>` is a builtin **non-owning view** over a contiguous run of `T`: a
-two-word value `{ ptr: T*; length: uint64 }`. It borrows storage it does not own
+two-word value `{ data: T*; length: uint64 }`. It borrows storage it does not own
 — it never allocates — so the value it views must outlive it. A slice supports a
 runtime `.length`, indexing `s[i]` (reads and writes go straight through to the
 borrowed storage), and native [`for x in s`](#control-flow) iteration.

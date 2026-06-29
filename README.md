@@ -387,16 +387,16 @@ Grouped by scope.
       `typeof`-checked type discriminant, so the live member is recovered safely
       (`case type`). The element type of the [variadic](#functions-and-methods)
       pack's `slice<any>`. Depends on unions and typeof/typeid
-- [ ] `slice<T>` — a builtin non-owning view, `{ ptr: T*; length: uint64 }`, over a
+- [ ] `slice<T>` — a builtin non-owning view, `{ data: T*; length: uint64 }`, over a
       contiguous run of `T`: runtime `length`, indexing, and `for … in`. It borrows
       and never allocates, distinct from a C array `T[]` (which stays length-less
       and decays to a bare pointer for the ABI). A 2-word struct, so not C-ABI by
       value — across the C boundary pass `T*` plus a length instead. Built in
       dependency-ordered stages:
   - [x] **Stage 1 — the type + explicit borrows.** The builtin `slice<T>`
-        (`{ ptr: T*; length: uint64 }`) with `.length` and indexing `s[i]`.
+        (`{ data: T*; length: uint64 }`) with `.length` and indexing `s[i]`.
         Construction is an explicit `as` borrow from an owned `list<T>` or `T[N]` —
-        `xs as slice<T>` reads `{ptr, length}` and drops `capacity` (a new "borrow"
+        `xs as slice<T>` reads `{data, length}` and drops `capacity` (a new "borrow"
         form of `as`, since `as` rejects struct casts today). Self-contained:
         depends on nothing else here.
   - [x] **Stage 2 — iteration.** `for … in` over a slice, its own builtin
