@@ -108,7 +108,7 @@
     },
     "types": {
       "name": "support.type.primitive.mcc",
-      "match": "\\b(int8|int16|int32|int64|uint8|uint16|uint32|uint64|bool|float64|void|va_list)\\b"
+      "match": "\\b(int8|int16|int32|int64|uint8|uint16|uint32|uint64|char|bool|float64|void|va_list)\\b"
     },
     "constants": {
       "name": "constant.language.mcc",
