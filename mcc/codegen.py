@@ -2050,17 +2050,26 @@ class CodeGen:
         # order, so a const may reference any declared earlier (as in C). The
         # built-in target facts were seeded above, so user consts may use them
         # (and may not shadow them).
+        #
+        # A const (or @static global) whose initializer names a function holds
+        # that function's address -- a link-time constant -- but functions are
+        # not declared until below, so its folding is deferred until they are.
+        # A function-valued const can never be an array size, so nothing folded
+        # here depends on it.
+        func_names = {f.name for f in self.program.functions}
+        deferred_consts = []
+        deferred_const_names: set[str] = set()
         for const in self.program.consts:
             self.current_source = const.source
-            if const.name in self.consts:
+            if const.name in self.consts or const.name in deferred_const_names:
                 raise LangError(f"constant {const.name!r} already defined", const.line)
-            value = self.eval_const(const.value, const.line)
-            if const.type_name is not None:
-                declared = self.lang_type(const.type_name, const.line)
-                value = self.const_coerce(
-                    value, declared, const.line, f"const {const.name}"
-                )
-            self.consts[const.name] = value
+            if self.initializer_names_function(
+                const.value, func_names | deferred_const_names
+            ):
+                deferred_consts.append(const)
+                deferred_const_names.add(const.name)
+                continue
+            self.consts[const.name] = self.fold_const_value(const)
             self.const_privacy[const.name] = (const.private, const.source)
         # Enums are registered after consts, so a member's value may use one;
         # they are folded in source order, so a member may reference any enum
@@ -2070,8 +2079,21 @@ class CodeGen:
         # An @static initializer may name a function (a constant function
         # pointer), so its evaluation waits until functions are declared below.
         deferred_static_inits = []
+        deferred_static_globals = []
         for var in self.program.globals:
             self.current_source = var.source  # the type may name private structs
+            # An unannotated @static global whose initializer names a function
+            # infers its type from that function, which is not declared yet, so
+            # defer the whole declaration until functions exist (below).
+            if (
+                var.static
+                and var.type_name is None
+                and self.initializer_names_function(
+                    var.init, func_names | deferred_const_names
+                )
+            ):
+                deferred_static_globals.append(var)
+                continue
             if var.type_name is not None:
                 # An initializer can supply an inferred outermost [] dimension.
                 var_type = self.list_type_for(var.type_name, var.init, var.line)
@@ -2231,8 +2253,16 @@ class CodeGen:
             self.funcs[func.name] = fn
             self.signatures[func.name] = (ret, params, func.variadic)
             self.hidden_ref[func.name] = hidden
-        # Functions are declared now, so @static initializers that reference one
-        # can be folded to its address.
+        # Functions are declared now, so consts and @static globals that name a
+        # function can be folded to its address. Consts come first, since a
+        # deferred global's initializer may reference one.
+        for const in deferred_consts:
+            self.current_source = const.source
+            self.consts[const.name] = self.fold_const_value(const)
+            self.const_privacy[const.name] = (const.private, const.source)
+        for var in deferred_static_globals:
+            self.current_source = var.source
+            self.declare_static_global(var)
         for glob, var, var_type in deferred_static_inits:
             self.current_source = var.source
             glob.initializer = self.const_initializer(var.init, var_type, var.line)
@@ -2242,6 +2272,79 @@ class CodeGen:
                 ret, params, _ = self.signatures[symbol]
                 self.gen_function(func, self.funcs[symbol], ret, params)
         return self.module
+
+    def initializer_names_function(self, expr, names: set[str]) -> bool:
+        """Whether a const/``@static`` initializer refers to a deferred name.
+
+        ``names`` holds every function (and already-deferred const) whose value
+        is not available until functions are declared. A bare name reference to
+        one -- directly, or as an element of an array literal -- means this
+        initializer must be folded in that later pass too.
+
+        Args:
+            expr: The initializer expression (may be ``None``).
+            names: The names whose folding is deferred.
+
+        Returns:
+            ``True`` when the initializer references a deferred name.
+        """
+        if isinstance(expr, Var):
+            return expr.name in names
+        if isinstance(expr, ArrayLit):
+            return any(
+                self.initializer_names_function(e, names) for e in expr.elements
+            )
+        return False
+
+    def fold_const_value(self, const) -> TypedValue:
+        """Fold a ``const`` initializer, coercing to its annotation if given.
+
+        Args:
+            const: The ``Const`` declaration.
+
+        Returns:
+            The folded value, coerced to the declared type when one is written.
+        """
+        value = self.eval_const(const.value, const.line)
+        if const.type_name is not None:
+            declared = self.lang_type(const.type_name, const.line)
+            value = self.const_coerce(value, declared, const.line, f"const {const.name}")
+        return value
+
+    def declare_static_global(self, var):
+        """Declare an unannotated ``@static`` global whose type is inferred.
+
+        Used in the post-function-declaration pass for a global whose
+        initializer names a function: the type comes from that function value,
+        and the storage is created and initialized to its address.
+
+        Args:
+            var: The ``GlobalVar`` declaration.
+
+        Raises:
+            LangError: When the inferred type is ambiguous or ``void``, or the
+                global is already defined.
+        """
+        inferred = self.eval_const(var.init, var.line)
+        if inferred.adaptable:
+            raise LangError(
+                f"type of {var.name!r} is ambiguous: the initializer is an "
+                f"untyped constant; annotate it "
+                f"(@static let {var.name}: int32 = ...) or cast the value",
+                var.line,
+            )
+        var_type = inferred.type
+        if var_type is VOID:
+            raise LangError(f"cannot declare a void variable {var.name!r}", var.line)
+        key = (var.source, var.name)
+        if key in self.static_globals:
+            raise LangError(f"variable {var.name!r} already defined", var.line)
+        symbol = self.static_base(var.name, var.source)
+        glob = ir.GlobalVariable(self.module, var_type.ir, name=symbol)
+        glob.linkage = self.shared_linkage(var.source)
+        glob.initializer = self.const_initializer(var.init, var_type, var.line)
+        self.static_globals[key] = (glob, var_type, var.volatile)
+        self.global_privacy[var.name] = (var.private, var.source)
 
     def gen_function(
         self, func: Func, fn: ir.Function, ret: LangType, params: list[LangType]
@@ -4870,6 +4973,20 @@ class CodeGen:
                 raise LangError(f"{expr.name!r} is not a generic function", expr.line)
             callee = self.gen_expr(Var(expr.name, expr.line))
             return self.gen_indirect_call(callee, expr.args, repr(expr.name), expr.line)
+        # A const may hold a function pointer (e.g. `const f = some_fn;`); call
+        # it indirectly through that value, like a variable.
+        const = self.consts.get(expr.name)
+        if const is not None:
+            if not is_function(const.type):
+                raise LangError(
+                    f"{expr.name!r} is not callable; it is a {const.type}", expr.line
+                )
+            if expr.type_args:
+                raise LangError(f"{expr.name!r} is not a generic function", expr.line)
+            self.check_access(
+                *self.const_privacy[expr.name], f"constant {expr.name!r}", expr.line
+            )
+            return self.gen_indirect_call(const, expr.args, repr(expr.name), expr.line)
         # File-scoped (@static) names shadow the global namespace.
         key = (self.current_source, expr.name)
         if key in self.static_templates:

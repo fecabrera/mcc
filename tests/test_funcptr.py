@@ -332,3 +332,69 @@ def test_list_of_function_pointer_pointers():
     (func,) = parse("fn main() { let t: (fn(int32) -> int32)*[2]; }").functions
     t = func.body[0].type_name
     assert t.params is not None and t.stars == 1 and t.dims == [2]
+
+
+# ----------------------------------------- function aliases (const / @static)
+
+# A const (or @static global) may name a function and be called by that name.
+# The function is declared after consts/globals are folded, so the folding of
+# such an initializer is deferred until functions exist.
+
+
+def test_const_function_alias_inferred():
+    source = """
+    fn greet(n: int32) -> int32 { return n + 1; }
+    const hello = greet;                       // unannotated: type inferred
+    fn main() -> int32 { return hello(41); }   // 42
+    """
+    assert run(source) == 42
+
+
+def test_const_function_alias_annotated():
+    source = """
+    fn dbl(n: int32) -> int32 { return n * 2; }
+    type op = fn(int32) -> int32;
+    const twice: op = dbl;
+    fn main() -> int32 { return twice(21); }   // 42
+    """
+    assert run(source) == 42
+
+
+def test_unannotated_static_function_alias():
+    source = """
+    fn greet(n: int32) -> int32 { return n + 10; }
+    @static let hello = greet;                 // unannotated @static, inferred
+    fn main() -> int32 { return hello(32); }   // 42
+    """
+    assert run(source) == 42
+
+
+def test_const_alias_of_a_variadic_function(capfd):
+    # The reported case: aliasing variadic println-style output through a const,
+    # called with varargs. printf is a variadic extern.
+    run(
+        """
+        import "libc/stdio";
+        const out = printf;
+        fn main() -> int32 { out("v=%d\\n", 42); return 0; }
+        """
+    )
+    assert capfd.readouterr().out == "v=42\n"
+
+
+def test_function_const_used_in_a_static_table():
+    # An array initializer may mix a function name and a function-pointer const;
+    # the const reference inside the literal also defers the table's folding.
+    source = """
+    fn add(a: int32, b: int32) -> int32 { return a + b; }
+    const plus = add;
+    type binop = fn(int32, int32) -> int32;
+    @static let ops: binop[2] = [add, plus];
+    fn main() -> int32 { return ops[0](1, 2) + ops[1](3, 4); }   // 3 + 7
+    """
+    assert run(source) == 10
+
+
+def test_non_function_const_is_not_callable():
+    with pytest.raises(LangError, match="not callable; it is a int32"):
+        compile_ir("const x: int32 = 5; fn main() -> int32 { return x(); }")

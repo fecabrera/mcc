@@ -8,6 +8,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- A `const` or `@static` global may now name a function (a compile-time alias),
+  e.g. `const log = println;`, and be called by that name. Previously only a
+  local `let` could; a `const` always failed with "not a constant" and an
+  unannotated `@static let f = fn;` reported a misleading error, because their
+  initializers were folded before functions were declared. Such initializers
+  are now deferred until functions exist, and the type is inferred from the
+  function — so even a variadic like `println` aliases cleanly (a variadic
+  function-pointer *type* still cannot be written, but the alias needs none).
+
 ## [0.3.0] - 2026-06-29
 
 ### Added

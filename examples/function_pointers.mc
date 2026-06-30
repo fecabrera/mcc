@@ -35,6 +35,13 @@ fn loud(x: int32) -> int32 { return x * 100; }
 // count inferred from the initializer.
 @static let binops: (fn(int32, int32) -> int32)[] = [add, sub];
 
+// A const (or @static let) can name a function: a compile-time alias you then
+// call by its new name. The type is inferred from the function -- no signature
+// to spell out -- so even a variadic like `println` aliases cleanly. Handy for
+// renaming a library function locally.
+const plus = add;
+const log = println;
+
 fn main() -> int32 {
     // In a variable, reassignable.
     let op: fn(int32, int32) -> int32 = add;
@@ -44,6 +51,9 @@ fn main() -> int32 {
 
     // Passed as an argument.
     println("apply(add) = %d", apply(add, 4, 5));
+
+    // A const alias of a function, called by its new name (`log` is `println`).
+    log("plus(8, 8) = %d", plus(8, 8));
 
     // Calling the result of a call directly.
     println("op_for('-')(9, 2) = %d", op_for('-')(9, 2));

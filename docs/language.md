@@ -798,6 +798,26 @@ fn main() -> int32 {
 A function name folds to a constant address, so a `@static` table can be
 initialized with one at compile time.
 
+A `const` (or `@static let`) may also name a single function, giving a
+compile-time **alias** you then call by its new name. The type is inferred from
+the function, so nothing needs spelling out — even a variadic like `println`
+aliases cleanly (a variadic function-pointer *type* cannot be written, but the
+alias never needs to):
+
+```c
+const log = println;          // an alias; the type is inferred
+const plus = add;
+
+fn main() -> int32 {
+    log("plus(2, 3) = %d", plus(2, 3));
+    return 0;
+}
+```
+
+(A `@static let` aliasing a function must either be annotated or left to infer
+from the bare function name; an unannotated table literal still needs its type,
+as `@static let ops: binop[] = [add, sub];` above.)
+
 A function value is a pointer underneath, so it casts like one: `add as
 uint64` is the function's address as an integer, `addr as fn(...) -> R`
 turns an address back into a callable pointer, and it bitcasts to/from a
