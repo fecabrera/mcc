@@ -112,3 +112,36 @@ jobs:
             lib/libmc.a
             lib/libmc.so
             lib/libmc/**/*.mci
+
+  # Install the wheel exactly as a user (or the Homebrew formula) does and
+  # smoke-test it, so a packaging slip -- a renamed stdlib directory, a missing
+  # subpackage -- fails here instead of after a release tag is cut.
+  package:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install the wheel
+        run: pip install .
+
+      # Compile from a directory other than the repo root, so `import "std"`
+      # can only resolve through the *bundled* stdlib (mcc/libmc inside the
+      # install), never the repo's own libmc/ tree.
+      - name: Smoke-test the installed compiler
+        run: |
+          tmp="$(mktemp -d)"
+          cat > "$tmp/hi.mc" <<'MC'
+          import "std";
+          fn main() -> int32 { println("packaged ok: %d", 30); return 0; }
+          MC
+          cd "$tmp"
+          mcc hi.mc --run             # JIT: exercises codegen + the bundled stdlib
+          mcc hi.mc -o hi && ./hi     # native: object emission + linking
