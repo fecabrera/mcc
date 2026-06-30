@@ -83,6 +83,10 @@ def render_const_expr(e) -> str:
         return f"{e.enum}::{e.member}"
     if isinstance(e, SizeOf):
         return f"sizeof({e.type_name})"
+    if isinstance(e, AlignOf):
+        return f"alignof({e.type_name})"
+    if isinstance(e, OffsetOf):
+        return f"offsetof({e.type_name}, {e.field})"
     if isinstance(e, Unary):
         return f"{e.op}{render_const_expr(e.operand)}"
     if isinstance(e, Cast):
@@ -871,6 +875,40 @@ class SizeOf:
     """
 
     type_name: TypeRef
+    line: int
+
+
+@dataclass
+class AlignOf:
+    """An ``alignof(type)`` expression -- a compile-time ``uint64``.
+
+    Like ``sizeof``, a bare name in scope is taken as that variable, so
+    ``alignof(v)`` is the alignment of ``v``'s type.
+
+    Attributes:
+        type_name: The type whose alignment is taken.
+        line: Source line for diagnostics.
+    """
+
+    type_name: TypeRef
+    line: int
+
+
+@dataclass
+class OffsetOf:
+    """An ``offsetof(struct S, field)`` expression -- a compile-time ``uint64``.
+
+    The byte offset of ``field`` within struct ``S``, honoring padding,
+    ``@packed``, and ``@align``.
+
+    Attributes:
+        type_name: The struct type.
+        field: The field name whose offset is taken.
+        line: Source line for diagnostics.
+    """
+
+    type_name: TypeRef
+    field: str
     line: int
 
 

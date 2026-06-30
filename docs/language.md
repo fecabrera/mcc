@@ -712,7 +712,24 @@ fn main() -> int32 {
 `sizeof(type)` is a compile-time `uint64` constant (pointers are 8 bytes).
 `sizeof` also accepts a variable — `sizeof(v)` is the size of `v`'s type, as in
 C — so you need not spell the type out. The operand is never evaluated, so it
-has no side effects and folds to the same constant. `uint8*` doubles as the
+has no side effects and folds to the same constant.
+
+`alignof(type)` and `offsetof(struct S, field)` are the two other compile-time
+`uint64` layout constants, the C counterparts of the same name. `alignof(T)` is
+a type's alignment in bytes (and, like `sizeof`, accepts a variable —
+`alignof(v)`); `offsetof(struct S, field)` is a field's byte offset within a
+struct, honoring padding, `@packed`, and `@align`. All three fold at compile
+time, so they may size arrays and initialize a `const`:
+
+```c
+struct mixed { a: uint8; b: int64; c: uint16; }   // a@0, b@8, c@16; sizeof 24
+
+const ALIGN  = alignof(struct mixed);              // 8
+const B_OFF  = offsetof(struct mixed, b);          // 8
+let scratch: uint8[offsetof(struct mixed, c)];     // a 16-byte buffer
+```
+
+`uint8*` doubles as the
 raw-memory pointer (C's `void*`): any pointer
 implicitly coerces to it, which is why `free(nums)` works without a cast.
 A [string literal](#strings) is a `char[N]` array that decays to a `char*`
@@ -1133,6 +1150,14 @@ The member has no storage of its own, so it cannot be set in a struct literal
 (or given a default) and cannot be borrowed as a `slice<T>` — its length is not
 known statically. Reach it through `p->data`, indexing as far as the allocation
 runs. See [examples/flexible_array_members.mc](examples/flexible_array_members.mc).
+
+The [layout constants](#pointers) describe a flexible array member precisely:
+`offsetof(struct S, data)` is where its elements **begin** — the tight base for
+sizing an allocation, `offsetof(struct S, data) + n * sizeof(T)` — and
+`alignof(struct S)` counts the element type, so the tail is always aligned for a
+`T`. `sizeof(struct S)` excludes the member (it adds 0) but is still rounded up
+to the struct's alignment, so it can exceed `offsetof(struct S, data)` by a few
+bytes of trailing padding; both over-allocate safely, offsetof exactly.
 
 `sizeof` understands struct layout (including padding), so
 `alloc<struct node<int32>>(n)` allocates correctly. Struct values can be

@@ -36,6 +36,13 @@ fn main() -> int32 {
     println("point = (%d, %d)", p->x, p->y);
     println("sizeof(point) = %llu", sizeof(struct point));
 
+    // sizeof / alignof / offsetof are compile-time uint64 layout constants.
+    // The int32 `value` pads out to the pointer's 8-byte alignment, so `next`
+    // sits at offset 8 and the whole node is 16 bytes.
+    println("sizeof(node<int32>) = %llu, alignof = %llu, next @ %llu",
+            sizeof(struct node<int32>), alignof(struct node<int32>),
+            offsetof(struct node<int32>, next));
+
     // Dereferencing copies the struct; `.` accesses fields of a value.
     let q = *p;
     q.x = 30;

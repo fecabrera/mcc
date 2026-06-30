@@ -144,6 +144,27 @@ def test_sizeof_in_dimension():
     assert run(source) == 8
 
 
+def test_alignof_in_dimension():
+    source = """
+    fn main() -> int32 {
+        let a: uint8[alignof(int64) * 2];   // 8 * 2 = 16
+        return len(a) as int32;
+    }
+    """
+    assert run(source) == 16
+
+
+def test_offsetof_in_dimension():
+    source = """
+    struct mixed { a: uint8; b: int64; c: uint16; }
+    fn main() -> int32 {
+        let a: uint8[offsetof(struct mixed, c)];   // 16
+        return len(a) as int32;
+    }
+    """
+    assert run(source) == 16
+
+
 def test_const_expression_dimension_must_be_positive():
     with pytest.raises(LangError, match="array size must be at least 1"):
         compile_ir("const N = 2; fn main() { let x: int32[N - 2]; }")

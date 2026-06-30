@@ -291,7 +291,9 @@ reference section.
 - [x] [Operators](docs/language.md#operators) — arithmetic, comparison, logical
       (`and`/`or`/`!`), bitwise (`&` `|` `^` `<<` `>>` `~`), `cond ? a : b`
 - [x] [Casts](docs/language.md#casts) — explicit `as`
-- [x] [Pointers](docs/language.md#pointers) — address-of, deref, `null`
+- [x] [Pointers](docs/language.md#pointers) — address-of, deref, `null`,
+      `sizeof`/`alignof` (of a type or a variable) and `offsetof(struct S, field)`
+      as compile-time `uint64` layout constants
 - [x] [Function pointers](docs/language.md#function-pointers)
 - [x] [Arrays](docs/language.md#arrays) — fixed-size `T[N]` (`N` any constant
       expression), indexing, `len`, `sizeof`
@@ -379,11 +381,6 @@ Grouped by scope.
 
 #### Structs, arrays, and data layout
 
-- [ ] Struct ergonomics and C-layout interop:
-  - [ ] `offsetof(struct S, field)` — the byte offset of a field as a constant
-        (today only `sizeof`, which includes trailing padding)
-  - [ ] `alignof(T)` — the alignment requirement of a type as a constant, for
-        laying out buffers and matching the C ABI (today only `sizeof`)
 - [ ] Unions — `union Name { i: int64; f: float64; p: void*; }`, members
       sharing one storage (size of the largest, all at offset 0), for C-layout
       interop (`epoll_data`, `sigval`, most syscall structs embed a union) and

@@ -69,6 +69,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   cannot be set in a literal or borrowed as a `slice<T>` (its length is not
   static) — index it through its pointer. See [Structs](docs/language.md#structs)
   and [examples/flexible_array_members.mc](examples/flexible_array_members.mc).
+- **`alignof` and `offsetof`** — two more compile-time `uint64` layout
+  constants, the C counterparts of the same name. `alignof(T)` is a type's
+  alignment in bytes (and, like `sizeof`, also accepts a variable —
+  `alignof(v)`); `offsetof(struct S, field)` is a field's byte offset within a
+  struct, honoring padding, `@packed`, and `@align`. Both fold at compile time,
+  so they can size arrays and initialize a `const`. For a flexible array member,
+  `offsetof(struct S, data)` is where its elements begin — the tight base for an
+  allocation — and `alignof` counts the element type. See
+  [Pointers](docs/language.md#pointers) and [Structs](docs/language.md#structs).
 - **Constant-expression array sizes** — an array dimension may be any constant
   integer expression (`int32[N + 1]`, `uint8[2 * SIZE]`), not just a literal or a
   lone `const` name.

@@ -520,3 +520,124 @@ def test_generic_flexible_array_member(capfd):
         """
     )
     assert capfd.readouterr().out == "8 60\n"
+
+
+# ------------------------------------------------------- alignof and offsetof
+
+# uint8 at 0, int64 padded to 8, uint16 at 16; sizeof 24, alignment 8.
+MIXED = "struct mixed { a: uint8; b: int64; c: uint16; }\n"
+
+
+def test_alignof_parses():
+    from mcc.nodes import AlignOf
+
+    (stmt,) = parse("fn f() { let n = alignof(int64); }").functions[0].body
+    assert isinstance(stmt.value, AlignOf)
+    assert str(stmt.value.type_name) == "int64"
+
+
+def test_offsetof_parses():
+    from mcc.nodes import OffsetOf
+
+    (stmt,) = parse("fn f() { let n = offsetof(struct s, field); }").functions[0].body
+    assert isinstance(stmt.value, OffsetOf)
+    assert str(stmt.value.type_name) == "s" and stmt.value.field == "field"
+
+
+def test_alignof_scalars():
+    assert run(
+        "fn main() -> int32 { return (alignof(int64) + alignof(uint8)) as int32; }"
+    ) == 9
+
+
+def test_alignof_struct():
+    assert run(MIXED + "fn main() -> int32 { return alignof(struct mixed) as int32; }") == 8
+
+
+def test_alignof_of_a_variable():
+    # Like sizeof, a bare name in scope is the variable's type.
+    assert run(
+        MIXED + "fn main() -> int32 { let m: struct mixed; return alignof(m) as int32; }"
+    ) == 8
+
+
+def test_offsetof_honors_padding():
+    assert run(MIXED + "fn main() -> int32 { return offsetof(struct mixed, c) as int32; }") == 16
+
+
+def test_offsetof_packed_has_no_padding():
+    assert run(
+        "@packed struct wire { tag: uint8; length: uint64; }\n"
+        "fn main() -> int32 { return offsetof(struct wire, length) as int32; }"
+    ) == 1
+
+
+def test_offsetof_follows_extends():
+    assert run(
+        "struct base { x: int32; y: int32; }\n"
+        "struct derived extends base { z: int32; }\n"
+        "fn main() -> int32 { return offsetof(struct derived, z) as int32; }"
+    ) == 8
+
+
+def test_offsetof_in_generic_struct():
+    assert run(
+        "struct box<T> { tag: uint8; value: T; }\n"
+        "fn main() -> int32 { return offsetof(struct box<int64>, value) as int32; }"
+    ) == 8
+
+
+def test_alignof_and_offsetof_in_const():
+    assert run(
+        MIXED + "const OFF = offsetof(struct mixed, b);\n"
+        "const AL = alignof(int64);\n"
+        "fn main() -> int32 { return (OFF + AL) as int32; }"  # 8 + 8
+    ) == 16
+
+
+def test_offsetof_of_a_flexible_array_member(capfd):
+    # The FAM's offset is where its elements physically begin -- after the
+    # header, padded to the element's alignment. sizeof rounds that up to the
+    # struct alignment (here it includes a byte of trailing padding), so offsetof
+    # is the tight base for a FAM allocation. alignof counts the FAM element.
+    run(
+        """
+        import "libc/stdio";
+        struct s { a: int64; b: uint8; data: uint8[]; }
+        fn main() -> int32 {
+            printf("%llu %llu %llu\\n",
+                sizeof(struct s),            // 16 (rounded to align 8)
+                offsetof(struct s, data),    // 9  (right after a, b)
+                alignof(struct s));          // 8
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "16 9 8\n"
+
+
+def test_alignof_struct_counts_a_flexible_array_member():
+    # A 1-byte header but an int64 FAM element raises the alignment to 8.
+    assert run(
+        "struct buf { n: uint8; data: int64[]; }\n"
+        "fn main() -> int32 { return alignof(struct buf) as int32; }"
+    ) == 8
+
+
+@pytest.mark.parametrize(
+    "source, message",
+    [
+        (
+            "fn main() -> int32 { return offsetof(int32, x) as int32; }",
+            "offsetof needs a struct",
+        ),
+        (
+            "struct point { x: int32; y: int32; }\n"
+            "fn main() -> int32 { return offsetof(struct point, z) as int32; }",
+            "no field 'z'",
+        ),
+    ],
+)
+def test_offsetof_errors(source, message):
+    with pytest.raises(LangError, match=message):
+        compile_ir(source)

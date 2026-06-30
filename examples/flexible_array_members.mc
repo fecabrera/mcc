@@ -12,8 +12,14 @@ struct packet {
 
 // One malloc covers the header plus `n` elements; the elements live right after
 // `length`, reached through `p->data` (which is just a pointer to the tail).
+//
+// `offsetof(struct packet, data)` is where the elements begin -- the tight base
+// for the allocation. `sizeof(struct packet)` works too, but it is rounded up to
+// the struct's alignment and so can include trailing padding the elements would
+// overlap; offsetof is exact. (`alignof` counts the element type, so the tail
+// is always aligned for a T.)
 fn make_packet(n: uint64) -> struct packet* {
-    let p = alloc<byte>(sizeof(struct packet) + n * sizeof(int32))
+    let p = alloc<byte>(offsetof(struct packet, data) + n * sizeof(int32))
         as struct packet*;
     p->length = n;
     let i: uint64 = 0;

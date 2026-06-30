@@ -19,6 +19,7 @@ from llvmlite import ir
 
 from mcc.errors import LangError
 from mcc.nodes import (
+    AlignOf,
     ArrayLit,
     Asm,
     Assign,
@@ -53,6 +54,7 @@ from mcc.nodes import (
     Len,
     Member,
     NullLit,
+    OffsetOf,
     Program,
     Return,
     SizeOf,
@@ -785,6 +787,37 @@ def type_size(lang_type: LangType) -> int:
     if isinstance(lang_type.ir, ir.IntType):
         return max(1, lang_type.ir.width // 8)
     return 8  # float64
+
+
+def field_offset(struct_type: LangType, fname: str, line: int) -> int:
+    """Compute the byte offset of a field within a struct, as ``offsetof`` reports.
+
+    Walks the fields accumulating the same offsets :func:`type_size` does --
+    padding each field to its alignment, except in a ``@packed`` struct where
+    fields sit at consecutive bytes -- so the result matches the emitted layout.
+
+    Args:
+        struct_type: The struct type.
+        fname: The field whose offset is wanted.
+        line: Source line for diagnostics.
+
+    Returns:
+        The field's byte offset.
+
+    Raises:
+        LangError: When ``struct_type`` is not a struct or has no such field.
+    """
+    if not is_struct(struct_type):
+        raise LangError(f"offsetof needs a struct, not {struct_type}", line)
+    offset = 0
+    for name, ftype in struct_type.fields:
+        if not struct_type.packed:
+            align = type_align(ftype)
+            offset = (offset + align - 1) // align * align
+        if name == fname:
+            return offset
+        offset += type_size(ftype)
+    raise LangError(f"struct {struct_type} has no field {fname!r}", line)
 
 
 COMPARISON_OPS = ("==", "!=", "<", "<=", ">", ">=")
@@ -3580,6 +3613,13 @@ class CodeGen:
         if isinstance(expr, SizeOf):
             size = type_size(self.sizeof_operand(expr.type_name, expr.line))
             return TypedValue(ir.Constant(UINT64.ir, size), UINT64)
+        if isinstance(expr, AlignOf):
+            align = type_align(self.sizeof_operand(expr.type_name, expr.line))
+            return TypedValue(ir.Constant(UINT64.ir, align), UINT64)
+        if isinstance(expr, OffsetOf):
+            struct_type = self.lang_type(expr.type_name, expr.line)
+            off = field_offset(struct_type, expr.field, expr.line)
+            return TypedValue(ir.Constant(UINT64.ir, off), UINT64)
         if isinstance(expr, Len):
             # The element count is a compile-time property of the array's type;
             # read it through the address so the array does not decay first. It
@@ -4539,6 +4579,13 @@ class CodeGen:
         if isinstance(expr, SizeOf):
             size = type_size(self.lang_type(expr.type_name, line))
             return TypedValue(ir.Constant(UINT64.ir, size), UINT64)
+        if isinstance(expr, AlignOf):
+            align = type_align(self.lang_type(expr.type_name, line))
+            return TypedValue(ir.Constant(UINT64.ir, align), UINT64)
+        if isinstance(expr, OffsetOf):
+            struct_type = self.lang_type(expr.type_name, line)
+            off = field_offset(struct_type, expr.field, line)
+            return TypedValue(ir.Constant(UINT64.ir, off), UINT64)
         if isinstance(expr, Var):
             const = self.consts.get(expr.name)
             if const is not None:

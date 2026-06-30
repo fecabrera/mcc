@@ -7,6 +7,7 @@ import re
 from mcc.errors import LangError
 from mcc.lexer import Token
 from mcc.nodes import (
+    AlignOf,
     ArrayLit,
     Asm,
     Assign,
@@ -41,6 +42,7 @@ from mcc.nodes import (
     Logical,
     Member,
     NullLit,
+    OffsetOf,
     Program,
     Return,
     SizeOf,
@@ -454,6 +456,8 @@ class Parser:
         "false",
         "null",
         "sizeof",
+        "alignof",
+        "offsetof",
         "len",
         "(",
         "[",
@@ -1351,6 +1355,18 @@ class Parser:
             type_name = self.parse_type_ref()
             self.expect(")")
             return SizeOf(type_name, tok.line)
+        if tok.kind == "alignof":
+            self.expect("(")
+            type_name = self.parse_type_ref()
+            self.expect(")")
+            return AlignOf(type_name, tok.line)
+        if tok.kind == "offsetof":
+            self.expect("(")
+            type_name = self.parse_type_ref()
+            self.expect(",")
+            field = self.expect("IDENT").text
+            self.expect(")")
+            return OffsetOf(type_name, field, tok.line)
         if tok.kind == "len":
             self.expect("(")
             operand = self.parse_expr()
