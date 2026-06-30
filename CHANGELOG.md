@@ -60,6 +60,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `malloc`/`calloc`/`realloc`/`free`, `memcpy`/`memmove`/`memset`/`memchr`/
   `memcmp`, `qsort`/`bsearch`, and the raw stream buffers of
   `fread`/`fwrite`/`setbuf`/`setvbuf`. See [Types](docs/language.md#types).
+- **Flexible array members** — a struct's last field may be written `field: T[]`
+  with no size: a trailing run of `T` that adds **0** to `sizeof` and decays to a
+  `T*` at the struct's tail, so one allocation holds a header plus a contiguous
+  run of elements (the C `struct { int len; T data[]; }` idiom, without the
+  `T[1]` "struct hack"). It must be the last field with `[]` as its only
+  dimension; a struct ending in one cannot be an `extends` base, and the member
+  cannot be set in a literal or borrowed as a `slice<T>` (its length is not
+  static) — index it through its pointer. See [Structs](docs/language.md#structs)
+  and [examples/flexible_array_members.mc](examples/flexible_array_members.mc).
 - **Constant-expression array sizes** — an array dimension may be any constant
   integer expression (`int32[N + 1]`, `uint8[2 * SIZE]`), not just a literal or a
   lone `const` name.

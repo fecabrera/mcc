@@ -632,6 +632,23 @@ def is_array(lang_type: LangType) -> bool:
     return lang_type.element is not None
 
 
+def is_flexible_array(lang_type: LangType) -> bool:
+    """Report whether a type is a flexible array member's ``[0 x T]``.
+
+    A trailing struct field ``field: T[]`` lowers to a zero-length array: it adds
+    nothing to ``sizeof`` and decays to a ``T*`` at the struct's tail. A literal
+    ``[0]`` size is rejected by the parser, so a zero count is an unambiguous
+    marker for a flexible array member.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` for a zero-length array type.
+    """
+    return is_array(lang_type) and lang_type.count == 0
+
+
 def is_struct(lang_type: LangType) -> bool:
     """Report whether a type is a struct.
 
@@ -1795,14 +1812,21 @@ class CodeGen:
             # (e.g. node<T> holding a node<T>*) can refer to themselves.
             self.struct_types[mangled] = struct_type
             fields = tuple(
-                (fname, self.lang_type(ftype, decl.line))
-                for fname, ftype in decl.fields
+                (fname, self.field_type(ftype, i == len(decl.fields) - 1, decl))
+                for i, (fname, ftype) in enumerate(decl.fields)
             )
         finally:
             self.resolving_bases.discard(mangled)
             self.type_bindings = outer
             self.current_source = outer_source
         if base_type is not None:
+            if base_type.fields and is_flexible_array(base_type.fields[-1][1]):
+                raise LangError(
+                    f"cannot extend struct {base_type.name!r}: it ends in a "
+                    "flexible array member, which must stay the last field",
+                    decl.line,
+                    source=decl.source,
+                )
             inherited = {fname for fname, _ in base_type.fields}
             for fname, _ in fields:
                 if fname in inherited:
@@ -1864,6 +1888,44 @@ class CodeGen:
             return False
         n = len(base.fields)
         return n <= len(derived.fields) and derived.fields[:n] == base.fields
+
+    def field_type(self, ftype: TypeRef, is_last: bool, decl: StructDecl) -> LangType:
+        """Resolve a struct field's type, lowering a flexible array member.
+
+        A trailing field written ``field: T[]`` is a flexible array member: an
+        inferred dimension (``None``) only legal here, on the struct's last
+        field, and as its sole dimension. It lowers to a zero-length array
+        ``[0 x T]``, which adds nothing to ``sizeof`` and decays to a ``T*`` at
+        the struct's tail (see :meth:`value_at`). Every other field resolves
+        normally.
+
+        Args:
+            ftype: The field's parsed type.
+            is_last: Whether this is the struct's last declared field.
+            decl: The owning declaration, for error attribution.
+
+        Returns:
+            The resolved field ``LangType``.
+
+        Raises:
+            LangError: When an inferred ``[]`` is misused (not last, not the sole
+                dimension, or over a ``void`` element).
+        """
+        if None not in ftype.dims:
+            return self.lang_type(ftype, decl.line)
+        if ftype.dims != [None] or not is_last:
+            raise LangError(
+                "a flexible array member 'field: T[]' must be the struct's last "
+                "field, with '[]' as its only array dimension",
+                decl.line,
+                source=decl.source,
+            )
+        element = self.lang_type(dataclasses_replace(ftype, dims=[]), decl.line)
+        if element is VOID:
+            raise LangError(
+                "cannot make a flexible array of void", decl.line, source=decl.source
+            )
+        return list_of(element, 0)
 
     def struct_field(
         self, owner: LangType, fname: str, line: int
@@ -2384,6 +2446,13 @@ class CodeGen:
     def store_struct_field(self, slot, struct_type, fname, tv, line, what):
         """Coerce ``tv`` to field ``fname``'s type and store it into ``slot``."""
         index, ftype = self.struct_field(struct_type, fname, line)
+        if is_flexible_array(ftype):
+            raise LangError(
+                f"{what} {fname!r} is a flexible array member with no storage; "
+                "allocate the struct with trailing room and fill it through "
+                f"the {fname!r} pointer",
+                line,
+            )
         addr = self.builder.gep(
             slot, [I32_ZERO, ir.Constant(ir.IntType(32), index)], inbounds=True
         )
@@ -4154,6 +4223,12 @@ class CodeGen:
         # and the static length, which would otherwise decay away once the value
         # is read. Reached through the address, so the array type survives.
         src_t = self.lvalue_type(value_expr)
+        if src_t is not None and is_flexible_array(src_t):
+            raise LangError(
+                "cannot borrow a flexible array member as a slice; its length is "
+                "not known statically -- index it through its pointer instead",
+                line,
+            )
         if isinstance(value_expr, StrLit) or (src_t is not None and is_array(src_t)):
             addr, owner, _, _ = self.gen_addr(value_expr, line)
             self.check_borrow_element(owner.element, value_expr, str(owner), target, line)

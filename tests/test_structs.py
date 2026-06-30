@@ -410,3 +410,113 @@ def test_list_from_array_builds_a_private_copy(capfd):
         """
     )
     assert capfd.readouterr().out == "18 3\n"
+
+
+# ------------------------------------------------ flexible array members (FAM)
+
+# A trailing `field: T[]` lays out as a zero-length array, last in the struct.
+PACKET = "struct packet { length: int32; data: int32[]; }\n"
+
+
+def test_flexible_array_member_parses():
+    (decl,) = parse(PACKET).structs
+    assert [(n, str(t)) for n, t in decl.fields] == [
+        ("length", "int32"),
+        ("data", "int32[]"),
+    ]
+
+
+def test_flexible_array_member_adds_nothing_to_sizeof():
+    # The FAM contributes 0; sizeof is just the int32 length.
+    assert (
+        run(PACKET + "fn main() -> int32 { return sizeof(struct packet) as int32; }")
+        == 4
+    )
+
+
+def test_flexible_array_member_emits_zero_length_array():
+    ir_text = compile_ir(PACKET + "fn f(p: struct packet*) -> int32 { return p->length; }")
+    assert '%"packet" = type {i32, [0 x i32]}' in ir_text
+
+
+@pytest.mark.parametrize(
+    "source, message",
+    [
+        (
+            "struct bad { data: int32[]; length: int32; }\n"
+            "fn f(b: struct bad*) {}",
+            "must be the struct's last field",
+        ),
+        (
+            "struct bad { n: int32; data: int32[][3]; }\n"
+            "fn f(b: struct bad*) {}",
+            "only array dimension",
+        ),
+        (
+            "struct base { n: int32; data: int32[]; }\n"
+            "struct derived extends base { extra: int32; }\n"
+            "fn f(d: struct derived*) {}",
+            "ends in a flexible array member",
+        ),
+        (
+            PACKET + "fn f() { let p = struct packet { length = 1, data = 0 }; }",
+            "flexible array member with no storage",
+        ),
+        (
+            'import "list";\n' + PACKET
+            + "fn f(p: struct packet*) { let s = p->data as slice<int32>; }",
+            "cannot borrow a flexible array member",
+        ),
+    ],
+)
+def test_flexible_array_member_errors(source, message):
+    with pytest.raises(LangError, match=message):
+        compile_ir(source)
+
+
+def test_flexible_array_member_roundtrips(capfd):
+    run(
+        """
+        import "libc/stdio";
+        import "libc/stdlib";
+        struct packet { length: int32; data: int32[]; }
+        fn main() -> int32 {
+            let n: int32 = 4;
+            let p = malloc(sizeof(struct packet)
+                           + (n as uint64) * sizeof(int32)) as struct packet*;
+            p->length = n;
+            let i: int32 = 0;
+            while (i < n) { p->data[i] = i * i; i = i + 1; }
+            let sum: int32 = 0;
+            i = 0;
+            while (i < p->length) { sum = sum + p->data[i]; i = i + 1; }
+            printf("%d\\n", sum);                    // 0+1+4+9 = 14
+            free(p as byte*);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "14\n"
+
+
+def test_generic_flexible_array_member(capfd):
+    run(
+        """
+        import "libc/stdio";
+        import "memory";
+        struct vec<T> { length: uint64; items: T[]; }
+        fn main() -> int32 {
+            let v = alloc<byte>(sizeof(struct vec<int32>)
+                                + 3 * sizeof(int32)) as struct vec<int32>*;
+            v->length = 3;
+            v->items[0] = 10; v->items[1] = 20; v->items[2] = 30;
+            let sum: int32 = 0;
+            let i: uint64 = 0;
+            while (i < v->length) { sum = sum + v->items[i]; i = i + 1; }
+            printf("%llu %d\\n", sizeof(struct vec<int32>), sum);  // 8 60
+            dealloc(v as byte*);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "8 60\n"

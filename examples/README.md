@@ -34,6 +34,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [enums.mc](enums.mc) | `enum Name: T { M = v, ... }`, `Enum::Member`, the enum name as a type, custom underlying types (uint64 flags, string members), members referencing earlier ones |
 | [structs.mc](structs.mc) | structs, generic structs, `->` / `.`, `null`, struct literals, a hand-built linked list |
 | [struct_literals.mc](struct_literals.mc) | `struct Name { field = value, ... }` literals: omitted fields zeroed or set to a `= default`, free field order, generics (inferred type args), nesting, as args/returns/through a pointer |
+| [flexible_array_members.mc](flexible_array_members.mc) | a trailing `field: T[]` flexible array member: adds 0 to `sizeof`, decays to a `T*` at the struct's tail, one allocation for header plus elements |
 | [data_structures.mc](data_structures.mc) | the growable lib containers: `list<T>`, `stack<T>` (LIFO), `queue<T>` (FIFO ring buffer) |
 | [slices.mc](slices.mc) | the builtin `slice<T>` view: borrowing a `list<T>` or `T[N]` with `as`, `.length`, indexing, `for x in`, passing by value, writing through |
 | [pointers.mc](pointers.mc) | `import`, heap allocation, `&` `*` `[]`, `sizeof`, `as` casts |

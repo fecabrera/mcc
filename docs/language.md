@@ -1103,6 +1103,37 @@ struct entry<K, V> extends pair<K, V> { state: uint8; }   // key, value, state
 A struct extends a single base, named as a struct (optionally generic); a
 pointer, array, or function type is not a valid base.
 
+A struct's last field may be a **flexible array member** — a trailing
+`field: T[]` written with no size. It contributes **0** to `sizeof` and decays
+to a `T*` pointing at the struct's tail, so a single allocation can hold the
+header and a run of elements laid out contiguously after it (the C
+`struct { int len; T data[]; }` idiom, without the `T[1]` "struct hack"). It
+must be the struct's **last** field, with `[]` as its only dimension; a struct
+that ends in one cannot be a base for `extends` (the inherited member would no
+longer be last):
+
+```c
+struct packet {
+    length: uint64;     // element count
+    data: int32[];      // flexible array member — last field, adds 0 to sizeof
+}
+
+fn main() -> int32 {
+    let n: uint64 = 4;
+    // One allocation: the header plus n trailing elements.
+    let p = alloc<byte>(sizeof(struct packet) + n * sizeof(int32))
+        as struct packet*;
+    p->length = n;
+    p->data[0] = 7;            // index through the tail pointer
+    return 0;
+}
+```
+
+The member has no storage of its own, so it cannot be set in a struct literal
+(or given a default) and cannot be borrowed as a `slice<T>` — its length is not
+known statically. Reach it through `p->data`, indexing as far as the allocation
+runs. See [examples/flexible_array_members.mc](examples/flexible_array_members.mc).
+
 `sizeof` understands struct layout (including padding), so
 `alloc<struct node<int32>>(n)` allocates correctly. Struct values can be
 passed to and returned from functions, but not to variadic functions like

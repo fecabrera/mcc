@@ -307,7 +307,8 @@ reference section.
       a field's `= default`, generic type arguments inferred from typed field
       values),
       `@packed`/`@align`/`@volatile`, `extends` (prefix specialization),
-      struct value upcast
+      struct value upcast, flexible array members (a trailing `field: T[]` that
+      adds 0 to `sizeof` and decays to a `T*` at the struct's tail)
 - [x] [Enums](docs/language.md#enums) — `enum Name[: type] { … }`, `Name::Member`
       constants over any underlying type, the name usable as a type
 - [x] [Type aliases](docs/language.md#type-aliases) — `type <name> = <type>;`,
@@ -379,9 +380,6 @@ Grouped by scope.
 #### Structs, arrays, and data layout
 
 - [ ] Struct ergonomics and C-layout interop:
-  - [ ] flexible array members — a trailing `field: T[]` that adds 0 to
-        `sizeof` and decays to a pointer at the struct's tail, for C structs
-        like `linux_dirent64`'s `d_name[]` (today needs the `T[1]` "struct hack")
   - [ ] `offsetof(struct S, field)` — the byte offset of a field as a constant
         (today only `sizeof`, which includes trailing padding)
   - [ ] `alignof(T)` — the alignment requirement of a type as a constant, for
