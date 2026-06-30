@@ -295,6 +295,13 @@ reference section.
 - [x] [Function pointers](docs/language.md#function-pointers)
 - [x] [Arrays](docs/language.md#arrays) — fixed-size `T[N]` (`N` any constant
       expression), indexing, `len`, `sizeof`
+- [x] [Slices](docs/language.md#slices) — the builtin non-owning view
+      `slice<T>` (`{ data: T*; length: uint64 }`) over a contiguous run of `T`:
+      runtime `.length`, indexing, native `for … in`. Borrows from an owned
+      `list<T>`/`T[N]` with an explicit `as` (dropping `capacity`); a
+      `slice<const T>` is the read-only form a mutable slice widens into. A
+      string literal **adapts** to a `slice<char>`/`slice<const char>` from
+      context (NUL dropped), so `writeln("hi")` just works
 - [x] [Structs](docs/language.md#structs) — `.`/`->` access, generics, struct
       literals (`struct point { x = 6, y = 4 }`, omitted fields zeroed or set to
       a field's `= default`, generic type arguments inferred from typed field
@@ -387,39 +394,6 @@ Grouped by scope.
       `typeof`-checked type discriminant, so the live member is recovered safely
       (`case type`). The element type of the [variadic](#functions-and-methods)
       pack's `slice<any>`. Depends on unions and typeof/typeid
-- [ ] `slice<T>` — a builtin non-owning view, `{ data: T*; length: uint64 }`, over a
-      contiguous run of `T`: runtime `length`, indexing, and `for … in`. It borrows
-      and never allocates, distinct from a C array `T[]` (which stays length-less
-      and decays to a bare pointer for the ABI). A 2-word struct, so not C-ABI by
-      value — across the C boundary pass `T*` plus a length instead. Built in
-      dependency-ordered stages:
-  - [x] **Stage 1 — the type + explicit borrows.** The builtin `slice<T>`
-        (`{ data: T*; length: uint64 }`) with `.length` and indexing `s[i]`.
-        Construction is an explicit `as` borrow from an owned `list<T>` or `T[N]` —
-        `xs as slice<T>` reads `{data, length}` and drops `capacity` (a new "borrow"
-        form of `as`, since `as` rejects struct casts today). Self-contained:
-        depends on nothing else here.
-  - [x] **Stage 2 — iteration.** `for … in` over a slice, its own builtin
-        iteration (walking `ptr` from `0` to `length`), with no library
-        `_it`/`_next` protocol. Depends on Stage 1.
-  - [x] **Stage 3 — the element-const axis.** A `slice<const T>` is a read-only
-        view (the element-mutability distinction, like Rust's `&[T]` vs
-        `&mut [T]`): indexing yields a non-assignable element. A `list<T>`/`T[N]`
-        borrows to a `slice<T>`; a `const` one borrows to a `slice<const T>`, so
-        the conversion preserves immutability (and stays sound if `const` ever
-        deepens to the pointee). A mutable `slice<T>` also widens implicitly to
-        `slice<const T>`, so the read-only form is the common one — the place
-        the variadic pack's `slice<const any>` and a format string's
-        `slice<const uint8>` will land. Depends on Stage 1.
-  - [x] **Stage 4 — borrowing in (literal adaptation).** A string literal
-        **adapts** to a `slice<char>` (or `slice<const char>`) from context at
-        compile time (length baked in, the NUL dropped; the buffer stays
-        NUL-terminated so the same literal also serves as `char*`/`uint8*` for
-        C), the way an untyped constant takes its type from context — at a
-        function argument (including a `const`-by-hidden-reference slice
-        parameter, so `writeln("hi")` just works), a `let` slot, or a `return`.
-        Typed owned values still convert **explicitly** with `as` (Stage 1);
-        only literals adapt. Depends on Stage 3.
 - [ ] builtin `range` — fold the standard-library [`range<T>`](docs/language.md)
       into the compiler so a counting loop reads `for i in range(0, 5)` (or
       `for i in range(5)`, `start` defaulting to 0) instead of constructing a
@@ -492,7 +466,7 @@ Grouped by scope.
   - [ ] literal promotion: because the parameter is read-only, a literal
         argument can be promoted to its type at compile time. (For string
         formatting this is now done by a literal adapting to `slice<const uint8>`
-        — see [`slice<T>`](#structs-arrays-and-data-layout) — so `println("{}", a)`
+        — see [`slice<T>`](docs/language.md#slices) — so `println("{}", a)`
         needs no `struct string`.)
 - [ ] Native variadic arguments — `fn f(args: slice<const any>)` (with
       `fn f(args...)` as sugar): a trailing `slice<const any>` parameter collects
@@ -552,7 +526,7 @@ Grouped by scope.
       a string literal adapts to `format` at the call site (so `println("{}", a)`
       works directly), and an owned `struct string` borrows in with
       `str as slice<uint8>` — both via the
-      [`slice<T>`](#structs-arrays-and-data-layout) borrowing rules:
+      [`slice<T>`](docs/language.md#slices) borrowing rules:
   - [ ] formatting over the `slice<const uint8>` format with bare/sequential and
         positional placeholders (`"{d} {f} {x} {s}"`, `"{0:d} {1:f} {2:x} {3:s}"`),
         parsed at runtime

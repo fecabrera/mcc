@@ -22,7 +22,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Type aliases** — `type <name> = <type>;`, a transparent alias (not a new
   distinct type) for builtins, pointers, function pointers, and structs;
   `@private` / `@static` apply. See [Type aliases](docs/language.md#type-aliases).
-- **Slices** — `slice<T>`, a builtin non-owning view `{ ptr: T*; length: uint64 }`
+- **Slices** — `slice<T>`, a builtin non-owning view `{ data: T*; length: uint64 }`
   over a contiguous run of `T`, with a runtime `.length`, indexing `s[i]`, and
   native `for x in s` iteration. Constructed by an explicit borrow — `xs as
   slice<T>` from an owned `list<T>` (reads `{data, length}`, drops `capacity`) or
