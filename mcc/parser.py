@@ -577,13 +577,32 @@ class Parser:
         self.expect("fn")
         self.expect("(")
         params = []
+        variadic = False
         while self.cur.kind != ")":
             if params:
                 self.expect(",")
+            if self.cur.kind == "...":
+                ellipsis = self.advance()
+                if not params:
+                    raise LangError(
+                        "'...' needs at least one parameter type before it",
+                        ellipsis.line,
+                    )
+                if self.cur.kind != ")":
+                    raise LangError("'...' must be the last parameter", ellipsis.line)
+                variadic = True
+                break
             params.append(self.parse_type_ref())
         self.expect(")")
         ret = self.parse_type_ref() if self.accept("->") else TypeRef("void")
-        return TypeRef("fn", [], self.parse_stars(greedy_stars), params=params, ret=ret)
+        return TypeRef(
+            "fn",
+            [],
+            self.parse_stars(greedy_stars),
+            params=params,
+            ret=ret,
+            variadic=variadic,
+        )
 
     def parse_stars(self, greedy_stars: bool) -> int:
         """Count the pointer ``*`` tokens following a type.

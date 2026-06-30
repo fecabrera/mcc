@@ -769,6 +769,20 @@ optional callback works:
 if (cb != null) { cb(x); }
 ```
 
+A trailing `...` after at least one fixed parameter makes a **variadic**
+function-pointer type, `fn(A, ...) -> R` — the type of a pointer to a variadic
+function, matching a C `R (*)(A, ...)`. It is distinct from the non-variadic
+form (a plain function does not fit a variadic slot, or vice versa), and it is
+how a variadic like `printf` is held or passed:
+
+```c
+fn run(log: fn(char*, ...) -> int32) -> int32 {
+    return log("answer = %d\n", 42);    // called with varargs
+}
+
+run(printf);
+```
+
 Any expression of function-pointer type is callable, not just a variable —
 a struct field, an array element, or the result of another call:
 
@@ -801,8 +815,7 @@ initialized with one at compile time.
 A `const` (or `@static let`) may also name a single function, giving a
 compile-time **alias** you then call by its new name. The type is inferred from
 the function, so nothing needs spelling out — even a variadic like `println`
-aliases cleanly (a variadic function-pointer *type* cannot be written, but the
-alias never needs to):
+aliases cleanly:
 
 ```c
 const log = println;          // an alias; the type is inferred

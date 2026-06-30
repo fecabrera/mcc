@@ -8,6 +8,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Variadic function-pointer types** — `fn(A, ...) -> R`, a trailing `...`
+  after at least one fixed parameter, is the type of a pointer to a variadic
+  function (matching a C `R (*)(A, ...)`). It is distinct from the non-variadic
+  form and usable anywhere a type is — a parameter, a struct field, a `let`, or
+  a `const` alias — so a variadic like `printf` can be held, passed, and called
+  through with varargs. See [Function pointers](docs/language.md#function-pointers).
+
 ### Fixed
 
 - A `const` or `@static` global may now name a function (a compile-time alias),
@@ -16,8 +25,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   unannotated `@static let f = fn;` reported a misleading error, because their
   initializers were folded before functions were declared. Such initializers
   are now deferred until functions exist, and the type is inferred from the
-  function — so even a variadic like `println` aliases cleanly (a variadic
-  function-pointer *type* still cannot be written, but the alias needs none).
+  function — so even a variadic like `println` aliases cleanly.
 
 ## [0.3.0] - 2026-06-29
 

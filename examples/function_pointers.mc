@@ -11,6 +11,14 @@ fn apply(op: fn(int32, int32) -> int32, x: int32, y: int32) -> int32 {
     return op(x, y);
 }
 
+// A variadic function-pointer type, `fn(A, ...) -> R` (a trailing `...` after
+// at least one fixed parameter), types a pointer to a variadic function -- so
+// even a printf-style function like `println` can be passed and called through
+// with varargs.
+fn log_with(printer: fn(char*, ...), label: char*) {
+    printer("logging from %s", label);
+}
+
 // A function pointer can be returned, too. Here a default is picked and a
 // case overrides it for specific inputs.
 fn op_for(symbol: char) -> fn(int32, int32) -> int32 {
@@ -54,6 +62,9 @@ fn main() -> int32 {
 
     // A const alias of a function, called by its new name (`log` is `println`).
     log("plus(8, 8) = %d", plus(8, 8));
+
+    // Passing a variadic function through a variadic function-pointer param.
+    log_with(println, "fn_ptr demo");
 
     // Calling the result of a call directly.
     println("op_for('-')(9, 2) = %d", op_for('-')(9, 2));

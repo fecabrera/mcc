@@ -38,6 +38,7 @@ class TypeRef:
     ret: "TypeRef | None" = None
     dims: list = field(default_factory=list)  # array sizes, outermost first
     const: bool = False  # a leading `const` read-only qualifier
+    variadic: bool = False  # a trailing `...` in a fn(...) type's parameters
 
     def __str__(self) -> str:
         """Render the type back to its source spelling.
@@ -47,9 +48,10 @@ class TypeRef:
             generic arguments, trailing ``*``, and array dimensions.
         """
         if self.params is not None:
-            text = (
-                "fn(" + ", ".join(str(p) for p in self.params) + ") -> " + str(self.ret)
-            )
+            parts = [str(p) for p in self.params]
+            if self.variadic:
+                parts.append("...")
+            text = "fn(" + ", ".join(parts) + ") -> " + str(self.ret)
         else:
             text = self.name
             if self.args:

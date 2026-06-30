@@ -276,7 +276,10 @@ def function_type(ret: LangType, params: tuple, variadic: bool = False) -> LangT
         A ``LangType`` for the function-pointer type.
     """
     fnty = ir.FunctionType(ret.ir, [p.ir for p in params], var_arg=variadic)
-    name = "fn(" + ", ".join(p.name for p in params) + ") -> " + ret.name
+    parts = [p.name for p in params]
+    if variadic:
+        parts.append("...")
+    name = "fn(" + ", ".join(parts) + ") -> " + ret.name
     return LangType(
         name, fnty.as_pointer(), signed=False, signature=(ret, tuple(params), variadic)
     )
@@ -1511,7 +1514,7 @@ class CodeGen:
         if ref.params is not None:  # a fn(...) -> ret function-pointer type
             ret = self.lang_type(ref.ret, line)
             params = tuple(self.lang_type(p, line) for p in ref.params)
-            base = function_type(ret, params)
+            base = function_type(ret, params, ref.variadic)
             for _ in range(ref.stars):
                 base = pointer_to(base)
             return self.apply_dims(base, ref.dims, line)

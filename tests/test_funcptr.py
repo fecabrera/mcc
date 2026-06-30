@@ -398,3 +398,69 @@ def test_function_const_used_in_a_static_table():
 def test_non_function_const_is_not_callable():
     with pytest.raises(LangError, match="not callable; it is a int32"):
         compile_ir("const x: int32 = 5; fn main() -> int32 { return x(); }")
+
+
+# ------------------------------------------ variadic function-pointer types
+
+# `fn(A, ...) -> R` is the type of a pointer to a variadic function (a trailing
+# `...` after at least one fixed parameter), matching a C `R (*)(A, ...)`.
+
+
+def test_variadic_fn_type_parses():
+    (func,) = parse("fn f(log: fn(char*, ...) -> int32) {}").functions
+    log_type = func.params[0][1]
+    assert log_type.variadic is True
+    assert str(log_type) == "fn(char*, ...) -> int32"
+
+
+def test_call_through_a_variadic_fn_pointer(capfd):
+    run(
+        """
+        import "libc/stdio";
+        fn run(log: fn(char*, ...) -> int32, n: int32) -> int32 {
+            return log("n=%d\\n", n);
+        }
+        fn main() -> int32 { run(printf, 7); return 0; }
+        """
+    )
+    assert capfd.readouterr().out == "n=7\n"
+
+
+def test_variadic_fn_pointer_in_a_struct_field(capfd):
+    run(
+        """
+        import "libc/stdio";
+        type printer = fn(char*, ...) -> int32;
+        struct sink { write: printer; }
+        fn main() -> int32 {
+            let s = struct sink { write = printf };
+            s.write("x=%d\\n", 8);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "x=8\n"
+
+
+def test_variadic_and_non_variadic_fn_types_are_distinct():
+    # A plain function does not fit a variadic slot, and vice versa.
+    with pytest.raises(LangError, match=r"expected fn\(char\*, \.\.\.\) -> int32"):
+        compile_ir(
+            "fn plain(a: char*) -> int32 { return 0; }\n"
+            "fn main() -> int32 {\n"
+            "    let f: fn(char*, ...) -> int32 = plain;\n"
+            "    return f(\"x\");\n"
+            "}"
+        )
+
+
+@pytest.mark.parametrize(
+    "type_text, message",
+    [
+        ("fn(...) -> int32", "at least one parameter type before it"),
+        ("fn(int32, ..., int32) -> int32", "must be the last parameter"),
+    ],
+)
+def test_malformed_variadic_fn_type(type_text, message):
+    with pytest.raises(LangError, match=message):
+        compile_ir(f"fn main() {{ let f: {type_text}; }}")
