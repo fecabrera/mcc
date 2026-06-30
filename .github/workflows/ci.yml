@@ -129,8 +129,13 @@ jobs:
         with:
           python-version: "3.14"
 
+      # Build the wheel once, then install that exact file -- so the artifact
+      # uploaded below is the very thing the smoke test exercises.
+      - name: Build the wheel
+        run: pip wheel . --no-deps -w dist
+
       - name: Install the wheel
-        run: pip install .
+        run: pip install dist/*.whl
 
       # Compile from a directory other than the repo root, so `import "std"`
       # can only resolve through the *bundled* stdlib (mcc/libmc inside the
@@ -145,3 +150,12 @@ jobs:
           cd "$tmp"
           mcc hi.mc --run             # JIT: exercises codegen + the bundled stdlib
           mcc hi.mc -o hi && ./hi     # native: object emission + linking
+
+      # The wheel is pure Python (py3-none-any), identical on every runner, so
+      # publish it once -- from Linux -- to avoid a duplicate-name upload.
+      - name: Upload the wheel
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcc-wheel
+          path: dist/*.whl
