@@ -51,6 +51,23 @@ def test_multi_char_operators_win_over_single():
     assert kinds("== != <= >= ->")[:-1] == ["==", "!=", "<=", ">=", "->"]
 
 
+def test_compound_assignment_operators_are_single_tokens():
+    src = "+= -= *= /= %= &= |= ^= <<= >>="
+    assert kinds(src)[:-1] == [
+        "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>=",
+    ]
+
+
+def test_compound_assign_beats_shorter_operators():
+    # `<<=` must not lex as `<<` then `=`, and `+=` not as `+` then `=`.
+    assert kinds("a <<= 1")[:-1] == ["IDENT", "<<=", "INT"]
+    assert kinds("a += 1")[:-1] == ["IDENT", "+=", "INT"]
+    # A bare `<=`/`<<`/`=` is still lexed as before, not swallowed.
+    assert kinds("a <= b << c = d")[:-1] == [
+        "IDENT", "<=", "IDENT", "<<", "IDENT", "=", "IDENT",
+    ]
+
+
 def test_float_and_int_literals():
     assert kinds("1.5 2")[:-1] == ["FLOAT", "INT"]
 

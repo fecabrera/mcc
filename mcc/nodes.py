@@ -353,6 +353,31 @@ class Assign:
 
 
 @dataclass
+class CompoundAssign:
+    """A compound assignment: ``target op= value;`` for an arithmetic,
+    bitwise, or shift operator.
+
+    ``target op= value`` means ``target = target op value``, but the target's
+    address is computed only once -- so any side effects in a complex lvalue
+    (e.g. ``arr[next()] += 1``) happen a single time.
+
+    Attributes:
+        target: The lvalue expression written: a ``Var``, ``*ptr`` (a ``Unary``
+            with ``op == "*"``), ``base[index]`` (an ``Index``), or a member
+            (a ``Member``) -- the same forms a plain assignment accepts.
+        op: The base binary operator, without the trailing ``=`` (e.g. ``"+"``,
+            ``"<<"``).
+        value: The right-hand side expression.
+        line: Source line for diagnostics.
+    """
+
+    target: object
+    op: str
+    value: object
+    line: int
+
+
+@dataclass
 class Return:
     """A ``return [value];`` statement.
 

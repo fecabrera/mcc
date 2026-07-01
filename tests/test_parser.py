@@ -2,8 +2,8 @@ import pytest
 
 from mcc.errors import LangError
 from mcc.nodes import (
-    Assign, Binary, Break, Call, CharLit, Continue, ExprStmt, If, Let, Return,
-    StrLit, Unary, Var,
+    Assign, Binary, Break, Call, CharLit, CompoundAssign, Continue, ExprStmt,
+    If, Index, IntLit, Let, Member, Return, StrLit, Unary, Var,
 )
 from helpers import parse
 
@@ -118,6 +118,32 @@ def test_assignment_vs_expression_statement():
     assign, call = parse_main_body("x = 1; f(x);")
     assert isinstance(assign, Assign) and assign.name == "x"
     assert isinstance(call, ExprStmt) and isinstance(call.expr, Call)
+
+
+def test_compound_assignment_maps_to_base_operator():
+    ops = {"+=": "+", "-=": "-", "*=": "*", "/=": "/", "%=": "%",
+           "&=": "&", "|=": "|", "^=": "^", "<<=": "<<", ">>=": ">>"}
+    for token, base in ops.items():
+        (stmt,) = parse_main_body(f"x {token} 1;")
+        assert isinstance(stmt, CompoundAssign)
+        assert stmt.op == base
+        assert isinstance(stmt.target, Var) and stmt.target.name == "x"
+        assert isinstance(stmt.value, IntLit) and stmt.value.value == 1
+
+
+def test_compound_assignment_target_forms():
+    var, deref, index, member = parse_main_body(
+        "x += 1; *p += 1; a[i] += 1; s.f += 1;"
+    )
+    assert isinstance(var.target, Var)
+    assert isinstance(deref.target, Unary) and deref.target.op == "*"
+    assert isinstance(index.target, Index)
+    assert isinstance(member.target, Member) and member.target.field == "f"
+
+
+def test_compound_assignment_rejects_non_lvalue():
+    with pytest.raises(LangError, match="invalid assignment target"):
+        parse_main_body("3 += 1;")
 
 
 def test_let_with_and_without_annotation():

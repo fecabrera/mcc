@@ -8,6 +8,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Compound assignment** — `target op= value` for every arithmetic, bitwise,
+  and shift operator (`+= -= *= /= %= &= |= ^= <<= >>=`), meaning
+  `target = target op value`. The target may be any assignable lvalue (a
+  variable, `*p`, `a[i]`, or a field), obeys the same read-only rules as a
+  plain assignment, and is evaluated exactly once — so a complex lvalue like
+  `arr[next()] += 1` runs its side effects a single time. See
+  [Variables](docs/language.md#variables) and
+  [compound_assignment.mc](examples/compound_assignment.mc).
+
 ## [0.3.1] - 2026-06-30
 
 ### Added

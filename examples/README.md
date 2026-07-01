@@ -14,6 +14,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [conditional.mc](conditional.mc) | `@if` / `@else` compile-time selection over `TARGET_OS` / `TARGET_ARCH`, `@symbol` per platform |
 | [literals.mc](literals.mc) | hexadecimal integer literals, `char` character literals and escapes |
 | [arithmetic.mc](arithmetic.mc) | operators, precedence, comparisons, `!`, float math, `abs` |
+| [compound_assignment.mc](compound_assignment.mc) | `+= -= *= /= %= &= \|= ^= <<= >>=`, target evaluated once, through variables/pointers/elements/fields, floats |
 | [control_flow.mc](control_flow.mc) | `if` / `else if` / `else`, integer conditions, `and` / `or`, `while`, `until`, nested loops, `break` / `continue` |
 | [case_when.mc](case_when.mc) | `case` / `when` / `else:` with no fall-through, integer and character subjects, multi-value arms |
 | [defer.mc](defer.mc) | `defer` cleanup at scope exit (return/break included), LIFO order, the block form |

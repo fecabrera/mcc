@@ -17,6 +17,9 @@ TOKEN_SPEC = [
     ("WS", r"[ \t\r\n]+"),
     ("ARROW", r"->"),
     ("ELLIPSIS", r"\.\.\."),
+    # Compound-assignment operators. Listed before OP2/OP so the longest match
+    # wins: `<<=`/`>>=` beat OP2's `<<`/`>>`, and `+=` etc. beat OP's `+`.
+    ("OPASSIGN", r"<<=|>>=|[-+*/%&|^]="),
     ("OP2", r"==|!=|<=|>=|<<|>>|::"),
     ("ANNOT", r"@[A-Za-z_]\w*"),
     ("FLOAT", r"\d+\.\d+(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+"),
@@ -78,7 +81,7 @@ def tokenize(source: str) -> list[Token]:
             raise LangError(f"unexpected character {source[pos]!r}", line)
         kind, text = match.lastgroup, match.group()
         if kind not in ("WS", "COMMENT"):
-            if kind in ("ARROW", "ELLIPSIS", "OP", "OP2") \
+            if kind in ("ARROW", "ELLIPSIS", "OP", "OP2", "OPASSIGN") \
                     or (kind == "IDENT" and text in KEYWORDS):
                 kind = text
             tokens.append(Token(kind, text, line, match.start()))

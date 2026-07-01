@@ -176,6 +176,31 @@ let w = x + 1;          // fine: int64, from x
 x = x + 1;
 ```
 
+**Compound assignment** shortens `target = target op value` to `target op= value`,
+for every arithmetic, bitwise, and shift operator:
+`+=` `-=` `*=` `/=` `%=` `&=` `|=` `^=` `<<=` `>>=`. The target may be any
+assignable lvalue — a variable, a pointer dereference `*p`, an array element
+`a[i]`, or a struct field `s.f` / `p->f` — and the same read-only rules apply
+(a `const` value, a `const` parameter, or a `slice<const T>` element is
+rejected). The right-hand side is a full expression, and the result keeps the
+target's type exactly as the equivalent `=` would, so `x += y` where widening
+`y` would change the type still needs a cast, just like `x = x + y`.
+
+The target is evaluated **once**, so any side effects in a complex lvalue
+happen a single time — the reason to prefer `arr[next()] += 1` over spelling
+out `arr[next()] = arr[next()] + 1`, which would advance `next()` twice:
+
+```c
+let x: int32 = 10;
+x += 5;                 // 15
+x <<= 1;                // 30
+x &= 0xF;               // 14
+
+*p -= 1;                // through a pointer
+counts[digit] += 1;     // an element; digit is evaluated once
+node->total *= 2;       // a field through a pointer
+```
+
 A declaration may omit the initializer if it has a type annotation. Like a
 C local, the variable holds garbage until assigned — reading it first is
 undefined:

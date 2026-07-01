@@ -33,6 +33,7 @@ from mcc.nodes import (
     Case,
     Cast,
     CharLit,
+    CompoundAssign,
     Conditional,
     Const,
     Continue,
@@ -2193,6 +2194,8 @@ class CodeGen:
                 f"assignment to {stmt.name}",
             )
             self.gen_store(tv.value, slot, volatile=volatile)
+        elif isinstance(stmt, CompoundAssign):
+            self.gen_compound_assign(stmt)
         elif isinstance(stmt, If):
             cond = self.gen_cond(stmt.cond)
             if stmt.otherwise:
@@ -2344,6 +2347,102 @@ class CodeGen:
             self.gen_expr(stmt.expr)
         else:
             raise LangError(f"cannot compile statement {stmt!r}", stmt.line)
+
+    def gen_compound_assign(self, stmt: CompoundAssign):
+        """Lower ``target op= value`` to a load, an ``op``, and a store back.
+
+        The target's address is computed once (so a complex lvalue like
+        ``arr[next()]`` runs its side effects a single time), the current value
+        is read from it, combined with the right-hand side via the same rules
+        as ``target op value``, and stored back -- coerced to the target's type,
+        exactly as a plain assignment would be.
+
+        Args:
+            stmt: The ``CompoundAssign`` node.
+
+        Raises:
+            LangError: On a read-only target or operands the operator does not
+                support.
+        """
+        addr, elem_type, align, volatile = self.compound_target_addr(
+            stmt.target, stmt.line
+        )
+        current = TypedValue(
+            self.gen_load(addr, align=align, volatile=volatile),
+            strip_const(elem_type),
+        )
+        rhs = self.gen_expr(stmt.value)
+        result = self.apply_binary(current, rhs, stmt.op, stmt.line)
+        stored = self.coerce(
+            result, elem_type, stmt.line, f"{stmt.op}= assignment"
+        )
+        self.gen_store(stored.value, addr, align=align, volatile=volatile)
+
+    def compound_target_addr(
+        self, target, line: int
+    ) -> tuple[ir.Value, LangType, int | None, bool]:
+        """Address a compound-assignment target, enforcing read-only rules.
+
+        Mirrors the four assignment-statement forms (``Assign``,
+        ``StoreDeref``, ``StoreIndex``, ``StoreMember``): it rejects the same
+        const/read-only targets with the same diagnostics, so ``x op= y`` is
+        writable exactly where ``x = y`` is.
+
+        Args:
+            target: The lvalue expression (``Var``, ``*ptr``, ``Index``, or
+                ``Member``).
+            line: Source line for diagnostics.
+
+        Returns:
+            A ``(pointer, element type, guaranteed alignment, volatile)`` tuple,
+            as in :meth:`gen_addr`.
+
+        Raises:
+            LangError: On a read-only or otherwise invalid target.
+        """
+        if isinstance(target, Var):
+            if target.name in self.const_locals:
+                raise LangError(
+                    f"cannot assign to const parameter {target.name!r}", line
+                )
+            slot, var_type, volatile = self.var_addr(target.name, line)
+            if var_type.const:
+                raise LangError(
+                    f"cannot assign to read-only variable {target.name!r}", line
+                )
+            return slot, var_type, None, volatile
+        if isinstance(target, Unary) and target.op == "*":
+            ptr = self.gen_expr(target.operand)
+            if not is_pointer(ptr.type):
+                raise LangError(f"cannot dereference a {ptr.type}", line)
+            if ptr.type.pointee.const:
+                raise LangError(
+                    "cannot assign through a pointer to a read-only "
+                    f"{ptr.type.pointee}",
+                    line,
+                )
+            return ptr.value, ptr.type.pointee, None, ptr.type.pointee.volatile
+        if isinstance(target, Index):
+            base_t = self.lvalue_type(target.base)
+            if base_t is not None and is_array(base_t) and self.writes_const(
+                target.base
+            ):
+                raise LangError(
+                    "cannot assign to an element of a const parameter", line
+                )
+            addr, element = self.gen_index_addr(target.base, target.index, line)
+            if element.const:
+                raise LangError(
+                    "cannot assign through a read-only slice<const T>", line
+                )
+            return addr, element, None, element.volatile
+        if isinstance(target, Member):
+            if not target.arrow and self.writes_const(target.base):
+                raise LangError(
+                    "cannot assign to a field of a const parameter", line
+                )
+            return self.gen_member_addr(target.base, target.field, target.arrow, line)
+        raise LangError("invalid assignment target", line)
 
     def gen_for(self, stmt: For):
         """Lower ``for x in obj { body }`` to the per-struct it/next protocol.
@@ -4861,14 +4960,38 @@ class CodeGen:
         """
         lhs = self.gen_expr(expr.lhs)
         rhs = self.gen_expr(expr.rhs)
+        return self.apply_binary(lhs, rhs, expr.op, expr.line)
+
+    def apply_binary(
+        self, lhs: TypedValue, rhs: TypedValue, op: str, line: int
+    ) -> TypedValue:
+        """Combine two evaluated operands with a binary operator.
+
+        The operand-unification and instruction-selection core of
+        :meth:`gen_binary`, factored out so a compound assignment
+        (``target op= value``) can reuse it with a freshly loaded left operand.
+
+        Args:
+            lhs: The left operand, already evaluated.
+            rhs: The right operand, already evaluated.
+            op: The operator token (e.g. ``"+"``, ``"<<"``, ``"=="``).
+            line: Source line for diagnostics.
+
+        Returns:
+            The result as a ``TypedValue``.
+
+        Raises:
+            LangError: On operands of mismatched or unsupported types for the
+                operator.
+        """
         if lhs.type != rhs.type:
-            ctx = f"operand of {expr.op!r}"
+            ctx = f"operand of {op!r}"
             both_int = is_integer(lhs.type) and is_integer(rhs.type)
             # An untyped constant operand adapts to the other side's type.
             if rhs.adaptable and not lhs.adaptable:
-                rhs = self.coerce(rhs, lhs.type, expr.line, ctx)
+                rhs = self.coerce(rhs, lhs.type, line, ctx)
             elif lhs.adaptable and not rhs.adaptable:
-                lhs = self.coerce(lhs, rhs.type, expr.line, ctx)
+                lhs = self.coerce(lhs, rhs.type, line, ctx)
             elif lhs.adaptable and rhs.adaptable and both_int:
                 # Two untyped constants: widen to the larger, staying adaptable
                 # (so neither narrows and the result can still fold/adapt).
@@ -4881,19 +5004,19 @@ class CodeGen:
                 # return, argument) still needs an explicit cast. (Mixed
                 # signedness falls through to the type error below.)
                 wide = wider_int_type(lhs.type, rhs.type)
-                lhs = self.widen_operand(lhs, wide, expr.line, ctx)
-                rhs = self.widen_operand(rhs, wide, expr.line, ctx)
+                lhs = self.widen_operand(lhs, wide, line, ctx)
+                rhs = self.widen_operand(rhs, wide, line, ctx)
             else:
-                lhs = self.coerce(lhs, rhs.type, expr.line, ctx)
+                lhs = self.coerce(lhs, rhs.type, line, ctx)
         op_type = lhs.type
-        if expr.op in COMPARISON_OPS:
+        if op in COMPARISON_OPS:
             if is_pointer(op_type) or is_function(op_type):
-                if expr.op not in ("==", "!="):
+                if op not in ("==", "!="):
                     raise LangError(
-                        f"operator {expr.op!r} not supported for {op_type}", expr.line
+                        f"operator {op!r} not supported for {op_type}", line
                     )
                 return TypedValue(
-                    self.builder.icmp_unsigned(expr.op, lhs.value, rhs.value), BOOL
+                    self.builder.icmp_unsigned(op, lhs.value, rhs.value), BOOL
                 )
             if isinstance(op_type.ir, ir.IntType):
                 icmp = (
@@ -4901,10 +5024,10 @@ class CodeGen:
                     if op_type.signed
                     else self.builder.icmp_unsigned
                 )
-                return TypedValue(icmp(expr.op, lhs.value, rhs.value), BOOL)
+                return TypedValue(icmp(op, lhs.value, rhs.value), BOOL)
             if op_type is FLOAT64:
                 return TypedValue(
-                    self.builder.fcmp_ordered(expr.op, lhs.value, rhs.value), BOOL
+                    self.builder.fcmp_ordered(op, lhs.value, rhs.value), BOOL
                 )
         elif is_integer(op_type):
             # Fold constant operands so expressions like 10 * sizeof(int64)
@@ -4912,12 +5035,12 @@ class CodeGen:
             if isinstance(lhs.value, ir.Constant) and isinstance(
                 rhs.value, ir.Constant
             ):
-                if expr.op == "<<" and lhs.adaptable:
+                if op == "<<" and lhs.adaptable:
                     widened = fold_untyped_shift(lhs.value.constant, rhs.value.constant)
                     if widened is not None:
                         return widened
                 folded = fold_int_arithmetic(
-                    expr.op, lhs.value.constant, rhs.value.constant, op_type
+                    op, lhs.value.constant, rhs.value.constant, op_type
                 )
                 if folded is not None:
                     return TypedValue(
@@ -4937,13 +5060,13 @@ class CodeGen:
                 "<<": self.builder.shl,
                 ">>": self.builder.ashr if op_type.signed else self.builder.lshr,
             }
-            return TypedValue(ops[expr.op](lhs.value, rhs.value), op_type)
-        elif op_type is FLOAT64 and expr.op != "%":
+            return TypedValue(ops[op](lhs.value, rhs.value), op_type)
+        elif op_type is FLOAT64 and op != "%":
             ops = {
                 "+": self.builder.fadd,
                 "-": self.builder.fsub,
                 "*": self.builder.fmul,
                 "/": self.builder.fdiv,
             }
-            return TypedValue(ops[expr.op](lhs.value, rhs.value), op_type)
-        raise LangError(f"operator {expr.op!r} not supported for {op_type}", expr.line)
+            return TypedValue(ops[op](lhs.value, rhs.value), op_type)
+        raise LangError(f"operator {op!r} not supported for {op_type}", line)

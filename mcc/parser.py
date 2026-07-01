@@ -21,6 +21,7 @@ from mcc.nodes import (
     Case,
     Cast,
     CharLit,
+    CompoundAssign,
     Conditional,
     Const,
     Continue,
@@ -79,6 +80,21 @@ STRING_ESCAPES = {
     "\\": "\\",
 }
 
+# Compound-assignment operators mapped to the base binary operator they apply:
+# `target op= value` means `target = target op value` (target evaluated once).
+COMPOUND_ASSIGN_OPS = {
+    "+=": "+",
+    "-=": "-",
+    "*=": "*",
+    "/=": "/",
+    "%=": "%",
+    "&=": "&",
+    "|=": "|",
+    "^=": "^",
+    "<<=": "<<",
+    ">>=": ">>",
+}
+
 
 def int_value(text: str) -> int:
     """Parse the integer value of an INT token.
@@ -90,6 +106,24 @@ def int_value(text: str) -> int:
         The integer value.
     """
     return int(text, 16 if text[:2] in ("0x", "0X") else 10)
+
+
+def is_lvalue(expr) -> bool:
+    """Whether an expression is a valid assignment target.
+
+    The forms an assignment accepts: a variable, ``*ptr``, an index
+    ``base[i]``, or a member ``base.field``/``base->field``.
+
+    Args:
+        expr: The parsed target expression.
+
+    Returns:
+        ``True`` when ``expr`` is an assignable lvalue.
+    """
+    return (
+        isinstance(expr, (Var, Index, Member))
+        or (isinstance(expr, Unary) and expr.op == "*")
+    )
 
 
 class Parser:
@@ -1109,6 +1143,14 @@ class Parser:
             if isinstance(expr, Member):
                 return StoreMember(expr.base, expr.field, expr.arrow, value, tok.line)
             raise LangError("invalid assignment target", tok.line)
+        if self.cur.kind in COMPOUND_ASSIGN_OPS:
+            op = COMPOUND_ASSIGN_OPS[self.cur.kind]
+            self.advance()
+            value = self.parse_expr()
+            self.expect(";")
+            if not is_lvalue(expr):
+                raise LangError("invalid assignment target", tok.line)
+            return CompoundAssign(expr, op, value, tok.line)
         self.expect(";")
         return ExprStmt(expr, tok.line)
 

@@ -290,6 +290,8 @@ reference section.
       coerces to `uint8*` like any pointer, so libc still takes string literals
 - [x] [Operators](docs/language.md#operators) — arithmetic, comparison, logical
       (`and`/`or`/`!`), bitwise (`&` `|` `^` `<<` `>>` `~`), `cond ? a : b`
+- [x] [Compound assignment](docs/language.md#variables) — `+= -= *= /= %= &= |= ^= <<= >>=`,
+      `x op= y` meaning `x = x op y` with the target evaluated once
 - [x] [Casts](docs/language.md#casts) — explicit `as`
 - [x] [Pointers](docs/language.md#pointers) — address-of, deref, `null`,
       `sizeof`/`alignof` (of a type or a variable) and `offsetof(struct S, field)`
@@ -365,12 +367,6 @@ Grouped by scope.
   - [ ] bounds — constrain a parameter with `fn myfunc<T extends mystruct>(x: T)`
         (a struct and its `extends` specializations) or
         `fn myfunc<T in (t1, t2, ...)>(x: T)` (an explicit set of types)
-
-#### Expressions and operators
-
-- [ ] Compound assignment — `+= -= *= /= %= &= |= ^= <<= >>=`, where `x op= y`
-      means `x = x op y` but evaluates the target `x` once (so the index/field of
-      a complex lvalue like `arr[next()] += 1` is computed a single time)
 
 #### Modules and imports
 
