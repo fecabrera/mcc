@@ -418,6 +418,18 @@ Grouped by scope.
   [memory](libmc/memory.mc), struct literals, deref-assign, whole-struct copy),
   so the only remaining work is the surface-syntax rewrite into the block above
   — no new codegen.
+- [ ] Keyword-free struct literals — `T { field = value, ... }` as a shorthand
+      for today's `struct T { field = value, ... }`, so a stack struct value
+      reads `let a = Point { x = 1, y = 2 };`. The pair to `new T { ... }` above:
+      `T { ... }` is the value (stack) form, `new T { ... }` the heap one.
+      Parser-only — it builds the same `StructLit` node, so codegen and type
+      checking are unchanged. The single ambiguity is the `for x in <expr> { … }`
+      header, where `for x in A { ... }` could read `A { ... }` as either the
+      iterable or the loop body; as in Rust/Swift, a bare struct literal is
+      barred in that one position (parenthesize — `for x in (A { ... })` — to
+      force it). Every other position is unambiguous: `let`/`return`/`emit` and
+      expression statements end in `;`, arguments and array elements are
+      bracket-delimited, and `if`/`while`/`case` conditions are parenthesized.
 
 #### Functions and methods
 
