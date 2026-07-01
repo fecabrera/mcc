@@ -1075,26 +1075,35 @@ fn main() -> int32 {
 ```
 
 A **struct literal** builds a struct value in one expression:
-`struct Name { field = value, ... }`. Any field left out is zero-initialized,
-so `struct point { }` is all zeros and the order of the listed fields does not
-matter. Each value is checked against its field's type exactly as an assignment
-would be, so untyped integer constants adapt to the field type. The literal is
-an ordinary value — usable as an initializer, an argument, a return value, or
-the right side of an assignment (`*p = struct point { x = 1, y = 2 };`).
+`Name { field = value, ... }`, with the `struct` keyword optional
+(`struct Name { ... }` means the same thing). Any field left out is
+zero-initialized, so `point { }` is all zeros and the order of the listed
+fields does not matter. Each value is checked against its field's type exactly
+as an assignment would be, so untyped integer constants adapt to the field
+type. The literal is an ordinary value — usable as an initializer, an
+argument, a return value, or the right side of an assignment
+(`*p = point { x = 1, y = 2 };`).
 
 ```c
-let p = struct point { x = 6, y = 4 };
-let q = struct point { x = 9 };            // y is 0
-let r = struct node<int32> { value = 1 };  // generic, type argument given
+let p = point { x = 6, y = 4 };
+let q = point { x = 9 };            // y is 0
+let r = node<int32> { value = 1 };  // generic, type argument given
 ```
 
+The one place the keyword-free form is not allowed is the header of a
+`for x in <expr> { ... }` loop, where `for x in A { ... }` would be ambiguous —
+`A { ... }` could be the iterable or the loop body. There the `{` always starts
+the loop body; parenthesize (`for x in (A { ... })`) or use the keyword form to
+iterate a literal. The restriction ends at any inner bracket or parenthesis
+(`for x in make(A { ... })` is fine), and every other position is unambiguous.
+
 A generic struct's type arguments may be given explicitly
-(`struct pair<int32, uint8*> { ... }`) or **inferred** from the field values,
+(`pair<int32, uint8*> { ... }`) or **inferred** from the field values,
 the same way a generic function call infers from its arguments — so with a
-`n: int32`, `struct pair { a = n, b = "x" }` deduces `A = int32`, `B = uint8*`.
+`n: int32`, `pair { a = n, b = "x" }` deduces `A = int32`, `B = uint8*`.
 Only a **typed** field value pins a parameter (and two typed fields that
 disagree are an error). An untyped constant doesn't anchor a parameter — a bare
-`struct pair { a = 0, b = "x" }` leaves `A` ambiguous, the same way `let a = 0`
+`pair { a = 0, b = "x" }` leaves `A` ambiguous, the same way `let a = 0`
 is, since the constant has no type of its own to deduce, only a default it would
 guess. It still _adapts_ to a parameter another field has already fixed. A
 parameter no typed field determines can't be inferred, so spell those cases out
@@ -1113,12 +1122,12 @@ struct config {
     name:     uint8*;         // no default — zero (null) when omitted
 }
 
-let c = struct config { name = "db" };   // capacity = 16, verbose = 0
+let c = config { name = "db" };   // capacity = 16, verbose = 0
 ```
 
 Declaring any default also changes a bare declaration: `let c: struct config;`
 is then default-initialized (zeroed, then its defaults applied) — the same as
-`let c = struct config { }` — rather than left uninitialized. A struct with no
+`let c = config { }` — rather than left uninitialized. A struct with no
 defaults keeps the uninitialized behavior of a bare `let`, like any other type.
 
 A default is an ordinary expression evaluated wherever it is applied, so it

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 
 from mcc.errors import LangError
 from mcc.lexer import Token
@@ -147,6 +148,21 @@ class Parser:
         """
         self.tokens = tokens
         self.pos = 0
+        # Whether a keyword-free struct literal `T { ... }` may appear here.
+        # Turned off only while parsing a `for x in <expr>` header, where a
+        # trailing `{` would otherwise be ambiguous with the loop body; any
+        # bracket/paren-delimited sub-expression turns it back on.
+        self.struct_lit_ok = True
+
+    @contextmanager
+    def _struct_literals(self, ok: bool):
+        """Scope whether a bare `T { ... }` literal is allowed (see cur flag)."""
+        saved = self.struct_lit_ok
+        self.struct_lit_ok = ok
+        try:
+            yield
+        finally:
+            self.struct_lit_ok = saved
 
     @property
     def cur(self) -> Token:
@@ -1128,7 +1144,10 @@ class Parser:
             self.advance()
             var = self.expect("IDENT").text
             self.expect("in")
-            iterable = self.parse_expr()
+            # A bare `T { ... }` here would be ambiguous with the loop body, so
+            # it is disallowed; parenthesize (`for x in (T { ... })`) to force it.
+            with self._struct_literals(False):
+                iterable = self.parse_expr()
             return For(var, iterable, self.parse_body(), tok.line)
         expr = self.parse_expr()
         if self.accept("="):
@@ -1317,7 +1336,8 @@ class Parser:
         while True:
             if self.cur.kind == "[":
                 line = self.advance().line
-                index = self.parse_expr()
+                with self._struct_literals(True):
+                    index = self.parse_expr()
                 self.expect("]")
                 expr = Index(expr, index, line)
             elif self.cur.kind in (".", "->"):
@@ -1341,10 +1361,11 @@ class Parser:
         """
         self.expect("(")
         args = []
-        while self.cur.kind != ")":
-            if args:
-                self.expect(",")
-            args.append(self.parse_expr())
+        with self._struct_literals(True):
+            while self.cur.kind != ")":
+                if args:
+                    self.expect(",")
+                args.append(self.parse_expr())
         self.expect(")")
         return args
 
@@ -1389,7 +1410,8 @@ class Parser:
                 )
             return CharLit(ord(char), tok.line)
         if tok.kind == "(":
-            expr = self.parse_expr()
+            with self._struct_literals(True):
+                expr = self.parse_expr()
             self.expect(")")
             return expr
         if tok.kind == "{":
@@ -1403,10 +1425,11 @@ class Parser:
             return BlockExpr(body, tok.line)
         if tok.kind == "[":
             elements = []
-            while self.cur.kind != "]":
-                elements.append(self.parse_expr())
-                if not self.accept(","):  # a trailing comma is allowed
-                    break
+            with self._struct_literals(True):
+                while self.cur.kind != "]":
+                    elements.append(self.parse_expr())
+                    if not self.accept(","):  # a trailing comma is allowed
+                        break
             self.expect("]")
             return ArrayLit(elements, tok.line)
         if tok.kind == "struct":
@@ -1439,6 +1462,8 @@ class Parser:
                 member = self.expect("IDENT").text
                 return EnumAccess(tok.text, member, tok.line)
             type_args = self.try_type_args() if self.cur.kind == "<" else []
+            if self.cur.kind == "{" and self.struct_lit_ok:
+                return self.parse_struct_lit_fields(tok.text, type_args, tok.line)
             if self.cur.kind != "(":
                 return Var(tok.text, tok.line)
             return Call(tok.text, type_args, self.parse_call_args(), tok.line)
@@ -1463,14 +1488,34 @@ class Parser:
             while self.accept(","):
                 args.append(self.parse_type_ref())
             self.expect_close_angle()
+        return self.parse_struct_lit_fields(name, args, line)
+
+    def parse_struct_lit_fields(self, name: str, args: list, line: int) -> StructLit:
+        """Parse the ``{ field = expr, ... }`` body of a struct literal.
+
+        Shared by the keyword form ``struct Name { ... }`` and the keyword-free
+        ``Name { ... }``; the name and any type arguments are already parsed.
+        A trailing comma is allowed, and an empty ``{ }`` zero-initializes.
+
+        Args:
+            name: The struct type name.
+            args: The parsed type arguments (possibly empty).
+            line: Source line for diagnostics.
+
+        Returns:
+            The parsed ``StructLit``.
+        """
         self.expect("{")
         fields = []
-        while self.cur.kind != "}":
-            fname = self.expect("IDENT").text
-            self.expect("=")
-            fields.append((fname, self.parse_expr()))
-            if not self.accept(","):  # a trailing comma is allowed
-                break
+        # Field values sit inside the literal's braces, so a bare `T { ... }`
+        # value is unambiguous again here.
+        with self._struct_literals(True):
+            while self.cur.kind != "}":
+                fname = self.expect("IDENT").text
+                self.expect("=")
+                fields.append((fname, self.parse_expr()))
+                if not self.accept(","):  # a trailing comma is allowed
+                    break
         self.expect("}")
         return StructLit(TypeRef(name, args), fields, line)
 
@@ -1490,7 +1535,13 @@ class Parser:
         try:
             while True:
                 args.append(self.parse_type_ref())
-                if self.cur.kind == ">" and self.tokens[self.pos + 1].kind == "(":
+                # Commit when the `>` closes onto a call `(` -- or, for a
+                # keyword-free struct literal `Box<int32> { ... }`, onto a `{`
+                # in a context where such a literal is allowed.
+                after = self.tokens[self.pos + 1].kind
+                if self.cur.kind == ">" and (
+                    after == "(" or (after == "{" and self.struct_lit_ok)
+                ):
                     self.advance()
                     return args
                 if not self.accept(","):

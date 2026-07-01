@@ -1,9 +1,10 @@
 import "std";
 import "memory";
 
-// A struct literal `struct Name { field = value, ... }` builds a whole struct
-// value in one expression, instead of declaring it and assigning fields one at
-// a time. Any field left out is zero-initialized, and field order doesn't
+// A struct literal `Name { field = value, ... }` builds a whole struct value
+// in one expression, instead of declaring it and assigning fields one at a
+// time. The `struct` keyword is optional (`struct Name { ... }` means the same
+// thing). Any field left out is zero-initialized, and field order doesn't
 // matter.
 
 struct point { x: int32; y: int32; }
@@ -18,15 +19,19 @@ struct config { capacity: int32 = 16; verbose: int32 = 0; name: char*; }
 fn length2(p: struct point) -> int32 { return p.x * p.x + p.y * p.y; }
 
 // ...and as a return value.
-fn origin() -> struct point { return struct point { }; }   // all zero
+fn origin() -> struct point { return point { }; }   // all zero
 
 fn main() -> int32 {
     // The basic form: an initializer.
-    let p = struct point { x = 3, y = 4 };
+    let p = point { x = 3, y = 4 };
     println("p = (%d, %d)", p.x, p.y);
 
+    // The keyword form is the same literal, spelled out.
+    let k = struct point { x = 3, y = 4 };
+    println("k = (%d, %d)", k.x, k.y);
+
     // Omitted fields are zero, and order is free.
-    let q = struct point { y = 9 };     // x defaults to 0
+    let q = point { y = 9 };     // x defaults to 0
     println("q = (%d, %d)", q.x, q.y);
 
     // An empty literal zero-initializes everything.
@@ -34,10 +39,10 @@ fn main() -> int32 {
     println("origin = (%d, %d)", o.x, o.y);
 
     // Passed straight to a function, no named temporary needed.
-    println("length2(6, 8) = %d", length2(struct point { x = 6, y = 8 }));
+    println("length2(6, 8) = %d", length2(point { x = 6, y = 8 }));
 
     // Generic structs work too. The type arguments can be given explicitly...
-    let pr = struct pair<int32, char*> { a = 42, b = "answer" };
+    let pr = pair<int32, char*> { a = 42, b = "answer" };
     println("pair = (%d, %s)", pr.a, pr.b);
 
     // ...or inferred from the field values, like a generic function call. The
@@ -46,23 +51,23 @@ fn main() -> int32 {
     // parameter -- that is the same ambiguity `let a = 0` is -- but it still
     // adapts to a parameter another field has already fixed.
     let n: int32 = 7;
-    let pr2 = struct pair { a = n, b = "inferred" };
+    let pr2 = pair { a = n, b = "inferred" };
     println("pair2 = (%d, %s)", pr2.a, pr2.b);
 
     // A field whose type is itself a struct takes a nested literal.
-    let seg = struct line {
-        from = struct point { x = 1, y = 2 },
-        to   = struct point { x = 4, y = 6 },
+    let seg = line {
+        from = point { x = 1, y = 2 },
+        to   = point { x = 4, y = 6 },
     };
     println("segment (%d,%d) -> (%d,%d)", seg.from.x, seg.from.y, seg.to.x, seg.to.y);
 
     // Default field values: the omitted fields take their declared defaults
     // (capacity = 16, verbose = 0), while a given field overrides its default.
-    let cfg = struct config { name = "db" };
+    let cfg = config { name = "db" };
     println("config: capacity=%d verbose=%d name=%s", cfg.capacity, cfg.verbose, cfg.name);
 
     // Declaring a default also makes a bare `let` default-initialized (the same
-    // as `struct config { }`), rather than leaving the value uninitialized.
+    // as `config { }`), rather than leaving the value uninitialized.
     let dfl: struct config;
     println("default config: capacity=%d verbose=%d", dfl.capacity, dfl.verbose);
 
@@ -70,8 +75,12 @@ fn main() -> int32 {
     // pattern an eventual `new point { ... }` sugar would build on.
     let h = alloc<struct point>(1);
     defer dealloc(h);
-    *h = struct point { x = 10, y = 20 };
+    *h = point { x = 10, y = 20 };
     println("heap point = (%d, %d)", h->x, h->y);
+
+    // The one place a bare literal is not allowed is a `for x in ... {` header,
+    // where the `{` always starts the loop body; parenthesize to iterate a
+    // literal there: `for x in (A { ... }) { ... }`.
 
     return 0;
 }

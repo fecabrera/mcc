@@ -36,6 +36,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   available in every program with no import. They are ordinary names, not
   reserved: a user struct named `iterator` or `pair` takes precedence, as with
   the builtin `range`.
+- **Keyword-free struct literals** — `Name { field = value, ... }` is now a
+  shorthand for `struct Name { field = value, ... }`, so a stack struct value
+  reads `let p = point { x = 1, y = 2 };`. Parser-only: it builds the same
+  literal, so codegen, defaults, and generic type-argument inference
+  (`pair<int32, char*> { ... }` or inferred) are unchanged. The one barred
+  position is the `for x in <expr> { ... }` header, where the `{` always starts
+  the loop body — parenthesize (`for x in (A { ... })`) or use the keyword form
+  there. See [Structs](docs/language.md#structs) and
+  [struct_literals.mc](examples/struct_literals.mc).
 
 ### Removed
 

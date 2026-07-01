@@ -1,9 +1,10 @@
-"""Struct literals: `struct Name { field = expr, ... }`."""
+"""Struct literals: `struct Name { field = expr, ... }` and the keyword-free
+`Name { field = expr, ... }` shorthand."""
 
 import pytest
 
 from mcc.errors import LangError
-from mcc.nodes import StructLit
+from mcc.nodes import StructLit, Var
 from helpers import compile_ir, parse, run
 
 POINT = "struct point { x: int32; y: int32; }\n"
@@ -154,6 +155,109 @@ def test_unknown_field_on_generic_literal_is_rejected():
     """
     with pytest.raises(LangError, match="no field 'nope'"):
         compile_ir(source)
+
+
+# ----------------------------------------------------------- keyword-free form
+
+
+def test_keyword_free_literal_parses():
+    (stmt,) = parse(
+        "fn f() { let p = point { x = 6, y = 4 }; }"
+    ).functions[0].body
+    lit = stmt.value
+    assert isinstance(lit, StructLit)
+    assert lit.type_ref.name == "point"
+    assert [name for name, _ in lit.fields] == ["x", "y"]
+
+
+def test_keyword_free_generic_literal_parses():
+    (stmt,) = parse(
+        "fn f() { let p = pair<int32, uint8*> { a = 1, b = null }; }"
+    ).functions[0].body
+    assert isinstance(stmt.value, StructLit)
+    assert [str(t) for t in stmt.value.type_ref.args] == ["int32", "uint8*"]
+
+
+def test_keyword_free_literal_runs():
+    source = POINT + """
+        fn flip(p: struct point) -> struct point {
+            return point { x = p.y, y = p.x };      // as a return value
+        }
+        fn main() -> int32 {
+            let p = flip(point { x = 4, y = 6 });   // as an argument
+            return p.x * 10 + p.y;
+        }
+    """
+    assert run(source) == 64
+
+
+def test_keyword_free_generic_inference_runs():
+    source = """
+        struct pair<A, B> { a: A; b: B; }
+        fn main() -> int32 {
+            let n: int64 = 30;
+            let m: int32 = 12;
+            let p = pair { a = n, b = m };
+            return (p.a as int32) + p.b;
+        }
+    """
+    assert run(source) == 42
+
+
+def test_keyword_free_nested_literal_runs():
+    source = """
+        struct point { x: int32; y: int32; }
+        struct line { from: struct point; to: struct point; }
+        fn main() -> int32 {
+            let l = line {
+                from = point { x = 1, y = 2 },
+                to = point { x = 3, y = 4 },
+            };
+            return l.from.x + l.from.y + l.to.x + l.to.y;
+        }
+    """
+    assert run(source) == 10
+
+
+def test_keyword_free_literal_through_pointer():
+    source = POINT + """
+        fn main() -> int32 {
+            let p = point { };
+            let q = &p;
+            *q = point { x = 40, y = 2 };
+            return q->x + q->y;
+        }
+    """
+    assert run(source) == 42
+
+
+def test_for_header_name_brace_is_loop_body():
+    # In a `for x in <expr> { ... }` header a bare `Name {` must read `{` as
+    # the loop body, not a struct literal -- the one barred position.
+    fn = parse("fn f(xs: struct list<int32>*) { for x in xs { } }").functions[0]
+    (loop,) = fn.body
+    assert isinstance(loop.iterable, Var)
+    assert loop.iterable.name == "xs"
+    assert loop.body == []
+
+
+def test_for_header_parenthesized_literal_is_iterable():
+    # Parenthesizing forces the literal reading back on.
+    fn = parse(
+        "fn f() { for x in (count { limit = 3 }) { } }"
+    ).functions[0]
+    (loop,) = fn.body
+    assert isinstance(loop.iterable, StructLit)
+    assert loop.iterable.type_ref.name == "count"
+
+
+def test_for_header_call_argument_literal_is_allowed():
+    # Bracket/paren-delimited sub-expressions of the header are unambiguous,
+    # so a literal is allowed again inside them.
+    fn = parse("fn f() { for x in make(point { x = 1 }) { } }").functions[0]
+    (loop,) = fn.body
+    (arg,) = loop.iterable.args
+    assert isinstance(arg, StructLit)
 
 
 # --------------------------------------------------------- default member values
