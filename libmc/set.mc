@@ -1,7 +1,5 @@
 import "memory";
 import "hash";
-import "iteration/pair";
-import "iteration/iterator";
 
 // Slot states
 enum set_entry_state: uint8 {

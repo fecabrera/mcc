@@ -25,7 +25,6 @@ link_static() {
 mkdir -p lib/
 mkdir -p lib/libmc
 mkdir -p lib/libmc/hashing
-mkdir -p lib/libmc/iteration
 mkdir -p lib/libmc/libc
 
 for file in libmc/*.mc; do compile $file; done

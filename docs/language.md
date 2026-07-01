@@ -432,10 +432,14 @@ fn list_it<T>(self: struct list<T>*) -> struct iterator<list<T>>;  // make a cur
 fn list_next<T>(it: struct iterator<list<T>>*, out: T*) -> bool;    // false when done
 ```
 
-The cursor is the shared `struct iterator<C> { obj: C*; idx: uint64; }` from
-`iteration/iterator` — the `list`, `set`, `dict`, and `string` libraries all use
-it rather than each defining its own — but the protocol only cares about the
-function names, so a cursor of any shape works.
+The cursor is the **builtin** `struct iterator<C> { obj: C*; idx: uint64; }` —
+available in every program with no import, and shared by the `list`, `set`,
+`dict`, and `string` libraries rather than each defining its own. The
+`pair<K, V>` the keyed containers yield from their `_next` (fields `key` and
+`value`) is builtin the same way. Both are ordinary names, not reserved: a user
+struct named `iterator` or `pair` takes precedence over the builtin, exactly as
+a user-defined `range` function shadows the builtin counting loop. The protocol
+itself only cares about the function names, so a cursor of any shape works.
 
 ```c
 for v in &nums {            // nums: list<int32>; v is int32, inferred from list_next

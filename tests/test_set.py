@@ -24,7 +24,6 @@ def test_iteration_visits_all_entries():
         run(
             """
         import "set";
-        import "iteration/pair";
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
             set_init(s, 8);

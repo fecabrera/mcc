@@ -1,5 +1,4 @@
 import "list";
-import "iteration/iterator";
 
 /**
  * Default slot count reserved by string_init before the first growth.

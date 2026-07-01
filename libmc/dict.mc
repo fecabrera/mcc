@@ -2,8 +2,6 @@ import "memory";
 import "hash";
 import "set";
 import "libc/string";
-import "iteration/pair";
-import "iteration/iterator";
 
 // Slot states
 enum dict_entry_state: uint8 {

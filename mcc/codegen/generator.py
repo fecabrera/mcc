@@ -126,6 +126,31 @@ from mcc.codegen.types import (
     _host_triple,
 )
 
+# Builtin struct templates, available in every program with no import: the
+# shared `iterator<T>` cursor behind the `_it`/`_next` protocol, and the
+# `pair<K, V>` element the keyed containers yield from `_next`. They are
+# ordinary (not reserved) names -- a user struct with the same name takes
+# precedence, exactly as a user-defined `range` function shadows the builtin
+# counting loop.
+BUILTIN_STRUCTS = (
+    # A forward cursor over a container of type T: a borrowed pointer to the
+    # container and the index of the next slot to yield, so the container must
+    # outlive the iterator and must not be resized while iterating.
+    StructDecl(
+        name="iterator",
+        type_params=["T"],
+        fields=[("obj", TypeRef("T", stars=1)), ("idx", TypeRef("uint64"))],
+        line=0,
+    ),
+    # A key/value pair -- what `set_next`/`dict_next` fill per occupied entry.
+    StructDecl(
+        name="pair",
+        type_params=["K", "V"],
+        fields=[("key", TypeRef("K")), ("value", TypeRef("V"))],
+        line=0,
+    ),
+)
+
 
 class CodeGen:
     """Lowers a merged ``Program`` to an LLVM IR module.
@@ -1188,6 +1213,12 @@ class CodeGen:
                 raise LangError(f"type {decl.name!r} already defined", decl.line)
             self.struct_templates[decl.name] = decl
             self.used_symbols.add(decl.name)
+        # The builtin struct templates (`iterator<T>`, `pair<K, V>`) fill in
+        # after user structs, so a user declaration of the same name wins.
+        for decl in BUILTIN_STRUCTS:
+            if decl.name not in self.struct_templates:
+                self.struct_templates[decl.name] = decl
+                self.used_symbols.add(decl.name)
         # Type aliases are registered next (records only; resolved lazily on
         # use), so a const's or signature's type may name one.
         for alias in self.program.aliases:

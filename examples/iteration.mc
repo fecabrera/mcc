@@ -42,7 +42,9 @@ fn main() -> int32 {
 
     // The other lib containers implement the same protocol. Iterating a set
     // yields a `pair<K, V>` per entry, in unspecified (hash-table) order; read
-    // its fields as x.key and x.value.
+    // its fields as x.key and x.value. `pair` -- like the `iterator<T>` cursor
+    // behind every container's _it/_next -- is a builtin struct, so no import
+    // is needed to name it.
     let table: set<uint64, uint64>;
     set_init(&table, 2);
     defer set_destroy(&table);

@@ -9,7 +9,6 @@ def test_iteration_visits_all_entries():
     assert run(
         """
         import "dict";
-        import "iteration/pair";
         fn main() -> int32 {
             let d = alloc<struct dict<uint64>>(1);
             dict_init(d, 8);

@@ -31,17 +31,14 @@ packages = [
     "mcc.libmc",
     "mcc.libmc.libc",
     "mcc.libmc.hashing",
-    "mcc.libmc.iteration",
 ]
 
 [tool.setuptools.package-dir]
 "mcc.libmc" = "libmc"
 "mcc.libmc.libc" = "libmc/libc"
 "mcc.libmc.hashing" = "libmc/hashing"
-"mcc.libmc.iteration" = "libmc/iteration"
 
 [tool.setuptools.package-data]
 "mcc.libmc" = ["*.mc", "*.md"]
 "mcc.libmc.libc" = ["*.mc"]
 "mcc.libmc.hashing" = ["*.mc"]
-"mcc.libmc.iteration" = ["*.mc"]

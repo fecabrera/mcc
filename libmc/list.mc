@@ -1,5 +1,4 @@
 import "memory";
-import "iteration/iterator";
 
 /**
  * A growable, heap-backed list of T.

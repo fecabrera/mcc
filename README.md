@@ -314,6 +314,10 @@ reference section.
       `@packed`/`@align`/`@volatile`, `extends` (prefix specialization),
       struct value upcast, flexible array members (a trailing `field: T[]` that
       adds 0 to `sizeof` and decays to a `T*` at the struct's tail)
+- [x] [Builtin structs](docs/language.md#control-flow) — `iterator<T>` (the
+      shared `_it`/`_next` cursor) and `pair<K, V>` (what the keyed containers
+      yield), available with no import; a same-named user struct takes
+      precedence, as with the builtin `range`
 - [x] [Enums](docs/language.md#enums) — `enum Name[: type] { … }`, `Name::Member`
       constants over any underlying type, the name usable as a type
 - [x] [Type aliases](docs/language.md#type-aliases) — `type <name> = <type>;`,
@@ -327,9 +331,8 @@ reference section.
 ### Standard library
 
 - [x] Core — `memory` (typed `alloc`/`dealloc`), `std` (`print`/`println`)
-- [x] Containers — `list`, `stack`, `queue`, `set`, `dict`, `string`
-- [x] Iterables — the shared `iteration/iterator` cursor the containers iterate
-      through (counting loops use the builtin [`range`](docs/language.md#control-flow))
+- [x] Containers — `list`, `stack`, `queue`, `set`, `dict`, `string` (counting
+      loops use the builtin [`range`](docs/language.md#control-flow))
 - [x] Hashing — `splitmix64`, `fnv1a`, `murmur3`, `crc32`, `md5`
 - [x] [libc bindings](docs/language.md#reaching-libc) — `stdio`, `stdlib`, `string`, `ctype`,
       `math`, `limits`, `float`, `time`, `errno`

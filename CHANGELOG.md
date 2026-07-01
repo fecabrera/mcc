@@ -30,12 +30,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   straight to a counter, with no import, no struct built, and no `_it`/`_next`
   calls. The element type is inferred from the bounds or set with `range<T>(...)`.
   See [Control flow](docs/language.md#control-flow).
+- **Builtin `iterator<T>` and `pair<K, V>` structs** — the shared cursor behind
+  the `_it`/`_next` protocol (`{ obj: T*; idx: uint64 }`) and the key/value
+  element the keyed containers yield are now compiler-provided struct templates,
+  available in every program with no import. They are ordinary names, not
+  reserved: a user struct named `iterator` or `pair` takes precedence, as with
+  the builtin `range`.
 
 ### Removed
 
 - The `range` **library** module (`import "range"`, `struct range<T>`,
   `range_it`/`range_next`) is gone, subsumed by the builtin above. Counting
   loops that built a `struct range` and iterated `&r` become `for i in range(…)`.
+- The `iteration` **library** modules (`import "iteration/iterator"` and
+  `import "iteration/pair"`) are gone, subsumed by the builtin structs above.
+  Drop the imports; the struct names resolve as before.
 
 ## [0.3.1] - 2026-06-30
 
