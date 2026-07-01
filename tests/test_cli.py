@@ -374,6 +374,100 @@ def test_compile_only_rejects_run(tmp_path):
     assert result.returncode == 1 and "compile only" in result.stderr
 
 
+# ------------------------------------------------------- linker passthrough
+
+TWICE_LIB = "fn twice(n: int32) -> int32 { return n * 2; }"
+TWICE_APP = (
+    'import "libc/stdio";\n'
+    "@extern fn twice(n: int32) -> int32;\n"
+    'fn main() -> int32 { printf("%d\\n", twice(21)); return 0; }'
+)
+
+
+def build_twice_object(tmp_path):
+    (tmp_path / "twice.mc").write_text(TWICE_LIB)
+    assert mcc(tmp_path / "twice.mc", "-c").returncode == 0
+    (tmp_path / "app.mc").write_text(TWICE_APP)
+    return tmp_path / "twice.o"
+
+
+def test_link_extra_object(tmp_path):
+    # An extra non-.mc positional is forwarded to the link.
+    obj = build_twice_object(tmp_path)
+    exe = tmp_path / "app"
+    result = mcc(tmp_path / "app.mc", obj, "-o", exe)
+    assert result.returncode == 0, result.stderr
+    assert subprocess.run([exe], capture_output=True, text=True).stdout == "42\n"
+
+
+def test_link_archive_via_l_and_L(tmp_path):
+    # -L adds a search path and -l names a library, both forwarded to cc.
+    obj = build_twice_object(tmp_path)
+    subprocess.run(["ar", "rcs", tmp_path / "libtwice.a", obj], check=True)
+    exe = tmp_path / "app"
+    result = mcc(tmp_path / "app.mc", "-L", tmp_path, "-ltwice", "-o", exe)
+    assert result.returncode == 0, result.stderr
+    assert subprocess.run([exe], capture_output=True, text=True).stdout == "42\n"
+
+
+def test_explicit_lm_does_not_duplicate(tmp_path):
+    # The driver always links libm; an explicit -lm must not break that.
+    src = tmp_path / "trig.mc"
+    src.write_text(
+        'import "libc/stdio";\nimport "libc/math";\n'
+        'fn main() -> int32 { printf("%d\\n", sqrt(16.0) as int32); return 0; }'
+    )
+    exe = tmp_path / "trig"
+    assert mcc(src, "-lm", "-o", exe).returncode == 0
+    assert subprocess.run([exe], capture_output=True, text=True).stdout == "4\n"
+
+
+def test_link_extras_rejected_when_not_linking(tmp_path):
+    obj = build_twice_object(tmp_path)
+    for flag in ("--run", "-c", "--emit-llvm"):
+        result = mcc(tmp_path / "app.mc", obj, flag)
+        assert result.returncode == 1
+        assert "apply only when linking" in result.stderr and flag in result.stderr
+    result = mcc(tmp_path / "app.mc", "-ltwice", "--target", "aarch64-unknown-none-elf")
+    assert result.returncode == 1 and "--target" in result.stderr
+
+
+def test_missing_link_input_is_clean_error(tmp_path):
+    (tmp_path / "app.mc").write_text(TWICE_APP)
+    result = mcc(tmp_path / "app.mc", tmp_path / "nope.o")
+    assert result.returncode == 1
+    assert "cannot read" in result.stderr and "nope.o" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_multiple_mc_sources_rejected(tmp_path):
+    (tmp_path / "a.mc").write_text(TWICE_LIB)
+    (tmp_path / "b.mc").write_text(TWICE_APP)
+    result = mcc(tmp_path / "a.mc", tmp_path / "b.mc")
+    assert result.returncode == 1
+    assert "exactly one .mc source" in result.stderr
+
+
+def test_link_failure_is_clean_error(tmp_path):
+    (tmp_path / "app.mc").write_text(TWICE_APP)  # `twice` never defined
+    exe = tmp_path / "app"
+    result = mcc(tmp_path / "app.mc", "-o", exe)
+    assert result.returncode == 1
+    assert "linking failed" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert not exe.with_suffix(".o").exists()  # intermediate still cleaned up
+
+
+def test_link_input_may_not_collide_with_intermediate_object(tmp_path):
+    # `mcc app.mc app.o` would overwrite and then delete the given app.o.
+    obj = build_twice_object(tmp_path)
+    (tmp_path / "app.o").write_bytes(obj.read_bytes())
+    result = mcc(tmp_path / "app.mc", tmp_path / "app.o", "-o", tmp_path / "app")
+    assert result.returncode == 1
+    assert "collides" in result.stderr
+    assert (tmp_path / "app.o").exists()  # the input was left alone
+
+
 def test_interface_package_roundtrip(tmp_path):
     # Build a library to an object + interface, drop the source, then compile a
     # consumer that imports it by bare name (resolving to the .mci) and links

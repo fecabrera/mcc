@@ -99,15 +99,20 @@ mcc libmc/list.mc --emit-interface        # write an importable .mci stub
 mcc examples/helloworld.mc -O3          # optimization level (0-3, default 2)
 mcc main.mc -I vendor -I deps           # extra import search paths
 mcc main.mc --nostdlib                  # don't put libmc/ on the import path
+mcc main.mc util.o -lcurl               # link extra objects and libraries
+mcc main.mc -L build/lib -lmylib        # with a library search path
+
 mcc main.mc --target aarch64-unknown-none-elf   # cross-compile to an object file
 mcc main.mc --general-regs-only         # never use FP/SIMD registers
 ```
 
 | Option                    | Description                                                                                                                                                                                   |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`                  | The `.mc` file to compile (required). Its imports are resolved and compiled with it.                                                                                                          |
+| `source`                  | The `.mc` file to compile (exactly one). Its imports are resolved and compiled with it. Any other input — a `.o` object, `.a` archive, or shared library — is forwarded to the linker.        |
 | `-o`, `--output FILE`     | Name of the generated file. Defaults to the source name without its extension (a native executable), or with a `.o` suffix when `--target` is given.                                          |
 | `-c`, `--compile`         | Compile to an object file (`.o`) for the host and stop, without linking an executable. Defaults the output to the source name with a `.o` suffix.                                             |
+| `-l NAME`                 | Link against a library, forwarded to `cc` as `-lNAME` (repeatable). `libm` is always linked, so `-lm` is implied.                                                                             |
+| `-L DIR`                  | Add a library search path, forwarded to `cc` as `-LDIR` (repeatable).                                                                                                                         |
 | `--emit-interface`        | Write a [`.mci` interface stub](docs/language.md#interface-files) describing the file's public surface (to ship beside an object) and exit.                                                   |
 | `-O 0`–`3`                | Optimization level, from `0` (none) to `3` (most aggressive). Default `2`.                                                                                                                    |
 | `--run`                   | JIT-compile and run the program immediately instead of writing a file; its exit code becomes mcc's. Cannot be combined with `--target`.                                                       |
@@ -347,6 +352,9 @@ reference section.
       `--nostdlib`, `-I`
 - [x] Separate compilation across files
 - [x] Object-only compilation (`-c`) — emit a `.o` without linking
+- [x] Linker passthrough — `-l<name>` libraries, `-L<dir>` search paths, and
+      extra object/archive inputs on the command line, all forwarded to the
+      `cc` link step
 - [x] [Interface files](docs/language.md#interface-files) — `--emit-interface`
       writes a `.mci` stub (`@extern` prototypes plus full types/consts/generics)
       to ship beside an object; a bare `import` resolves to `.mc` then `.mci`
@@ -531,10 +539,6 @@ Grouped by scope.
 
 #### Tooling and C interop
 
-- [ ] Linker passthrough — link against libraries and extra objects: `-l<name>`,
-      `-L<dir>` library search paths, and forwarding object/library inputs to
-      `cc` (today only `libm` is linked, and there is no `-l`/`-L`; `-c` plus a
-      manual `cc` is the only route)
 - [ ] Linker selection — `--linker=/path/to/ld` to pick a specific linker
       (today whatever the driver `cc` defaults to)
 - [ ] Compiler-driver selection — `--cc=/path/to/cc` to choose the C driver used

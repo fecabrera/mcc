@@ -45,6 +45,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the loop body — parenthesize (`for x in (A { ... })`) or use the keyword form
   there. See [Structs](docs/language.md#structs) and
   [struct_literals.mc](examples/struct_literals.mc).
+- **Linker passthrough** — the `mcc` command line now takes `-l<name>` libraries
+  and `-L<dir>` search paths, plus extra object/archive inputs alongside the
+  `.mc` source (`mcc app.mc util.o -L build/lib -lmylib`), all forwarded to the
+  `cc` link step. They apply only when linking an executable (not with `--run`,
+  `-c`, `--target`, or the `--emit-*` modes, which stop before the link), and a
+  failed link is reported cleanly after cc's own diagnostics. `libm` is still
+  always linked. See [Usage](README.md#usage).
 
 ### Removed
 

@@ -541,16 +541,25 @@ def main() -> int:
     Parses arguments, compiles the source file to IR, and then -- depending on
     the flags -- prints the IR (``--emit-llvm``), emits an object file for a
     cross target (``--target``), JIT-executes ``main`` (``--run``), or links a
-    native executable with ``cc``. Compile and I/O errors are reported as
-    ``file: error: ...`` on stderr.
+    native executable with ``cc``, forwarding any extra object/archive inputs
+    and ``-l``/``-L`` options to the link. Compile and I/O errors are reported
+    as ``file: error: ...`` on stderr.
 
     Returns:
         A process exit status: 0 on success, 1 on a reported error, or the
         value returned by the program's ``main`` under ``--run``.
     """
     cli = argparse.ArgumentParser(prog="mcc", description="Compile .mc source files with LLVM.")
-    cli.add_argument("source", type=Path)
+    cli.add_argument("source", type=Path, nargs="+", metavar="source",
+                     help="the .mc file to compile (exactly one); any other input "
+                          "(a .o object, .a archive, or shared library) is forwarded "
+                          "to the linker")
     cli.add_argument("-o", "--output", type=Path, help="output executable name")
+    cli.add_argument("-l", dest="libs", action="append", default=[], metavar="NAME",
+                     help="link against a library, forwarded to cc as -lNAME (repeatable)")
+    cli.add_argument("-L", dest="lib_dirs", action="append", type=Path, default=[],
+                     metavar="DIR",
+                     help="add a library search path, forwarded to cc as -LDIR (repeatable)")
     cli.add_argument("-c", "--compile", action="store_true",
                      help="compile to an object file (.o) without linking")
     cli.add_argument("-O", type=int, default=2, choices=range(4), help="optimization level")
@@ -582,6 +591,16 @@ def main() -> int:
                           "sets an integer (repeatable). An @if name with no -D reads as 0")
     args = cli.parse_args()
 
+    # Split the positionals: exactly one .mc source; everything else (objects,
+    # archives, shared libraries) is handed to the linker untouched.
+    sources = [p for p in args.source if p.suffix == ".mc"]
+    link_inputs = [p for p in args.source if p.suffix != ".mc"]
+    if len(sources) != 1:
+        print(f"mcc: error: expected exactly one .mc source file, got {len(sources)}",
+              file=sys.stderr)
+        return 1
+    args.source = sources[0]
+
     if args.target and args.run:
         print("mcc: error: --run cannot execute cross-compiled code", file=sys.stderr)
         return 1
@@ -590,6 +609,21 @@ def main() -> int:
         print("mcc: error: --run cannot be combined with -c (compile only)",
               file=sys.stderr)
         return 1
+
+    if link_inputs or args.libs or args.lib_dirs:
+        skips_link = ("--run" if args.run else "-c" if args.compile
+                      else "--target" if args.target
+                      else "--emit-llvm" if args.emit_llvm
+                      else "--emit-interface" if args.emit_interface else None)
+        if skips_link:
+            print(f"mcc: error: -l, -L, and extra link inputs apply only when "
+                  f"linking an executable, not with {skips_link}", file=sys.stderr)
+            return 1
+        for extra in link_inputs:
+            if not extra.exists():
+                print(f"mcc: error: cannot read {extra}: No such file or directory",
+                      file=sys.stderr)
+                return 1
 
     try:
         defines = parse_defines(args.define)
@@ -655,7 +689,22 @@ def main() -> int:
 
     output = args.output or args.source.with_suffix("")
     obj_path = output.with_suffix(".o")
+    if any(extra.resolve() == obj_path.resolve() for extra in link_inputs):
+        # The intermediate object is deleted after the link; never let a link
+        # input silently become (and then lose) it.
+        print(f"mcc: error: link input {obj_path} collides with the intermediate "
+              f"object; rename it or pick another -o", file=sys.stderr)
+        return 1
     obj_path.write_bytes(target_machine.emit_object(native))
-    subprocess.run(["cc", str(obj_path), "-o", str(output), "-lm"], check=True)
+    link_cmd = ["cc", str(obj_path), *map(str, link_inputs), "-o", str(output)]
+    link_cmd += [f"-L{directory}" for directory in args.lib_dirs]
+    link_cmd += [f"-l{name}" for name in args.libs]
+    if "m" not in args.libs:
+        link_cmd.append("-lm")
+    status = subprocess.run(link_cmd).returncode
     obj_path.unlink()
+    if status != 0:
+        print("mcc: error: linking failed (see the cc diagnostics above)",
+              file=sys.stderr)
+        return 1
     return 0

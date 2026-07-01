@@ -1388,7 +1388,9 @@ mcc mathlib.mc -c                  # the object (mathlib.o), no linking
 mcc mathlib.mc --emit-interface    # the interface (mathlib.mci)
 ```
 
-A consumer `import`s the library and links the object. A bare `import "mathlib";`
+A consumer `import`s the library and links the object — the object (or an
+archive, or `-L dir -lname`) goes straight on the `mcc` command line and is
+forwarded to the link (`mcc app.mc mathlib.o`). A bare `import "mathlib";`
 resolves to `mathlib.mc` if the source is present, otherwise to `mathlib.mci` --
 so the same import works whether you have the sources or just the shipped object
 plus its stub. The stub mixes two forms, by whether a declaration carries a
@@ -1600,7 +1602,10 @@ reaching the rest of the C library.
 
 Anything the bindings do not cover, you can [declare yourself](#extern-declarations)
 with `@extern`. Variadic arguments to functions like `printf` follow C promotion
-rules (small integers are widened to `int32`).
+rules (small integers are widened to `int32`). The same route reaches any other
+C library: declare its functions `@extern` and link it by passing `-l<name>`
+(with `-L<dir>` for its search path), or its `.o`/`.a` file directly, on the
+`mcc` command line — libc and libm themselves are always linked.
 
 ## Inline assembly
 
