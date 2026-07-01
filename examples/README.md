@@ -20,7 +20,7 @@ pipenv run python -m mcc examples/<name>.mc --run
 | [defer.mc](defer.mc) | `defer` cleanup at scope exit (return/break included), LIFO order, the block form |
 | [block_expressions.mc](block_expressions.mc) | `{ ...; emit v; }` as a value, contained temporaries, branch emits, `defer` inside |
 | [iteration.mc](iteration.mc) | `for x in` over the iter/next protocol (array, set, dict), `break`/`continue`, bare `{ }` block scopes |
-| [ranges.mc](ranges.mc) | the standard-library `range<T>` half-open interval, counting loops with `for i in &r`, generic over the integer width |
+| [ranges.mc](ranges.mc) | the builtin `range` — `for i in range(start, end)` / `range(end)` counting loops, lowered directly with no allocation, element type inferred from the bounds |
 | [functions.mc](functions.mc) | void functions, any-order definitions, recursion, mutual recursion |
 | [const_params.mc](const_params.mc) | `const` read-only parameters, structs passed by hidden reference (no copy), `const` on pointers vs values |
 | [variadic.mc](variadic.mc) | variadic `...` definitions, `va_list`, `va_start`/`va_end`, forwarding to `vsnprintf` |

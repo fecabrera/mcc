@@ -455,7 +455,7 @@ not required. A struct *value* is borrowed automatically — `for x in r` iterat
 a snapshot (the value is copied once to a temporary the iterator points at),
 while `for x in &r` iterates `r` itself by reference; a value already of pointer
 type passes straight through. Because the snapshot is a real local, even an
-rvalue is iterable: `for x in make_range() { ... }` works, where `&` could not
+rvalue is iterable: `for x in make_iter() { ... }` works, where `&` could not
 take its address. For value types the two forms are indistinguishable; the
 reference form matters when the body mutates the container as it goes (and, as
 in C, growing a container mid-iteration invalidates an in-flight cursor either
@@ -474,6 +474,23 @@ this — see [examples/iteration.mc](examples/iteration.mc).
 A builtin [`slice<T>`](#slices) is the exception: it iterates natively, with no
 `_it`/`_next` of its own. `for x in s` (or `for x in &s`) walks the slice's
 `ptr` from index `0` up to `length`.
+
+For a plain counting loop, **`range` is builtin** — no import, no struct.
+`for i in range(start, end)` counts over the half-open interval `[start, end)`,
+and `for i in range(end)` counts from `0`. It lowers straight to a counter
+(initialize, compare, increment), so it costs nothing beyond the loop itself.
+The type of `i` is inferred from the bounds — their integer width and
+signedness — or set explicitly with `range<T>(...)`:
+
+```c
+for i in range(5)        { ... }   // 0, 1, 2, 3, 4
+for i in range(2, 9)     { ... }   // 2 .. 8
+for i in range<int64>(n) { ... }   // i is int64
+```
+
+`i` is a fresh copy of the counter each turn (assigning to it in the body does
+not change the iteration), and `range` here is a compiler builtin, not a name in
+scope — but a user-defined `range` function, if any, takes precedence.
 
 `case` matches a value against a series of `when` arms, with an optional
 `else:` default. The subject is evaluated once, and there is **no

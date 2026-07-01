@@ -1,6 +1,5 @@
 import "libc/string";
 import "libc/stdlib";
-import "range";
 
 /**
  * Allocates heap space for n elements of type T.
@@ -83,8 +82,7 @@ fn copy_bytes<T>(dst: T*, src: T*, n: uint64) {
  */
 @inline
 fn copy<T>(dst: T*, src: T*, n: uint64) -> uint64 {
-    let r = struct range { end = n };
-    for i in &r {
+    for i in range(n) {
         dst[i] = src[i];
     }
     return n;
@@ -146,8 +144,7 @@ fn set_bytes<T>(dst: T*, value: byte, n: uint64) {
  */
 @inline
 fn set_items<T>(dst: T*, value: T, n: uint64) {
-    let r = struct range { end = n };
-    for i in &r {
+    for i in range(n) {
         dst[i] = value;
     }
 }

@@ -1,5 +1,4 @@
 import "memory";
-import "range";
 
 // Dynamic ring-buffer FIFO queue<T>. Grows automatically when full; never
 // shrinks.
@@ -135,8 +134,7 @@ fn queue_grow<T>(self: struct queue<T>*) {
 
     let new_data: T* = alloc<T>(new_capacity);
 
-    let r = struct range { end = self->length };
-    for i in &r {
+    for i in range(self->length) {
         new_data[i] = self->data[(self->head + i) % self->capacity];
     }
 

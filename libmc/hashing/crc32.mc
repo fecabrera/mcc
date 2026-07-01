@@ -1,5 +1,3 @@
-import "range";
-
 /**
  * CRC-32 (IEEE 802.3, the zlib/PNG polynomial) over a byte buffer,
  * computed bitwise with the reflected polynomial 0xEDB88320. Binary-safe:
@@ -13,12 +11,10 @@ import "range";
 fn crc32(data: uint8*, length: uint64) -> uint32 {
     let crc: uint32 = 4294967295;  // 0xffffffff
 
-    let r = struct range { end = length };
-    for i in &r {
+    for i in range(length) {
         crc ^= data[i] as uint32;
 
-        let bits = struct range<int32> { end = 8 };
-        for bit in &bits {
+        for bit in range(8) {
             if (crc & 1)
                 crc = (crc >> 1) ^ 3988292384;  // 0xedb88320
             else

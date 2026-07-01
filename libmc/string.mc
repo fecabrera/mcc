@@ -1,5 +1,4 @@
 import "list";
-import "range";
 import "iteration/iterator";
 
 /**
@@ -160,8 +159,7 @@ fn string_eq(self: struct string*, str: struct string*) -> bool {
     if (self->length != str->length)
         return false;
     
-    let r = struct range { end = self->length };
-    for i in &r {
+    for i in range(self->length) {
         if (self->data[i] != str->data[i])
             return false;
     }

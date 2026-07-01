@@ -273,7 +273,8 @@ reference section.
 - [x] [Conditional compilation](docs/language.md#conditional-compilation) — structured `@if`,
       including conditional `import`s
 - [x] [Control flow](docs/language.md#control-flow) — `if`/`else`, `while`, `until`,
-      `for … in`, `break`/`continue`, braceless bodies
+      `for … in` (incl. the builtin `range` counting loop), `break`/`continue`,
+      braceless bodies
 - [x] [`defer`](docs/language.md#defer) — statement and block forms, reverse order
 - [x] [Block expressions](docs/language.md#block-expressions) — `{ ...; emit v; }` as a
       value, with contained temporaries
@@ -327,8 +328,8 @@ reference section.
 
 - [x] Core — `memory` (typed `alloc`/`dealloc`), `std` (`print`/`println`)
 - [x] Containers — `list`, `stack`, `queue`, `set`, `dict`, `string`
-- [x] Iterables — `range` (half-open integer range for `for ... in`) and the
-      shared `iteration/iterator` cursor the containers iterate through
+- [x] Iterables — the shared `iteration/iterator` cursor the containers iterate
+      through (counting loops use the builtin [`range`](docs/language.md#control-flow))
 - [x] Hashing — `splitmix64`, `fnv1a`, `murmur3`, `crc32`, `md5`
 - [x] [libc bindings](docs/language.md#reaching-libc) — `stdio`, `stdlib`, `string`, `ctype`,
       `math`, `limits`, `float`, `time`, `errno`
@@ -385,15 +386,6 @@ Grouped by scope.
       `typeof`-checked type discriminant, so the live member is recovered safely
       (`case type`). The element type of the [variadic](#functions-and-methods)
       pack's `slice<any>`. Depends on unions and typeof/typeid
-- [ ] builtin `range` — fold the standard-library [`range<T>`](docs/language.md)
-      into the compiler so a counting loop reads `for i in range(0, 5)` (or
-      `for i in range(5)`, `start` defaulting to 0) instead of constructing and
-      iterating a `struct range<T> { start = …, end = … }`. The bound type
-      is inferred from the arguments (so `i` takes their integer width). Because
-      the compiler owns the lowering, the loop is emitted directly — the counter's
-      init/compare/step inline, with no range struct built, no `range_it`/
-      `range_next` calls, and nothing to borrow — so the setup is done at compile
-      time with no runtime footprint. Subsumes the `range` library module
 - [ ] `tuple<A, B, ...>` — a builtin heterogeneous, fixed-arity product: each
       position keeps its own statically-known type, accessed by position (`t.0`,
       `t.1`). For multiple return values

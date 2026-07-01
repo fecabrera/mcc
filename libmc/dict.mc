@@ -1,7 +1,6 @@
 import "memory";
 import "hash";
 import "set";
-import "range";
 import "libc/string";
 import "iteration/pair";
 import "iteration/iterator";
@@ -87,8 +86,7 @@ fn dict_init<V>(self: struct dict<V>*, capacity: uint64) {
     self->length = 0;
     self->capacity = capacity;
 
-    let r = struct range { end = capacity };
-    for i in &r {
+    for i in range(capacity) {
         self->entries[i].state = dict_entry_state::EMPTY;
     }
 }
@@ -100,8 +98,7 @@ fn dict_init<V>(self: struct dict<V>*, capacity: uint64) {
  * @param self: dict to destroy
  */
 fn dict_destroy<V>(self: struct dict<V>*) {
-    let r = struct range { end = self->capacity };
-    for i in &r {
+    for i in range(self->capacity) {
         if (self->entries[i].state == dict_entry_state::OCCUPIED)
             dealloc(self->entries[i].key);
     }

@@ -23,8 +23,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   value is borrowed automatically (iterating a snapshot), while `for x in &r`
   still iterates by reference and a pointer passes straight through. Because
   the snapshot is a real local, an rvalue is now iterable too —
-  `for x in make_range() { ... }`, which `&` could not address. See
+  `for x in make_iter() { ... }`, which `&` could not address. See
   [Control flow](docs/language.md#control-flow).
+- **Builtin `range`** — `for i in range(start, end)` (or `for i in range(end)`,
+  from 0) is a compiler builtin: a counting loop over `[start, end)` that lowers
+  straight to a counter, with no import, no struct built, and no `_it`/`_next`
+  calls. The element type is inferred from the bounds or set with `range<T>(...)`.
+  See [Control flow](docs/language.md#control-flow).
+
+### Removed
+
+- The `range` **library** module (`import "range"`, `struct range<T>`,
+  `range_it`/`range_next`) is gone, subsumed by the builtin above. Counting
+  loops that built a `struct range` and iterated `&r` become `for i in range(…)`.
 
 ## [0.3.1] - 2026-06-30
 

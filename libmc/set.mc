@@ -1,6 +1,5 @@
 import "memory";
 import "hash";
-import "range";
 import "iteration/pair";
 import "iteration/iterator";
 
@@ -51,8 +50,7 @@ fn set_init<K, V>(self: struct set<K, V>*, capacity: uint64) {
     self->length = 0;
     self->capacity = capacity;
 
-    let r = struct range { end = capacity };
-    for i in &r {
+    for i in range(capacity) {
         self->entries[i].state = set_entry_state::EMPTY;
     }
 }

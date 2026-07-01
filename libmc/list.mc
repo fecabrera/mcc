@@ -1,5 +1,4 @@
 import "memory";
-import "range";
 import "iteration/iterator";
 
 /**
@@ -48,8 +47,7 @@ fn list_duplicate<T>(dst: struct list<T>*, src: struct list<T>*) {
 fn list_from_array<T>(self: struct list<T>*, arr: T*, n: uint64) {
     list_init(self, n);
 
-    let r = struct range { end = n };
-    for i in &r {
+    for i in range(n) {
         list_push(self, arr[i]);
     }
 }

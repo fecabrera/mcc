@@ -2474,6 +2474,17 @@ class CodeGen:
             LangError: When the iterable is not a struct, or its ``S_it`` /
                 matching ``S_next`` is not in scope.
         """
+        # `for x in range(...)` is a builtin counting loop, lowered directly to
+        # a counter with no struct or protocol calls. A user-defined `range`
+        # function, if any, takes precedence.
+        it = stmt.iterable
+        if (
+            isinstance(it, Call)
+            and it.name == "range"
+            and not self.callable_exists("range")
+        ):
+            self.gen_for_range(stmt, it)
+            return
         # Dispatch on the iterable's struct: `for x in obj` calls
         # `<Struct>_it(obj)` then `<Struct>_next(&it, &x)`. Evaluate the iterable
         # once (it may be effectful) and read its struct name off the type.
@@ -2625,6 +2636,123 @@ class CodeGen:
             self.builder.position_at_end(step_bb)
             nxt = self.builder.add(
                 self.builder.load(idx_slot), ir.Constant(UINT64.ir, 1)
+            )
+            self.builder.store(nxt, idx_slot)
+            self.builder.branch(cond_bb)
+            self.builder.position_at_end(end_bb)
+        finally:
+            self.defer_stack.pop()
+            self.locals, self.scope_names = outer_locals, outer_names
+
+    def gen_for_range(self, stmt: For, call: Call):
+        """Lower ``for i in range(end)`` / ``for i in range(start, end)``.
+
+        ``range`` is a builtin, not a library type: it emits a direct counting
+        loop over the half-open interval ``[start, end)`` (``start`` defaults to
+        0), with no struct built and no ``_it``/``_next`` calls -- so at any
+        optimization level there is no runtime footprint beyond the counter::
+
+            { let _i = start; let x: T;
+              while (_i < end) { x = _i; body; _i = _i + 1; } }
+
+        The element type ``T`` comes from an explicit ``range<T>(...)`` argument
+        or is inferred from the bounds (their integer width and signedness); the
+        loop variable ``x`` is a fresh copy of the counter each turn, so
+        assigning to it inside the body does not perturb the iteration.
+
+        Args:
+            stmt: The ``For`` node whose iterable is the ``range`` call.
+            call: The ``range(...)`` call expression.
+
+        Raises:
+            LangError: On the wrong argument count, a non-integer bound, or
+                bounds whose types disagree.
+        """
+        if len(call.args) == 1:
+            start_expr, end_expr = None, call.args[0]
+        elif len(call.args) == 2:
+            start_expr, end_expr = call.args[0], call.args[1]
+        else:
+            raise LangError(
+                "range() takes 1 or 2 arguments: range(end) or range(start, end)",
+                stmt.line,
+            )
+
+        if call.type_args:
+            if len(call.type_args) != 1:
+                raise LangError("range() takes a single type argument", stmt.line)
+            elem = self.lang_type(call.type_args[0], stmt.line)
+            end = self.coerce(self.gen_expr(end_expr), elem, stmt.line, "range end")
+            start = (
+                self.coerce(self.gen_expr(start_expr), elem, stmt.line, "range start")
+                if start_expr is not None
+                else TypedValue(ir.Constant(elem.ir, 0), elem)
+            )
+        else:
+            end = self.gen_expr(end_expr)
+            start = self.gen_expr(start_expr) if start_expr is not None else None
+            # Infer the element type: a typed bound fixes it; two untyped bounds
+            # widen to the larger. The other bound then coerces to it (a typed
+            # mismatch is a coercion error, as it should be).
+            if start is None:
+                elem = end.type
+            elif not start.adaptable:
+                elem = start.type
+            elif not end.adaptable:
+                elem = end.type
+            else:
+                elem = wider_int_type(start.type, end.type)
+            end = self.coerce(end, elem, stmt.line, "range end")
+            start = (
+                self.coerce(start, elem, stmt.line, "range start")
+                if start is not None
+                else TypedValue(ir.Constant(elem.ir, 0), elem)
+            )
+
+        if not is_integer(elem):
+            raise LangError(f"range() needs integer bounds, not {elem}", stmt.line)
+
+        # The bound is fixed at entry; the counter lives in a hidden slot so the
+        # loop variable can be a fresh copy the body may freely reassign.
+        end_val = end.value
+        idx_slot = self.builder.alloca(elem.ir, name="range.idx")
+        self.builder.store(start.value, idx_slot)
+
+        # A fresh scope for the loop variable and the loop's defers.
+        outer_locals, outer_names = dict(self.locals), self.scope_names
+        self.scope_names = set()
+        self.defer_stack.append([])
+        try:
+            x_slot = self.builder.alloca(elem.ir, name=stmt.var)
+            self.bind_local(stmt.var, x_slot, elem)
+
+            cond_bb = self.builder.append_basic_block("range.cond")
+            body_bb = self.builder.append_basic_block("range.body")
+            step_bb = self.builder.append_basic_block("range.step")
+            end_bb = self.builder.append_basic_block("range.end")
+            self.builder.branch(cond_bb)
+            self.builder.position_at_end(cond_bb)
+            idx = self.builder.load(idx_slot)
+            cmp = (
+                self.builder.icmp_signed("<", idx, end_val)
+                if elem.signed
+                else self.builder.icmp_unsigned("<", idx, end_val)
+            )
+            self.builder.cbranch(cmp, body_bb, end_bb)
+            self.builder.position_at_end(body_bb)
+            self.builder.store(idx, x_slot)  # fresh copy of the counter
+            # `continue` lands on the step block, so it still advances the
+            # counter; `break` exits to the end.
+            self.loops.append((step_bb, end_bb, len(self.defer_stack)))
+            try:
+                self.gen_block(stmt.body)
+            finally:
+                self.loops.pop()
+            if not self.builder.block.is_terminated:
+                self.builder.branch(step_bb)
+            self.builder.position_at_end(step_bb)
+            nxt = self.builder.add(
+                self.builder.load(idx_slot), ir.Constant(elem.ir, 1)
             )
             self.builder.store(nxt, idx_slot)
             self.builder.branch(cond_bb)

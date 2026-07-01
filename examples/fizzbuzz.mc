@@ -1,9 +1,7 @@
 import "std";
-import "range";
 
 fn main() -> int32 {
-    let r = struct range<int32> { start = 1, end = 21 };
-    for i in &r {
+    for i in range(1, 21) {
         if (i % 15 == 0) {
             println("FizzBuzz");
         } else if (i % 3 == 0) {
