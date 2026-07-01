@@ -45,10 +45,10 @@ fn murmur3(key: uint8*, length: uint64, seed: uint32) -> uint32 {
     let r = struct range { end = nblocks };
     for i in &r {
         let k = load_le(&key[i * 4]);
-        k = k * 3432918353;  // 0xcc9e2d51
+        k *= 3432918353;  // 0xcc9e2d51
         k = rotl32(k, 15);
-        k = k * 461845907;   // 0x1b873593
-        h = h ^ k;
+        k *= 461845907;   // 0x1b873593
+        h ^= k;
         h = rotl32(h, 13);
         h = h * 5 + 3864292196;  // 0xe6546b64
     }
@@ -57,22 +57,22 @@ fn murmur3(key: uint8*, length: uint64, seed: uint32) -> uint32 {
     let rem = length & 3;
     let kt: uint32 = 0;
     if (rem == 3)
-        kt = kt ^ (key[tail + 2] as uint32 << 16);
+        kt ^= key[tail + 2] as uint32 << 16;
     if (rem >= 2)
-        kt = kt ^ (key[tail + 1] as uint32 << 8);
+        kt ^= key[tail + 1] as uint32 << 8;
     if (rem >= 1) {
-        kt = kt ^ key[tail] as uint32;
-        kt = kt * 3432918353;
+        kt ^= key[tail] as uint32;
+        kt *= 3432918353;
         kt = rotl32(kt, 15);
-        kt = kt * 461845907;
-        h = h ^ kt;
+        kt *= 461845907;
+        h ^= kt;
     }
 
-    h = h ^ length as uint32;
-    h = h ^ (h >> 16);
-    h = h * 2246822507;  // 0x85ebca6b
-    h = h ^ (h >> 13);
-    h = h * 3266489909;  // 0xc2b2ae35
-    h = h ^ (h >> 16);
+    h ^= length as uint32;
+    h ^= h >> 16;
+    h *= 2246822507;  // 0x85ebca6b
+    h ^= h >> 13;
+    h *= 3266489909;  // 0xc2b2ae35
+    h ^= h >> 16;
     return h;
 }

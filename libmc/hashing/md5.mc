@@ -110,7 +110,7 @@ fn md5(data: uint8*, length: uint64, digest: uint8*) {
     let j: uint64 = 0;
     while (j < 8) {
         buf[total - 8 + j] = (bits >> (j * 8)) as uint8;
-        j = j + 1;
+        j += 1;
     }
 
     let a0: uint32 = 1732584193;   // 0x67452301
@@ -143,19 +143,19 @@ fn md5(data: uint8*, length: uint64, digest: uint8*) {
                 g = (7 * round) % 16;
             }
             let m = load_le(&buf[chunk + g as uint64 * 4]);
-            f = f + a + md5_k(round) + m;
+            f += a + md5_k(round) + m;
             a = d;
             d = c;
             c = b;
-            b = b + rotl32(f, md5_shift(round));
-            round = round + 1;
+            b += rotl32(f, md5_shift(round));
+            round += 1;
         }
 
-        a0 = a0 + a;
-        b0 = b0 + b;
-        c0 = c0 + c;
-        d0 = d0 + d;
-        chunk = chunk + 64;
+        a0 += a;
+        b0 += b;
+        c0 += c;
+        d0 += d;
+        chunk += 64;
     }
 
     store_le(&digest[0], a0);
