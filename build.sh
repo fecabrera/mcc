@@ -1,6 +1,6 @@
 #!/bin/bash
-CC={$CC:-cc}
-AR={$AR:-ar}
+CC=${CC:-cc}
+AR=${AR:-ar}
 MCC="python -m mcc"
 MCFLAGS="--nostdlib -I libmc"
 
