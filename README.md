@@ -394,6 +394,16 @@ Grouped by scope.
       keeps each element's static type and a compile-time arity, where erasing
       every slot to `any` would collapse into a fixed-length `slice<any>`. Also
       the door to a statically-typed variadic later (no erasure), if wanted
+- [ ] builtin `enumerate` — `for e in enumerate(obj) { … }` walks any iterable
+      `obj` (a struct with the `_it`/`_next` protocol, borrowed like a bare
+      `for x in obj`) and yields a `{ index, value }` per element: `index` a
+      running `uint64` counter from 0, `value` the element from `obj`'s `_next`.
+      A compiler builtin like [`range`](docs/language.md#control-flow), so it
+      needs no import and adds no library surface (which a future
+      [method/OOP](#functions-and-methods) `range`/`enumerate` on a struct could
+      otherwise clash with) — it lowers to the underlying loop plus a counter,
+      with the pair's fields read as `e.index` / `e.value`. Pairs with `range`;
+      a user-defined `enumerate` function, if any, takes precedence.
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:
