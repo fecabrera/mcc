@@ -387,8 +387,8 @@ Grouped by scope.
       pack's `slice<any>`. Depends on unions and typeof/typeid
 - [ ] builtin `range` — fold the standard-library [`range<T>`](docs/language.md)
       into the compiler so a counting loop reads `for i in range(0, 5)` (or
-      `for i in range(5)`, `start` defaulting to 0) instead of constructing a
-      `struct range<T> { start = …, end = … }` and iterating `&r`. The bound type
+      `for i in range(5)`, `start` defaulting to 0) instead of constructing and
+      iterating a `struct range<T> { start = …, end = … }`. The bound type
       is inferred from the arguments (so `i` takes their integer width). Because
       the compiler owns the lowering, the loop is emitted directly — the counter's
       init/compare/step inline, with no range struct built, no `range_it`/

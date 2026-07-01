@@ -450,6 +450,22 @@ scoped to the loop, and `break`/`continue` work as usual. It lowers to
 `{ let it = <struct>_it(obj); while (<struct>_next(&it, &x)) { ... } }`, with the
 iterator held as a hidden, collision-proof temporary.
 
+`<struct>_it` takes the container by pointer, but the `&` is **yours to choose**,
+not required. A struct *value* is borrowed automatically — `for x in r` iterates
+a snapshot (the value is copied once to a temporary the iterator points at),
+while `for x in &r` iterates `r` itself by reference; a value already of pointer
+type passes straight through. Because the snapshot is a real local, even an
+rvalue is iterable: `for x in make_range() { ... }` works, where `&` could not
+take its address. For value types the two forms are indistinguishable; the
+reference form matters when the body mutates the container as it goes (and, as
+in C, growing a container mid-iteration invalidates an in-flight cursor either
+way).
+
+```c
+for v in nums  { ... }   // by value: iterate a snapshot of nums
+for v in &nums { ... }   // by reference: iterate nums itself
+```
+
 Define `<struct>_it` and `<struct>_next` to make your own types iterable; a
 struct built with [`extends`](#structs) can reuse its base's by forwarding
 through an upcast. The `list`, `set`, `dict`, and `string` libraries all do

@@ -2460,6 +2460,13 @@ class CodeGen:
         gone once the loop ends. The element type ``T`` is read from the resolved
         ``S_next``'s out-parameter.
 
+        ``S_it`` takes the container by pointer, so a struct *value* iterable is
+        borrowed automatically: ``for x in r`` iterates a snapshot (the value is
+        copied to a stack slot whose address is passed), while ``for x in &r``
+        iterates ``r`` by reference. A pointer iterable passes straight through.
+        Because the slot is a function-scoped alloca, the iterator's back-pointer
+        never dangles -- so even an rvalue (``for x in make_range()``) is safe.
+
         Args:
             stmt: The ``For`` node to lower.
 
@@ -2491,13 +2498,24 @@ class CodeGen:
                 "none is in scope",
                 stmt.line,
             )
-        # Pass the already-evaluated iterable through a hidden local so the
-        # `_it` call (routed through normal overload/generic resolution) does not
-        # re-evaluate the expression. The name cannot be a real identifier.
-        src_slot = self.builder.alloca(iterable.type.ir, name="for.src")
-        self.builder.store(iterable.value, src_slot)
+        # `_it` takes the container by pointer, so a value iterable is borrowed
+        # automatically: `for x in r` behaves like `for x in &r`. A pointer
+        # iterable passes straight through; a struct value is materialized to a
+        # stack slot and its address is taken (the slot lives for the whole
+        # function, so the iterator's back-pointer never dangles).
+        if is_pointer(iterable.type):
+            arg = iterable
+        else:
+            struct_slot = self.builder.alloca(iterable.type.ir, name="for.src")
+            self.builder.store(iterable.value, struct_slot)
+            arg = TypedValue(struct_slot, pointer_to(iterable.type))
+        # Pass the pointer through a hidden local so the `_it` call (routed
+        # through normal overload/generic resolution) does not re-evaluate the
+        # expression. The name cannot be a real identifier.
+        src_slot = self.builder.alloca(arg.type.ir, name="for.iterable")
+        self.builder.store(arg.value, src_slot)
         hidden = "0for.iterable"
-        self.bind_local(hidden, src_slot, iterable.type)
+        self.bind_local(hidden, src_slot, arg.type)
         iterator = self.gen_call(Call(it_name, [], [Var(hidden, stmt.line)], stmt.line))
         del self.locals[hidden]
         self.scope_names.discard(hidden)

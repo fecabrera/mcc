@@ -18,6 +18,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `arr[next()] += 1` runs its side effects a single time. See
   [Variables](docs/language.md#variables) and
   [compound_assignment.mc](examples/compound_assignment.mc).
+- **`for x in` over a struct value** — the `_it`/`_next` protocol takes the
+  container by pointer, but `for x in r` no longer needs the `&`: a struct
+  value is borrowed automatically (iterating a snapshot), while `for x in &r`
+  still iterates by reference and a pointer passes straight through. Because
+  the snapshot is a real local, an rvalue is now iterable too —
+  `for x in make_range() { ... }`, which `&` could not address. See
+  [Control flow](docs/language.md#control-flow).
 
 ## [0.3.1] - 2026-06-30
 
