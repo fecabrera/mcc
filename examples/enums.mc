@@ -61,7 +61,7 @@ fn main() -> int32 {
     let i: int32 = 0;
     while (i < 3) {
         println("palette[%d] = %s", i, name_of(palette[i]));
-        i = i + 1;
+        i += 1;
     }
 
     // uint64 flags, combined with bitwise OR and tested with AND.

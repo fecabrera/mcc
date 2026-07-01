@@ -32,7 +32,7 @@ fn print(s: uint8*) {
     let i = 0 as uint64;
     while (s[i] != 0) {
         put_char(s[i]);
-        i = i + 1;
+        i += 1;
     }
 }
 

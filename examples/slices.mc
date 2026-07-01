@@ -11,7 +11,7 @@ import "list";
 fn sum(xs: slice<int32>) -> int32 {
     let total: int32 = 0;
     for x in xs {                 // slices iterate natively -- no _it/_next
-        total = total + x;
+        total += x;
     }
     return total;
 }
@@ -20,8 +20,8 @@ fn sum(xs: slice<int32>) -> int32 {
 fn double_all(xs: slice<int32>) {
     let i: uint64 = 0;
     while (i < xs.length) {        // .length is the runtime element count
-        xs[i] = xs[i] * 2;
-        i = i + 1;
+        xs[i] *= 2;
+        i += 1;
     }
 }
 
@@ -66,7 +66,7 @@ fn main() -> int32 {
     let n: int32 = 1;
     while (n <= 5) {
         list_push(&nums, n * n);
-        n = n + 1;                        // 1 4 9 16 25
+        n += 1;                        // 1 4 9 16 25
     }
 
     let s = nums as slice<int32>;

@@ -35,7 +35,7 @@ fn main() -> int32 {
                 println("%c is a digit", c);
             }
         }
-        i = i + 1;
+        i += 1;
     }
     return 0;
 }

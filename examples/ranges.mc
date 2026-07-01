@@ -18,7 +18,7 @@ fn main() -> int32 {
     let span = struct range<int32>  { start = 10, end = 15 };
     let sum: int32 = 0;
     for n in &span {
-        sum = sum + n;
+        sum += n;
     }
     println("sum of [10, 15) = %d", sum);
 

@@ -14,7 +14,7 @@ fn main() -> int32 {
     let i: int32 = 0;
     while (i < 10) {
         list_push(&nums, i * i);      // one element; grows past the capacity of 2
-        i = i + 1;
+        i += 1;
     }
     let value: int32 = 0;
     if (list_get(&nums, 6, &value))
@@ -61,7 +61,7 @@ fn main() -> int32 {
     i = 1;
     while (i <= 5) {
         queue_push(&q, i);               // grows past the initial capacity of 2
-        i = i + 1;
+        i += 1;
     }
 
     println("queue: len %llu, front %d", queue_len(&q), queue_peek(&q));

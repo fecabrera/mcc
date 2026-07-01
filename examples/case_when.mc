@@ -42,7 +42,7 @@ fn main() -> int32 {
     let i: int32 = 0;
     while (i < 4) {
         println("%d is %s", i, name_of(i));
-        i = i + 1;
+        i += 1;
     }
 
     // `break` and `continue` inside an arm act on the enclosing loop, not the
@@ -50,7 +50,7 @@ fn main() -> int32 {
     // an arm.
     let n: int32 = 0;
     while (n < 10) {
-        n = n + 1;
+        n += 1;
         case (n % 3) {
             when 0: continue;        // skip multiples of 3
             else:   print("%d ", n);
@@ -65,7 +65,7 @@ fn main() -> int32 {
     let j: uint64 = 0;
     while (text[j] != '\0') {
         println("'%c' is a %s", text[j], classify(text[j]));
-        j = j + 1;
+        j += 1;
     }
     return 0;
 }

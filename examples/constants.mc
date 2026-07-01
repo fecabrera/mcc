@@ -27,9 +27,9 @@ fn main() -> int32 {
         let col: int32 = 0;
         while (col < WIDTH) {
             grid[row * WIDTH + col] = row * WIDTH + col;
-            col = col + 1;
+            col += 1;
         }
-        row = row + 1;
+        row += 1;
     }
 
     println("%s: %d cells, %d bytes per row", TITLE, CELLS, ROW_BYTES);

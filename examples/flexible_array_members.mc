@@ -25,7 +25,7 @@ fn make_packet(n: uint64) -> struct packet* {
     let i: uint64 = 0;
     while (i < n) {
         p->data[i] = (i * i) as int32;
-        i = i + 1;
+        i += 1;
     }
     return p;
 }
@@ -39,7 +39,7 @@ fn main() -> int32 {
     let i: uint64 = 0;
     while (i < p->length) {           // 0 1 4 9 16
         print(" %d", p->data[i]);
-        i = i + 1;
+        i += 1;
     }
     println("");
 

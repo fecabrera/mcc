@@ -9,7 +9,7 @@ fn is_prime(n: int32) -> bool {
         if (n % d == 0) {
             return false;
         }
-        d = d + 1;
+        d += 1;
     }
     return true;
 }
@@ -20,9 +20,9 @@ fn main() -> int32 {
     while (n < 50) {
         if (is_prime(n)) {
             print("%d ", n);
-            count = count + 1;
+            count += 1;
         }
-        n = n + 1;
+        n += 1;
     }
     print("\n%d primes below 50\n", count);
     return 0;

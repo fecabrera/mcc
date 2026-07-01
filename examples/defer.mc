@@ -36,7 +36,7 @@ fn build_labels(n: uint64) {
     defer {
         let i: uint64 = 0;
         while (i < labels.length) {
-            defer i = i + 1;                 // bump at the end of each iteration
+            defer i += 1;                 // bump at the end of each iteration
             println("  free %s", labels.data[i]);
             dealloc(labels.data[i]);
         }
@@ -49,7 +49,7 @@ fn build_labels(n: uint64) {
         label[0] = ('a' as byte) + (i as byte);   // raw byte buffer
         label[1] = 0;
         list_push(&labels, label);
-        i = i + 1;
+        i += 1;
     }
     println("built %llu labels", labels.length);
     // falling off the end here runs the cleanup block above
@@ -70,7 +70,7 @@ fn main() -> int32 {
     while (i < 3) {
         defer print("| ");          // marks the end of each iteration
         print("step %d ", i);
-        i = i + 1;
+        i += 1;
     }
     println("");
 

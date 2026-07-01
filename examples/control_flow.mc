@@ -30,7 +30,7 @@ fn main() -> int32 {
     let i: int32 = 0;
     while (i < 5) {
         println("i = %d", i);
-        i = i + 1;
+        i += 1;
     }
 
     // `until` is the inverse of `while`: it loops as long as the condition
@@ -38,7 +38,7 @@ fn main() -> int32 {
     let countdown: int32 = 3;
     until (countdown == 0) {
         println("countdown = %d", countdown);
-        countdown = countdown - 1;
+        countdown -= 1;
     }
 
     // Loops nest; here is a small multiplication table.
@@ -47,10 +47,10 @@ fn main() -> int32 {
         let col: int32 = 1;
         while (col <= 3) {
             print("%2d ", row * col);
-            col = col + 1;
+            col += 1;
         }
         println("");  // newline
-        row = row + 1;
+        row += 1;
     }
 
     // `break` leaves the innermost loop; `continue` jumps to its next
@@ -58,10 +58,10 @@ fn main() -> int32 {
     let sum: int32 = 0;
     let k: int32 = 0;
     while (true) {
-        k = k + 1;
+        k += 1;
         if (k > 10) { break; }
         if (k % 2 == 0) { continue; }
-        sum = sum + k;
+        sum += k;
     }
     println("sum of odds 1..9 = %d", sum);
 

@@ -17,7 +17,7 @@ fn sum_list(head: struct node<int32>*) -> int32 {
     let total: int32 = 0;
     let cur = head;
     until (cur == null) {
-        total = total + cur->value;
+        total += cur->value;
         cur = cur->next;
     }
     return total;

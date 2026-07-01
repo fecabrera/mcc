@@ -16,7 +16,7 @@ fn main() -> int32 {
     let i: int32 = 1;
     while (i <= 6) {
         list_push(&nums, i * i);      // 1 4 9 16 25 36
-        i = i + 1;
+        i += 1;
     }
 
     // Sum the squares, stopping once they exceed 20.
@@ -25,7 +25,7 @@ fn main() -> int32 {
         if (sq % 2 == 0) { continue; }   // skip the even squares
         if (sq > 20) { break; }          // and stop past 20
         println("odd square: %d", sq);
-        sum = sum + sq;
+        sum += sq;
     }
     println("sum of odd squares <= 20: %d", sum);   // 1 + 9 = 10
 

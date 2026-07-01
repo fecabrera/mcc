@@ -5,7 +5,7 @@ fn fill_squares(nums: int32*, n: int32) {
     let i: int32 = 0;
     while (i < n) {
         nums[i] = i * i;
-        i = i + 1;
+        i += 1;
     }
 }
 
@@ -17,7 +17,7 @@ fn main() -> int32 {
     let i: int32 = 0;
     while (i < 5) {
         println("nums[%d] = %d", i, nums[i]);
-        i = i + 1;
+        i += 1;
     }
     dealloc(nums);
 

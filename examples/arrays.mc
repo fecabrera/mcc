@@ -24,8 +24,8 @@ fn sum(xs: int32*, n: int32) -> int32 {
     let total: int32 = 0;
     let i: int32 = 0;
     while (i < n) {
-        total = total + xs[i];
-        i = i + 1;
+        total += xs[i];
+        i += 1;
     }
     return total;
 }
@@ -36,7 +36,7 @@ fn main() -> int32 {
     let i: int32 = 0;
     while (i < 6) {
         squares[i] = i * i;
-        i = i + 1;
+        i += 1;
     }
     println("squares[5] = %d, sum = %d", squares[5], sum(squares, 6));
     println("sizeof(int32[6]) = %llu bytes", sizeof(int32[6]));
@@ -50,8 +50,8 @@ fn main() -> int32 {
     let digits: int32[] = [3, 1, 4, 1, 5, 9, 1];
     i = 0;
     while (i < 7) {
-        counts[digits[i]] = counts[digits[i]] + 1;   // counts is the @static buffer
-        i = i + 1;
+        counts[digits[i]] += 1;   // counts is the @static buffer
+        i += 1;
     }
     println("digit 1 appears %d times", counts[1]);
 
@@ -61,7 +61,7 @@ fn main() -> int32 {
     i = 0;
     while (i < len(cmds)) {
         println("  %-6s %s", cmds[i][0], cmds[i][1]);
-        i = i + 1;
+        i += 1;
     }
 
     // Nested literals build multi-dimensional arrays (row-major).
