@@ -27,6 +27,7 @@ mcc = "mcc.driver:main"
 [tool.setuptools]
 packages = [
     "mcc",
+    "mcc.codegen",
     "mcc.libmc",
     "mcc.libmc.libc",
     "mcc.libmc.hashing",
