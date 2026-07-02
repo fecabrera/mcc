@@ -48,7 +48,9 @@
   "fn"
   "let"
   "const"
+  "mut"
   "struct"
+  "union"
   "enum"
   "type"
   "extends"
@@ -82,9 +84,11 @@
   "as"
 ] @keyword.operator
 
-; sizeof / len read as built-in calls.
+; sizeof / alignof / offsetof / len read as built-in calls.
 [
   "sizeof"
+  "alignof"
+  "offsetof"
   "len"
 ] @function.builtin
 
@@ -97,6 +101,16 @@
   ">="
   "<<"
   ">>"
+  "+="
+  "-="
+  "*="
+  "/="
+  "%="
+  "&="
+  "|="
+  "^="
+  "<<="
+  ">>="
   "="
   "+"
   "-"

@@ -54,6 +54,10 @@ module.exports = grammar({
     // index (maximal munch), rather than starting a new braceless-body
     // statement; prefer the postfix reading.
     [$.argument_list, $.parenthesized_expression],
+    // `Name {` may open a struct literal or be an expression followed by a
+    // block statement; the literal's dynamic precedence settles it.
+    [$.struct_literal, $.identifier_expression],
+    [$.struct_literal, $.identifier_expression, $._type_name],
   ],
 
   rules: {
@@ -97,10 +101,12 @@ module.exports = grammar({
         $.conditional,
       ),
 
+    // A `union` shares the struct shape (the compiler rejects `extends` and
+    // defaults on it later; a highlighting grammar doesn't enforce that).
     struct_declaration: ($) =>
       seq(
         repeat($.annotation),
-        'struct',
+        choice('struct', 'union'),
         field('name', alias($.identifier, $.type_identifier)),
         optional($.type_parameters),
         optional(seq('extends', field('base', $._type))),
@@ -108,7 +114,19 @@ module.exports = grammar({
       ),
 
     field_list: ($) =>
-      seq('{', repeat(seq(field('name', $.identifier), ':', $._type, ';')), '}'),
+      seq(
+        '{',
+        repeat(
+          seq(
+            field('name', $.identifier),
+            ':',
+            $._type,
+            optional(seq('=', field('default', $._expression))),
+            ';',
+          ),
+        ),
+        '}',
+      ),
 
     enum_declaration: ($) =>
       seq(
@@ -163,7 +181,12 @@ module.exports = grammar({
       seq('(', commaSep(choice($.parameter, $.variadic_parameter)), ')'),
 
     parameter: ($) =>
-      seq(optional('const'), field('name', $.identifier), ':', $._type),
+      seq(
+        optional(choice('const', 'mut')),
+        field('name', $.identifier),
+        ':',
+        $._type,
+      ),
 
     variadic_parameter: ($) => '...',
 
@@ -212,12 +235,23 @@ module.exports = grammar({
 
     // -------------------------------------------------------------------- types
     _type: ($) =>
-      choice($.pointer_type, $.array_type, $.function_type, $._type_name, $.grouped_type),
+      choice(
+        $.const_type,
+        $.pointer_type,
+        $.array_type,
+        $.function_type,
+        $._type_name,
+        $.grouped_type,
+      ),
+
+    // `const T` -- the read-only qualifier binding the whole following type
+    // (the element of a slice<const T>, a const function-type parameter).
+    const_type: ($) => prec.right(seq('const', $._type)),
 
     _type_name: ($) =>
       prec.right(
         seq(
-          optional('struct'),
+          optional(choice('struct', 'union')),
           field('name', alias($.identifier, $.type_identifier)),
           optional($.type_arguments),
         ),
@@ -232,10 +266,20 @@ module.exports = grammar({
     // highlighting grammar does without.
     pointer_type: ($) => prec(PREC.unary, seq($._type, repeat1('*'))),
     array_type: ($) => prec(1, seq($._type, repeat1($.dimension))),
-    dimension: ($) => seq('[', optional(choice($.number, $.identifier)), ']'),
+    // A dimension is any constant expression (e.g. `[N + 1]`); `[]` is an
+    // inferred (or flexible-array-member) dimension.
+    dimension: ($) => seq('[', optional($._expression), ']'),
 
     function_type: ($) =>
-      prec.right(seq('fn', '(', commaSep($._type), ')', optional(seq('->', $._type)))),
+      prec.right(
+        seq(
+          'fn',
+          '(',
+          commaSep(choice($._type, $.variadic_parameter)),
+          ')',
+          optional(seq('->', $._type)),
+        ),
+      ),
 
     grouped_type: ($) => seq('(', $._type, ')'),
 
@@ -304,7 +348,15 @@ module.exports = grammar({
       seq('for', field('variable', $.identifier), 'in', field('iterable', $._expression), field('body', $._body)),
 
     assignment_statement: ($) =>
-      seq(field('target', $._expression), '=', field('value', $._expression), ';'),
+      seq(
+        field('target', $._expression),
+        field(
+          'operator',
+          choice('=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>='),
+        ),
+        field('value', $._expression),
+        ';',
+      ),
 
     expression_statement: ($) => seq($._expression, ';'),
 
@@ -391,11 +443,14 @@ module.exports = grammar({
         $.boolean,
         $.null,
         $.enum_access,
+        $.struct_literal,
         $.identifier_expression,
         $.parenthesized_expression,
         $.block_expression,
         $.array_expression,
         $.sizeof_expression,
+        $.alignof_expression,
+        $.offsetof_expression,
         $.len_expression,
         $.asm_expression,
       ),
@@ -407,11 +462,34 @@ module.exports = grammar({
         field('member', $.identifier),
       ),
 
+    // `Name { field = value, ... }` (the `struct`/`union` keyword optional).
+    // In real mcc a literal is disabled in statement-head position (the `{`
+    // would read as a block); a highlighting grammar leans on GLR instead.
+    struct_literal: ($) =>
+      prec.dynamic(
+        1,
+        seq(
+          optional(choice('struct', 'union')),
+          field('type', alias($.identifier, $.type_identifier)),
+          optional($.type_arguments),
+          '{',
+          commaSep($.field_initializer),
+          optional(','),
+          '}',
+        ),
+      ),
+
+    field_initializer: ($) =>
+      seq(field('name', $.identifier), '=', field('value', $._expression)),
+
     identifier_expression: ($) => $.identifier,
     parenthesized_expression: ($) => seq('(', $._expression, ')'),
     block_expression: ($) => prec.dynamic(-1, seq('{', repeat($._statement), '}')),
     array_expression: ($) => seq('[', commaSep($._expression), optional(','), ']'),
     sizeof_expression: ($) => seq('sizeof', '(', $._type, ')'),
+    alignof_expression: ($) => seq('alignof', '(', $._type, ')'),
+    offsetof_expression: ($) =>
+      seq('offsetof', '(', $._type, ',', field('field', $.identifier), ')'),
     len_expression: ($) => seq('len', '(', $._expression, ')'),
 
     // ----------------------------------------------------------- inline asm

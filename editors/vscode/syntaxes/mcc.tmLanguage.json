@@ -93,11 +93,11 @@
         },
         {
           "name": "keyword.operator.word.mcc",
-          "match": "\\b(and|or|as|sizeof|len)\\b"
+          "match": "\\b(and|or|as|sizeof|alignof|offsetof|len)\\b"
         },
         {
           "name": "storage.type.mcc",
-          "match": "\\b(fn|let|const|struct|enum)\\b"
+          "match": "\\b(fn|let|const|mut|struct|enum|union)\\b"
         },
         {
           "comment": "`type` is contextual: only a keyword as `type <name> = …`.",

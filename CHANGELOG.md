@@ -10,6 +10,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Editor support catch-up** — the VS Code grammar and the Helix tree-sitter
+  grammar now highlight `mut` and `union`; the tree-sitter grammar also
+  learned the syntax it was missing: compound assignment operators, `const T`
+  in type positions, struct/union literals (`point { x = 1 }`), field
+  defaults, constant-expression array dimensions (`[N + 1]`), variadic
+  function types (`fn(char*, ...)`), and `alignof`/`offsetof`. Every file in
+  `examples/` and all of `libmc/` (except one line hitting the grammar's
+  documented `as T * n` cast-star ambiguity) now parses with no errors.
 - **`mut` parameters** — `fn find(key: int32, mut out: int32) -> bool`: the
   writable dual of `const`, passed by hidden reference to the caller's storage
   for every type (scalars included — that is how the write reaches the
