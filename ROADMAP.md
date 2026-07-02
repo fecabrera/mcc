@@ -264,6 +264,34 @@ already do).
         formatting this is now done by a literal adapting to `slice<const uint8>`
         — see [`slice<T>`](docs/language.md#slices) — so `println("{}", a)`
         needs no `struct string`.)
+- [ ] `mut` parameters and returns — the writable dual of `const`: a value
+      passed (or returned) by hidden reference to the caller's storage, mutable
+      *through* the reference but, like `const`, with its address unable to
+      escape (`&` on it is rejected). The reference is scoped to the current
+      context, so the underlying memory never leaks — the memory-safe
+      counterpart to handing out a raw `T*`. In an rvalue position a `mut T`
+      auto-derefs to `T` (copy on read, compare); in an lvalue position it
+      writes through. Inherits `const`'s restrictions: not allowed on `@extern`
+      parameters (ABI mismatch) and a function using it cannot be taken as a
+      plain `fn(...)` value (the hidden-reference convention is not expressible
+      in the pointer type). Note that, unlike `const`, `mut` on a **scalar**
+      changes the calling convention (always by hidden reference) — that is the
+      only way a write reaches the caller:
+  - [ ] `mut` parameters — `fn find(key: int32, mut out: int32) -> bool`: the
+        callee may write `out` but cannot take its address or store it, so it is
+        the memory-safe version of `fn find(key: int32, out: int32*) -> bool`.
+        The non-escape guarantee is local and total, enforceable with the same
+        machinery `const` already uses
+  - [ ] `mut` returns — a function that returns an lvalue:
+        `fn string_at(self: string*, i: uint64) -> mut char` makes
+        `string_at(&str, 0) = '/'` legal (as well as comparing it or copying it
+        out with `let c = string_at(&str, 0)`). A call returning `mut T` is a
+        new assignable expression category. To keep the reference from dangling
+        without a lifetime system, a `mut` return may only be **formed from a
+        `mut`/pointer parameter or a global — never from a local or a by-value
+        parameter**; this conservative, checkable rule fits the `string_at`
+        case (the result derives from `self`) and preserves the non-escape
+        guarantee
 - [ ] `@noalias` parameters — C's `restrict`: mark a pointer parameter
       (`fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64)`) as
       not overlapping any other pointer the function can reach, mapping to
