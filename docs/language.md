@@ -1695,7 +1695,7 @@ works on the host and on a cross `--target` of that same architecture — for
 instance an aarch64 host cross-compiling an aarch64 bare-metal object (see
 [examples/baremetal/](examples/baremetal/)) — but not a foreign architecture.
 Pinning an operand to a fixed physical register and `@naked` functions are on
-the [roadmap](../README.md#roadmap).
+the [roadmap](../ROADMAP.md#planned).
 
 ## Comments
 

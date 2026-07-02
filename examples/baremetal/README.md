@@ -40,7 +40,7 @@ hello from bare-metal mcc
   lowered by the host's assembler, so it only works when cross-compiling from a
   host of the same architecture — and this object is built from any host. A
   no-prologue `_start` would also need the `@naked` form. Both are noted on the
-  [roadmap](../../README.md#roadmap).)
+  [roadmap](../../ROADMAP.md#planned).)
 - **`--target aarch64-unknown-none-elf`** — makes `mcc` emit an ELF object
   for the bare-metal triple instead of linking a host executable.
   (For a target brought up with the MMU off, add
