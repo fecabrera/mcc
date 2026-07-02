@@ -127,6 +127,14 @@ already do).
   - [ ] bounds — constrain a parameter with `fn myfunc<T extends mystruct>(x: T)`
         (a struct and its `extends` specializations) or
         `fn myfunc<T in (t1, t2, ...)>(x: T)` (an explicit set of types)
+    - [ ] interface bounds — `fn myfunc<T implements I>(x: T)`, asserting
+          that `T` implements interface `I`: checked at each monomorphized
+          instantiation (the concrete type must define every method `I`
+          names), then calls dispatch statically — no fat pointer, no
+          vtable. The static counterpart of the dynamic
+          [interfaces](#functions-and-methods) dispatch; depends on
+          interface declarations and the methods they are made of, so it
+          lands after both
 
 ### Modules and imports
 
