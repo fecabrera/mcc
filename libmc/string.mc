@@ -105,8 +105,8 @@ fn string_reset(self: struct string*) {
  * @return true if index is in bounds, false otherwise
  */
 @inline
-fn string_get(self: struct string*, index: uint64, out: char*) -> bool {
-    return list_get(self, index, out);
+fn string_get(self: struct string*, index: uint64, mut out: char) -> bool {
+    return list_get(self, index, out);    // re-lends the mut reference
 }
 
 /**

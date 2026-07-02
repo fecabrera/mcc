@@ -261,7 +261,7 @@ def test_list_lib(tmp_path, capfd):
                 i = i + 1;
             }
             let v: float64 = 0.0;
-            list_get(floats, 3, &v);
+            list_get(floats, 3, v);
             printf("%f %llu\\n", v, floats->length);
             list_destroy(floats);
             dealloc(floats);
@@ -379,7 +379,7 @@ def test_list_duplicate_deep_copies(capfd):
             list_duplicate(&b, &a);                 // independent copy
             list_set(&a, 0, 99);                    // mutate the original
             let first: int32 = 0;
-            list_get(&b, 0, &first);                // copy is unaffected
+            list_get(&b, 0, first);                // copy is unaffected
             printf("%d %llu\\n", first, b.length);  // 7 2
             list_destroy(&a);
             list_destroy(&b);

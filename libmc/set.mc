@@ -105,7 +105,7 @@ fn set_set<K, V>(self: struct set<K, V>*, key: K, value: V) {
 }
 
 /**
- * Looks up key and writes the associated value into *out if found.
+ * Looks up key and writes the associated value into out if found.
  *
  * @param self: set to search
  * @param key:  key to look up
@@ -113,13 +113,13 @@ fn set_set<K, V>(self: struct set<K, V>*, key: K, value: V) {
  *
  * @return true if key was found, false otherwise
  */
-fn set_get<K, V>(self: struct set<K, V>*, key: K, out: V*) -> bool {
+fn set_get<K, V>(self: struct set<K, V>*, key: K, mut out: V) -> bool {
     let slot = hash(key) % self->capacity;
 
     while (self->entries[slot].state != set_entry_state::EMPTY) {
         if (self->entries[slot].state == set_entry_state::OCCUPIED) {
             if (self->entries[slot].key == key) {
-                *out = self->entries[slot].value;
+                out = self->entries[slot].value;
                 return true;
             }
         }

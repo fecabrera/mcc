@@ -17,7 +17,7 @@ fn main() -> int32 {
         i += 1;
     }
     let value: int32 = 0;
-    if (list_get(&nums, 6, &value))
+    if (list_get(&nums, 6, value))       // value is a mut parameter: no & needed
         println("list: length %llu, nums[6] = %d", nums.length, value);
 
     // list_from_array builds an owned list by copying a raw array; list_append

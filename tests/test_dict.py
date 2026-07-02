@@ -57,12 +57,12 @@ def test_lookup_by_content_not_address(tmp_path, capfd):
             dict_init(d, 4);
             dict_set(d, "hello", 42);
             let v: int32 = 0;
-            if (dict_get(d, "hello", &v))
+            if (dict_get(d, "hello", v))
                 printf("found %d\\n", v);
             dict_set(d, "hello", 43);          // update via another pointer
-            dict_get(d, "hello", &v);
+            dict_get(d, "hello", v);
             printf("updated %d, length %llu\\n", v, d->length);
-            if (!dict_get(d, "absent", &v))
+            if (!dict_get(d, "absent", v))
                 puts("absent missing");
             dict_destroy(d);
             dealloc(d);
@@ -105,7 +105,7 @@ def test_dict_owns_key_copies(tmp_path, capfd):
                 scratch[0] = (65 + i / 10) as char;
                 scratch[1] = (65 + i % 10) as char;
                 scratch[2] = 0;
-                if (!dict_get(d, scratch, &v))
+                if (!dict_get(d, scratch, v))
                     errors = errors + 1;
                 else if (v != i * 7)
                     errors = errors + 1;
@@ -139,9 +139,9 @@ def test_remove_and_tombstone_reuse(tmp_path, capfd):
             dict_set(d, "beta", 2);
             dict_remove(d, "alpha");
             let v: int32 = 0;
-            let gone = !dict_get(d, "alpha", &v);
+            let gone = !dict_get(d, "alpha", v);
             dict_set(d, "alpha", 10);          // re-insert into tombstone
-            dict_get(d, "alpha", &v);
+            dict_get(d, "alpha", v);
             printf("%d %d %llu\\n", gone, v, d->length);
             dict_destroy(d);
             dealloc(d);

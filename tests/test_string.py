@@ -23,10 +23,10 @@ def test_base_operations(capfd):
             string_push(&s, 'i');
             string_set(&s, 0, 'H');
             let c: char;
-            string_get(&s, 1, &c);
+            string_get(&s, 1, c);
             printf("len=%llu first_then_second=", s.length);   // inherited field
             let f: char;
-            string_get(&s, 0, &f);
+            string_get(&s, 0, f);
             printf("%c%c\\n", f, c);
             string_destroy(&s);
             return 0;

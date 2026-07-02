@@ -267,6 +267,14 @@ already do).
         argument's address must be formed before the overload is chosen);
         supporting them means deferring the lvalue/value decision until after
         overload resolution
+  - [ ] `for … in` protocol over `mut` — `_next` still takes its element slot
+        as a raw pointer (`fn list_next<T>(it: …, out: T*) -> bool`) because
+        the compiler emits the `_next(&it, &slot)` call itself; teaching that
+        protocol codegen to form a `mut` argument makes
+        `fn list_next<T>(it: …, mut out: T) -> bool` the expected shape and
+        removes the last stdlib out-pointer (the `get` family already
+        migrated). The `_it`/`_next` signatures are a compiler-checked
+        convention, so this is a coordinated compiler + stdlib change
   - [ ] `mut` returns — a function that returns an lvalue:
         `fn string_at(self: string*, i: uint64) -> mut char` makes
         `string_at(&str, 0) = '/'` legal (as well as comparing it or copying it

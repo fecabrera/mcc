@@ -112,7 +112,7 @@ def test_set_behaves_like_a_dict(tmp_path, capfd):
             let value: uint64 = 0;
             i = 0;
             while (i < 200) {
-                let found = set_get(s, i * 7, &value);
+                let found = set_get(s, i * 7, value);
                 if (i % 3 == 0) {
                     if (found)
                         errors = errors + 1;
@@ -127,7 +127,7 @@ def test_set_behaves_like_a_dict(tmp_path, capfd):
                 }
                 i = i + 1;
             }
-            if (set_get(s, 999999, &value))
+            if (set_get(s, 999999, value))
                 errors = errors + 1;           // absent key must not be found
 
             i = 0;
@@ -163,7 +163,7 @@ def test_generic_keys_and_values(tmp_path, capfd):
             set_set(prices, -5, 1.25);
             set_set(prices, 7, 2.5);
             let price: float64 = 0.0;
-            if (set_get(prices, -5, &price))
+            if (set_get(prices, -5, price))
                 printf("%f\\n", price);
             set_destroy(prices);
             dealloc(prices);
@@ -174,7 +174,7 @@ def test_generic_keys_and_values(tmp_path, capfd):
             let hello: uint8* = "hello";   // a uint8* key, matching set<uint8*, _>
             set_set(names, hello, 42);
             let found: int32 = 0;
-            if (set_get(names, hello, &found))
+            if (set_get(names, hello, found))
                 printf("%d\\n", found);
             set_destroy(names);
             dealloc(names);

@@ -97,6 +97,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   failed link is reported cleanly after cc's own diagnostics. `libm` is still
   always linked. See [Usage](README.md#usage).
 
+### Changed
+
+- **The stdlib `get` family takes `mut` out-parameters** — `list_get`,
+  `string_get`, `dict_get`, and `set_get` now declare their out-parameter as
+  `mut out: T` instead of `out: T*`. Call them with the variable itself
+  (`list_get(&nums, 6, value)`), not its address — the `&` at the call site
+  is gone, and the callee can no longer leak the address. The `_it`/`_next`
+  iteration protocol still uses `out: T*` (the compiler emits those calls;
+  migrating the protocol to `mut` is on the roadmap).
+
 ### Removed
 
 - The `range` **library** module (`import "range"`, `struct range<T>`,

@@ -147,7 +147,7 @@ fn dict_set<V>(self: struct dict<V>*, key: char*, value: V) {
 }
 
 /**
- * Looks up key by content and writes the associated value into *out if
+ * Looks up key by content and writes the associated value into out if
  * found.
  *
  * @param self: dict to search
@@ -156,13 +156,13 @@ fn dict_set<V>(self: struct dict<V>*, key: char*, value: V) {
  *
  * @return true if key was found, false otherwise
  */
-fn dict_get<V>(self: struct dict<V>*, key: char*, out: V*) -> bool {
+fn dict_get<V>(self: struct dict<V>*, key: char*, mut out: V) -> bool {
     let slot = hash(key) % self->capacity;
 
     while (self->entries[slot].state != dict_entry_state::EMPTY) {
         if (self->entries[slot].state == dict_entry_state::OCCUPIED) {
             if (str_eq(self->entries[slot].key, key)) {
-                *out = self->entries[slot].value;
+                out = self->entries[slot].value;
                 return true;
             }
         }

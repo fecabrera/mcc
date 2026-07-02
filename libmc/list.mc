@@ -96,15 +96,15 @@ fn list_reset<T>(self: struct list<T>*) {
  *
  * @param self:  list to read from
  * @param index: zero-based index; must be < self->length
- * @param out:   location the element is written to
+ * @param out:   written with the element; unchanged if index is out of bounds
  *
  * @return true on success, false if index is out of bounds
  */
-fn list_get<T>(self: struct list<T>*, index: uint64, out: T*) -> bool {
+fn list_get<T>(self: struct list<T>*, index: uint64, mut out: T) -> bool {
     if (index >= self->length)
         return false;
 
-    *out = self->data[index];
+    out = self->data[index];
     return true;
 }
 
