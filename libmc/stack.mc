@@ -42,7 +42,7 @@ fn stack_push<T>(self: struct stack<T>*, value: T) {
         stack_grow<T>(self);
 
     self->data[self->top] = value;
-    self->top = self->top + 1;
+    self->top += 1;
 }
 
 /**
@@ -54,7 +54,7 @@ fn stack_push<T>(self: struct stack<T>*, value: T) {
  * @return the popped value
  */
 fn stack_pop<T>(self: struct stack<T>*) -> T {
-    self->top = self->top - 1;
+    self->top -= 1;
     return self->data[self->top];
 }
 

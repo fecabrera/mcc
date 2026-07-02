@@ -136,7 +136,7 @@ fn list_push<T>(self: struct list<T>*, value: T) {
         list_grow<T>(self);
 
     self->data[self->length] = value;
-    self->length = self->length + 1;
+    self->length += 1;
 }
 
 /**
@@ -197,6 +197,6 @@ fn list_next<T>(it: struct iterator<list<T>>*, out: T*) -> bool {
         return false;
 
     *out = it->obj->data[it->idx];
-    it->idx = it->idx + 1;
+    it->idx += 1;
     return true;
 }

@@ -56,7 +56,7 @@ fn string_from_array(self: struct string*, str: char*) {
     let i: uint64 = 0;
     until (str[i] == '\0') {
         string_push(self, str[i]);
-        i = i + 1;
+        i += 1;
     }
 }
 

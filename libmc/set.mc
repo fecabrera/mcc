@@ -101,7 +101,7 @@ fn set_set<K, V>(self: struct set<K, V>*, key: K, value: V) {
     self->entries[slot].key = key;
     self->entries[slot].value = value;
     self->entries[slot].state = set_entry_state::OCCUPIED;
-    self->length = self->length + 1;
+    self->length += 1;
 }
 
 /**
@@ -142,11 +142,12 @@ fn set_remove<K, V>(self: struct set<K, V>*, key: K) {
         if (self->entries[slot].state == set_entry_state::OCCUPIED) {
             if (self->entries[slot].key == key) {
                 self->entries[slot].state = set_entry_state::TOMBSTONE;
-                self->length = self->length - 1;
+                self->length -= 1;
                 return;
             }
         }
-        slot = (slot + 1) % self->capacity;
+        slot += 1;
+        slot %= self->capacity;
     }
 }
 
@@ -167,7 +168,7 @@ fn set_grow<K, V>(self: struct set<K, V>*) {
     let i: uint64 = 0;
     while (i < new_capacity) {
         new_entries[i].state = set_entry_state::EMPTY;
-        i = i + 1;
+        i += 1;
     }
 
     i = 0;
@@ -179,7 +180,7 @@ fn set_grow<K, V>(self: struct set<K, V>*) {
 
             new_entries[slot] = old_entries[i];
         }
-        i = i + 1;
+        i += 1;
     }
 
     dealloc(old_entries);
@@ -216,7 +217,7 @@ fn set_it<K, V>(self: struct set<K, V>*) -> struct iterator<struct set<K, V>> {
 fn set_next<K, V>(it: struct iterator<struct set<K, V>>*, out: struct pair<K, V>*) -> bool {
     while (it->idx < it->obj->capacity) {
         let entry = it->obj->entries[it->idx];
-        defer it->idx = it->idx + 1;
+        defer it->idx += 1;
 
         if (entry.state == set_entry_state::OCCUPIED) {
             *out = entry as struct pair<K, V>;

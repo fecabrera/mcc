@@ -36,7 +36,7 @@ It stays close enough to the metal to write a driver or run on bare metal, yet
 comfortable enough to write an everyday application, so you never reach for a
 different tool at each end.
 
-- **Safe and unsafe code, side by side.** You can write memory-safe code *and*
+- **Safe and unsafe code, side by side.** You can write memory-safe code _and_
   drop to raw pointers and manual memory when you need to. Safety is
   **encouraged through syntax, never enforced by the compiler**: constructs like
   [`const`](docs/language.md#const-parameters) parameters, [slices](docs/language.md#slices),
@@ -132,7 +132,7 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 
 | Option                    | Description                                                                                                                                                                                   |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`                  | The `.mc` file to compile (exactly one). Its imports are resolved and compiled with it. Any other input (a `.o` object, `.a` archive, or shared library) is forwarded to the linker.        |
+| `source`                  | The `.mc` file to compile (exactly one). Its imports are resolved and compiled with it. Any other input (a `.o` object, `.a` archive, or shared library) is forwarded to the linker.          |
 | `-o`, `--output FILE`     | Name of the generated file. Defaults to the source name without its extension (a native executable), or with a `.o` suffix when `--target` is given.                                          |
 | `-c`, `--compile`         | Compile to an object file (`.o`) for the host and stop, without linking an executable. Defaults the output to the source name with a `.o` suffix.                                             |
 | `-l NAME`                 | Link against a library, forwarded to `cc` as `-lNAME` (repeatable). `libm` is always linked, so `-lm` is implied.                                                                             |
@@ -204,7 +204,7 @@ fn main() -> int32 {
 
     let i: int32 = 0;
     while (i < hi) {
-        defer i = i + 1;            // runs at the end of every iteration
+        defer i += 1;            // runs at the end of every iteration
         if (i % 2 == 0) {
             println("%d is even", i);
         }

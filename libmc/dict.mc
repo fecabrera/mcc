@@ -53,7 +53,7 @@ fn str_eq(a: char*, b: char*) -> bool {
     while (a[i] == b[i]) {
         if (a[i] == 0)
             return true;
-        i = i + 1;
+        i += 1;
     }
     return false;
 }
@@ -143,7 +143,7 @@ fn dict_set<V>(self: struct dict<V>*, key: char*, value: V) {
     self->entries[slot].key = str_clone(key);
     self->entries[slot].value = value;
     self->entries[slot].state = dict_entry_state::OCCUPIED;
-    self->length = self->length + 1;
+    self->length += 1;
 }
 
 /**
@@ -188,7 +188,7 @@ fn dict_remove<V>(self: struct dict<V>*, key: char*) {
                 dealloc(self->entries[slot].key);
                 self->entries[slot].key = null;
                 self->entries[slot].state = dict_entry_state::TOMBSTONE;
-                self->length = self->length - 1;
+                self->length -= 1;
                 return;
             }
         }
@@ -214,7 +214,7 @@ fn dict_grow<V>(self: struct dict<V>*) {
     let i: uint64 = 0;
     while (i < new_capacity) {
         new_entries[i].state = dict_entry_state::EMPTY;
-        i = i + 1;
+        i += 1;
     }
 
     i = 0;
@@ -226,7 +226,7 @@ fn dict_grow<V>(self: struct dict<V>*) {
 
             new_entries[slot] = old_entries[i];
         }
-        i = i + 1;
+        i += 1;
     }
 
     dealloc(old_entries);
@@ -265,7 +265,7 @@ fn dict_it<V>(self: struct dict<V>*) -> struct iterator<struct dict<V>> {
 fn dict_next<V>(it: struct iterator<struct dict<V>>*, out: struct pair<char*, V>*) -> bool {
     while (it->idx < it->obj->capacity) {
         let entry = it->obj->entries[it->idx];
-        defer it->idx = it->idx + 1;
+        defer it->idx += 1;
 
         if (entry.state == dict_entry_state::OCCUPIED) {
             *out = entry as struct pair<char*, V>;

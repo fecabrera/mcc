@@ -48,7 +48,7 @@ fn queue_push<T>(self: struct queue<T>*, value: T) {
 
     let pos = (self->head + self->length) % (self->capacity);
 
-    self->length = self->length + 1;
+    self->length += 1;
     self->data[pos] = value;
 }
 
@@ -64,7 +64,7 @@ fn queue_pop<T>(self: struct queue<T>*) -> T {
     let pos = self->head;
 
     self->head = (self->head + 1) % self->capacity;
-    self->length = self->length - 1;
+    self->length -= 1;
 
     return self->data[pos];
 }
