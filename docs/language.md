@@ -83,7 +83,10 @@ On a scalar it simply makes the parameter read-only.
 not match the C function). A function with a `const` struct parameter also
 cannot be used as a function value (`let f = trace;`), because a plain
 `fn(struct matrix) -> ...` pointer type cannot express the hidden-reference
-calling convention.
+calling convention. This is a limitation of the bare `fn(...)` type, not of the
+ABI — the two conventions are distinct at the machine level; a future
+`fn(const T)` function-pointer type could carry the convention and lift the
+restriction.
 
 ## Variadic functions
 

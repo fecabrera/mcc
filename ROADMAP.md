@@ -205,6 +205,55 @@ already do).
 
 ### Functions and methods
 
+- [ ] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
+      the callee promises not to mutate:
+  - [x] pass by hidden reference: a large value (a struct) is passed by a hidden
+        pointer instead of copied, so you get value semantics without
+        hand-writing a pointer (see [const parameters](docs/language.md#const-parameters))
+  - [ ] literal promotion: because the parameter is read-only, a literal
+        argument can be promoted to its type at compile time. (For string
+        formatting this is now done by a literal adapting to `slice<const uint8>`
+        — see [`slice<T>`](docs/language.md#slices) — so `println("{}", a)`
+        needs no `struct string`.)
+- [ ] `mut` parameters and returns — the writable dual of `const`: a value
+      passed (or returned) by hidden reference to the caller's storage, mutable
+      *through* the reference but, like `const`, with its address unable to
+      escape (`&` on it is rejected). The reference is scoped to the current
+      context, so the underlying memory never leaks — the memory-safe
+      counterpart to handing out a raw `T*`. In an rvalue position a `mut T`
+      auto-derefs to `T` (copy on read, compare); in an lvalue position it
+      writes through. Inherits `const`'s restrictions: not allowed on `@extern`
+      parameters (ABI mismatch) and a function using it cannot **initially** be
+      taken as a plain `fn(...)` value — the hidden-reference convention isn't
+      carried by the bare `fn(...)` type. That is a source-level type-system
+      simplification, not an ABI limit (LLVM already types the two conventions
+      distinctly), and can later be lifted by making `mut`/`const` part of the
+      function-pointer type — a distinct, non-coercible `fn(mut T)` — which is
+      also what makes the interface-vtable reconciliation below rigorous. Note
+      that, unlike `const`, `mut` on a **scalar**
+      changes the calling convention (always by hidden reference) — that is the
+      only way a write reaches the caller:
+  - [ ] `mut` parameters — `fn find(key: int32, mut out: int32) -> bool`: the
+        callee may write `out` but cannot take its address or store it, so it is
+        the memory-safe version of `fn find(key: int32, out: int32*) -> bool`.
+        The non-escape guarantee is local and total, enforceable with the same
+        machinery `const` already uses
+  - [ ] `mut` returns — a function that returns an lvalue:
+        `fn string_at(self: string*, i: uint64) -> mut char` makes
+        `string_at(&str, 0) = '/'` legal (as well as comparing it or copying it
+        out with `let c = string_at(&str, 0)`). A call returning `mut T` is a
+        new assignable expression category. To keep the reference from dangling
+        without a lifetime system, a `mut` return may only be **formed from a
+        `mut`/pointer parameter or a global — never from a local or a by-value
+        parameter**; this conservative, checkable rule fits the `string_at`
+        case (the result derives from `self`) and preserves the non-escape
+        guarantee
+  - [ ] motivating use case: method receivers — once methods / OOP (the item
+        below) land, `const`/`mut`/by-value on `self` express
+        read-only / mutating / consuming methods directly, replacing today's raw
+        `self: <struct>*` receiver, and a `mut` return formed from `self` gives a
+        memory-safe mutable accessor. See its receiver-kind note for the
+        field-projection and vtable details
 - [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
       keyed to a struct, including `@private` methods and the special
       constructor/destructor below (the `for … in` protocol already dispatches
@@ -216,6 +265,23 @@ already do).
   @private fn point::helper(self: struct point*) { ... }
   ```
 
+  - [ ] receiver kind — the `self: struct point*` above is the starting form,
+        but once the `const` / `mut` / by-value parameters above exist the three
+        receiver flavors fall out of them with no OOP-specific mechanism:
+        `const self: point` (read-only method), `mut self: point` (mutating
+        method — `&self` cannot escape, the memory-safe replacement for today's
+        raw `self: point*`), and `self: point` (consuming/copying method). None
+        require the caller to write `&`, so the method-call sugar below becomes
+        plain `var.method()` with the hidden reference formed at the call. Two
+        pieces of design work this pulls in: (1) `mut self` must project a
+        field to an lvalue (`self.x = ...`) and, in a constructor, never fire
+        its rvalue "copy on read" on the still-uninitialized whole `self`;
+        (2) it must reconcile with the interface vtable — a `mut`-using function
+        is normally not expressible as a plain `fn(...)` value, but in the
+        `{ data*, vtable* }` fat pointer the receiver is already behind `data*`,
+        so the vtable slot's first param is a genuine `T*` under an ABI the
+        compiler controls internally. A `mut` return formed from `self` is then
+        the natural spelling for a mutable accessor method
   - [ ] constructor — `fn <struct>::constructor(self: <struct>*, ...)`, the
         method that initializes a value: run by the `new <struct>(...)` sugar
         below, or invoked on a stack value. Constructing a stack-allocated
@@ -230,9 +296,21 @@ already do).
         `new`, run explicitly before the memory is freed
   - [ ] method-call sugar — `var->method(...)` desugars to
         `point::method(var, ...)`, passing the receiver as `self` (so `var` is a
-        `struct point*`):
+        `struct point*`). That `->` form is the pre-receiver-kinds starting
+        point; once the receiver kinds above land, calls are uniformly
+        `var.method()` — the method's declared `self` kind dictates the receiver
+        convention (`const`/`mut self` forms a hidden reference from the
+        receiver's storage, by-value `self` copies), and a `point*` receiver
+        (e.g. from `new`) auto-derefs one level first. No ambiguity, since
+        methods key on the struct type, not the pointer type: `ptr.method()` can
+        only mean the method on the pointee. The one honest tradeoff: this splits
+        method calls from field access — the language keeps C's `.`/`->`
+        distinction for **fields**, so `p->x` (field) and `p.method()` (method)
+        on the same pointer use different operators (the Go/Rust/Swift
+        receiver-adaptation model); `->` is retained only for field access:
     ```c
-    var->length2();   // desugars to point::length2(var)
+    var->length2();   // pre-receiver-kinds: desugars to point::length2(var)
+    var.length2();    // once receiver kinds land
     ```
   - [ ] `new <struct>(...)` sugar — desugars to a block that allocates with
         `new<<struct>>()`, runs the constructor (above), and emits the pointer
@@ -254,44 +332,6 @@ already do).
         (heterogeneous lists, plugin-style APIs) — the dynamic counterpart to
         the static [generic bounds](#types-and-generics). Depends on methods
         (above)
-- [ ] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
-      the callee promises not to mutate:
-  - [x] pass by hidden reference: a large value (a struct) is passed by a hidden
-        pointer instead of copied, so you get value semantics without
-        hand-writing a pointer (see [const parameters](docs/language.md#const-parameters))
-  - [ ] literal promotion: because the parameter is read-only, a literal
-        argument can be promoted to its type at compile time. (For string
-        formatting this is now done by a literal adapting to `slice<const uint8>`
-        — see [`slice<T>`](docs/language.md#slices) — so `println("{}", a)`
-        needs no `struct string`.)
-- [ ] `mut` parameters and returns — the writable dual of `const`: a value
-      passed (or returned) by hidden reference to the caller's storage, mutable
-      *through* the reference but, like `const`, with its address unable to
-      escape (`&` on it is rejected). The reference is scoped to the current
-      context, so the underlying memory never leaks — the memory-safe
-      counterpart to handing out a raw `T*`. In an rvalue position a `mut T`
-      auto-derefs to `T` (copy on read, compare); in an lvalue position it
-      writes through. Inherits `const`'s restrictions: not allowed on `@extern`
-      parameters (ABI mismatch) and a function using it cannot be taken as a
-      plain `fn(...)` value (the hidden-reference convention is not expressible
-      in the pointer type). Note that, unlike `const`, `mut` on a **scalar**
-      changes the calling convention (always by hidden reference) — that is the
-      only way a write reaches the caller:
-  - [ ] `mut` parameters — `fn find(key: int32, mut out: int32) -> bool`: the
-        callee may write `out` but cannot take its address or store it, so it is
-        the memory-safe version of `fn find(key: int32, out: int32*) -> bool`.
-        The non-escape guarantee is local and total, enforceable with the same
-        machinery `const` already uses
-  - [ ] `mut` returns — a function that returns an lvalue:
-        `fn string_at(self: string*, i: uint64) -> mut char` makes
-        `string_at(&str, 0) = '/'` legal (as well as comparing it or copying it
-        out with `let c = string_at(&str, 0)`). A call returning `mut T` is a
-        new assignable expression category. To keep the reference from dangling
-        without a lifetime system, a `mut` return may only be **formed from a
-        `mut`/pointer parameter or a global — never from a local or a by-value
-        parameter**; this conservative, checkable rule fits the `string_at`
-        case (the result derives from `self`) and preserves the non-escape
-        guarantee
 - [ ] `@noalias` parameters — C's `restrict`: mark a pointer parameter
       (`fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64)`) as
       not overlapping any other pointer the function can reach, mapping to
