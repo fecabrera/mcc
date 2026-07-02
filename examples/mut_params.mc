@@ -34,20 +34,13 @@ fn find(haystack: slice<const int32>, needle: int32, mut index: uint64) -> bool 
     return false;
 }
 
-// Structs work too, with field projection writing through; and generics
-// monomorphize per type, so one swap serves them all.
+// Structs work too, with field projection writing through.
 struct point { x: int32; y: int32; }
 
 fn mirror(mut p: struct point) {
     let t = p.x;
     p.x = p.y;
     p.y = t;
-}
-
-fn swap<T>(mut a: T, mut b: T) {
-    let t = a;
-    a = b;
-    b = t;
 }
 
 fn main() -> int32 {
@@ -68,10 +61,16 @@ fn main() -> int32 {
     mirror(p);
     println("mirror(p)   -> (%d, %d)", p.x, p.y);
 
+    // The standard library builds on mut: `swap` exchanges two values in
+    // place and `replace` stores a new value while returning the old one,
+    // both generic and pointer-free at the call site (import "std").
     let a: int32 = 3;
     let b: int32 = 9;
     swap(a, b);
     println("swap(a, b)  -> a=%d b=%d", a, b);
+
+    let old = replace(a, 100);
+    println("replace(a)  -> a=%d old=%d", a, old);
 
     return 0;
 }

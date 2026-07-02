@@ -80,7 +80,8 @@ its reference section in the [language reference](docs/language.md).
 
 ## Standard library
 
-- [x] Core — `memory` (typed `alloc`/`dealloc`), `std` (`print`/`println`)
+- [x] Core — `memory` (typed `alloc`/`dealloc`), `std` (`print`/`println`,
+      `swap`/`replace`)
 - [x] Containers — `list`, `stack`, `queue`, `set`, `dict`, `string` (counting
       loops use the builtin [`range`](docs/language.md#control-flow))
 - [x] Hashing — `splitmix64`, `fnv1a`, `murmur3`, `crc32`, `md5`

@@ -10,6 +10,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`swap` and `replace` in `std`** — the first stdlib helpers built on `mut`
+  parameters: `swap(a, b)` exchanges two values in place and
+  `replace(dst, value)` stores a new value and returns the old one, both
+  generic (`@inline`) and pointer-free at the call site. See
+  [libmc/std.mc](libmc/std.mc) and [mut_params.mc](examples/mut_params.mc).
 - **Editor support catch-up** — the VS Code grammar and the Helix tree-sitter
   grammar now highlight `mut` and `union`; the tree-sitter grammar also
   learned the syntax it was missing: compound assignment operators, `const T`
