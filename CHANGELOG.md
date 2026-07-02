@@ -45,6 +45,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the loop body — parenthesize (`for x in (A { ... })`) or use the keyword form
   there. See [Structs](docs/language.md#structs) and
   [struct_literals.mc](examples/struct_literals.mc).
+- **Builtin `enumerate`** — `for e in enumerate(obj)` runs `obj`'s ordinary
+  iteration (the `_it`/`_next` protocol, or a slice's native walk) while
+  keeping a position counter, yielding a builtin
+  `enumerated<T> { index: uint64; value: T }` per element, read as `e.index` /
+  `e.value`. No import, no extra copy per turn (`_next` writes straight into
+  the element's `value` field), and `obj` is borrowed exactly like a bare
+  `for x in obj` — a value is snapshot, `&` iterates by reference, an rvalue
+  works. A `continue` still consumes its index. A user-defined `enumerate`
+  function takes precedence, as does a user `enumerated` struct;
+  `enumerate(range(...))` is rejected since the counter is the value. See
+  [Control flow](docs/language.md#control-flow) and
+  [iteration.mc](examples/iteration.mc).
 - **Linker passthrough** — the `mcc` command line now takes `-l<name>` libraries
   and `-L<dir>` search paths, plus extra object/archive inputs alongside the
   `.mc` source (`mcc app.mc util.o -L build/lib -lmylib`), all forwarded to the

@@ -278,7 +278,8 @@ reference section.
 - [x] [Conditional compilation](docs/language.md#conditional-compilation) — structured `@if`,
       including conditional `import`s
 - [x] [Control flow](docs/language.md#control-flow) — `if`/`else`, `while`, `until`,
-      `for … in` (incl. the builtin `range` counting loop), `break`/`continue`,
+      `for … in` (incl. the builtin `range` counting loop and `enumerate`, which
+      pairs each element with its `uint64` position), `break`/`continue`,
       braceless bodies
 - [x] [`defer`](docs/language.md#defer) — statement and block forms, reverse order
 - [x] [Block expressions](docs/language.md#block-expressions) — `{ ...; emit v; }` as a
@@ -320,9 +321,10 @@ reference section.
       struct value upcast, flexible array members (a trailing `field: T[]` that
       adds 0 to `sizeof` and decays to a `T*` at the struct's tail)
 - [x] [Builtin structs](docs/language.md#control-flow) — `iterator<T>` (the
-      shared `_it`/`_next` cursor) and `pair<K, V>` (what the keyed containers
-      yield), available with no import; a same-named user struct takes
-      precedence, as with the builtin `range`
+      shared `_it`/`_next` cursor), `pair<K, V>` (what the keyed containers
+      yield), and `enumerated<T>` (what `enumerate` yields), available with no
+      import; a same-named user struct takes precedence, as with the builtin
+      `range`
 - [x] [Enums](docs/language.md#enums) — `enum Name[: type] { … }`, `Name::Member`
       constants over any underlying type, the name usable as a type
 - [x] [Type aliases](docs/language.md#type-aliases) — `type <name> = <type>;`,
@@ -405,16 +407,10 @@ Grouped by scope.
       keeps each element's static type and a compile-time arity, where erasing
       every slot to `any` would collapse into a fixed-length `slice<any>`. Also
       the door to a statically-typed variadic later (no erasure), if wanted
-- [ ] builtin `enumerate` — `for e in enumerate(obj) { … }` walks any iterable
-      `obj` (a struct with the `_it`/`_next` protocol, borrowed like a bare
-      `for x in obj`) and yields a `{ index, value }` per element: `index` a
-      running `uint64` counter from 0, `value` the element from `obj`'s `_next`.
-      A compiler builtin like [`range`](docs/language.md#control-flow), so it
-      needs no import and adds no library surface (which a future
-      [method/OOP](#functions-and-methods) `range`/`enumerate` on a struct could
-      otherwise clash with) — it lowers to the underlying loop plus a counter,
-      with the pair's fields read as `e.index` / `e.value`. Pairs with `range`;
-      a user-defined `enumerate` function, if any, takes precedence.
+- [ ] `enumerate(range(...))` — today the builtin `enumerate` rejects the
+      builtin `range` (the counter *is* the value); allow it for a non-zero
+      `start`, where the index (from 0) and the counter (from `start`) genuinely
+      differ
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:

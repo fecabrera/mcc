@@ -29,6 +29,22 @@ fn main() -> int32 {
     }
     println("sum of odd squares <= 20: %d", sum);   // 1 + 9 = 10
 
+    // enumerate(obj) is a builtin like `range`: it runs the same iteration
+    // while counting, yielding a builtin `enumerated<T> { index; value }` per
+    // element -- the position as a uint64 and the element itself.
+    for e in enumerate(&nums) {
+        if (e.index == 3) { break; }    // just the first three
+        println("nums[%llu] = %d", e.index, e.value);
+    }
+
+    // As with a bare `for x in`, the & is yours to choose, not required: a
+    // struct value is borrowed automatically, so enumerate(nums) iterates a
+    // snapshot of the container -- no dereference needed.
+    for e in enumerate(nums) {
+        if (e.index > 0) { break; }
+        println("first square (by value): %d", e.value);
+    }
+
     // A bare { } block is its own scope -- a place for a short-lived helper
     // and its cleanup, without leaking names into the rest of the function.
     {

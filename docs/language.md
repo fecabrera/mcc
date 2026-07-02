@@ -436,10 +436,12 @@ The cursor is the **builtin** `struct iterator<C> { obj: C*; idx: uint64; }` —
 available in every program with no import, and shared by the `list`, `set`,
 `dict`, and `string` libraries rather than each defining its own. The
 `pair<K, V>` the keyed containers yield from their `_next` (fields `key` and
-`value`) is builtin the same way. Both are ordinary names, not reserved: a user
-struct named `iterator` or `pair` takes precedence over the builtin, exactly as
-a user-defined `range` function shadows the builtin counting loop. The protocol
-itself only cares about the function names, so a cursor of any shape works.
+`value`) is builtin the same way, as is the `enumerated<T>` that
+[`enumerate`](#control-flow) yields. All are ordinary names, not reserved: a
+user struct named `iterator`, `pair`, or `enumerated` takes precedence over the
+builtin, exactly as a user-defined `range` function shadows the builtin
+counting loop. The protocol itself only cares about the function names, so a
+cursor of any shape works.
 
 ```c
 for v in &nums {            // nums: list<int32>; v is int32, inferred from list_next
@@ -495,6 +497,28 @@ for i in range<int64>(n) { ... }   // i is int64
 `i` is a fresh copy of the counter each turn (assigning to it in the body does
 not change the iteration), and `range` here is a compiler builtin, not a name in
 scope — but a user-defined `range` function, if any, takes precedence.
+
+To iterate **with the position**, `enumerate` is builtin the same way:
+`for e in enumerate(obj)` runs `obj`'s ordinary iteration — the `_it`/`_next`
+protocol, or a slice's native walk — while keeping a counter, and each turn
+yields an `enumerated<T>` (the builtin `struct enumerated<T> { index: uint64;
+value: T }`) read as `e.index` / `e.value`:
+
+```c
+for e in enumerate(&nums) {                    // nums: list<int32>
+    println("%llu: %d", e.index, e.value);     // 0: first, 1: second, ...
+}
+for e in enumerate(xs as slice<char>) { ... }  // slices too; index is free
+```
+
+`obj` is borrowed exactly like a bare `for x in obj` (a value is snapshot, `&`
+iterates by reference, an rvalue works), and `_next` writes straight into the
+element's `value` field, so no extra copy is made per turn. The index starts at
+`0` and counts every yielded element — a `continue` still consumes its
+position. As with `range`, a user-defined `enumerate` function takes
+precedence, and a user struct named `enumerated` shadows the builtin one
+(`enumerate` then reports it cannot yield through it). `enumerate(range(...))`
+is rejected — the counter *is* the value there; iterate the range directly.
 
 `case` matches a value against a series of `when` arms, with an optional
 `else:` default. The subject is evaluated once, and there is **no

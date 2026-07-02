@@ -149,6 +149,14 @@ BUILTIN_STRUCTS = (
         fields=[("key", TypeRef("K")), ("value", TypeRef("V"))],
         line=0,
     ),
+    # What the builtin `enumerate(obj)` yields per element: the running
+    # position and the element `obj`'s `_next` produced.
+    StructDecl(
+        name="enumerated",
+        type_params=["T"],
+        fields=[("index", TypeRef("uint64")), ("value", TypeRef("T"))],
+        line=0,
+    ),
 )
 
 
@@ -2516,6 +2524,16 @@ class CodeGen:
         ):
             self.gen_for_range(stmt, it)
             return
+        # `for e in enumerate(obj)` is likewise a builtin: the underlying loop
+        # plus a position counter, yielding an `enumerated<T>` per element. A
+        # user-defined `enumerate` function, if any, takes precedence.
+        if (
+            isinstance(it, Call)
+            and it.name == "enumerate"
+            and not self.callable_exists("enumerate")
+        ):
+            self.gen_for_enumerate(stmt, it)
+            return
         # Dispatch on the iterable's struct: `for x in obj` calls
         # `<Struct>_it(obj)` then `<Struct>_next(&it, &x)`. Evaluate the iterable
         # once (it may be effectful) and read its struct name off the type.
@@ -2532,40 +2550,8 @@ class CodeGen:
                 f"'<struct>_next' functions, not {iterable.type}",
                 stmt.line,
             )
-        base = struct_t.template or struct_t.name
-        it_name, next_name = f"{base}_it", f"{base}_next"
-        if not self.callable_exists(it_name):
-            raise LangError(
-                f"'for ... in' needs a {it_name!r} function for {struct_t}; "
-                "none is in scope",
-                stmt.line,
-            )
-        # `_it` takes the container by pointer, so a value iterable is borrowed
-        # automatically: `for x in r` behaves like `for x in &r`. A pointer
-        # iterable passes straight through; a struct value is materialized to a
-        # stack slot and its address is taken (the slot lives for the whole
-        # function, so the iterator's back-pointer never dangles).
-        if is_pointer(iterable.type):
-            arg = iterable
-        else:
-            struct_slot = self.builder.alloca(iterable.type.ir, name="for.src")
-            self.builder.store(iterable.value, struct_slot)
-            arg = TypedValue(struct_slot, pointer_to(iterable.type))
-        # Pass the pointer through a hidden local so the `_it` call (routed
-        # through normal overload/generic resolution) does not re-evaluate the
-        # expression. The name cannot be a real identifier.
-        src_slot = self.builder.alloca(arg.type.ir, name="for.iterable")
-        self.builder.store(arg.value, src_slot)
-        hidden = "0for.iterable"
-        self.bind_local(hidden, src_slot, arg.type)
-        iterator = self.gen_call(Call(it_name, [], [Var(hidden, stmt.line)], stmt.line))
-        del self.locals[hidden]
-        self.scope_names.discard(hidden)
-        it_slot = self.builder.alloca(iterator.type.ir, name="for.iter")
-        self.builder.store(iterator.value, it_slot)
-
-        next_fn, element = self.resolve_protocol_next(
-            iterator.type, next_name, stmt.line
+        it_slot, next_fn, element = self.setup_protocol_loop(
+            stmt, iterable, struct_t, "'for ... in'"
         )
 
         # A fresh scope for the element variable and the loop's defers.
@@ -2598,7 +2584,74 @@ class CodeGen:
             self.defer_stack.pop()
             self.locals, self.scope_names = outer_locals, outer_names
 
-    def gen_for_slice(self, stmt: For, iterable: TypedValue, slice_t: LangType):
+    def setup_protocol_loop(
+        self, stmt: For, iterable: TypedValue, struct_t: LangType, what: str
+    ):
+        """Set up an ``_it``/``_next`` protocol loop over ``iterable``.
+
+        The shared front half of ``for x in obj`` and ``enumerate(obj)``:
+        dispatches by the struct's name to ``<struct>_it``, borrows the
+        iterable (a struct value is snapshot to a stack slot so its address can
+        be taken -- ``for x in r`` behaves like ``for x in &r`` -- while a
+        pointer passes straight through; the slot is a function-scoped alloca,
+        so the iterator's back-pointer never dangles, even for an rvalue), and
+        resolves the matching ``<struct>_next``.
+
+        Args:
+            stmt: The ``For`` statement being lowered.
+            iterable: The already-evaluated iterable.
+            struct_t: The iterable's struct type, pointers stripped.
+            what: The construct named in diagnostics (``"'for ... in'"`` or
+                ``"enumerate()"``).
+
+        Returns:
+            ``(iterator slot, next function, element type)``: the alloca
+            holding the ``<struct>_it`` cursor, the instantiated
+            ``<struct>_next``, and the element type its out-parameter yields.
+
+        Raises:
+            LangError: When ``<struct>_it`` or a matching ``<struct>_next`` is
+                not in scope.
+        """
+        base = struct_t.template or struct_t.name
+        it_name, next_name = f"{base}_it", f"{base}_next"
+        if not self.callable_exists(it_name):
+            raise LangError(
+                f"{what} needs a {it_name!r} function for {struct_t}; "
+                "none is in scope",
+                stmt.line,
+            )
+        if is_pointer(iterable.type):
+            arg = iterable
+        else:
+            struct_slot = self.builder.alloca(iterable.type.ir, name="for.src")
+            self.builder.store(iterable.value, struct_slot)
+            arg = TypedValue(struct_slot, pointer_to(iterable.type))
+        # Pass the pointer through a hidden local so the `_it` call (routed
+        # through normal overload/generic resolution) does not re-evaluate the
+        # expression. The name cannot be a real identifier.
+        src_slot = self.builder.alloca(arg.type.ir, name="for.iterable")
+        self.builder.store(arg.value, src_slot)
+        hidden = "0for.iterable"
+        self.bind_local(hidden, src_slot, arg.type)
+        iterator = self.gen_call(Call(it_name, [], [Var(hidden, stmt.line)], stmt.line))
+        del self.locals[hidden]
+        self.scope_names.discard(hidden)
+        it_slot = self.builder.alloca(iterator.type.ir, name="for.iter")
+        self.builder.store(iterator.value, it_slot)
+
+        next_fn, element = self.resolve_protocol_next(
+            iterator.type, next_name, stmt.line
+        )
+        return it_slot, next_fn, element
+
+    def gen_for_slice(
+        self,
+        stmt: For,
+        iterable: TypedValue,
+        slice_t: LangType,
+        enumerated: bool = False,
+    ):
         """Lower ``for x in s { body }`` over a builtin ``slice<T>``.
 
         Unlike a library container, a slice iterates natively -- no
@@ -2612,10 +2665,17 @@ class CodeGen:
         temporaries; ``x`` lives in a fresh block scope, gone once the loop ends.
         A ``continue`` runs through the step block, so it still advances ``i``.
 
+        With ``enumerated`` (a ``for e in enumerate(s)`` loop), the variable is
+        an ``enumerated<T>`` instead: the native walk already keeps the
+        position, so its ``index`` field is the loop counter itself -- no
+        second counter -- and ``value`` takes the element.
+
         Args:
             stmt: The ``For`` node to lower.
             iterable: The already-evaluated slice (or pointer(s) to one).
             slice_t: The iterable's ``slice<T>`` type, pointers stripped.
+            enumerated: Yield ``enumerated<T>`` elements for the builtin
+                ``enumerate``, rather than bare ``T`` s.
         """
         # Materialize the slice value, loading through any pointers, then read
         # its pointer and length once up front (the slice does not change shape
@@ -2629,6 +2689,12 @@ class CodeGen:
         # The loop variable is a fresh copy of each element, so it is mutable
         # even when iterating a slice<const T>.
         element = strip_const(slice_t.fields[0][1].pointee)
+        if enumerated:
+            var_type, index_pos, value_pos = self.enumerated_type(
+                element, stmt.line
+            )
+        else:
+            var_type = element
 
         idx_slot = self.builder.alloca(UINT64.ir, name="for.idx")
         self.builder.store(ir.Constant(UINT64.ir, 0), idx_slot)
@@ -2638,10 +2704,21 @@ class CodeGen:
         self.scope_names = set()
         self.defer_stack.append([])
         try:
-            x_slot = self.builder.alloca(element.ir, name=stmt.var)
-            if over_aligned(element):
-                x_slot.align = type_align(element)
-            self.bind_local(stmt.var, x_slot, element)
+            x_slot = self.builder.alloca(var_type.ir, name=stmt.var)
+            if over_aligned(var_type):
+                x_slot.align = type_align(var_type)
+            self.bind_local(stmt.var, x_slot, var_type)
+            if enumerated:
+                index_ptr = self.builder.gep(
+                    x_slot, [I32_ZERO, ir.Constant(ir.IntType(32), index_pos)],
+                    inbounds=True,
+                )
+                value_ptr = self.builder.gep(
+                    x_slot, [I32_ZERO, ir.Constant(ir.IntType(32), value_pos)],
+                    inbounds=True,
+                )
+            else:
+                value_ptr = x_slot
 
             cond_bb = self.builder.append_basic_block("for.cond")
             body_bb = self.builder.append_basic_block("for.body")
@@ -2653,8 +2730,10 @@ class CodeGen:
             more = self.builder.icmp_unsigned("<", idx, length)
             self.builder.cbranch(more, body_bb, end_bb)
             self.builder.position_at_end(body_bb)
+            if enumerated:
+                self.builder.store(idx, index_ptr)
             elem_addr = self.builder.gep(ptr, [idx])
-            self.builder.store(self.gen_load(elem_addr), x_slot)
+            self.builder.store(self.gen_load(elem_addr), value_ptr)
             # `continue` lands on the step block, so it advances `i` like a
             # normal iteration; `break` exits to the end.
             self.loops.append((step_bb, end_bb, len(self.defer_stack)))
@@ -2787,6 +2866,144 @@ class CodeGen:
             )
             self.builder.store(nxt, idx_slot)
             self.builder.branch(cond_bb)
+            self.builder.position_at_end(end_bb)
+        finally:
+            self.defer_stack.pop()
+            self.locals, self.scope_names = outer_locals, outer_names
+
+    def enumerated_type(self, element: LangType, line: int):
+        """Instantiate ``enumerated<element>`` and locate its two fields.
+
+        Returns:
+            ``(struct type, index field position, value field position)``.
+
+        Raises:
+            LangError: When a user struct shadows ``enumerated`` with a shape
+                the builtin loop cannot fill.
+        """
+        decl = self.struct_templates.get("enumerated")
+        if decl is None or len(decl.type_params) != 1:
+            raise LangError(
+                "enumerate() needs the builtin 'enumerated<T>' struct, but a "
+                "user declaration shadows it with a different shape",
+                line,
+            )
+        elem_struct = self.instantiate_struct(decl, (element,))
+        index_pos, _ = self.struct_field(elem_struct, "index", line)
+        value_pos, vtype = self.struct_field(elem_struct, "value", line)
+        if vtype != element:
+            raise LangError(
+                f"enumerate() cannot yield {elem_struct}: its 'value' field is "
+                f"{vtype}, not the element type {element}",
+                line,
+            )
+        return elem_struct, index_pos, value_pos
+
+    def gen_for_enumerate(self, stmt: For, call: Call):
+        """Lower ``for e in enumerate(obj) { body }``.
+
+        ``enumerate`` is a builtin like ``range``: it runs ``obj``'s ordinary
+        iteration (the ``_it``/``_next`` protocol, or a slice's native walk)
+        while keeping a position counter, and yields an ``enumerated<T>``
+        (``{ index: uint64; value: T }``) per element::
+
+            { let _it = S_it(obj); let e: enumerated<T>; let _n: uint64 = 0;
+              while (S_next(&_it, &e.value)) { e.index = _n; _n += 1; body } }
+
+        ``obj`` is borrowed exactly like a bare ``for x in obj`` (a struct
+        value is snapshot to a stack slot, a pointer passes through), and
+        ``_next`` writes straight into the element's ``value`` field -- no
+        extra copy per turn. The counter bumps as each element is yielded, so
+        a ``continue`` does not skip a position. A user-defined ``enumerate``
+        function takes precedence over the builtin.
+
+        Args:
+            stmt: The ``For`` node whose iterable is the ``enumerate`` call.
+            call: The ``enumerate(...)`` call expression.
+
+        Raises:
+            LangError: On the wrong argument count, explicit type arguments,
+                a non-iterable argument, or `enumerate(range(...))`.
+        """
+        if call.type_args:
+            raise LangError("enumerate() takes no type arguments", stmt.line)
+        if len(call.args) != 1:
+            raise LangError(
+                "enumerate() takes exactly one iterable argument", stmt.line
+            )
+        inner = call.args[0]
+        if (
+            isinstance(inner, Call)
+            and inner.name == "range"
+            and not self.callable_exists("range")
+        ):
+            raise LangError(
+                "enumerate() over the builtin range is redundant -- the counter "
+                "is the value; iterate the range directly", stmt.line,
+            )
+
+        iterable = self.gen_expr(inner)
+        struct_t = iterable.type
+        while is_pointer(struct_t):
+            struct_t = struct_t.pointee
+        if is_slice(struct_t):
+            self.gen_for_slice(stmt, iterable, struct_t, enumerated=True)
+            return
+        if not is_struct(struct_t):
+            raise LangError(
+                "enumerate() needs a struct iterable with '<struct>_it' and "
+                f"'<struct>_next' functions, not {iterable.type}",
+                stmt.line,
+            )
+        it_slot, next_fn, element = self.setup_protocol_loop(
+            stmt, iterable, struct_t, "enumerate()"
+        )
+        elem_struct, index_pos, value_pos = self.enumerated_type(element, stmt.line)
+
+        counter_slot = self.builder.alloca(UINT64.ir, name="enum.idx")
+        self.builder.store(ir.Constant(UINT64.ir, 0), counter_slot)
+
+        # A fresh scope for the element variable and the loop's defers.
+        outer_locals, outer_names = dict(self.locals), self.scope_names
+        self.scope_names = set()
+        self.defer_stack.append([])
+        try:
+            e_slot = self.builder.alloca(elem_struct.ir, name=stmt.var)
+            if over_aligned(elem_struct):
+                e_slot.align = type_align(elem_struct)
+            self.bind_local(stmt.var, e_slot, elem_struct)
+            index_ptr = self.builder.gep(
+                e_slot, [I32_ZERO, ir.Constant(ir.IntType(32), index_pos)],
+                inbounds=True,
+            )
+            value_ptr = self.builder.gep(
+                e_slot, [I32_ZERO, ir.Constant(ir.IntType(32), value_pos)],
+                inbounds=True,
+            )
+
+            cond_bb = self.builder.append_basic_block("for.cond")
+            body_bb = self.builder.append_basic_block("for.body")
+            end_bb = self.builder.append_basic_block("for.end")
+            self.builder.branch(cond_bb)
+            self.builder.position_at_end(cond_bb)
+            # next(&_it, &e.value) fills the value field in place.
+            more = self.builder.call(next_fn, [it_slot, value_ptr])
+            self.builder.cbranch(more, body_bb, end_bb)
+            self.builder.position_at_end(body_bb)
+            # The position is claimed as soon as the element is yielded, so a
+            # `continue` (which re-enters at cond) never skips an index.
+            idx = self.builder.load(counter_slot)
+            self.builder.store(idx, index_ptr)
+            self.builder.store(
+                self.builder.add(idx, ir.Constant(UINT64.ir, 1)), counter_slot
+            )
+            self.loops.append((cond_bb, end_bb, len(self.defer_stack)))
+            try:
+                self.gen_block(stmt.body)
+            finally:
+                self.loops.pop()
+            if not self.builder.block.is_terminated:
+                self.builder.branch(cond_bb)
             self.builder.position_at_end(end_bb)
         finally:
             self.defer_stack.pop()
