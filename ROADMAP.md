@@ -331,7 +331,10 @@ already do).
         `{ data*, vtable* }` fat pointer for runtime polymorphism
         (heterogeneous lists, plugin-style APIs) — the dynamic counterpart to
         the static [generic bounds](#types-and-generics). Depends on methods
-        (above)
+        (above). Open question: dynamic dispatch can only carry **reference**
+        receivers (`const`/`mut self`) — the receiver travels as `data*`, so a
+        by-value (consuming) `self` cannot cross the vtable without a copy;
+        whether interfaces admit by-value receivers at all is undecided
 - [ ] `@noalias` parameters — C's `restrict`: mark a pointer parameter
       (`fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64)`) as
       not overlapping any other pointer the function can reach, mapping to
