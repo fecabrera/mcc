@@ -118,10 +118,10 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 | `--run`                   | JIT-compile and run the program immediately instead of writing a file; its exit code becomes mcc's. Cannot be combined with `--target`.                                                       |
 | `--emit-llvm`             | Print the generated LLVM IR to stdout and exit, without compiling or linking.                                                                                                                 |
 | `-I`, `--import-path DIR` | Add a directory to the import search path. Repeatable; later paths are searched after earlier ones.                                                                                           |
-| `--nostdlib`              | Do not put the bundled `libmc/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).                                                    |
+| `--nostdlib`              | Do not put the bundled `libmc/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).                                                  |
 | `--target TRIPLE`         | Cross-compile for the given LLVM target triple, emitting an object file instead of a host executable.                                                                                         |
 | `--general-regs-only`     | Generate code that uses only general-purpose registers, never the floating-point/SIMD ones.                                                                                                   |
-| `--strict-align`          | Never emit unaligned memory accesses (gcc's `-mstrict-align`); needed for bare-metal targets running with the MMU off, where an unaligned wide load/store traps.                               |
+| `--strict-align`          | Never emit unaligned memory accesses (gcc's `-mstrict-align`); needed for bare-metal targets running with the MMU off, where an unaligned wide load/store traps.                              |
 | `--freestanding`          | Don't assume a hosted C library, so LLVM won't rewrite standard-named calls (e.g. `printf("…\n")` → `puts`) into symbols a bare-metal program never defines. The `-ffreestanding` equivalent. |
 | `-D NAME[=VALUE]`         | Define a name for [`@if`](docs/language.md#conditional-compilation) conditions: `NAME` alone is `1`, `NAME=VALUE` sets an integer. Repeatable; a name with no `-D` reads as `0`.              |
 
@@ -228,7 +228,7 @@ lists every module.
 The standard library is **compiled from source** with each program. Shipping it
 as a precompiled native library (`libmc.a`/`.so`, built by [build.sh](build.sh))
 is **experimental**: the stdlib itself compiles cleanly into those archives, but
-*linking a program against them* is not ready — some exported symbols (`errno`,
+_linking a program against them_ is not ready — some exported symbols (`errno`,
 `crc32`, …) collide with system symbols, which needs
 [namespaced exported symbols](#planned). Until then the precompiled archives
 aren't linked.
@@ -240,12 +240,12 @@ whose signature is built from them interoperates with C in both directions —
 call C from mcc with `@extern`, or expose mcc functions to a C linker. This is
 why the [libc bindings](libmc/libc/) work directly:
 
-| mcc type | C type |
-| --- | --- |
+| mcc type                         | C type                                                   |
+| -------------------------------- | -------------------------------------------------------- |
 | `int8`–`int64`, `uint8`–`uint64` | `char`/`short`/`int`/`long`/`long long` (and `unsigned`) |
-| `float64` | `double` |
-| `T*` | `T *` |
-| `va_list`, variadic `...` | `va_list`, varargs |
+| `float64`                        | `double`                                                 |
+| `T*`                             | `T *`                                                    |
+| `va_list`, variadic `...`        | `va_list`, varargs                                       |
 
 Generics don't change this: a generic is monomorphized to concrete types before
 codegen, so an instantiation obeys the same ABI as a hand-written one.
@@ -292,7 +292,7 @@ reference section.
       `char`, `"hi"` is a `char[N]`, and a `char[N]` borrows to a `slice<char>`
       that **drops the trailing NUL** (the text) — while a `uint8[N]` stays raw
       bytes whose `slice<uint8>` keeps every byte. A `char` literal adapts to a
-      `uint8`/integer slot, but a `char` *value* needs an explicit `as`; `char*`
+      `uint8`/integer slot, but a `char` _value_ needs an explicit `as`; `char*`
       coerces to `uint8*` like any pointer, so libc still takes string literals
 - [x] [Operators](docs/language.md#operators) — arithmetic, comparison, logical
       (`and`/`or`/`!`), bitwise (`&` `|` `^` `<<` `>>` `~`), `cond ? a : b`
@@ -372,7 +372,7 @@ Grouped by scope.
   - [ ] defaults — a declared fallback type parameter, on functions
         (`fn myfunc<T = uint8*>(x: T) { ... }`) and structs
         (`struct range<T = int64> { ... }`), used when a type argument isn't
-        supplied or inferable from a *typed* value. The strongly-typed way to
+        supplied or inferable from a _typed_ value. The strongly-typed way to
         pick a default — declared at the definition, not guessed from an untyped
         literal at the use site (`let a = 0` and a no-anchor `struct range { … }`
         should stay ambiguous errors, not silently become `int32`)
@@ -443,6 +443,7 @@ Grouped by scope.
   fn point::length2(self: struct point*) -> int32 { ... }
   @private fn point::helper(self: struct point*) { ... }
   ```
+
   - [ ] method-call sugar — `var->method(...)` desugars to
         `point::method(var, ...)`, passing the receiver as `self` (so `var` is a
         `struct point*`):
@@ -463,7 +464,7 @@ Grouped by scope.
     };
     ```
 - [ ] `const` parameters — an immutable parameter (`fn f(const s: struct big)`)
-  the callee promises not to mutate:
+      the callee promises not to mutate:
   - [x] pass by hidden reference: a large value (a struct) is passed by a hidden
         pointer instead of copied, so you get value semantics without
         hand-writing a pointer (see [const parameters](docs/language.md#const-parameters))
@@ -502,8 +503,12 @@ Grouped by scope.
   - [ ] `@define <name> = <value>` — a named compile-time substitution
 - [ ] Bit-twiddling builtins — `byte_swap<T>` (`llvm.bswap`) and
       `bit_reverse<T>` (`llvm.bitreverse`) over the integer types
-- [~] [Inline assembly](docs/language.md#inline-assembly) — arch-specific (pair with `@if` on
-  `TARGET_ARCH`), preferring intrinsics where they exist:
+- [ ] `@static_assert(expr, msg)` — compile-time assertion that evaluates
+      `expr` during parsing; if false, emits a hard compile error with `msg`,
+      useful for validating struct layouts, alignment requirements, or type
+      sizes before linking
+- [ ] [Inline assembly](docs/language.md#inline-assembly) — arch-specific (pair with `@if` on
+      `TARGET_ARCH`), preferring intrinsics where they exist:
   - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an
         operand model (`$out`/`$N` operands, `=r`/`r` register class, `${N:w}`
         modifiers); output-less asm is implicitly volatile. Works on the host
