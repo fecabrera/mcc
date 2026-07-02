@@ -142,13 +142,13 @@ dispatch. When type arguments are omitted, they are inferred from the
 argument types (variables take priority over literals), and typed arguments
 that disagree are an error: `conflicting types for type parameter T`.
 Generic functions can call themselves recursively. See
-[examples/generics.mc](examples/generics.mc).
+[examples/generics.mc](../examples/generics.mc).
 
 Generic functions with the same name form an _overload set_, dispatched by
 parameter pattern — a call picks the most specific viable variant (`T*`
 beats `T`, `box<T>*` beats both). This is how libraries specialize by type
-shape: [libmc/hash.mc](libmc/hash.mc) hashes integer keys by value (splitmix64)
-and pointer keys by content (FNV-1a), and [libmc/set.mc](libmc/set.mc) simply
+shape: [libmc/hash.mc](../libmc/hash.mc) hashes integer keys by value (splitmix64)
+and pointer keys by content (FNV-1a), and [libmc/set.mc](../libmc/set.mc) simply
 calls `hash(key)`:
 
 ```c
@@ -475,7 +475,7 @@ for v in &nums { ... }   // by reference: iterate nums itself
 Define `<struct>_it` and `<struct>_next` to make your own types iterable; a
 struct built with [`extends`](#structs) can reuse its base's by forwarding
 through an upcast. The `list`, `set`, `dict`, and `string` libraries all do
-this — see [examples/iteration.mc](examples/iteration.mc).
+this — see [examples/iteration.mc](../examples/iteration.mc).
 
 A builtin [`slice<T>`](#slices) is the exception: it iterates natively, with no
 `_it`/`_next` of its own. `for x in s` (or `for x in &s`) walks the slice's
@@ -584,7 +584,7 @@ deferred code is evaluated when it runs, not when it is scheduled, so it sees
 the latest values of the variables it names (unlike Go, which snapshots the
 arguments). A returned value is computed _before_ the defers run, so freeing a
 buffer in a defer can't clobber what you return. See
-[examples/defer.mc](examples/defer.mc).
+[examples/defer.mc](../examples/defer.mc).
 
 ## Block expressions
 
@@ -707,7 +707,7 @@ far overflows its width and needs `(v as uint64) << 40`.
 Signedness changes behavior, not representation: unsigned types use unsigned
 division, remainder, and comparisons, and zero-extend instead of sign-extend
 when promoted. Unary `-` is not allowed on unsigned values. See
-[examples/unsigned.mc](examples/unsigned.mc).
+[examples/unsigned.mc](../examples/unsigned.mc).
 
 ## Operators
 
@@ -821,8 +821,8 @@ implicitly coerces to it, which is why `free(nums)` works without a cast.
 A [string literal](#strings) is a `char[N]` array that decays to a `char*`
 (which coerces to `uint8*`), so `"hi"[0]` is the byte `104`. There is
 no pointer arithmetic (`p + 1`); use `&p[1]`. See
-[examples/pointers.mc](examples/pointers.mc) and
-[libmc/memory.mc](libmc/memory.mc) for a generic typed allocator.
+[examples/pointers.mc](../examples/pointers.mc) and
+[libmc/memory.mc](../libmc/memory.mc) for a generic typed allocator.
 
 ## Function pointers
 
@@ -1025,7 +1025,7 @@ buffer keeps every byte. This is the one struct-producing `as` (ordinary struct
 casts are rejected). A slice is a plain value: it passes to and returns from
 functions by value (two words). Because it is two words it is **not** C-ABI by
 value — across a C boundary, pass a `T*` and a length separately instead. See
-[examples/slices.mc](examples/slices.mc).
+[examples/slices.mc](../examples/slices.mc).
 
 ### Read-only slices
 
@@ -1277,7 +1277,7 @@ fn main() -> int32 {
 The member has no storage of its own, so it cannot be set in a struct literal
 (or given a default) and cannot be borrowed as a `slice<T>` — its length is not
 known statically. Reach it through `p->data`, indexing as far as the allocation
-runs. See [examples/flexible_array_members.mc](examples/flexible_array_members.mc).
+runs. See [examples/flexible_array_members.mc](../examples/flexible_array_members.mc).
 
 The [layout constants](#pointers) describe a flexible array member precisely:
 `offsetof(struct S, data)` is where its elements **begin** — the tight base for
@@ -1291,10 +1291,10 @@ bytes of trailing padding; both over-allocate safely, offsetof exactly.
 `alloc<struct node<int32>>(n)` allocates correctly. Struct values can be
 passed to and returned from functions, but not to variadic functions like
 printf — pass a pointer or a field instead. See
-[examples/structs.mc](examples/structs.mc) and the data structures built on
-them: the growable [libmc/list.mc](libmc/list.mc), the open-addressing hash
-table [libmc/set.mc](libmc/set.mc) (borrowing, identity-keyed), and the
-string-keyed [libmc/dict.mc](libmc/dict.mc), which owns copies of its keys and
+[examples/structs.mc](../examples/structs.mc) and the data structures built on
+them: the growable [libmc/list.mc](../libmc/list.mc), the open-addressing hash
+table [libmc/set.mc](../libmc/set.mc) (borrowing, identity-keyed), and the
+string-keyed [libmc/dict.mc](../libmc/dict.mc), which owns copies of its keys and
 compares them by content.
 
 ## Enums
@@ -1377,8 +1377,8 @@ several routes (or cyclically) is only loaded once.
 
 Imports resolve relative to the importing file first, then through the
 import search path: directories added with `-I`/`--import-path` (in order),
-and finally the project's [libmc/](libmc/) directory, which is on the path by
-default so the [standard library](libmc/README.md) is importable by bare name.
+and finally the project's [libmc/](../libmc/) directory, which is on the path by
+default so the [standard library](../libmc/README.md) is importable by bare name.
 Pass `--nostdlib` to leave `libmc/` off the path.
 
 ```c
@@ -1608,12 +1608,12 @@ fn digit_value(c: char) -> char {
 ## Reaching libc
 
 To call into the C library, import a binding module from
-[libmc/libc/](libmc/libc/) — `import "libc/stdio";`, `import "libc/string";`, and
+[libmc/libc/](../libmc/libc/) — `import "libc/stdio";`, `import "libc/string";`, and
 so on. These are ordinary [`@extern` declarations](#extern-declarations) for the
 C functions, covering most of the standard headers (the `printf`/`scanf`
 families, the `str*`/`mem*` functions, `malloc`/`qsort`/`strtol`, `FILE*`
 streams, math, time, errno, …); see the
-[standard library index](libmc/README.md) for the full list.
+[standard library index](../libmc/README.md) for the full list.
 
 ```c
 import "libc/stdio";
@@ -1693,7 +1693,7 @@ pairs with [`@if`](#conditional-compilation) on `TARGET_ARCH` to select
 per-architecture code. It is lowered by the host architecture's assembler, so it
 works on the host and on a cross `--target` of that same architecture — for
 instance an aarch64 host cross-compiling an aarch64 bare-metal object (see
-[examples/baremetal/](examples/baremetal/)) — but not a foreign architecture.
+[examples/baremetal/](../examples/baremetal/)) — but not a foreign architecture.
 Pinning an operand to a fixed physical register and `@naked` functions are on
 the [roadmap](../ROADMAP.md#planned).
 
@@ -1714,5 +1714,5 @@ the [roadmap](../ROADMAP.md#planned).
  */
 ```
 
-See the [standard library index](libmc/README.md) for the modules under `libmc/`,
+See the [standard library index](../libmc/README.md) for the modules under `libmc/`,
 all written in this style.
