@@ -252,6 +252,10 @@ class Func:
         const_params: Names of parameters declared ``const`` -- read-only in the
             body; a ``const`` struct is passed by a hidden pointer rather than
             copied.
+        mut_params: Names of parameters declared ``mut`` -- passed by hidden
+            reference to the caller's storage (whatever the type), writable
+            through the reference, with ``&`` on them rejected so the
+            reference cannot escape.
     """
 
     name: str
@@ -268,6 +272,7 @@ class Func:
     symbol: str | None = None
     source: str | None = None
     const_params: set[str] = field(default_factory=set)
+    mut_params: set[str] = field(default_factory=set)
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 

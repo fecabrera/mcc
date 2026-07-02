@@ -57,6 +57,11 @@ def test_struct_is_emitted_in_full():
     assert "struct point { x: int32; y: int32; }" in out
 
 
+def test_mut_param_cannot_be_exported():
+    with pytest.raises(LangError, match="a mut parameter \\('out'\\) is passed"):
+        iface("fn set(mut out: int32) { out = 7; }")
+
+
 def test_union_is_emitted_in_full():
     out = iface(
         "union value { i: int64; f: float64; }\n"

@@ -236,6 +236,14 @@ class InterfaceWriter:
             )
         self.cg.current_source = func.source
         for pname, ptype in func.params:
+            if pname in func.mut_params:
+                raise LangError(
+                    f"cannot generate an interface for {func.name!r}: a mut "
+                    f"parameter ({pname!r}) is passed by hidden pointer, "
+                    "an ABI @extern cannot express",
+                    func.line,
+                    source=func.source,
+                )
             if pname in func.const_params and is_struct(
                 self.cg.lang_type(ptype, func.line)
             ):

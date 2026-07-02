@@ -10,6 +10,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`mut` parameters** — `fn find(key: int32, mut out: int32) -> bool`: the
+  writable dual of `const`, passed by hidden reference to the caller's storage
+  for every type (scalars included — that is how the write reaches the
+  caller). Assignments in the callee land in the caller's variable; reads copy
+  out; `&` on it is rejected so the reference cannot escape — the memory-safe
+  replacement for an out-pointer parameter, with no `&` at the call site. The
+  argument must be the caller's own writable storage of exactly the
+  parameter's type. Works on generic parameters (`swap<T>(mut a: T, mut b: T)`);
+  re-lending to another `mut` parameter (recursion included) is allowed. Not
+  allowed on `@extern`/`@asm` parameters, and a `mut` function cannot be a
+  function value or export to a `.mci` interface (the hidden-reference
+  convention is not expressible there). `mut` is now a reserved keyword. See
+  [mut parameters](docs/language.md#mut-parameters) and
+  [mut_params.mc](examples/mut_params.mc).
 - **Unions** — `union Name { i: int64; f: float64; }`: an aggregate whose
   members share one storage, sized by the largest member with every member at
   offset 0, for C-layout interop and deliberate type punning (a cross-member

@@ -217,10 +217,17 @@ class CodeGen:
         self.funcs: dict[str, ir.Function] = {}
         # name -> (return type, param types, variadic)
         self.signatures: dict[str, tuple[LangType, list[LangType], bool]] = {}
-        # symbol -> indices of params passed by hidden reference (const structs).
+        # symbol -> indices of params passed by hidden reference (const
+        # structs and mut parameters).
         self.hidden_ref: dict[str, frozenset[int]] = {}
+        # symbol -> the subset of hidden_ref indices that are mut: the
+        # argument must be the caller's own storage (never a spilled
+        # temporary), so writes through the reference reach the caller.
+        self.mut_ref: dict[str, frozenset[int]] = {}
         # Names of the current function's const (read-only) parameters.
         self.const_locals: set[str] = set()
+        # Names of the current function's mut (write-through) parameters.
+        self.mut_locals: set[str] = set()
         # Generic functions: a name maps to its overload set, distinguished
         # by parameter patterns (e.g. hash<T>(T) vs hash<T>(T*)).
         self.templates: dict[str, list[Func]] = {}
@@ -527,7 +534,10 @@ class CodeGen:
 
         A ``const`` parameter of struct type is handed over as a pointer to the
         caller's storage instead of copied by value: the callee promises not to
-        mutate it, so sharing the storage is safe and avoids the copy.
+        mutate it, so sharing the storage is safe and avoids the copy. A
+        ``mut`` parameter is a pointer to the caller's storage for **every**
+        type -- on a scalar the convention change is the point, since it is the
+        only way a write reaches the caller.
 
         Args:
             func: The function whose parameters to classify.
@@ -539,7 +549,15 @@ class CodeGen:
         return frozenset(
             i
             for i, ((name, _), ptype) in enumerate(zip(func.params, params))
-            if name in func.const_params and is_struct(ptype)
+            if (name in func.const_params and is_struct(ptype))
+            or name in func.mut_params
+        )
+
+    @staticmethod
+    def mut_indices(func: Func) -> frozenset[int]:
+        """Indices of ``func``'s ``mut`` parameters (a subset of hidden refs)."""
+        return frozenset(
+            i for i, (name, _) in enumerate(func.params) if name in func.mut_params
         )
 
     def lookup_enum(self, name: str) -> "EnumType | None":
@@ -1441,6 +1459,7 @@ class CodeGen:
                 self.funcs[symbol] = fn
                 self.signatures[symbol] = (ret, params, func.variadic)
                 self.hidden_ref[symbol] = hidden
+                self.mut_ref[symbol] = self.mut_indices(func)
                 self.static_funcs[key] = symbol
                 continue
             if func.type_params:
@@ -1481,6 +1500,7 @@ class CodeGen:
             self.funcs[func.name] = fn
             self.signatures[func.name] = (ret, params, func.variadic)
             self.hidden_ref[func.name] = hidden
+            self.mut_ref[func.name] = self.mut_indices(func)
         # Functions are declared now, so consts and @static globals that name a
         # function can be folded to its address. Consts come first, since a
         # deferred global's initializer may reference one.
@@ -1603,12 +1623,15 @@ class CodeGen:
         self.block_exprs = []  # emit cannot escape into a caller's block-expr
         hidden = self.hidden_ref_indices(func, params)
         self.const_locals = set(func.const_params)
+        self.mut_locals = set(func.mut_params)
         for i, ((pname, _), ptype, arg) in enumerate(zip(func.params, params, fn.args)):
             arg.name = pname
             if i in hidden:
-                # The struct arrives as a pointer to the caller's storage; bind
-                # the local straight to it (no copy). The const guarantee makes
-                # sharing safe; reads go through it exactly like an alloca slot.
+                # The value arrives as a pointer to the caller's storage; bind
+                # the local straight to it (no copy). For const the promise not
+                # to mutate makes sharing safe; for mut the sharing is the
+                # point -- reads load through it exactly like an alloca slot,
+                # and writes land in the caller's variable.
                 self.locals[pname] = (arg, ptype)
                 continue
             slot = self.builder.alloca(arg.type, name=pname)
@@ -3540,6 +3563,31 @@ class CodeGen:
                 return self.writes_const(target.base)
         return False
 
+    def roots_in_mut(self, target) -> bool:
+        """Whether an lvalue's storage is (part of) a ``mut`` parameter's.
+
+        The dual of :meth:`writes_const`'s traversal: the address stays inside
+        the parameter's storage along value member accesses (``.``) and
+        in-storage array indexing, which is exactly what ``&`` must not leak.
+        A ``->``, a ``*``, or indexing through a pointer crosses into separate
+        storage the non-escape guarantee does not cover.
+
+        Args:
+            target: The lvalue whose address is being taken.
+
+        Returns:
+            ``True`` when the address derives from a mut parameter.
+        """
+        if isinstance(target, Var):
+            return target.name in self.mut_locals
+        if isinstance(target, Member) and not target.arrow:
+            return self.roots_in_mut(target.base)
+        if isinstance(target, Index):
+            base_t = self.lvalue_type(target.base)
+            if base_t is not None and is_array(base_t):
+                return self.roots_in_mut(target.base)
+        return False
+
     def lvalue_type(self, expr) -> "LangType | None":
         """Best-effort static type of a simple lvalue, without emitting code.
 
@@ -3775,6 +3823,12 @@ class CodeGen:
             if self.writes_const(expr.operand):
                 raise LangError(
                     "cannot take the address of a const parameter; it is read-only",
+                    expr.line,
+                )
+            if self.roots_in_mut(expr.operand):
+                raise LangError(
+                    "cannot take the address of a mut parameter; "
+                    "its reference must not escape the call",
                     expr.line,
                 )
             # The pointer type does not carry the (possibly reduced)
@@ -4839,10 +4893,11 @@ class CodeGen:
         if symbol is None:
             return None
         if self.hidden_ref.get(symbol):
-            # The function takes a const struct by hidden pointer, an ABI a
-            # plain fn(struct) -> R pointer type cannot express.
+            # The function takes a const struct or mut parameter by hidden
+            # pointer, an ABI a plain fn(...) -> R pointer type cannot express.
+            kind = "mut" if self.mut_ref.get(symbol) else "const struct"
             raise LangError(
-                f"cannot take a function value of {name!r}: it has const struct "
+                f"cannot take a function value of {name!r}: it has {kind} "
                 "parameters (passed by hidden reference)",
                 line,
             )
@@ -4875,6 +4930,7 @@ class CodeGen:
             repr(expr.name),
             expr.line,
             self.hidden_ref.get(symbol, frozenset()),
+            self.mut_ref.get(symbol, frozenset()),
         )
         return TypedValue(self.builder.call(self.funcs[symbol], args), ret)
 
@@ -4912,6 +4968,7 @@ class CodeGen:
         label: str,
         line: int,
         hidden: frozenset[int] = frozenset(),
+        mut: frozenset[int] = frozenset(),
     ) -> list:
         """Evaluate and coerce a call's arguments against the parameter types.
 
@@ -4926,7 +4983,10 @@ class CodeGen:
             label: A description of the callee, for error messages.
             line: Source line for diagnostics.
             hidden: Indices of parameters passed by hidden reference (const
-                structs), handed over as a pointer to the argument's storage.
+                structs and mut parameters), handed over as a pointer to the
+                argument's storage.
+            mut: The subset of ``hidden`` that is ``mut``: the argument must
+                be the caller's own writable storage, never a temporary.
 
         Returns:
             The marshalled LLVM argument values.
@@ -4944,6 +5004,11 @@ class CodeGen:
         args = []
         for i, arg_expr in enumerate(arg_exprs):
             context = f"argument {i + 1} of {label}"
+            if i in mut:
+                # Before the string-literal adaptation: a literal is not the
+                # caller's storage, so it must be rejected, not spilled.
+                args.append(self.mut_ref_arg(arg_expr, params[i], line, context))
+                continue
             if i < len(params) and self.str_literal_adapts(arg_expr, params[i]):
                 # A string literal adapts to a char slice from the parameter type
                 # (Stage 4). A `const` slice parameter is passed by hidden
@@ -5009,6 +5074,84 @@ class CodeGen:
         else:
             tv = self.gen_expr(arg_expr)
         return self.spill_to_temp(tv, ptype, line, context)
+
+    def mut_ref_addr(
+        self, arg_expr, line: int, context: str
+    ) -> tuple[ir.Value, LangType]:
+        """Resolve a ``mut`` argument to the caller's own storage address.
+
+        Unlike :meth:`hidden_ref_arg`, a temporary is never acceptable -- the
+        callee's writes must land in the caller's variable -- so the argument
+        must be an addressable, writable lvalue, and the storage is shared
+        as-is.
+
+        Args:
+            arg_expr: The argument expression.
+            line: Source line for diagnostics.
+            context: A label for error messages (e.g. ``argument 1 of 'f'``).
+
+        Returns:
+            An ``(address, type)`` pair for the argument's storage.
+
+        Raises:
+            LangError: When the argument is not an lvalue, is read-only, is
+                ``@volatile``, or sits at an unguaranteed (packed) alignment.
+        """
+        if not self.is_addressable_form(arg_expr):
+            raise LangError(
+                f"{context} is not assignable; a mut parameter needs a "
+                "variable, field, element, or dereference",
+                line,
+            )
+        if self.writes_const(arg_expr):
+            raise LangError(
+                "cannot pass a const parameter as a mut argument; it is read-only",
+                line,
+            )
+        addr, t, align, volatile = self.gen_addr(arg_expr, line)
+        if t.const:
+            raise LangError(
+                f"cannot pass a read-only {t} as a mut argument", line
+            )
+        if volatile:
+            raise LangError(
+                "cannot pass @volatile storage as a mut argument; accesses "
+                "through the reference would not be volatile",
+                line,
+            )
+        if align is not None and align < type_align(t):
+            raise LangError(
+                "cannot pass a @packed field as a mut argument; its "
+                "alignment is not guaranteed",
+                line,
+            )
+        return addr, t
+
+    def mut_ref_arg(
+        self, arg_expr, ptype: LangType, line: int, context: str
+    ) -> ir.Value:
+        """Lower a ``mut`` argument to a pointer to the caller's storage.
+
+        The types must match exactly -- the callee writes through the pointer,
+        so no coercion (not even an adapting literal) is possible.
+
+        Args:
+            arg_expr: The argument expression.
+            ptype: The parameter's type.
+            line: Source line for diagnostics.
+            context: A label for error messages.
+
+        Returns:
+            A pointer to the argument's storage.
+
+        Raises:
+            LangError: When the argument is not a writable lvalue of exactly
+                ``ptype``.
+        """
+        addr, t = self.mut_ref_addr(arg_expr, line, context)
+        if t != ptype:
+            raise LangError(f"{context}: expected a {ptype} lvalue, got {t}", line)
+        return addr
 
     def spill_to_temp(
         self, tv: TypedValue, ptype: LangType, line: int, context: str
@@ -5132,7 +5275,22 @@ class CodeGen:
             LangError: When no overload matches, the choice is ambiguous, a type
                 parameter binds to ``void``, or access is denied.
         """
-        arg_tvs = [self.gen_expr(arg) for arg in expr.args]
+        # A mut argument's storage must be resolved before the args are
+        # lowered to values for inference, or the writes would land in a
+        # spilled temporary. Every arity-matching candidate must agree on
+        # which positions are mut for the address to be formed up front.
+        mut_positions = self.generic_mut_positions(expr, candidates)
+        arg_tvs, mut_addrs = [], {}
+        for i, arg in enumerate(expr.args):
+            if i in mut_positions:
+                context = f"argument {i + 1} of {expr.name!r}"
+                addr, t = self.mut_ref_addr(arg, expr.line, context)
+                mut_addrs[i] = (addr, t)
+                # Inference sees the stored value, loaded once through the
+                # already-computed address.
+                arg_tvs.append(TypedValue(self.gen_load(addr), t))
+            else:
+                arg_tvs.append(self.gen_expr(arg))
         if len(candidates) == 1:
             func = candidates[0]
             bindings = self.resolve_bindings(func, expr, arg_tvs, lenient=False)
@@ -5169,14 +5327,56 @@ class CodeGen:
         args = []
         for i, (tv, p) in enumerate(zip(arg_tvs, params)):
             context = f"argument {i + 1} of {expr.name!r}"
-            if i in hidden:
+            if i in mut_positions:
+                # The caller's storage address was formed before inference;
+                # the instantiated parameter type must match it exactly.
+                addr, t = mut_addrs[i]
+                if t != p:
+                    raise LangError(
+                        f"{context}: expected a {p} lvalue, got {t}", expr.line
+                    )
+                args.append(addr)
+            elif i in hidden:
                 # The args are already lowered to values for binding inference;
-                # a hidden-reference parameter takes a pointer, so spill to a
-                # temporary (no shared-storage optimization on the generic path).
+                # a const hidden-reference parameter takes a pointer, so spill
+                # to a temporary (no shared-storage optimization on the
+                # generic path).
                 args.append(self.spill_to_temp(tv, p, expr.line, context))
             else:
                 args.append(self.coerce(tv, p, expr.line, context).value)
         return TypedValue(self.builder.call(fn, args), ret)
+
+    def generic_mut_positions(self, expr: Call, candidates: list) -> frozenset[int]:
+        """The argument positions that are ``mut`` for a generic call.
+
+        Computed before binding inference (the address must be formed before
+        the args are lowered to values), so every arity-matching candidate in
+        the overload set must agree on which positions are ``mut``.
+
+        Args:
+            expr: The ``Call`` node.
+            candidates: The generic overload set.
+
+        Returns:
+            The agreed ``mut`` positions (empty when no candidate matches the
+            arity; the arity error surfaces later).
+
+        Raises:
+            LangError: When two arity-matching overloads disagree on a
+                position's ``mut``-ness.
+        """
+        matching = [f for f in candidates if len(f.params) == len(expr.args)]
+        if not matching:
+            return frozenset()
+        positions = self.mut_indices(matching[0])
+        for func in matching[1:]:
+            if self.mut_indices(func) != positions:
+                raise LangError(
+                    f"overloads of {expr.name!r} disagree on which parameters "
+                    "are mut",
+                    expr.line,
+                )
+        return positions
 
     def resolve_bindings(
         self, func: Func, expr: Call, arg_tvs: list[TypedValue], lenient: bool
@@ -5369,6 +5569,7 @@ class CodeGen:
             self.defer_stack,
             self.block_exprs,
             self.const_locals,
+            self.mut_locals,
         )
         self.type_bindings = bindings
         self.current_source = func.source  # the signature may name private structs
@@ -5386,6 +5587,7 @@ class CodeGen:
             self.funcs[mangled] = fn
             self.signatures[mangled] = (ret, params, False)
             self.hidden_ref[mangled] = hidden
+            self.mut_ref[mangled] = self.mut_indices(func)
             self.instances[key] = mangled
             self.gen_function(func, fn, ret, params)
         except LangError as err:
@@ -5407,6 +5609,7 @@ class CodeGen:
                 self.defer_stack,
                 self.block_exprs,
                 self.const_locals,
+                self.mut_locals,
             ) = saved
             self.type_bindings = outer_bindings
             self.current_source = outer_source

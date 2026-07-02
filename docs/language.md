@@ -88,6 +88,55 @@ ABI — the two conventions are distinct at the machine level; a future
 `fn(const T)` function-pointer type could carry the convention and lift the
 restriction.
 
+### mut parameters
+
+A parameter marked `mut` is the writable dual of `const`: it is passed by
+hidden reference to the caller's storage — for **every** type, scalars
+included, since that is the only way a write can reach the caller — and the
+callee's assignments land in the caller's variable. Reading it loads the
+current value (copy on read); `&` on it is rejected, so the reference can
+never outlive the call. It is the memory-safe replacement for an out-pointer
+parameter:
+
+```c
+fn find(key: int32, mut out: int32) -> bool {   // instead of out: int32*
+    out = 42;          // writes the caller's variable
+    return true;
+}
+
+fn main() -> int32 {
+    let x: int32 = 0;
+    find(7, x);        // no & at the call site; x is now 42
+    return x;
+}
+```
+
+The argument must be the caller's own writable storage — a variable, a field,
+an array element, or a dereference — of **exactly** the parameter's type (the
+callee writes through the reference, so nothing can adapt or widen; `int32`
+and `uint32` may share bits, but not a `mut` reference). A literal, a call
+result, a `const` parameter, a read-only `const T` lvalue, `@volatile`
+storage, and a `@packed` field (whose alignment is not guaranteed) are all
+rejected.
+
+Inside the body a `mut` parameter behaves like the variable it references:
+assignment and compound assignment write through, a struct's fields project
+(`p.x = 3` writes the caller's field), and it can be **re-lent** — passed
+onward as another function's `mut` argument (recursion included), which
+forwards the reference without letting it escape. Two `mut` parameters may
+alias the same variable; as with two pointers, the last write wins.
+
+`mut` works on generic parameters (`fn swap<T>(mut a: T, mut b: T)`), with
+the argument's type matching the instantiated parameter exactly; overloads of
+a generic name must agree on which positions are `mut`. Like `const`, `mut`
+is not allowed on `@extern` parameters (the hidden-reference ABI would not
+match the C function), and a function with a `mut` parameter cannot be used
+as a function value or exported to an [interface file](#interface-files) —
+the bare `fn(...)` type cannot express the convention (the same liftable
+limitation as `const`, see above).
+
+See [examples/mut_params.mc](../examples/mut_params.mc).
+
 ## Variadic functions
 
 A trailing `...` after at least one named parameter makes a function

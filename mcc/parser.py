@@ -893,6 +893,7 @@ class Parser:
         self.expect("(")
         params = []
         const_params: set[str] = set()
+        mut_params: set[str] = set()
         variadic = False
         while self.cur.kind != ")":
             if params:
@@ -909,9 +910,16 @@ class Parser:
                 variadic = True
                 break
             is_const = bool(self.accept("const"))
+            is_mut = bool(self.accept("mut"))
+            if is_const and is_mut:
+                raise LangError(
+                    "a parameter cannot be both const and mut", self.cur.line
+                )
             pname = self.expect("IDENT").text
             if is_const:
                 const_params.add(pname)
+            if is_mut:
+                mut_params.add(pname)
             self.expect(":")
             params.append((pname, self.parse_type_ref()))
         self.expect(")")
@@ -923,6 +931,12 @@ class Parser:
         if const_params and extern:
             raise LangError(
                 "const parameters are not allowed on @extern functions "
+                "(they would change the C calling convention)",
+                line,
+            )
+        if mut_params and extern:
+            raise LangError(
+                "mut parameters are not allowed on @extern functions "
                 "(they would change the C calling convention)",
                 line,
             )
@@ -949,6 +963,10 @@ class Parser:
             if const_params:
                 raise LangError(
                     "const parameters are not allowed on @asm functions", line
+                )
+            if mut_params:
+                raise LangError(
+                    "mut parameters are not allowed on @asm functions", line
                 )
             template = self.parse_asm_body(line)
             inputs = [Var(pname, line) for pname, _ in params]
@@ -981,6 +999,7 @@ class Parser:
             variadic=variadic,
             inline=inline,
             const_params=const_params,
+            mut_params=mut_params,
         )
 
     def parse_asm(self):

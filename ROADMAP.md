@@ -254,11 +254,19 @@ already do).
       that, unlike `const`, `mut` on a **scalar**
       changes the calling convention (always by hidden reference) — that is the
       only way a write reaches the caller:
-  - [ ] `mut` parameters — `fn find(key: int32, mut out: int32) -> bool`: the
+  - [x] `mut` parameters — `fn find(key: int32, mut out: int32) -> bool`: the
         callee may write `out` but cannot take its address or store it, so it is
         the memory-safe version of `fn find(key: int32, out: int32*) -> bool`.
-        The non-escape guarantee is local and total, enforceable with the same
-        machinery `const` already uses
+        The non-escape guarantee is local and total, enforced with the same
+        machinery `const` uses. The argument must be the caller's own writable
+        storage of exactly the parameter's type; generics are supported
+        (`swap<T>(mut a: T, mut b: T)`); implemented, see
+        [mut parameters](docs/language.md#mut-parameters)
+  - [ ] generic overloads mixing `mut` — overloads of one generic name that
+        disagree on which positions are `mut` are currently rejected (the
+        argument's address must be formed before the overload is chosen);
+        supporting them means deferring the lvalue/value decision until after
+        overload resolution
   - [ ] `mut` returns — a function that returns an lvalue:
         `fn string_at(self: string*, i: uint64) -> mut char` makes
         `string_at(&str, 0) = '/'` legal (as well as comparing it or copying it
