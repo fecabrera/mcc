@@ -113,6 +113,7 @@ from mcc.codegen.types import (
     is_pointer,
     is_slice,
     is_struct,
+    is_union,
     is_valist,
     list_of,
     over_aligned,
@@ -904,6 +905,13 @@ class CodeGen:
                 decl.line,
                 source=decl.source,
             )
+        if is_union(base_type):
+            raise LangError(
+                f"a union cannot be extended, but {decl.name!r} extends "
+                f"union {base_type}",
+                decl.line,
+                source=decl.source,
+            )
         return base_type
 
     def slice_type(self, element: LangType, line: int) -> LangType:
@@ -1020,6 +1028,7 @@ class CodeGen:
                 align=align,
                 packed=packed,
                 volatile=volatile,
+                union=decl.union,
             )
             # Register before resolving fields so self-referential structs
             # (e.g. node<T> holding a node<T>*) can refer to themselves.
@@ -1065,6 +1074,30 @@ class CodeGen:
         object.__setattr__(
             struct_type, "fields", fields
         )  # frozen; fields excluded from eq
+        if decl.union:
+            # A union's members all share the storage at offset 0. Body the
+            # identified type as the most-aligned member plus explicit pad
+            # bytes up to the union's size (what clang emits for a C union),
+            # so LLVM's natural size and alignment agree with type_size() and
+            # type_align(). Member access never GEPs to an element -- it casts
+            # the union's address to the member type -- so elem_indices are
+            # all zeros. A @packed/@align union departs from the natural
+            # alignment exactly like a struct: its body is packed and the
+            # existing over_aligned() machinery aligns the storage by hand.
+            rep = max(
+                (ftype for _, ftype in fields),
+                key=lambda t: (type_align(t), type_size(t)),
+                default=None,
+            )
+            elements = [] if rep is None else [rep.ir]
+            pad = type_size(struct_type) - (0 if rep is None else type_size(rep))
+            if pad:
+                elements.append(ir.ArrayType(ir.IntType(8), pad))
+            if packed or over_aligned(struct_type):
+                identified.packed = True
+            identified.set_body(*elements)
+            object.__setattr__(struct_type, "elem_indices", (0,) * len(fields))
+            return struct_type
         if packed or over_aligned(struct_type):
             # @packed and @align depart from LLVM's natural layout, so spell
             # the layout out: a packed body with explicit padding, keeping
@@ -1095,9 +1128,12 @@ class CodeGen:
         a ``derived`` value can be narrowed to ``base`` -- the prefix occupies
         the same starting bytes. Compared by field name and type, so the check
         also covers transitive ``extends`` chains and same-layout
-        specializations.
+        specializations. A union never participates: its members share offset
+        0, so a matching field list does not mean a matching layout.
         """
         if base.fields is None or derived.fields is None:
+            return False
+        if base.union or derived.union:
             return False
         n = len(base.fields)
         return n <= len(derived.fields) and derived.fields[:n] == base.fields
@@ -1126,6 +1162,12 @@ class CodeGen:
         """
         if None not in ftype.dims:
             return self.lang_type(ftype, decl.line)
+        if decl.union:
+            raise LangError(
+                "a union cannot contain a flexible array member",
+                decl.line,
+                source=decl.source,
+            )
         if ftype.dims != [None] or not is_last:
             raise LangError(
                 "a flexible array member 'field: T[]' must be the struct's last "
@@ -1748,6 +1790,10 @@ class CodeGen:
             raise LangError(
                 f"a struct literal needs a struct type, not {struct_type}", expr.line
             )
+        if is_union(struct_type) and len(items) > 1:
+            # The members share one storage, so writing two would just
+            # overwrite; the literal names the (at most one) live member.
+            raise LangError("a union literal sets at most one member", expr.line)
 
         slot = self.builder.alloca(struct_type.ir)
         if over_aligned(struct_type):
@@ -1775,9 +1821,14 @@ class CodeGen:
                 f"the {fname!r} pointer",
                 line,
             )
-        addr = self.builder.gep(
-            slot, [I32_ZERO, ir.Constant(ir.IntType(32), index)], inbounds=True
-        )
+        if is_union(struct_type):
+            # Every union member lives at offset 0: address it by casting the
+            # union's storage to the member type instead of a GEP.
+            addr = self.builder.bitcast(slot, ftype.ir.as_pointer())
+        else:
+            addr = self.builder.gep(
+                slot, [I32_ZERO, ir.Constant(ir.IntType(32), index)], inbounds=True
+            )
         value = self.coerce(tv, ftype, line, f"{what} {fname!r}")
         self.builder.store(value.value, addr)
 
@@ -3383,6 +3434,19 @@ class CodeGen:
                 # Field of a non-addressable struct value, e.g. f().field.
                 base = self.gen_expr(expr.base)
                 index, ftype = self.struct_field(base.type, expr.field, expr.line)
+                if is_union(base.type):
+                    # A union member is read through the storage, not by
+                    # element index: spill the value and cast the slot to the
+                    # member type.
+                    slot = self.builder.alloca(base.type.ir)
+                    if over_aligned(base.type):
+                        slot.align = type_align(base.type)
+                    self.builder.store(base.value, slot)
+                    addr = self.builder.bitcast(slot, ftype.ir.as_pointer())
+                    # A @packed union's storage guarantees no alignment.
+                    return self.value_at(
+                        addr, ftype, align=1 if base.type.packed else None
+                    )
                 return TypedValue(self.builder.extract_value(base.value, index), ftype)
             addr, ftype, align, volatile = self.gen_member_addr(
                 expr.base, expr.field, expr.arrow, expr.line
@@ -3660,9 +3724,15 @@ class CodeGen:
         else:
             base_addr, owner, base_align, base_volatile = self.gen_addr(base_expr, line)
         index, ftype = self.struct_field(owner, fname, line)
-        addr = self.builder.gep(
-            base_addr, [I32_ZERO, ir.Constant(ir.IntType(32), index)], inbounds=True
-        )
+        if is_union(owner):
+            # Every union member lives at offset 0: address it by casting the
+            # union's storage to the member type instead of a GEP.
+            addr = self.builder.bitcast(base_addr, ftype.ir.as_pointer())
+        else:
+            addr = self.builder.gep(
+                base_addr, [I32_ZERO, ir.Constant(ir.IntType(32), index)],
+                inbounds=True,
+            )
         # A @packed owner (or a base that already sits at a packed offset)
         # gives no alignment guarantee; loads and stores must say so, or
         # LLVM would assume the field type's natural alignment.
@@ -4225,8 +4295,15 @@ class CodeGen:
             The constant value.
 
         Raises:
-            LangError: When ``expr`` is not a constant of ``expected``.
+            LangError: When ``expr`` is not a constant of ``expected``, or
+                ``expected`` is a union (not supported yet).
         """
+        if is_union(expected):
+            raise LangError(
+                "a global union initializer is not supported yet; "
+                "assign the member at runtime instead",
+                line,
+            )
         if isinstance(expr, ArrayLit):
             if not is_array(expected):
                 raise LangError(

@@ -64,6 +64,10 @@ its reference section in the [language reference](docs/language.md).
       yield), and `enumerated<T>` (what `enumerate` yields), available with no
       import; a same-named user struct takes precedence, as with the builtin
       `range`
+- [x] [Unions](docs/language.md#unions) — `union Name { … }` members sharing
+      one storage (all at offset 0): one-member zero-filled literals, defined
+      cross-member byte reinterpretation (type punning), generics,
+      `@packed`/`@align`/`@volatile`
 - [x] [Enums](docs/language.md#enums) — `enum Name[: type] { … }`, `Name::Member`
       constants over any underlying type, the name usable as a type
 - [x] [Type aliases](docs/language.md#type-aliases) — `type <name> = <type>;`,
@@ -152,12 +156,29 @@ already do).
 - [ ] Unions — `union Name { i: int64; f: float64; p: void*; }`, members
       sharing one storage (size of the largest, all at offset 0), for C-layout
       interop (`epoll_data`, `sigval`, most syscall structs embed a union) and
-      type punning. The unsafe primitive under `any`
+      type punning. The unsafe primitive under `any`:
+  - [x] core unions — declarations, one-member zero-filled literals, `.`/`->`
+        access with defined cross-member byte reinterpretation, generics,
+        `@packed`/`@align`/`@volatile`, `const` parameters, and `.mci`
+        interfaces, riding on the struct machinery (a union flag on the
+        declaration and its `LangType`; layout is max-member size and
+        alignment, lowered to an LLVM struct of the most-aligned member plus
+        pad bytes, member access by pointer cast). `extends` (either
+        direction), member defaults, and flexible array members are rejected;
+        implemented, see [Unions](docs/language.md#unions)
   - [ ] `any` — a tagged union over the above: a union payload plus a
         `typeof`-checked type discriminant, so the live member is recovered
         safely (`case type`). The element type of the
         [variadic](#functions-and-methods) pack's `slice<any>`. Depends on
         unions (above) and [`typeof`](#types-and-generics)
+  - [ ] global/`@static` union initializers — teach the const-initializer
+        path to emit a union constant (zero-fill plus the one written member).
+        Until then a global/`@static` union initializer is rejected with an
+        explicit compile error
+  - [ ] dedicated union declaration — migrate unions off the shared struct
+        declaration onto their own AST node and type kind, so a struct-only
+        code path (sequential layout, `extends`, prefix upcast) can never
+        silently accept a union. A pure compiler refactor, no language change
 - [ ] Bitfields — `field: uint32 : 5;`, packing consecutive narrow fields into
       one storage unit, for hardware registers, protocol headers, and C-layout
       interop (many syscall/kernel structs use them; `@packed` doesn't

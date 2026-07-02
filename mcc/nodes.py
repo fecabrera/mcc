@@ -151,6 +151,10 @@ class StructDecl:
         defaults: ``{field name: default-value expression}`` for fields declared
             ``name: type = expr;``. A struct literal uses a field's default when
             the field is omitted (falling back to zero when there is none).
+        union: ``True`` for a ``union`` declaration -- the members share one
+            storage (all at offset 0) instead of being laid out sequentially.
+            Unions ride on the struct machinery; ``base``, ``defaults``, and
+            flexible array members are rejected for them.
         source: Defining file, stamped by the driver.
     """
 
@@ -165,6 +169,7 @@ class StructDecl:
     packed: bool = False
     volatile: bool = False
     defaults: dict = field(default_factory=dict)
+    union: bool = False
     source: str | None = None
     span: tuple[int, int] | None = field(default=None, compare=False)
 

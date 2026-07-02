@@ -57,6 +57,15 @@ def test_struct_is_emitted_in_full():
     assert "struct point { x: int32; y: int32; }" in out
 
 
+def test_union_is_emitted_in_full():
+    out = iface(
+        "union value { i: int64; f: float64; }\n"
+        "fn value_int(v: union value*) -> int64 { return v->i; }"
+    )
+    assert "union value { i: int64; f: float64; }" in out
+    assert "@extern fn value_int(v: value*) -> int64;" in out
+
+
 def test_enum_is_emitted_in_full():
     out = iface("enum Color: int32 { Red = 0, Blue = 7 }")
     assert "enum Color: int32 { Red = 0, Blue = 7 }" in out

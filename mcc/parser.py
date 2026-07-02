@@ -391,11 +391,11 @@ class Parser:
                 "@symbol only applies to @extern functions and variables",
                 self.cur.line,
             )
-        if align is not None and self.cur.kind != "struct":
+        if align is not None and self.cur.kind not in ("struct", "union"):
             raise LangError("@align only applies to structs", self.cur.line)
-        if packed and self.cur.kind != "struct":
+        if packed and self.cur.kind not in ("struct", "union"):
             raise LangError("@packed only applies to structs", self.cur.line)
-        if inline and (extern or self.cur.kind in ("struct", "let", "const")):
+        if inline and (extern or self.cur.kind in ("struct", "union", "let", "const")):
             raise LangError(
                 "@inline only applies to functions with a body", self.cur.line
             )
@@ -403,10 +403,13 @@ class Parser:
             raise LangError("@asm only applies to functions with a body", self.cur.line)
         if clobbers and not asm:
             raise LangError("@clobbers only applies to @asm", self.cur.line)
-        if self.cur.kind == "struct":
+        if self.cur.kind in ("struct", "union"):
             if extern:
                 raise LangError("@extern does not apply to structs", self.cur.line)
-            return self.parse_struct(private, static, align, packed, volatile)
+            return self.parse_struct(
+                private, static, align, packed, volatile,
+                union=self.cur.kind == "union",
+            )
         # `type` is a contextual keyword: `type <name> = <type>;` at top level.
         # Elsewhere (a field, variable, or parameter) `type` stays an identifier.
         if (
@@ -565,7 +568,8 @@ class Parser:
             # Dimensions on the group are the outermost, so they come first.
             inner.dims = self.parse_dims() + inner.dims
             return inner
-        self.accept("struct")
+        if not self.accept("struct"):
+            self.accept("union")
         name = self.expect("IDENT").text
         args = []
         if self.accept("<"):
@@ -709,8 +713,14 @@ class Parser:
         align: int | None = None,
         packed: bool = False,
         volatile: bool = False,
+        union: bool = False,
     ) -> StructDecl:
-        """Parse a ``struct`` declaration with its (optionally generic) fields.
+        """Parse a ``struct`` or ``union`` declaration with its fields.
+
+        A ``union`` shares the struct machinery (one declaration node, generic
+        type parameters, the same annotations) but its members share one
+        storage, so the struct-only forms -- ``extends``, field defaults, and
+        flexible array members -- are rejected for it.
 
         Args:
             private: Whether ``@private`` was applied.
@@ -718,15 +728,22 @@ class Parser:
             align: The ``@align(N)`` value, or ``None``.
             packed: Whether ``@packed`` was applied.
             volatile: Whether ``@volatile`` was applied.
+            union: ``True`` to parse a ``union`` declaration.
 
         Returns:
             The parsed ``StructDecl``.
+
+        Raises:
+            LangError: On ``extends`` or a member default in a ``union``.
         """
-        line = self.expect("struct").line
+        line = self.expect("union" if union else "struct").line
         name = self.expect("IDENT").text
         type_params = self.parse_type_params()
         base = None
-        if self.accept("extends"):
+        if self.cur.kind == "extends":
+            if union:
+                raise LangError("a union cannot extend another type", self.cur.line)
+            self.advance()
             base = self.parse_base_ref()
         # The body is required, except `struct B extends A;` (a specialization
         # that adds no fields of its own).
@@ -740,7 +757,13 @@ class Parser:
                 fname = self.expect("IDENT").text
                 self.expect(":")
                 ftype = self.parse_type_ref()
-                if self.accept("="):  # name: type = default;
+                if self.cur.kind == "=":  # name: type = default;
+                    if union:
+                        raise LangError(
+                            "a union member cannot declare a default value",
+                            self.cur.line,
+                        )
+                    self.advance()
                     defaults[fname] = self.parse_expr()
                 fields.append((fname, ftype))
                 self.expect(";")
@@ -757,6 +780,7 @@ class Parser:
             packed=packed,
             volatile=volatile,
             defaults=defaults,
+            union=union,
         )
 
     def parse_base_ref(self) -> TypeRef:
@@ -1432,7 +1456,7 @@ class Parser:
                         break
             self.expect("]")
             return ArrayLit(elements, tok.line)
-        if tok.kind == "struct":
+        if tok.kind in ("struct", "union"):
             return self.parse_struct_lit(tok.line)
         if tok.kind == "sizeof":
             self.expect("(")

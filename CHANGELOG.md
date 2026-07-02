@@ -10,6 +10,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Unions** — `union Name { i: int64; f: float64; }`: an aggregate whose
+  members share one storage, sized by the largest member with every member at
+  offset 0, for C-layout interop and deliberate type punning (a cross-member
+  read is defined byte reinterpretation). Union literals set at most one
+  member over zero-filled storage, members read and write through `.`/`->`,
+  and unions take generics, `@packed`/`@align`/`@volatile`, `const`
+  parameters, and `.mci` interfaces like structs. The struct-only forms
+  (`extends`, member defaults, flexible array members) are rejected, and a
+  global/`@static` union initializer is not supported yet. See
+  [Unions](docs/language.md#unions) and [unions.mc](examples/unions.mc).
 - **Compound assignment** — `target op= value` for every arithmetic, bitwise,
   and shift operator (`+= -= *= /= %= &= |= ^= <<= >>=`), meaning
   `target = target op value`. The target may be any assignable lvalue (a

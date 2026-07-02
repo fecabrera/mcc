@@ -1300,6 +1300,62 @@ table [libmc/set.mc](../libmc/set.mc) (borrowing, identity-keyed), and the
 string-keyed [libmc/dict.mc](../libmc/dict.mc), which owns copies of its keys and
 compares them by content.
 
+## Unions
+
+A `union` is an aggregate whose members all share one storage: its size is the
+largest member's, rounded up to the union's alignment (the most-aligned
+member's), and every member sits at offset 0. It is declared like a struct and
+its members are read and written with the same `.`/`->` access:
+
+```c
+union value {
+    i: int64;
+    f: float64;
+    b: uint8[8];
+}
+
+fn main() -> int32 {
+    let v: union value;
+    v.i = 42;                  // write one member
+    return (v.i & 0xFF) as int32;
+}
+```
+
+Writing one member and reading another reinterprets the same bytes. In mcc
+this is **defined behavior**: a cross-member read is a byte reinterpretation
+of the shared storage (deliberate type punning), with the bytes falling where
+the platform's endianness puts them. That, and matching C's layout for interop
+(`epoll_data`, `sigval`, and many syscall structs embed a union), is what
+unions are for:
+
+```c
+fn float_bits(x: float64) -> int64 {
+    let v = value { f = x };
+    return v.i;                // 1.0 reads back as 0x3FF0000000000000
+}
+```
+
+A union literal (`value { f = 1.0 }`, with the `union` keyword optional like
+`struct`) zero-fills the storage first and sets **at most one** member, the
+live one; `value { }` is all zeroes. Whole-union assignment copies all the
+bytes. `sizeof`, `alignof`, and `offsetof` work as expected (`offsetof` is 0
+for every member), and unions nest freely: a union can hold structs and
+arrays, and a struct can hold unions.
+
+Unions are generic like structs (`union boxed<T> { typed: T; raw: uint64; }`,
+one instantiation per type argument) and take the same `@packed` (alignment
+1), `@align(N)`, and `@volatile` annotations. A `const` union parameter passes
+by hidden reference like a `const` struct. What a union does **not** take are
+the struct-only forms: `extends` (in either direction), member defaults
+(`m: T = v`), and flexible array members are all rejected, and a
+global/`@static` union initializer is not supported yet (assign the member at
+runtime instead).
+
+Like a by-value struct, a by-value union is not
+[C-ABI compatible](../README.md#c-abi-compatibility) across the C boundary
+yet; pass a pointer to it instead, as C interop code does anyway. See
+[examples/unions.mc](../examples/unions.mc).
+
 ## Enums
 
 An `enum` is a named set of compile-time constants. The declaration names the

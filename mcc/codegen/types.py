@@ -40,8 +40,14 @@ class LangType:
         packed: ``@packed`` -- fields at unpadded offsets, alignment 1.
         volatile: ``@volatile`` -- loads/stores must not be elided, merged, or
             reordered.
+        union: ``True`` for a ``union`` -- an aggregate whose fields all share
+            one storage at offset 0 (see :func:`is_union`); excluded from
+            equality/hash like the other layout attributes (the interned name
+            is the identity).
         elem_indices: LLVM element index of each field; padding elements in an
-            explicitly laid-out struct shift these.
+            explicitly laid-out struct shift these. All zeros for a union,
+            whose member access bypasses field indices (a pointer cast to the
+            member type instead of a GEP).
         signature: ``(return type, param types, variadic)`` for a
             function-pointer type; part of equality, so structurally equal
             function types match.
@@ -66,6 +72,7 @@ class LangType:
     align: int | None = field(default=None, compare=False)
     packed: bool = field(default=False, compare=False)
     volatile: bool = field(default=False, compare=False)
+    union: bool = field(default=False, compare=False)
     elem_indices: tuple | None = field(default=None, compare=False)
     signature: tuple | None = None
     element: "LangType | None" = None
@@ -380,6 +387,23 @@ def is_struct(lang_type: LangType) -> bool:
     return lang_type.fields is not None
 
 
+def is_union(lang_type: LangType) -> bool:
+    """Report whether a type is a ``union``.
+
+    A union is an aggregate riding on the struct machinery (``is_struct`` is
+    also true for it), so struct-generic behavior -- by-value copies,
+    ``sizeof``, ``const``-parameter hidden references -- applies unchanged,
+    while layout and member access branch on this predicate.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type is a union.
+    """
+    return lang_type.fields is not None and lang_type.union
+
+
 def is_slice(lang_type: LangType) -> bool:
     """Report whether a type is a builtin ``slice<T>`` view.
 
@@ -492,6 +516,11 @@ def type_size(lang_type: LangType) -> int:
         return POINTER_SIZE
     if is_array(lang_type):
         return lang_type.count * type_size(lang_type.element)
+    if is_union(lang_type):
+        # Members share one storage: the largest, rounded to the alignment.
+        largest = max((type_size(ftype) for _, ftype in lang_type.fields), default=0)
+        align = type_align(lang_type)
+        return (largest + align - 1) // align * align
     if is_struct(lang_type):
         offset = 0
         for _, ftype in lang_type.fields:
@@ -526,6 +555,11 @@ def field_offset(struct_type: LangType, fname: str, line: int) -> int:
     """
     if not is_struct(struct_type):
         raise LangError(f"offsetof needs a struct, not {struct_type}", line)
+    if is_union(struct_type):
+        # Every member sits at offset 0; only validate that the field exists.
+        if any(name == fname for name, _ in struct_type.fields):
+            return 0
+        raise LangError(f"struct {struct_type} has no field {fname!r}", line)
     offset = 0
     for name, ftype in struct_type.fields:
         if not struct_type.packed:

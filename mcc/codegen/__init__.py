@@ -32,6 +32,7 @@ from mcc.codegen.types import (
     is_pointer,
     is_slice,
     is_struct,
+    is_union,
     is_valist,
 )
 
@@ -56,5 +57,6 @@ __all__ = [
     "is_pointer",
     "is_slice",
     "is_struct",
+    "is_union",
     "is_valist",
 ]
