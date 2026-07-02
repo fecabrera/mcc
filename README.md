@@ -1,6 +1,6 @@
 # mcc
 
-A small, modern-C-style language with generics, structs, and pointers,
+A modern C-style language with generics, structs, and pointers,
 compiled to native code (or JIT-executed) via [LLVM](https://llvm.org/)
 using [llvmlite](https://llvmlite.readthedocs.io/). The compiler lives in
 the [mcc/](mcc/) package, with one module per stage: lexer, parser, code
@@ -29,8 +29,32 @@ fn main() -> int32 {
 }
 ```
 
+## Goals
+
+mcc aims to be **one language for both systems and application programming**.
+It stays close enough to the metal to write a driver or run on bare metal, yet
+comfortable enough to write an everyday application, so you never reach for a
+different tool at each end.
+
+- **Safe and unsafe code, side by side.** You can write memory-safe code *and*
+  drop to raw pointers and manual memory when you need to. Safety is
+  **encouraged through syntax, never enforced by the compiler**: constructs like
+  [`const`](docs/language.md#const-parameters) parameters, [slices](docs/language.md#slices),
+  and planned `mut` references make the safe path the natural, ergonomic one,
+  while the language never forbids the low-level one.
+- **Familiar to C programmers.** The syntax, type system, and
+  [C ABI](#c-abi-compatibility) stay close to C, so a C programmer can read mcc
+  on day one and explore its additions (generics, `defer`, block expressions) a
+  feature at a time, without relearning the basics.
+- **Staged porting, no big rewrite.** Because mcc is
+  [ABI-compatible with C](#c-abi-compatibility) and links directly against libc
+  and existing objects, an existing C application can be ported one file at a
+  time, with mcc and C translation units side by side and no disruptive
+  all-at-once rewrite.
+
 ## Contents
 
+- [Goals](#goals)
 - [Requirements](#requirements)
 - [Install](#install)
 - [Usage](#usage)
@@ -39,7 +63,7 @@ fn main() -> int32 {
 - [Standard library](#standard-library)
 - [C ABI compatibility](#c-abi-compatibility)
 - [Roadmap](#roadmap)
-- [Language reference](docs/language.md) — the complete guide to every feature
+- [Language reference](docs/language.md), the complete guide to every feature
 - [Editor support](#editor-support)
 - [Tests](#tests)
 - [How it works](#how-it-works)
@@ -108,7 +132,7 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 
 | Option                    | Description                                                                                                                                                                                   |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `source`                  | The `.mc` file to compile (exactly one). Its imports are resolved and compiled with it. Any other input — a `.o` object, `.a` archive, or shared library — is forwarded to the linker.        |
+| `source`                  | The `.mc` file to compile (exactly one). Its imports are resolved and compiled with it. Any other input (a `.o` object, `.a` archive, or shared library) is forwarded to the linker.        |
 | `-o`, `--output FILE`     | Name of the generated file. Defaults to the source name without its extension (a native executable), or with a `.o` suffix when `--target` is given.                                          |
 | `-c`, `--compile`         | Compile to an object file (`.o`) for the host and stop, without linking an executable. Defaults the output to the source name with a `.o` suffix.                                             |
 | `-l NAME`                 | Link against a library, forwarded to `cc` as `-lNAME` (repeatable). `libm` is always linked, so `-lm` is implied.                                                                             |
@@ -131,12 +155,12 @@ host executable; link it with that target's toolchain (e.g.
 freestanding kernel built this way.
 
 `--general-regs-only` keeps generated code off the floating-point and SIMD
-registers — the equivalent of gcc's `-mgeneral-regs-only`. It stops the
+registers, the equivalent of gcc's `-mgeneral-regs-only`. It stops the
 backend from quietly using a vector register (say, to copy a struct) in
 code that must not touch FP state, such as a kernel or an interrupt
 handler. Supported for aarch64, x86, and riscv targets.
 
-`--strict-align` forbids the backend from emitting unaligned memory accesses —
+`--strict-align` forbids the backend from emitting unaligned memory accesses,
 the equivalent of gcc's `-mstrict-align`. It is needed for a bare-metal target
 brought up with the MMU off: until paging is enabled all RAM is treated as
 Device memory, where an unaligned wide load or store (which the backend would
@@ -148,7 +172,7 @@ so they compose.
 no hosted C library, so its optimizer won't recognize standard-named
 functions and rewrite calls between them. At `-O2`, a `printf("done\n")`
 (constant string, no args) is otherwise turned into a `puts` call, and
-`printf("%c", c)` into `putchar` — synthesizing references to libc symbols a
+`printf("%c", c)` into `putchar`, synthesizing references to libc symbols a
 bare-metal program never defines. Pass it when building a kernel or any
 target with no libc. (`--nostdlib` only drops mcc's `libmc/` from the import
 path; it does not change this optimizer assumption.)
@@ -156,7 +180,7 @@ path; it does not change this optimizer assumption.)
 ## Quickstart
 
 Write a `.mc` file and run it with `mcc file.mc --run`. A short taste of the
-language — typed `fn`s, `let` with type inference, structs, a monomorphized
+language, showing typed `fn`s, `let` with type inference, structs, a monomorphized
 generic, `defer`, control flow, and the standard library:
 
 ```c
@@ -189,13 +213,13 @@ fn main() -> int32 {
 }
 ```
 
-That covers the basics; for the full language — generics, `defer`, block
-expressions, pointers, compile-time `@if`, inline assembly, and the rest — see
+That covers the basics; for the full language (generics, `defer`, block
+expressions, pointers, compile-time `@if`, inline assembly, and the rest), see
 the **[Language reference](docs/language.md)**.
 
 ## Examples
 
-[examples/](examples/) is a runnable tour of the whole language — one
+[examples/](examples/) is a runnable tour of the whole language, one
 feature per file, from hello world through unsigned arithmetic and generics
 to fizzbuzz and a prime sieve. See the [index](examples/README.md).
 
@@ -203,7 +227,7 @@ to fizzbuzz and a prime sieve. See the [index](examples/README.md).
 
 The modules under [libmc/](libmc/) are on the import search path by default, so
 they import by bare name. For everyday output, `import "std";` provides `print`
-and `println` — printf-style formatting, written in mcc on top of the libc
+and `println`, printf-style formatting written in mcc on top of the libc
 bindings:
 
 ```c
@@ -220,15 +244,15 @@ Alongside `std` are `memory` (typed `alloc`/`dealloc`), the
 `hashing/*` functions.
 
 The [`libc/`](libmc/libc/) modules are instead `@extern` bindings for the C
-library itself — `printf`, `malloc`, the `str*`/`mem*` functions, `FILE*`
-streams, and so on — for when you want C directly; see
+library itself (`printf`, `malloc`, the `str*`/`mem*` functions, `FILE*`
+streams, and so on), for when you want C directly; see
 [Reaching libc](docs/language.md#reaching-libc). The [standard library index](libmc/README.md)
 lists every module.
 
 The standard library is **compiled from source** with each program. Shipping it
 as a precompiled native library (`libmc.a`/`.so`, built by [build.sh](build.sh))
 is **experimental**: the stdlib itself compiles cleanly into those archives, but
-_linking a program against them_ is not ready — some exported symbols (`errno`,
+_linking a program against them_ is not ready: some exported symbols (`errno`,
 `crc32`, …) collide with system symbols, which needs
 [namespaced exported symbols](ROADMAP.md#planned). Until then the precompiled archives
 aren't linked.
@@ -236,7 +260,7 @@ aren't linked.
 ## C ABI compatibility
 
 mcc follows the platform C ABI for **scalars and pointers**, so any function
-whose signature is built from them interoperates with C in both directions —
+whose signature is built from them interoperates with C in both directions:
 call C from mcc with `@extern`, or expose mcc functions to a C linker. This is
 why the [libc bindings](libmc/libc/) work directly:
 
@@ -256,7 +280,7 @@ register/`byval`/`sret` classification automatically the way a C compiler does,
 so a `struct` argument or return won't match a C function expecting the same
 struct. Across the C boundary, pass a pointer (`struct point*`) instead. Fixing
 this is [on the roadmap](ROADMAP.md#planned). (`bool` is `i1`; it matches C's 1-byte
-`_Bool` inside structs but isn't strictly the `_Bool` parameter ABI — rarely a
+`_Bool` inside structs but isn't strictly the `_Bool` parameter ABI, rarely a
 concern in practice.)
 
 ## Roadmap
@@ -269,7 +293,7 @@ ordered by dependency.
 ## Editor support
 
 [editors/vscode/](editors/vscode/) is a VS Code extension that syntax-highlights
-`.mc` files — keywords, the `intN`/`uintN`/`float64` types, `@`-annotations, and
+`.mc` files: keywords, the `intN`/`uintN`/`float64` types, `@`-annotations, and
 string/char/number literals. Symlink it into your extensions folder and reload:
 
 ```bash
@@ -292,10 +316,10 @@ pipenv install --dev
 pipenv run pytest
 ```
 
-The suite in [tests/](tests/) covers each stage in isolation — token streams
+The suite in [tests/](tests/) covers each stage in isolation: token streams
 ([test_lexer.py](tests/test_lexer.py)), AST shapes and precedence
 ([test_parser.py](tests/test_parser.py)), emitted IR and compile-error
-diagnostics ([test_codegen.py](tests/test_codegen.py)) — plus end-to-end
+diagnostics ([test_codegen.py](tests/test_codegen.py)), plus end-to-end
 programs that JIT-compile in-process and assert on their real printf output
 ([test_execution.py](tests/test_execution.py)), and the command-line
 interface as a subprocess ([test_cli.py](tests/test_cli.py)).
@@ -304,16 +328,16 @@ interface as a subprocess ([test_cli.py](tests/test_cli.py)).
 
 The `mcc` package is a classic four-stage pipeline, one module per stage:
 
-1. **[lexer.py](mcc/lexer.py)** — a single regex alternation turns source
+1. **[lexer.py](mcc/lexer.py)**: a single regex alternation turns source
    text into tokens, tracking line numbers for error messages.
-2. **[parser.py](mcc/parser.py)** — recursive descent over the token
+2. **[parser.py](mcc/parser.py)**: recursive descent over the token
    stream, with precedence climbing for expressions, producing a dataclass
    AST (node classes live in [nodes.py](mcc/nodes.py)).
-3. **[codegen/](mcc/codegen/)** — walks the AST and emits LLVM IR with
-   `llvmlite.ir`: locals become `alloca` slots, strings become private global
-   constants, control flow becomes basic blocks and branches, and generic
-   functions are monomorphized into one LLVM function per instantiation.
-4. **[driver.py](mcc/driver.py)** — resolves the `import` graph into a
+3. **[codegen/](mcc/codegen/)**: walks the AST and emits LLVM IR with
+   `llvmlite.ir`, lowering locals to `alloca` slots, strings to private global
+   constants, control flow to basic blocks and branches, and generic
+   functions to one monomorphized LLVM function per instantiation.
+4. **[driver.py](mcc/driver.py)**: resolves the `import` graph into a
    single merged program, then `llvmlite.binding` verifies the module, runs
    LLVM's pass pipeline at the requested `-O` level, and either executes
    `main` through MCJIT (`--run`) or emits an object file and links it with

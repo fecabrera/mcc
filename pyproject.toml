@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mcc"
 version = "0.3.1"
-description = "A small, modern-C-style language compiled to native code via LLVM"
+description = "A modern C-style language compiled to native code via LLVM"
 readme = "README.md"
 requires-python = ">=3.14"
 license = "BSD-3-Clause"
