@@ -254,10 +254,13 @@ class InterfaceWriter:
                     func.line,
                     source=func.source,
                 )
-        # @noalias is attribute-only (no ABI change), so it rides along on the
-        # exported prototype, carrying the overlap contract to callers.
+        # @noalias/@nonnull are attribute-only (no ABI change), so they ride
+        # along on the exported prototype, carrying the overlap and non-null
+        # contracts to callers.
         params = [
-            f"{'@noalias ' if pname in func.noalias_params else ''}{pname}: {ptype}"
+            f"{'@noalias ' if pname in func.noalias_params else ''}"
+            f"{'@nonnull ' if pname in func.nonnull_params else ''}"
+            f"{pname}: {ptype}"
             for pname, ptype in func.params
         ]
         if func.variadic:

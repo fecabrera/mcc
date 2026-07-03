@@ -43,7 +43,7 @@ Branching, looping, compile-time selection, and the scope-based constructs
 ## functions/
 
 Defining and calling functions: void/recursion, the parameter modifiers
-(`const`, `mut`, `@noalias`), variadics, and function pointers.
+(`const`, `mut`, `@noalias`, `@nonnull`), variadics, and function pointers.
 
 | Example | Shows |
 |---------|-------|
@@ -51,6 +51,7 @@ Defining and calling functions: void/recursion, the parameter modifiers
 | [const_params.mc](functions/const_params.mc) | `const` read-only parameters, structs passed by hidden reference (no copy), `const` on pointers vs values |
 | [mut_params.mc](functions/mut_params.mc) | `mut` write-through parameters: out-params with no pointer in the signature, re-lending, struct field projection, a generic `swap<T>` |
 | [noalias.mc](functions/noalias.mc) | `@noalias` pointer parameters (C's `restrict`): the unchecked no-overlap promise that lets the optimizer treat a copy's regions as disjoint |
+| [nonnull.mc](functions/nonnull.mc) | `@nonnull` pointer parameters: the checked "definitely non-null" refinement — call sites must prove the argument non-null, the callee skips the re-check |
 | [variadic.mc](functions/variadic.mc) | variadic `...` definitions, `va_list`, `va_start`/`va_end`, forwarding to `vsnprintf` |
 | [function_pointers.mc](functions/function_pointers.mc) | `fn(...) -> R` types (incl. variadic `fn(A, ...)`), callbacks in structs, dispatch tables, `const`/`@static` function aliases, `null` callbacks |
 

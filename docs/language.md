@@ -166,6 +166,54 @@ parameter, on a `mut` parameter (aliasing two `mut` parameters is allowed by
 design, which would contradict the promise), and on `@asm` functions. See
 [examples/functions/noalias.mc](../examples/functions/noalias.mc).
 
+### @nonnull parameters
+
+`@nonnull` on a **pointer** parameter is a *checked* "definitely non-null"
+refinement over the nullable-by-default `T*`: the callee is statically
+guaranteed a non-null argument and can skip the defensive re-check. Unlike
+`@noalias`, the promise is not the caller's to break — every call site must
+**prove** the argument non-null, or the program does not compile:
+
+```c
+fn first(@nonnull p: int32*) -> int32 {
+    return *p;    // no null check needed: the compiler guaranteed it
+}
+
+fn main() -> int32 {
+    let x: int32 = 42;
+    return first(&x);      // ok: &x is always non-null
+    // first(null);        // compile error: null literal
+    // let p: int32* = &x;
+    // first(p);           // compile error: a plain T* carries no proof
+}
+```
+
+The accepted proofs are the always-non-null sources: `&x` (the address of
+named storage), a string or array literal, an array decaying to a pointer
+(local, `@static`, or global), and — transitively — a `@nonnull` parameter of
+the calling function, so a `@nonnull` callee forwards its own parameter onward
+with no check. Narrowing a plain `T*` from an `if (p != null)` check, and an
+explicit escape hatch for heap or returned pointers, are planned
+([roadmap](../ROADMAP.md#planned)); until then a plain pointer crosses into a
+`@nonnull` slot only through one of the sources above.
+
+To keep the per-binding fact sound, a `@nonnull` parameter cannot be
+reassigned, cannot have its address taken (a `T**` could store null through
+it), and a shadowing `let` of the same name is a fresh, unproven binding. A
+function with `@nonnull` parameters cannot be used as a function value — the
+plain `fn(...)` type cannot carry the contract, and a call through the
+pointer would skip the proof check.
+
+Like `@noalias`, the annotation precedes any `const` (`@nonnull const p: T*`
+composes; the two annotations combine in either order), changes **no ABI**,
+and so is allowed on `@extern` declarations and rides along on
+[interface files](#interface-files). It is rejected on non-pointer
+parameters, on `mut` (a `mut` parameter is passed by reference and is never
+null), and on `@asm` functions. At the LLVM level the established fact is
+handed to the optimizer as the `nonnull` and `dereferenceable(sizeof(T))`
+argument attributes. See
+[examples/functions/nonnull.mc](../examples/functions/nonnull.mc).
+
 ## Variadic functions
 
 A trailing `...` after at least one named parameter makes a function

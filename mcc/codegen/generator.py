@@ -224,10 +224,18 @@ class CodeGen:
         # argument must be the caller's own storage (never a spilled
         # temporary), so writes through the reference reach the caller.
         self.mut_ref: dict[str, frozenset[int]] = {}
+        # symbol -> indices of @nonnull pointer parameters: every call site
+        # must prove the argument non-null (a checked refinement, unlike the
+        # unchecked @noalias promise).
+        self.nonnull_ref: dict[str, frozenset[int]] = {}
         # Names of the current function's const (read-only) parameters.
         self.const_locals: set[str] = set()
         # Names of the current function's mut (write-through) parameters.
         self.mut_locals: set[str] = set()
+        # Names of the current function's @nonnull parameters -- per-binding
+        # non-null facts, so forwarding one to another @nonnull slot needs no
+        # proof. A shadowing `let` drops the name (see bind_local).
+        self.nonnull_locals: set[str] = set()
         # Generic functions: a name maps to its overload set, distinguished
         # by parameter patterns (e.g. hash<T>(T) vs hash<T>(T*)).
         self.templates: dict[str, list[Func]] = {}
@@ -363,6 +371,46 @@ class CodeGen:
                     source=func.source,
                 )
             fn.args[i].add_attribute("noalias")
+
+    def mark_nonnull(self, fn: ir.Function, func: Func, params: list):
+        """Apply ``@nonnull`` by attaching LLVM argument attributes.
+
+        Each marked parameter must be a pointer. Unlike ``@noalias``, the
+        guarantee is *checked*: every call site must prove the argument
+        non-null (see :meth:`check_nonnull_arg`), so the fact can be handed to
+        LLVM as ``nonnull``, plus ``dereferenceable(sizeof(pointee))`` when
+        the pointee is sized.
+
+        Args:
+            fn: The IR function whose args to annotate.
+            func: The AST function carrying ``nonnull_params``.
+            params: The resolved parameter ``LangType``s, in order.
+
+        Raises:
+            LangError: When ``@nonnull`` marks a non-pointer parameter.
+        """
+        if not func.nonnull_params:
+            return
+        for i, ((pname, _), ptype) in enumerate(zip(func.params, params)):
+            if pname not in func.nonnull_params:
+                continue
+            if not is_pointer(ptype):
+                raise LangError(
+                    "@nonnull only applies to pointer parameters",
+                    func.line,
+                    source=func.source,
+                )
+            fn.args[i].add_attribute("nonnull")
+            pointee = strip_const(ptype.pointee)
+            if pointee is not VOID and not is_flexible_array(pointee):
+                fn.args[i].attributes.dereferenceable = type_size(pointee)
+
+    @staticmethod
+    def nonnull_indices(func: Func) -> frozenset[int]:
+        """Indices of ``func``'s ``@nonnull`` parameters."""
+        return frozenset(
+            i for i, (name, _) in enumerate(func.params) if name in func.nonnull_params
+        )
 
     def shared_linkage(self, source: str | None) -> str:
         """The linkage for a file-scoped definition (a @static global).
@@ -1454,9 +1502,12 @@ class CodeGen:
                 )
                 # @symbol overrides the linker name; mcc still calls it by func.name.
                 fn = ir.Function(self.module, fnty, name=func.symbol or func.name)
-                self.mark_noalias(fn, func, params)  # @noalias is allowed on @extern
+                # @noalias/@nonnull are attribute-only, so allowed on @extern.
+                self.mark_noalias(fn, func, params)
+                self.mark_nonnull(fn, func, params)
                 self.funcs[func.name] = fn
                 self.signatures[func.name] = (ret, params, func.variadic)
+                self.nonnull_ref[func.name] = self.nonnull_indices(func)
                 self.func_privacy[func.name] = (func.private, func.source)
                 self.extern_decls.add(func.name)
                 self.used_symbols.add(func.name)
@@ -1486,10 +1537,12 @@ class CodeGen:
                 self.link_shared(fn, func.source)
                 self.mark_inline(fn, func)
                 self.mark_noalias(fn, func, params)
+                self.mark_nonnull(fn, func, params)
                 self.funcs[symbol] = fn
                 self.signatures[symbol] = (ret, params, func.variadic)
                 self.hidden_ref[symbol] = hidden
                 self.mut_ref[symbol] = self.mut_indices(func)
+                self.nonnull_ref[symbol] = self.nonnull_indices(func)
                 self.static_funcs[key] = symbol
                 continue
             if func.type_params:
@@ -1528,10 +1581,12 @@ class CodeGen:
             self.link_shared(fn, func.source)
             self.mark_inline(fn, func)
             self.mark_noalias(fn, func, params)
+            self.mark_nonnull(fn, func, params)
             self.funcs[func.name] = fn
             self.signatures[func.name] = (ret, params, func.variadic)
             self.hidden_ref[func.name] = hidden
             self.mut_ref[func.name] = self.mut_indices(func)
+            self.nonnull_ref[func.name] = self.nonnull_indices(func)
         # Functions are declared now, so consts and @static globals that name a
         # function can be folded to its address. Consts come first, since a
         # deferred global's initializer may reference one.
@@ -1655,6 +1710,7 @@ class CodeGen:
         hidden = self.hidden_ref_indices(func, params)
         self.const_locals = set(func.const_params)
         self.mut_locals = set(func.mut_params)
+        self.nonnull_locals = set(func.nonnull_params)
         for i, ((pname, _), ptype, arg) in enumerate(zip(func.params, params, fn.args)):
             arg.name = pname
             if i in hidden:
@@ -2017,6 +2073,9 @@ class CodeGen:
         """
         self.locals[name] = (slot, lang_type)
         self.scope_names.add(name)
+        # A shadowing binding is a fresh, possibly-null variable: the shadowed
+        # @nonnull parameter's fact must not transfer to it.
+        self.nonnull_locals.discard(name)
 
     def coerce(
         self, tv: TypedValue, expected: LangType, line: int, context: str
@@ -2326,6 +2385,12 @@ class CodeGen:
                 raise LangError(
                     f"cannot assign to const parameter {stmt.name!r}", stmt.line
                 )
+            if stmt.name in self.nonnull_locals:
+                raise LangError(
+                    f"cannot assign to @nonnull parameter {stmt.name!r}; "
+                    "reassignment could drop the non-null guarantee",
+                    stmt.line,
+                )
             slot, var_type, volatile = self.var_addr(stmt.name, stmt.line)
             if var_type.const:
                 raise LangError(
@@ -2548,6 +2613,12 @@ class CodeGen:
             if target.name in self.const_locals:
                 raise LangError(
                     f"cannot assign to const parameter {target.name!r}", line
+                )
+            if target.name in self.nonnull_locals:
+                raise LangError(
+                    f"cannot assign to @nonnull parameter {target.name!r}; "
+                    "reassignment could drop the non-null guarantee",
+                    line,
                 )
             slot, var_type, volatile = self.var_addr(target.name, line)
             if var_type.const:
@@ -3862,6 +3933,15 @@ class CodeGen:
                     "its reference must not escape the call",
                     expr.line,
                 )
+            if (
+                isinstance(expr.operand, Var)
+                and expr.operand.name in self.nonnull_locals
+            ):
+                raise LangError(
+                    "cannot take the address of a @nonnull parameter; "
+                    "null could be stored through it",
+                    expr.line,
+                )
             # The pointer type does not carry the (possibly reduced)
             # alignment: taking the address of a packed field and
             # dereferencing it elsewhere is unsafe, exactly as in C.
@@ -4932,6 +5012,14 @@ class CodeGen:
                 "parameters (passed by hidden reference)",
                 line,
             )
+        if self.nonnull_ref.get(symbol):
+            # A plain fn(...) type cannot carry the @nonnull contract, and a
+            # call through the pointer would skip the call-site proof check.
+            raise LangError(
+                f"cannot take a function value of {name!r}: it has @nonnull "
+                "parameters, which a plain function type cannot express",
+                line,
+            )
         ret, params, variadic = self.signatures[symbol]
         return TypedValue(
             self.funcs[symbol], function_type(ret, tuple(params), variadic)
@@ -4962,6 +5050,7 @@ class CodeGen:
             expr.line,
             self.hidden_ref.get(symbol, frozenset()),
             self.mut_ref.get(symbol, frozenset()),
+            self.nonnull_ref.get(symbol, frozenset()),
         )
         return TypedValue(self.builder.call(self.funcs[symbol], args), ret)
 
@@ -5000,6 +5089,7 @@ class CodeGen:
         line: int,
         hidden: frozenset[int] = frozenset(),
         mut: frozenset[int] = frozenset(),
+        nonnull: frozenset[int] = frozenset(),
     ) -> list:
         """Evaluate and coerce a call's arguments against the parameter types.
 
@@ -5018,6 +5108,8 @@ class CodeGen:
                 argument's storage.
             mut: The subset of ``hidden`` that is ``mut``: the argument must
                 be the caller's own writable storage, never a temporary.
+            nonnull: Indices of ``@nonnull`` parameters: the argument must be
+                provably non-null (see :meth:`check_nonnull_arg`).
 
         Returns:
             The marshalled LLVM argument values.
@@ -5035,6 +5127,8 @@ class CodeGen:
         args = []
         for i, arg_expr in enumerate(arg_exprs):
             context = f"argument {i + 1} of {label}"
+            if i in nonnull:
+                self.check_nonnull_arg(arg_expr, context, line)
             if i in mut:
                 # Before the string-literal adaptation: a literal is not the
                 # caller's storage, so it must be rejected, not spilled.
@@ -5077,6 +5171,58 @@ class CodeGen:
                 value = tv.value
             args.append(value)
         return args
+
+    def proves_nonnull(self, expr) -> bool:
+        """Whether an argument expression is provably non-null.
+
+        The proof is syntactic, over the always-non-null sources: ``&x`` (the
+        address of named storage), a string or array literal (the address of
+        fresh storage), an array variable decaying to a pointer (local,
+        ``@static``, or global -- all named storage), and a ``@nonnull``
+        parameter of the current function (the guarantee travels
+        transitively). Narrowing a plain pointer from an ``if (p != null)``
+        check is planned but not implemented.
+
+        Args:
+            expr: The argument expression.
+
+        Returns:
+            ``True`` when the expression cannot evaluate to null.
+        """
+        if isinstance(expr, (StrLit, ArrayLit)):
+            return True
+        if isinstance(expr, Unary) and expr.op == "&":
+            return True
+        if isinstance(expr, Var):
+            if expr.name in self.nonnull_locals:
+                return True
+            var_type = self.var_type_of(expr.name)
+            return var_type is not None and is_array(var_type)
+        return False
+
+    def check_nonnull_arg(self, arg_expr, context: str, line: int):
+        """Require proof that an argument to a ``@nonnull`` slot is non-null.
+
+        Args:
+            arg_expr: The argument expression.
+            context: A label describing the site, for the error message.
+            line: Source line for diagnostics.
+
+        Raises:
+            LangError: When the argument is the ``null`` literal or is not
+                provably non-null (see :meth:`proves_nonnull`).
+        """
+        if isinstance(arg_expr, NullLit):
+            raise LangError(
+                f"cannot pass null as {context}: the parameter is @nonnull", line
+            )
+        if not self.proves_nonnull(arg_expr):
+            raise LangError(
+                f"cannot pass a possibly-null pointer as {context}: the "
+                "parameter is @nonnull (pass &x, a string or array literal, "
+                "an array, or a @nonnull parameter)",
+                line,
+            )
 
     def hidden_ref_arg(
         self, arg_expr, ptype: LangType, line: int, context: str
@@ -5354,6 +5500,13 @@ class CodeGen:
                     f"cannot bind type parameter {tparam} to {bound}", expr.line
                 )
         fn, ret, params = self.instantiate(func, bindings)
+        # The proof is syntactic, so it runs on the argument expressions even
+        # though they were already lowered to values for binding inference.
+        for i in self.nonnull_indices(func):
+            if i < len(expr.args):
+                self.check_nonnull_arg(
+                    expr.args[i], f"argument {i + 1} of {expr.name!r}", expr.line
+                )
         hidden = self.hidden_ref_indices(func, params)
         args = []
         for i, (tv, p) in enumerate(zip(arg_tvs, params)):
@@ -5601,6 +5754,7 @@ class CodeGen:
             self.block_exprs,
             self.const_locals,
             self.mut_locals,
+            self.nonnull_locals,
         )
         self.type_bindings = bindings
         self.current_source = func.source  # the signature may name private structs
@@ -5615,11 +5769,13 @@ class CodeGen:
             self.link_shared(fn, func.source)
             self.mark_inline(fn, func)
             self.mark_noalias(fn, func, params)
+            self.mark_nonnull(fn, func, params)
             # Register before generating the body so recursive calls resolve.
             self.funcs[mangled] = fn
             self.signatures[mangled] = (ret, params, False)
             self.hidden_ref[mangled] = hidden
             self.mut_ref[mangled] = self.mut_indices(func)
+            self.nonnull_ref[mangled] = self.nonnull_indices(func)
             self.instances[key] = mangled
             self.gen_function(func, fn, ret, params)
         except LangError as err:
@@ -5642,6 +5798,7 @@ class CodeGen:
                 self.block_exprs,
                 self.const_locals,
                 self.mut_locals,
+                self.nonnull_locals,
             ) = saved
             self.type_bindings = outer_bindings
             self.current_source = outer_source

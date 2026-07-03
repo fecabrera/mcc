@@ -895,6 +895,7 @@ class Parser:
         const_params: set[str] = set()
         mut_params: set[str] = set()
         noalias_params: set[str] = set()
+        nonnull_params: set[str] = set()
         variadic = False
         while self.cur.kind != ")":
             if params:
@@ -911,9 +912,17 @@ class Parser:
                 variadic = True
                 break
             is_noalias = False
-            if self.cur.kind == "ANNOT" and self.cur.text == "@noalias":
-                self.advance()  # a per-parameter annotation, before const/mut
-                is_noalias = True
+            is_nonnull = False
+            # Per-parameter annotations come before const/mut, in any order.
+            while self.cur.kind == "ANNOT" and self.cur.text in (
+                "@noalias",
+                "@nonnull",
+            ):
+                if self.cur.text == "@noalias":
+                    is_noalias = True
+                else:
+                    is_nonnull = True
+                self.advance()
             is_const = bool(self.accept("const"))
             is_mut = bool(self.accept("mut"))
             if is_const and is_mut:
@@ -926,6 +935,12 @@ class Parser:
                     "(aliasing mut parameters is allowed by design)",
                     self.cur.line,
                 )
+            if is_nonnull and is_mut:
+                raise LangError(
+                    "a parameter cannot be both @nonnull and mut "
+                    "(a mut parameter is passed by reference and is never null)",
+                    self.cur.line,
+                )
             pname = self.expect("IDENT").text
             if is_const:
                 const_params.add(pname)
@@ -933,6 +948,8 @@ class Parser:
                 mut_params.add(pname)
             if is_noalias:
                 noalias_params.add(pname)
+            if is_nonnull:
+                nonnull_params.add(pname)
             self.expect(":")
             params.append((pname, self.parse_type_ref()))
         self.expect(")")
@@ -966,7 +983,9 @@ class Parser:
                 extern=True,
                 variadic=variadic,
                 symbol=symbol,
-                noalias_params=noalias_params,  # attribute-only: no ABI change
+                # Both attribute-only: no ABI change, so allowed on @extern.
+                noalias_params=noalias_params,
+                nonnull_params=nonnull_params,
             )
         if asm:
             # `@asm fn` is sugar for a function whose body is one @asm(...)
@@ -985,6 +1004,10 @@ class Parser:
             if noalias_params:
                 raise LangError(
                     "@noalias parameters are not allowed on @asm functions", line
+                )
+            if nonnull_params:
+                raise LangError(
+                    "@nonnull parameters are not allowed on @asm functions", line
                 )
             template = self.parse_asm_body(line)
             inputs = [Var(pname, line) for pname, _ in params]
@@ -1019,6 +1042,7 @@ class Parser:
             const_params=const_params,
             mut_params=mut_params,
             noalias_params=noalias_params,
+            nonnull_params=nonnull_params,
         )
 
     def parse_asm(self):

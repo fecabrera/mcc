@@ -10,6 +10,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`@nonnull` parameters** — a *checked* "definitely non-null" refinement
+  over the nullable-by-default `T*`: mark a pointer parameter
+  (`fn first(@nonnull p: int32*) -> int32`) and the callee is statically
+  guaranteed a non-null argument. Every call site must prove the argument
+  non-null — `&x`, a string/array literal, an array decaying to a pointer, or
+  (transitively) a `@nonnull` parameter of the caller; the `null` literal or
+  an unproven plain `T*` is a compile error. To keep the per-binding fact
+  sound, a `@nonnull` parameter cannot be reassigned or have its address
+  taken, and a function with `@nonnull` parameters cannot be used as a
+  function value. Attribute-only at runtime (same representation as `T*`,
+  lowered to LLVM's `nonnull` + `dereferenceable` argument attributes), so it
+  is allowed on `@extern` and round-trips through `.mci` interfaces; rejected
+  on `mut`, non-pointer, and `@asm` parameters; combines with `const` and
+  `@noalias`. Flow-narrowing from null checks and an explicit escape hatch
+  for heap pointers are planned follow-ons. See
+  [@nonnull parameters](docs/language.md#nonnull-parameters) and
+  [nonnull.mc](examples/functions/nonnull.mc).
+
 - **`@noalias` parameters** — mcc's `restrict`: mark a pointer parameter
   (`fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64)`) as not
   overlapping any other pointer the function reaches, lowered to LLVM's

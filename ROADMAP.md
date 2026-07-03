@@ -449,7 +449,7 @@ already do).
       libc `restrict` family is marked); rejected on `mut` (aliasing is
       allowed there) and non-pointer parameters; implemented, see
       [@noalias parameters](docs/language.md#noalias-parameters)
-- [ ] `@nonnull` parameters — a checked "definitely non-null" refinement over
+- [x] `@nonnull` parameters — a checked "definitely non-null" refinement over
       C's nullable-by-default `T*`, opt-in per parameter: the callee is
       statically guaranteed a non-null argument and skips the re-check, and the
       guarantee travels transitively (a plain-`T*` caller must check before
@@ -461,12 +461,18 @@ already do).
       `nonnull`/`dereferenceable` param attributes, the per-param annotation
       slot, `.mci` round-trip). Represented as a per-binding fact set like
       `const_locals`, not a new type. Always-non-null sources (`&x`,
-      string/array-literal decay, `@static`/global addresses) construct non-null
-      directly, and passing the `null` literal to a `@nonnull` parameter is a
-      compile error. Crossing from a heap or returned `T*` needs an explicit
-      escape hatch (postfix `p!` or `assume_nonnull(p)`, spelling undecided).
-      Composes with `const`; allowed on `@extern` (attribute-only, like
-      `@noalias`); `@nonnull mut` rejected initially:
+      string/array-literal decay, array decay) construct non-null directly,
+      and passing the `null` literal to a `@nonnull` parameter is a compile
+      error. To keep the fact sound, a `@nonnull` parameter cannot be
+      reassigned or have its address taken, and a function with `@nonnull`
+      parameters cannot be a function value. Composes with `const` and
+      `@noalias`; allowed on `@extern` (attribute-only, like `@noalias`);
+      `@nonnull mut` rejected initially; implemented, see
+      [@nonnull parameters](docs/language.md#nonnull-parameters):
+  - [ ] escape hatch — crossing from a heap or returned `T*` into a `@nonnull`
+        slot needs an explicit programmer assertion (postfix `p!` or
+        `assume_nonnull(p)`, spelling undecided); until it (or flow-narrowing
+        below) lands, only the always-non-null sources cross
   - [ ] flow-narrowing — narrow a plain `T*` to non-null from a null check, so
         idiomatic code needs no escape hatch: `if (p != null) { ... }` narrows
         the then-branch, and the C-idiomatic guard `if (p == null) return;`

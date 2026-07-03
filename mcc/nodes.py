@@ -260,6 +260,11 @@ class Func:
             promised not to overlap any other pointer the function reaches
             (C's ``restrict``), lowered to LLVM's ``noalias`` argument
             attribute. Unchecked: overlapping arguments are undefined behavior.
+        nonnull_params: Names of pointer parameters declared ``@nonnull`` --
+            statically guaranteed non-null. Checked: every call site must
+            prove the argument non-null, and the callee may pass the
+            parameter onward as proof. Lowered to LLVM's ``nonnull`` (plus
+            ``dereferenceable``) argument attributes.
     """
 
     name: str
@@ -278,6 +283,7 @@ class Func:
     const_params: set[str] = field(default_factory=set)
     mut_params: set[str] = field(default_factory=set)
     noalias_params: set[str] = field(default_factory=set)
+    nonnull_params: set[str] = field(default_factory=set)
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 
