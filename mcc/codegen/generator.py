@@ -5325,12 +5325,36 @@ class CodeGen:
                 "variable, field, element, or dereference",
                 line,
             )
+        addr, t, align, volatile = self.gen_addr(arg_expr, line)
+        self.check_mut_storage(arg_expr, t, align, volatile, line)
+        return addr, t
+
+    def check_mut_storage(
+        self, arg_expr, t: LangType, align: int | None, volatile: bool, line: int
+    ):
+        """Check that already-addressed storage may be lent as a ``mut`` argument.
+
+        The legality half of :meth:`mut_ref_addr`, kept IR-free so a generic
+        call can defer it until after overload resolution: ``writes_const`` is
+        syntactic, and the const/volatile/alignment facts are the flags
+        :meth:`gen_addr` already returned when the address was formed.
+
+        Args:
+            arg_expr: The argument expression (for the const-parameter check).
+            t: The storage's type, as returned by :meth:`gen_addr`.
+            align: The guaranteed alignment, as returned by :meth:`gen_addr`.
+            volatile: The volatility flag, as returned by :meth:`gen_addr`.
+            line: Source line for diagnostics.
+
+        Raises:
+            LangError: When the storage is read-only, is ``@volatile``, or sits
+                at an unguaranteed (packed) alignment.
+        """
         if self.writes_const(arg_expr):
             raise LangError(
                 "cannot pass a const parameter as a mut argument; it is read-only",
                 line,
             )
-        addr, t, align, volatile = self.gen_addr(arg_expr, line)
         if t.const:
             raise LangError(
                 f"cannot pass a read-only {t} as a mut argument", line
@@ -5347,7 +5371,6 @@ class CodeGen:
                 "alignment is not guaranteed",
                 line,
             )
-        return addr, t
 
     def mut_ref_arg(
         self, arg_expr, ptype: LangType, line: int, context: str
@@ -5497,20 +5520,31 @@ class CodeGen:
             LangError: When no overload matches, the choice is ambiguous, a type
                 parameter binds to ``void``, or access is denied.
         """
-        # A mut argument's storage must be resolved before the args are
-        # lowered to values for inference, or the writes would land in a
-        # spilled temporary. Every arity-matching candidate must agree on
-        # which positions are mut for the address to be formed up front.
-        mut_positions = self.generic_mut_positions(expr, candidates)
-        arg_tvs, mut_addrs = [], {}
+        # A mut argument lends the caller's storage, so its address must be
+        # formed before the args are lowered to values for inference -- but
+        # which overload wins (and with it which positions are mut) is not
+        # known yet. Form the address wherever ANY arity-matching candidate
+        # is mut and the argument denotes storage, and defer the
+        # lvalue/value decision until after overload resolution.
+        matching = [f for f in candidates if len(f.params) == len(expr.args)]
+        maybe_mut = frozenset().union(*(self.mut_indices(f) for f in matching))
+        arg_tvs, addrs = [], {}
         for i, arg in enumerate(expr.args):
-            if i in mut_positions:
-                context = f"argument {i + 1} of {expr.name!r}"
-                addr, t = self.mut_ref_addr(arg, expr.line, context)
-                mut_addrs[i] = (addr, t)
+            if i in maybe_mut and self.denotes_storage(arg):
+                addr, t, align, volatile = self.gen_addr(arg, expr.line)
+                addrs[i] = (addr, t, align, volatile)
                 # Inference sees the stored value, loaded once through the
-                # already-computed address.
-                arg_tvs.append(TypedValue(self.gen_load(addr), t))
+                # already-computed address. The load carries the storage's
+                # flags: a @volatile lvalue is a legal argument when a
+                # non-mut overload wins, and its read must stay volatile.
+                # Like any loaded value, it sheds a const qualifier; the
+                # storage's own const-ness is judged post-resolution.
+                arg_tvs.append(
+                    TypedValue(
+                        self.gen_load(addr, align=align, volatile=volatile),
+                        strip_const(t),
+                    )
+                )
             else:
                 arg_tvs.append(self.gen_expr(arg))
         if len(candidates) == 1:
@@ -5519,12 +5553,26 @@ class CodeGen:
         else:
             # Overload set: keep the viable candidates and pick the one with
             # the most specific parameter patterns (T* beats T, and so on).
-            viable = []
+            # An rvalue argument (no address was formed) rules out any
+            # candidate that is mut at its position; an lvalue rules nothing
+            # out, so a same-shape mut/non-mut pair stays ambiguous.
+            viable, mut_failures = [], []
             for func in candidates:
                 bindings = self.resolve_bindings(func, expr, arg_tvs, lenient=True)
-                if bindings is not None:
-                    viable.append((self.specificity(func), func, bindings))
+                if bindings is None:
+                    continue
+                unaddressed = [i for i in self.mut_indices(func) if i not in addrs]
+                if unaddressed:
+                    mut_failures.append(min(unaddressed))
+                    continue
+                viable.append((self.specificity(func), func, bindings))
             if not viable:
+                if len(mut_failures) == 1:
+                    # Exactly one candidate matched but for an rvalue in a
+                    # mut position: report that, not a generic mismatch.
+                    raise LangError(
+                        self.not_assignable(mut_failures[0], expr.name), expr.line
+                    )
                 arg_types = ", ".join(str(tv.type) for tv in arg_tvs)
                 raise LangError(
                     f"no overload of {expr.name!r} matches argument types ({arg_types})",
@@ -5544,6 +5592,15 @@ class CodeGen:
                 raise LangError(
                     f"cannot bind type parameter {tparam} to {bound}", expr.line
                 )
+        # The winner is known: run the deferred mut legality checks against
+        # the chosen signature (all IR-free -- the address and its
+        # const/volatile/alignment facts were recorded when it was formed).
+        mut_positions = self.mut_indices(func)
+        for i in sorted(mut_positions):
+            if i not in addrs:
+                raise LangError(self.not_assignable(i, expr.name), expr.line)
+            _, t, align, volatile = addrs[i]
+            self.check_mut_storage(expr.args[i], t, align, volatile, expr.line)
         fn, ret, params = self.instantiate(func, bindings)
         # The proof is syntactic, so it runs on the argument expressions even
         # though they were already lowered to values for binding inference.
@@ -5559,7 +5616,7 @@ class CodeGen:
             if i in mut_positions:
                 # The caller's storage address was formed before inference;
                 # the instantiated parameter type must match it exactly.
-                addr, t = mut_addrs[i]
+                addr, t, _, _ = addrs[i]
                 if t != p:
                     raise LangError(
                         f"{context}: expected a {p} lvalue, got {t}", expr.line
@@ -5575,37 +5632,30 @@ class CodeGen:
                 args.append(self.coerce(tv, p, expr.line, context).value)
         return TypedValue(self.builder.call(fn, args), ret)
 
-    def generic_mut_positions(self, expr: Call, candidates: list) -> frozenset[int]:
-        """The argument positions that are ``mut`` for a generic call.
+    def denotes_storage(self, arg) -> bool:
+        """Whether a possibly-``mut`` generic argument's address may be formed.
 
-        Computed before binding inference (the address must be formed before
-        the args are lowered to values), so every arity-matching candidate in
-        the overload set must agree on which positions are ``mut``.
+        A bare name in lvalue *form* may still denote no storage -- a constant,
+        or a function used as a value -- and must be evaluated as a value
+        instead (:meth:`gen_addr` would reject it).
 
         Args:
-            expr: The ``Call`` node.
-            candidates: The generic overload set.
+            arg: The argument expression.
 
         Returns:
-            The agreed ``mut`` positions (empty when no candidate matches the
-            arity; the arity error surfaces later).
-
-        Raises:
-            LangError: When two arity-matching overloads disagree on a
-                position's ``mut``-ness.
+            ``True`` when ``arg`` is an addressable form denoting storage.
         """
-        matching = [f for f in candidates if len(f.params) == len(expr.args)]
-        if not matching:
-            return frozenset()
-        positions = self.mut_indices(matching[0])
-        for func in matching[1:]:
-            if self.mut_indices(func) != positions:
-                raise LangError(
-                    f"overloads of {expr.name!r} disagree on which parameters "
-                    "are mut",
-                    expr.line,
-                )
-        return positions
+        if not self.is_addressable_form(arg):
+            return False
+        return not (isinstance(arg, Var) and self.var_type_of(arg.name) is None)
+
+    @staticmethod
+    def not_assignable(position: int, name: str) -> str:
+        """The error message for an rvalue argument in a ``mut`` position."""
+        return (
+            f"argument {position + 1} of {name!r} is not assignable; a mut "
+            "parameter needs a variable, field, element, or dereference"
+        )
 
     def resolve_bindings(
         self, func: Func, expr: Call, arg_tvs: list[TypedValue], lenient: bool

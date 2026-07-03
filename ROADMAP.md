@@ -329,11 +329,15 @@ already do).
         storage of exactly the parameter's type; generics are supported
         (`swap<T>(mut a: T, mut b: T)`); implemented, see
         [mut parameters](docs/language.md#mut-parameters)
-  - [ ] generic overloads mixing `mut` — overloads of one generic name that
-        disagree on which positions are `mut` are currently rejected (the
-        argument's address must be formed before the overload is chosen);
-        supporting them means deferring the lvalue/value decision until after
-        overload resolution
+  - [x] generic overloads mixing `mut` — overloads of one generic name may
+        disagree on which positions are `mut`: at a position any candidate
+        marks `mut`, an lvalue argument's address is formed up front and the
+        lvalue/value decision is deferred until after overload resolution. An
+        rvalue rules out the overloads that are `mut` at its position (an
+        lvalue rules nothing out, so a same-shape `mut`/non-`mut` pair stays
+        ambiguous), and the writability checks (`const`, `@volatile`,
+        `@packed`) are judged against the chosen overload only; implemented,
+        see [mut parameters](docs/language.md#mut-parameters)
   - [ ] `for … in` protocol over `mut` — `_next` still takes its element slot
         as a raw pointer (`fn list_next<T>(it: …, out: T*) -> bool`) because
         the compiler emits the `_next(&it, &slot)` call itself; teaching that

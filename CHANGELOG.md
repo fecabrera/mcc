@@ -10,6 +10,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Generic overloads mixing `mut`** — overloads of one generic name may now
+  disagree on which positions are `mut` (previously a compile error), so a
+  `mut`-taking overload can sit next to a pointer- or value-taking one
+  (`fn set<T>(mut a: T)` / `fn set<T>(p: T*)`). At a position any candidate
+  marks `mut`, an lvalue argument's address is formed up front and its value
+  read once through it, deferring the lvalue/value decision until after
+  overload resolution: an rvalue rules out the overloads that are `mut` at
+  its position (so `pick(3)` selects the by-value overload), while an lvalue
+  rules nothing out — a same-shape `mut`/non-`mut` pair stays ambiguous for
+  an lvalue. The writability checks (`const` parameter, read-only `const T`
+  lvalue, `@volatile` storage, `@packed` field) are judged against the
+  *chosen* overload only, so a read-only or `@volatile` lvalue is now a legal
+  argument when a non-`mut` overload wins (a `@volatile` one keeps its
+  volatile read) and remains an error when a `mut` one does. Arguments are
+  still evaluated exactly once, and single-overload generics and non-generic
+  `mut` calls are unchanged. See
+  [mut parameters](docs/language.md#mut-parameters) and
+  [mut_overloads.mc](examples/functions/mut_overloads.mc).
+
 - **Error directives**: two top-level directives that turn a bad build into a
   compile error before it links. `@static_assert(cond, "message")` fails when
   its condition is false; the condition is folded during code generation (like

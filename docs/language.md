@@ -127,15 +127,48 @@ forwards the reference without letting it escape. Two `mut` parameters may
 alias the same variable; as with two pointers, the last write wins.
 
 `mut` works on generic parameters (`fn swap<T>(mut a: T, mut b: T)`), with
-the argument's type matching the instantiated parameter exactly; overloads of
-a generic name must agree on which positions are `mut`. Like `const`, `mut`
-is not allowed on `@extern` parameters (the hidden-reference ABI would not
-match the C function), and a function with a `mut` parameter cannot be used
-as a function value or exported to an [interface file](#interface-files) —
-the bare `fn(...)` type cannot express the convention (the same liftable
-limitation as `const`, see above).
+the argument's type matching the instantiated parameter exactly. Overloads of
+one generic name may freely mix `mut` and non-`mut` positions — for example a
+`mut`-taking overload next to a pointer-taking one:
 
-See [examples/functions/mut_params.mc](../examples/functions/mut_params.mc).
+```c
+fn set<T>(mut a: T) { a = 7 as T; }    // for the caller's own variable
+fn set<T>(p: T*)    { *p = 9 as T; }   // for storage reached by pointer
+```
+
+The call resolves the overload in a defined order:
+
+1. **Shape** — candidates whose parameter patterns the argument types cannot
+   match are dropped, and a candidate that is `mut` at a position receiving
+   something that is not an lvalue (a literal, a call result, an `&x`, a bare
+   function name) is dropped with them.
+2. **Specificity** — among the viable candidates the most specific parameter
+   patterns win (`T*` beats `T`, concrete types beat both), exactly as for
+   overloads without `mut`.
+3. A remaining tie is an error, and lvalue-ness never breaks it: the
+   same-shape pair `fn f<T>(mut a: T)` / `fn f<T>(a: T)` is ambiguous for an
+   lvalue argument (an rvalue picks the non-`mut` one, the only viable
+   candidate).
+
+The argument is still evaluated exactly once, before the winner is known: at
+a position any candidate marks `mut`, an lvalue's address is formed up front
+and its value read through that address, so the callee's writes land in the
+caller's storage when a `mut` overload wins, and the single read keeps the
+storage's semantics (a `@volatile` lvalue gets a volatile load) when a
+non-`mut` one does. The writability rules above are judged against the
+**chosen** overload only: a `const` parameter, a read-only `const T` lvalue,
+`@volatile` storage, or a `@packed` field is a fine argument when a non-`mut`
+overload wins, and remains an error when a `mut` one does.
+
+Like `const`, `mut` is not allowed on `@extern` parameters (the
+hidden-reference ABI would not match the C function), and a function with a
+`mut` parameter cannot be used as a function value or exported to an
+[interface file](#interface-files) — the bare `fn(...)` type cannot express
+the convention (the same liftable limitation as `const`, see above).
+
+See [examples/functions/mut_params.mc](../examples/functions/mut_params.mc)
+and, for overloads mixing `mut`,
+[examples/functions/mut_overloads.mc](../examples/functions/mut_overloads.mc).
 
 ### @noalias parameters
 

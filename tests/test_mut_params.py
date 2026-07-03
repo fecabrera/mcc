@@ -227,14 +227,168 @@ def test_generic_mut_type_must_match_instantiation():
         )
 
 
-def test_generic_overloads_must_agree_on_mut():
-    message = "overloads of 'f' disagree on which parameters are mut"
+# ------------------------------------------------- overloads mixing mut
+
+
+def test_mixed_overloads_lvalue_picks_mut_rvalue_picks_pointer():
+    # One generic name, one mut overload and one pointer overload: an lvalue
+    # goes to the mut one (int32 does not match T*), a pointer rvalue to the
+    # pointer one (no address is formed for &y, ruling the mut overload out).
+    assert run(
+        "fn set<T>(mut a: T) { a = 7 as T; }\n"
+        "fn set<T>(p: T*) { *p = 9 as T; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 0;\n"
+        "    let y: int32 = 0;\n"
+        "    set(x);\n"
+        "    set(&y);\n"
+        "    return x * 10 + y;\n"
+        "}"
+    ) == 79
+
+
+def test_mixed_overloads_rvalue_selects_the_value_overload():
+    # A literal is not assignable, so the mut overload is not viable and the
+    # same-shape by-value one wins without ambiguity.
+    assert run(
+        "fn pick<T>(mut a: T) -> int32 { return 1; }\n"
+        "fn pick<T>(a: T) -> int32 { return 2; }\n"
+        "fn main() -> int32 { return pick(3); }"
+    ) == 2
+
+
+def test_mixed_same_shape_overloads_ambiguous_for_lvalue():
+    # An lvalue fits both a mut and a by-value overload of the same shape;
+    # lvalue-ness does not break the tie.
+    message = "call to 'pick' is ambiguous between overloads"
+    with pytest.raises(LangError, match=message):
+        compile_ir(
+            "fn pick<T>(mut a: T) -> int32 { return 1; }\n"
+            "fn pick<T>(a: T) -> int32 { return 2; }\n"
+            "fn main() -> int32 { let x: int32 = 0; return pick(x); }"
+        )
+
+
+def test_rvalue_into_single_generic_mut_is_not_assignable():
+    message = (
+        "argument 1 of 'f' is not assignable; a mut parameter needs a "
+        "variable, field, element, or dereference"
+    )
+    with pytest.raises(LangError, match=message):
+        compile_ir("fn f<T>(mut a: T) {}\nfn main() -> int32 { f(3); return 0; }")
+
+
+def test_rvalue_failing_one_mut_overload_is_not_assignable():
+    # Only one candidate matched the call at all, and it failed purely on the
+    # rvalue-into-mut rule: the specific error beats "no overload matches".
+    message = (
+        "argument 1 of 'f' is not assignable; a mut parameter needs a "
+        "variable, field, element, or dereference"
+    )
     with pytest.raises(LangError, match=message):
         compile_ir(
             "fn f<T>(mut a: T) {}\n"
-            "fn f<T>(a: T*) {}\n"
-            "fn main() -> int32 { let x: int32 = 1; f(x); return 0; }"
+            "fn f<T>(mut a: T, b: T) {}\n"
+            "fn main() -> int32 { f(3); return 0; }"
         )
+
+
+def test_rvalue_failing_several_mut_overloads_is_no_match():
+    # Both candidates fit the shape but need an lvalue; with more than one
+    # such near-miss the general no-overload error is reported.
+    message = "no overload of 'f' matches argument types"
+    with pytest.raises(LangError, match=message):
+        compile_ir(
+            "fn f<T>(mut a: T) {}\n"
+            "fn f<T>(mut a: T*) {}\n"
+            "fn main() -> int32 { let x: int32 = 0; f(&x); return 0; }"
+        )
+
+
+def test_const_lvalue_compiles_when_the_value_overload_wins():
+    # The legality checks run after resolution: lending a const parameter is
+    # fine when the chosen overload only reads it.
+    assert run(
+        "fn f<T>(mut a: T, b: T) -> int32 { a = b; return 1; }\n"
+        "fn f<T>(a: char, b: T) -> int32 { return 2; }\n"
+        "fn g(const c: char) -> int32 { return f(c, 'x'); }\n"
+        "fn main() -> int32 { return g('q'); }"
+    ) == 2
+
+
+def test_const_lvalue_still_rejected_when_the_mut_overload_wins():
+    message = "cannot pass a const parameter as a mut argument; it is read-only"
+    with pytest.raises(LangError, match=message):
+        compile_ir(
+            "fn f<T>(mut a: T, b: T) -> int32 { a = b; return 1; }\n"
+            "fn f<T>(a: char, b: T) -> int32 { return 2; }\n"
+            "fn g(const c: int32) -> int32 { return f(c, 5); }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_volatile_lvalue_gets_a_volatile_read_when_value_overload_wins():
+    # A @volatile lvalue is a legal argument once the non-mut overload wins,
+    # and the single up-front load must be (and stay) volatile.
+    ir_text = compile_ir(
+        "@extern @volatile let r: char;\n"
+        "fn f<T>(mut a: T, b: T) -> int32 { a = b; return 1; }\n"
+        "fn f<T>(a: char, b: T) -> int32 { return 2; }\n"
+        "fn main() -> int32 { return f(r, 'x'); }"
+    )
+    assert "load volatile" in ir_text
+
+
+def test_volatile_lvalue_still_rejected_when_the_mut_overload_wins():
+    message = "cannot pass @volatile storage as a mut argument"
+    with pytest.raises(LangError, match=message):
+        compile_ir(
+            "@extern @volatile let r: int32;\n"
+            "fn f<T>(mut a: T, b: T) -> int32 { a = b; return 1; }\n"
+            "fn f<T>(a: char, b: T) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return f(r, 5); }"
+        )
+
+
+def test_function_name_argument_still_selects_the_value_overload():
+    # A bare function name is lvalue-shaped but denotes no storage; it must
+    # lower as a function value, ruling out the mut overload.
+    assert run(
+        "fn three() -> int32 { return 3; }\n"
+        "fn pick<T>(mut a: T) -> int32 { return 1; }\n"
+        "fn pick<T>(a: T) -> int32 { return a(); }\n"
+        "fn main() -> int32 { return pick(three); }"
+    ) == 3
+
+
+def test_mixed_overload_argument_is_evaluated_once():
+    # The address (base and index included) is formed once, before the
+    # overload is chosen; the side effect must not run twice.
+    assert run(
+        "fn next(mut n: int32) -> int32 { n += 1; return n - 1; }\n"
+        "fn set<T>(mut a: T) { a = 7 as T; }\n"
+        "fn set<T>(p: T*) { *p = 9 as T; }\n"
+        "fn main() -> int32 {\n"
+        "    let a: int32[2] = [0, 0];\n"
+        "    let i: int32 = 0;\n"
+        "    set(a[next(i)]);\n"
+        "    return a[0] * 100 + a[1] * 10 + i;\n"
+        "}"
+    ) == 701
+
+
+def test_agreeing_mut_overloads_still_work():
+    assert run(
+        "fn f<T>(mut a: T) { a = 1 as T; }\n"
+        "fn f<T>(mut a: T, b: T) { a = b; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 0;\n"
+        "    let y: int32 = 0;\n"
+        "    f(x);\n"
+        "    f(y, 9);\n"
+        "    return x * 10 + y;\n"
+        "}"
+    ) == 19
 
 
 # ---------------------------------------------------------------- rejections
