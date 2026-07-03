@@ -140,6 +140,57 @@ already do).
           [interfaces](#functions-and-methods) dispatch; depends on
           interface declarations and the methods they are made of, so it
           lands after both
+- [ ] Enum member reuse — a derived enum inherits a base enum's members by
+      naming it in the existing `:` slot:
+      `enum x_status: x_error { SUCCESS = 0 }` copies `x_error`'s member table
+      and adopts its underlying type, then adds its own, so `x_status::NOT_FOUND`
+      resolves and folds equal to `x_error::NOT_FOUND`. Compile-time only and
+      purely additive (no currently-legal program changes meaning), with no
+      runtime or ABI change: a single-function change in `register_enum` (merge
+      the base member table, adopt its underlying type, run the base's access
+      check so a `@private` base cannot be extended cross-file), leaving the
+      parser, the tree-sitter/tmLanguage grammars, and the `.mci` round-trip
+      untouched (the `:` slot already parses an enum name). A name collision
+      with an inherited member is a hard error; value aliasing across base and
+      derived is allowed (enums already allow it); the base must be a single,
+      direct enum name (not a `type` alias to an enum) appearing textually
+      before the derived enum or in an imported file. Delivers DRY reuse plus
+      the `x_status::NOT_FOUND` spelling, but **zero new type safety**: enum
+      values are transparent integers today, so a derived value stays
+      indistinguishable from its base and from a plain int. The directional
+      base-to-derived safety that reuse suggests needs
+      [nominal enums](#types-and-generics) below
+- [ ] Nominal enums — make an enum value carry its type identity instead of
+      collapsing to its underlying integer. Today an enum used as a type
+      becomes a raw `int32` (or its declared underlying), so `x_status` and
+      `x_error` values mix freely with each other and with plain ints. A large,
+      **backward-incompatible** semantics change: nominal enums begin rejecting
+      some code that compiles now (implicit enum/int and enum/enum mixing), so
+      it needs a migration story (staged warnings before errors). It is the
+      genuine prerequisite for both dependents nested below: the directional
+      conversion safety that [enum member reuse](#types-and-generics) above
+      suggests, and enum-aware `case` exhaustiveness (today `case` is pure
+      integer equality with no enum awareness):
+  - [ ] directional conversion safety — once enums are nominal, a
+        [member-reuse](#types-and-generics) derivation gains real conversions:
+        base-to-derived is implicit widening (the derived value set is a
+        superset of the base's), derived-to-base is explicit and checked. Note
+        this is the **inverse** of OOP class inheritance's derived-to-base
+        conversion, because here the extending enum is the value-set superset.
+        Meaningful only once enums are nominal (transparent enums have nothing
+        to convert)
+  - [ ] `case` over an enum — exhaustiveness:
+    - [x] `case`/`when` value matching with an optional `else` — implemented,
+          see [Control flow](docs/language.md#control-flow)
+    - [ ] exhaustiveness checking — when the scrutinee is an enum and there is
+          no `else`, check that every member is covered, catching the "added an
+          enum member, forgot a `case` site" bug; the natural pair of the
+          planned [`unreachable`](#functions-and-methods) (an exhaustive `case`
+          whose fall-through is `unreachable`). Introduced as a warning first —
+          a hard error would break today's legal non-exhaustive `case`s — with
+          a later flip to an error once the stdlib and examples are clean. That
+          non-fatal first phase depends on the
+          [warning subsystem](#metaprogramming-and-builtins)
 
 ### Modules and imports
 
@@ -239,19 +290,6 @@ already do).
   [memory](libmc/memory.mc), struct literals, deref-assign, whole-struct copy),
   so the only remaining work is the surface-syntax rewrite into the block above
   — no new codegen.
-
-### Control flow
-
-- [ ] `case` over an enum — exhaustiveness:
-  - [x] `case`/`when` value matching with an optional `else` — implemented,
-        see [Control flow](docs/language.md#control-flow)
-  - [ ] exhaustiveness checking — when the scrutinee is an enum and there is
-        no `else`, check that every member is covered, catching the "added an
-        enum member, forgot a `case` site" bug; the natural pair of the
-        planned [`unreachable`](#functions-and-methods) (an exhaustive `case`
-        whose fall-through is `unreachable`). Introduced as a warning first —
-        a hard error would break today's legal non-exhaustive `case`s — with
-        a later flip to an error once the stdlib and examples are clean
 
 ### Functions and methods
 
@@ -411,6 +449,43 @@ already do).
       libc `restrict` family is marked); rejected on `mut` (aliasing is
       allowed there) and non-pointer parameters; implemented, see
       [@noalias parameters](docs/language.md#noalias-parameters)
+- [ ] `@nonnull` parameters — a checked "definitely non-null" refinement over
+      C's nullable-by-default `T*`, opt-in per parameter: the callee is
+      statically guaranteed a non-null argument and skips the re-check, and the
+      guarantee travels transitively (a plain-`T*` caller must check before
+      passing to a `@nonnull` callee, but a `@nonnull` callee passing its own
+      parameter onward needs no check). This is a *checked* type refinement, not
+      an unchecked optimizer hint: passing a plain `T*` to a `@nonnull` slot
+      without proof is a compile error. Attribute-only at runtime, sharing
+      `T*`'s representation and reusing the `@noalias` machinery above (LLVM
+      `nonnull`/`dereferenceable` param attributes, the per-param annotation
+      slot, `.mci` round-trip). Represented as a per-binding fact set like
+      `const_locals`, not a new type. Always-non-null sources (`&x`,
+      string/array-literal decay, `@static`/global addresses) construct non-null
+      directly, and passing the `null` literal to a `@nonnull` parameter is a
+      compile error. Crossing from a heap or returned `T*` needs an explicit
+      escape hatch (postfix `p!` or `assume_nonnull(p)`, spelling undecided).
+      Composes with `const`; allowed on `@extern` (attribute-only, like
+      `@noalias`); `@nonnull mut` rejected initially:
+  - [ ] flow-narrowing — narrow a plain `T*` to non-null from a null check, so
+        idiomatic code needs no escape hatch: `if (p != null) { ... }` narrows
+        the then-branch, and the C-idiomatic guard `if (p == null) return;`
+        narrows the remainder of the enclosing scope. Tractable because mcc has
+        only structured control flow (no `goto`): syntax-directed narrowing on
+        the AST, not a general CFG dataflow pass. Starts with those two `if`
+        guards; `and`/`or` threading, loop bodies, and divergence-awareness are
+        follow-on. Synergy with
+        [`@noreturn`/`unreachable`](#functions-and-methods): once `@noreturn`
+        lets `if (p == null) abort();` count as divergence, early-guard
+        narrowing covers more cases (not a blocker, since
+        `return`/`break`/`continue` already diverge):
+    - [ ] first-class `T!` type — non-null on return types, locals, struct
+          fields, and function-pointer types, which needs a real distinct type
+          rather than a per-binding fact (a larger blast radius). Optional and
+          deferred; pursue only if demand for non-null returns or fields
+          appears. A non-null return type extends return types the same way
+          [`mut` returns](#functions-and-methods) does, so sequence it after
+          that work if it happens
 - [ ] Native variadic arguments — `fn f(args: slice<const any>)` (with
       `fn f(args...)` as sugar): a trailing `slice<const any>` parameter collects
       the call's extra arguments, so `f(x, a, b, c)` (after `f`'s fixed
@@ -434,7 +509,7 @@ already do).
       return after it and the backend drops the dead path; `unreachable` is a
       statement asserting a path is never reached (lowering to LLVM
       `unreachable`), for the fall-through of an
-      [exhaustive `case`](#control-flow) or an impossible branch
+      [exhaustive `case`](#types-and-generics) or an impossible branch
 
 ### Metaprogramming and builtins
 
@@ -450,10 +525,79 @@ already do).
   - [ ] over the builtin `range` — today `enumerate` rejects `range` (the
         counter *is* the value); allow it for a non-zero `start`, where the
         index (from 0) and the counter (from `start`) genuinely differ
-- [ ] `@static_assert(expr, msg)` — compile-time assertion that evaluates
-      `expr` during parsing; if false, emits a hard compile error with `msg`,
-      useful for validating struct layouts, alignment requirements, or type
-      sizes before linking
+- [ ] Error directives — `@static_assert(cond, msg)` and `@error(msg)`, both
+      emitting a hard compile error through the existing error path, with the
+      condition folded by `eval_const` **during code generation** (not during
+      parsing: `sizeof(T)`/`alignof`/`offsetof`/`const` references need the
+      type system, so the fold has to wait for codegen). `@static_assert(cond,
+      msg)` fails the compile when the folded boolean is false (a nonzero
+      int/bool constant passes), for validating struct layouts, alignment
+      requirements, or type sizes before linking; `@error(msg)` fails
+      unconditionally at its position, useful guarded by `@if`
+      (`@if(!TARGET_OS) @error("unsupported OS");`). No new subsystem, reusing
+      error emission and `eval_const`. Minimal surface first: top-level
+      position (where struct-layout assertions live), with statement position
+      a later add. Generics synergy: inside a generic body each fires *per
+      instantiation* at monomorphization, a lightweight type-parameter
+      constraint that complements the planned
+      [interface bounds](#types-and-generics), and an assert in a
+      never-instantiated generic correctly never fires
+- [ ] Warning subsystem — a non-fatal diagnostic channel, the foundation the
+      warning directives below and enum-exhaustiveness checking both build on.
+      Today every diagnostic is a hard `file: error: line N: msg` that aborts;
+      this collects warnings on the `CodeGen` instance and has the driver print
+      `file: warning: line N: msg` to stderr *after* generation succeeds,
+      without aborting, plus a `-Werror` toggle that promotes warnings to the
+      failure exit path. Decided default: `-Werror` off in normal builds, on in
+      CI. No user-facing surface of its own; its consumers are the warning
+      directives below and enum
+      [`case` exhaustiveness](#types-and-generics):
+  - [ ] Warning directives — `@warning(msg)` and `@deprecated(msg)` over the
+        channel above. `@warning(msg)` is `@error`'s non-fatal twin, emitting a
+        warning at its position. `@deprecated(msg)` is different in kind: a
+        declaration attribute on a function that fires a diagnostic (a
+        **warning by default**, not an error) at each *call site*, pointing at
+        the caller with a migration message. Storage mirrors the
+        `@noalias`/`const`/`mut` param-set pattern on the `Func` node; the
+        call-site hook lives in `gen_call`. It round-trips through `.mci` for
+        free for generic and `@inline` functions (verbatim source-span
+        emission), needing explicit re-emission only for concrete exported
+        prototypes. Default severity is warn deliberately: a hard error would
+        make a deprecated alias uncallable and break importers, defeating the
+        purpose. Motivating use case: the four generic `// deprecated`
+        forwarders in [memory](libmc/memory.mc) (`copy_bytes`, `copy_items`,
+        `set_bytes`, `set_items`) forward silently today, where a
+        `@deprecated("use bytecopy instead")` that warns is exactly right and,
+        being generic, round-trips through `.mci` with no extra work. Scope v1
+        to functions (types/enums/globals later); the terminal escalation to a
+        hard error is not a flag on `@deprecated` but its own
+        [`@removed` tombstone](#metaprogramming-and-builtins) directive below.
+        Known task before it lands: repoint the internal stdlib and example
+        calls to the deprecated forwarders onto the new names (a one-time
+        cleanup, since CI runs `-Werror`)
+- [ ] `@removed(msg)` tombstones (the `@removed` name is tentative) — the
+      terminal state of the function-availability lifecycle, one step past
+      [`@deprecated`](#metaprogramming-and-builtins) above: a function goes from
+      available, to `@deprecated(msg)` (warns, still callable), to `@removed(msg)`
+      (a hard compile **error** at every call site), to finally deleted (the name
+      gone, a generic "unknown function"). A declaration attribute on a function
+      that turns each *call site* into a compile error carrying the migration
+      message, so pulling an implementation still gives callers a targeted
+      `copy_bytes was removed: use bytecopy instead` for a release cycle rather
+      than a bare `unknown function 'copy_bytes'`. A small delta on `@deprecated`,
+      reusing the same machinery: the call-site hook in `gen_call`, the `.mci`
+      round-trip (so importers of a removed stdlib function get the error), and
+      the `Func`-node message storage. Two differences only: (1) it emits through
+      the existing error/abort path, **not** the warning channel, so unlike
+      `@warning`/`@deprecated` it does **not** depend on the
+      [warning subsystem](#metaprogramming-and-builtins); its only real
+      dependency is `@deprecated`'s call-site attribution plumbing above; (2) it
+      allows a **bodiless tombstone** declaration
+      (`@removed("use bytecopy") fn copy_bytes<T>(dst: T*, src: T*, n: uint64);`
+      with no body, a small parser allowance like an `@extern` prototype), since
+      the implementation is gone. Prior art: Swift's `@available(..., obsoleted:)`
+      and C#'s `[Obsolete(msg, error: true)]`. Open question: the bodiless
+      tombstone (recommended) versus keeping a dead stub body
 - [ ] [Inline assembly](docs/language.md#inline-assembly) — arch-specific (pair with `@if` on
       `TARGET_ARCH`), preferring intrinsics where they exist:
   - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an
@@ -499,6 +643,39 @@ already do).
 
 ### Tooling and C interop
 
+- [ ] Instantiation backtraces on errors — an error inside a monomorphized body
+      today prints as a bare line in the template file with no trace of how the
+      compiler reached it; attach a source-level note chain to `LangError`
+      (which today carries only message/line/source) so the driver prints
+      `file: note: line N: ...` lines after the unchanged primary
+      `file: error: line N: msg`:
+  ```
+  list.mc: error: line N: <the actual problem>
+    note: in instantiation of list<char> (from string) at string.mc:LL
+    note: in instantiation of string here at yourcode.mc:MM
+  ```
+  the "in instantiation of ..." note chain of C++ and Rust. Frames are built on
+  the exception-unwind path through the existing `try`/`except`/`finally` at the
+  two monomorphization entry points (`instantiate` for generic functions,
+  `instantiate_struct` for generic structs), so function and struct instances
+  interleave (one `string` call nests a generic-function instance and a
+  generic-struct instance) and there is no live push/pop stack to corrupt.
+  Instantiations are memoized, so a cached instantiation reports the first
+  triggering path, matching C++/Rust. Independent of the
+  [warning subsystem](#metaprogramming-and-builtins): errors already have their
+  own terminal render path, so this extends that path and never touches the
+  non-fatal warning channel; the two share only a one-line severity-formatting
+  helper (`{where}: {severity}: line N: {msg}`), introduced by whichever ships
+  first and reused by the other. Test-safe: the primary error line stays
+  byte-identical and notes appear only when the instantiation chain is
+  non-empty, so the suite's `str(LangError)` matches hold and the
+  substring/`startswith` stderr checks in `test_cli.py` are undisturbed:
+  - [ ] Import / inclusion / macro frames — additive frame sources for the same
+        note chain, no new render machinery: the import chain (`merge_imports`),
+        `@if`-inclusion (`flatten_conditionals`), and eventual macro expansion.
+        The macro-frame part is gated on
+        [`@macro`](#metaprogramming-and-builtins) existing, so it rides in
+        whenever macros land; the import and inclusion frames can come first
 - [ ] Linker selection — `--linker=/path/to/ld` to pick a specific linker
       (today whatever the driver `cc` defaults to)
 - [ ] Compiler-driver selection — `--cc=/path/to/cc` to choose the C driver used
