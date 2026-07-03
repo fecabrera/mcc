@@ -94,12 +94,14 @@ Pointers and the builtin container/view types built on them.
 
 ## systems/
 
-Interfacing with the outside world: libc, formatted I/O, and inline assembly.
+Interfacing with the outside world: libc, formatted I/O, shipping compiled
+libraries, and inline assembly.
 
 | Example | Shows |
 |---------|-------|
 | [extern.mc](systems/extern.mc) | `@extern` functions (including variadic `...`), interfacing with libc |
 | [io.mc](systems/io.mc) | printf format specifiers, `puts`, `putchar`, string escapes |
+| [interfaces.mc](systems/interfaces.mc) | bodyless `fn` prototypes (the mcc-convention counterpart to `@extern`) and the `--emit-interface` / `.mci` flow for shipping a compiled library: `mut`/`const`-struct exports, what ships as a prototype vs in full, the compile-then-link consumer side |
 | [inline_asm.mc](systems/inline_asm.mc) | `@asm fn` and the `@asm(...)` expression, `$out`/`$N` operands and `:w` register modifiers, gated by `@if` on `TARGET_ARCH` |
 
 ## programs/

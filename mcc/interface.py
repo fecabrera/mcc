@@ -1,10 +1,13 @@
 """Generate a ``.mci`` interface stub from a compiled program.
 
 An interface is valid mcc source that another program ``import``\\ s to compile
-and link against a precompiled object: concrete functions become ``@extern``
-prototypes (the real bodies live in the ``.o``), while types, constants, and
-generic/``@inline`` functions are emitted in full because the consumer needs
-their layout, value, or body to type-check and re-instantiate them.
+and link against a precompiled object: concrete functions become bodyless
+``fn`` prototypes (the real bodies live in the ``.o``, called with the mcc
+convention, hidden ``mut``/``const``-struct references included), while types,
+constants, and generic/``@inline`` functions are emitted in full because the
+consumer needs their layout, value, or body to type-check and re-instantiate
+them. A real ``@extern`` declaration in the source stays verbatim -- it keeps
+meaning "C calling convention".
 
 The stub is the root file's **public surface plus its transitive closure**: any
 declaration a shipped body or signature reaches is pulled in, even a ``@private``
@@ -21,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
 
-from mcc.codegen import CodeGen, is_struct
+from mcc.codegen import CodeGen
 from mcc.errors import LangError
 from mcc.nodes import (
     Call,
@@ -209,23 +212,27 @@ class InterfaceWriter:
         start, end = decl.span
         return self.source[start:end]
 
-    def _extern_prototype(self, func: Func) -> str:
-        """Render a concrete function as an ``@extern`` prototype.
+    def _prototype(self, func: Func) -> str:
+        """Render a concrete function as a bodyless ``fn`` prototype.
 
-        Keeps a ``@private`` marker so a pulled-in helper stays private to the
-        interface; the bare name resolves to the compiled symbol (the parser
-        forbids ``@symbol`` on non-extern functions, so there is none to carry).
+        The prototype means "a concrete mcc function defined in another
+        object, called with the mcc convention" -- the hidden-reference
+        convention for ``mut``/``const``-struct parameters is a pure function
+        of the signature, so re-emitting every parameter marker carries it in
+        full. Keeps a ``@private`` marker so a pulled-in helper stays private
+        to the interface; the bare name resolves to the compiled symbol (the
+        parser forbids ``@symbol`` on non-extern functions, so there is none
+        to carry).
 
         Args:
-            func: The function to externalize.
+            func: The function to render as a prototype.
 
         Returns:
-            The ``@extern fn ...;`` declaration text.
+            The ``fn ...;`` declaration text.
 
         Raises:
-            LangError: When a parameter is a ``const`` struct (its hidden-pointer
-                ABI cannot be expressed as ``@extern``), or the function is
-                ``@static`` (its symbol is file-local, so no stable name exists).
+            LangError: When the function is ``@static`` (its symbol is
+                file-local, so no stable name exists).
         """
         if func.static:
             raise LangError(
@@ -234,47 +241,31 @@ class InterfaceWriter:
                 func.line,
                 source=func.source,
             )
-        self.cg.current_source = func.source
-        for pname, ptype in func.params:
-            if pname in func.mut_params:
-                raise LangError(
-                    f"cannot generate an interface for {func.name!r}: a mut "
-                    f"parameter ({pname!r}) is passed by hidden pointer, "
-                    "an ABI @extern cannot express",
-                    func.line,
-                    source=func.source,
-                )
-            if pname in func.const_params and is_struct(
-                self.cg.lang_type(ptype, func.line)
-            ):
-                raise LangError(
-                    f"cannot generate an interface for {func.name!r}: a const "
-                    f"struct parameter ({pname!r}) is passed by hidden pointer, "
-                    "an ABI @extern cannot express",
-                    func.line,
-                    source=func.source,
-                )
-        # @noalias/@nonnull are attribute-only (no ABI change), so they ride
-        # along on the exported prototype, carrying the overlap and non-null
-        # contracts to callers.
+        # Every parameter marker rides along: @noalias/@nonnull carry the
+        # overlap and non-null contracts, const/mut carry the read-only and
+        # by-reference conventions -- the prototype must match the definition's
+        # signature exactly for the call to be compiled correctly.
         params = [
             f"{'@noalias ' if pname in func.noalias_params else ''}"
             f"{'@nonnull ' if pname in func.nonnull_params else ''}"
+            f"{'const ' if pname in func.const_params else ''}"
+            f"{'mut ' if pname in func.mut_params else ''}"
             f"{pname}: {ptype}"
             for pname, ptype in func.params
         ]
         if func.variadic:
             params.append("...")
         ret = "" if _is_void(func.ret_type) else f" -> {func.ret_type}"
-        head = "@private @extern" if func.private else "@extern"
-        return f"{head} fn {func.name}({', '.join(params)}){ret};"
+        head = "@private fn" if func.private else "fn"
+        return f"{head} {func.name}({', '.join(params)}){ret};"
 
     def _render(self, decl) -> str:
         """Render one declaration for the interface.
 
-        A concrete function becomes an ``@extern`` prototype; everything else --
-        a type, constant, global, ``@extern`` declaration, or generic/``@inline``
-        function -- is emitted verbatim from its source span.
+        A concrete function becomes a bodyless ``fn`` prototype; everything
+        else -- a type, constant, global, ``@extern`` declaration, or
+        generic/``@inline`` function -- is emitted verbatim from its source
+        span.
 
         Args:
             decl: The declaration to render.
@@ -285,7 +276,7 @@ class InterfaceWriter:
         if isinstance(decl, Func) and not (
             decl.extern or decl.type_params or decl.inline
         ):
-            return self._extern_prototype(decl)
+            return self._prototype(decl)
         return self._slice(decl)
 
     def render(self) -> str:

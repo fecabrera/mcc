@@ -674,7 +674,7 @@ def main() -> int:
     cli.add_argument("--run", action="store_true", help="JIT-compile and run immediately")
     cli.add_argument("--emit-llvm", action="store_true", help="print LLVM IR and exit")
     cli.add_argument("--emit-interface", action="store_true",
-                     help="write a .mci interface stub (@extern prototypes plus full "
+                     help="write a .mci interface stub (bodyless fn prototypes plus full "
                           "types, constants, and generic/@inline functions) and exit")
     cli.add_argument("-I", "--import-path", action="append", type=Path, default=[],
                      metavar="DIR", help="add a directory to the import search path (repeatable)")

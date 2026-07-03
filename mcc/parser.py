@@ -919,11 +919,13 @@ class Parser:
         asm: bool = False,
         clobbers: list[str] | None = None,
     ) -> Func:
-        """Parse a function definition or an ``@extern`` declaration.
+        """Parse a function definition, an ``@extern`` declaration, or a proto.
 
         Reads the (optionally generic) signature, an optional trailing ``...``
-        for an extern variadic, and then either a body or, for an extern, a
-        terminating ``;``.
+        for an extern variadic, and then either a body or a terminating ``;``.
+        A bare ``;`` on a non-extern function makes a bodyless prototype: a
+        concrete mcc function defined in another object, called with the mcc
+        convention (interface stubs emit these).
 
         Args:
             private: Whether ``@private`` was applied.
@@ -939,7 +941,8 @@ class Parser:
 
         Raises:
             LangError: On a generic-extern, generic-variadic, or malformed
-                ``...`` parameter.
+                ``...`` parameter, or a generic/``@inline``/``@asm``/``@static``
+                prototype (their body or symbol cannot live elsewhere).
         """
         line = self.expect("fn").line
         name = self.expect("IDENT").text
@@ -1047,6 +1050,12 @@ class Parser:
             # `@asm fn` is sugar for a function whose body is one @asm(...)
             # expression over its parameters: the params are the inputs, the
             # return type is the output. No `ret` -- the epilogue returns.
+            if self.cur.kind == ";":
+                raise LangError(
+                    "an @asm function cannot be a bodyless prototype "
+                    "(its body is the asm template)",
+                    line,
+                )
             if variadic:
                 raise LangError("an @asm function cannot be variadic", line)
             if const_params:
@@ -1083,6 +1092,47 @@ class Parser:
                 private=private,
                 static=static,
                 inline=inline,
+            )
+        if self.cur.kind == ";":
+            # A bodyless prototype: a concrete mcc function defined in another
+            # object, called with the mcc convention (hidden references for
+            # mut/const-struct parameters included). The convention is a pure
+            # function of the signature, so the prototype carries everything a
+            # caller needs. Interface stubs are the usual writer.
+            self.advance()
+            if type_params:
+                raise LangError(
+                    "a generic function cannot be a bodyless prototype "
+                    "(its body must travel to be instantiated)",
+                    line,
+                )
+            if inline:
+                raise LangError(
+                    "an @inline function cannot be a bodyless prototype "
+                    "(its body must travel to be inlined)",
+                    line,
+                )
+            if static:
+                raise LangError(
+                    "a @static function cannot be a bodyless prototype "
+                    "(its symbol is file-local, so no other object can "
+                    "define it)",
+                    line,
+                )
+            return Func(
+                name,
+                type_params,
+                params,
+                ret_type,
+                [],
+                line,
+                private=private,
+                proto=True,
+                variadic=variadic,
+                const_params=const_params,
+                mut_params=mut_params,
+                noalias_params=noalias_params,
+                nonnull_params=nonnull_params,
             )
         return Func(
             name,

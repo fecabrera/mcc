@@ -224,7 +224,7 @@
         },
         {
           "type": "SYMBOL",
-          "name": "extern_function"
+          "name": "function_prototype"
         },
         {
           "type": "SYMBOL",
@@ -710,7 +710,7 @@
         }
       ]
     },
-    "extern_function": {
+    "function_prototype": {
       "type": "SEQ",
       "members": [
         {

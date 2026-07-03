@@ -137,4 +137,4 @@ def _iface(source: str) -> str:
 
 def test_noalias_round_trips_through_interface():
     out = _iface("fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64) {}")
-    assert "@extern fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64);" in out
+    assert "fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64);" in out

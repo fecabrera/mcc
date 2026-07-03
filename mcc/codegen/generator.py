@@ -1710,7 +1710,10 @@ class CodeGen:
                 ret.ir, self.param_irs(params, hidden), var_arg=func.variadic
             )
             fn = ir.Function(self.module, fnty, name=func.name)
-            self.link_shared(fn, func.source)
+            if not func.proto:
+                # A prototype emits an LLVM declaration (no body); linkonce_odr
+                # is only legal on definitions, so it keeps external linkage.
+                self.link_shared(fn, func.source)
             self.mark_inline(fn, func)
             self.mark_noalias(fn, func, params)
             self.mark_nonnull(fn, func, params)
@@ -1738,7 +1741,9 @@ class CodeGen:
         # assertion aborts the build without wasting work on codegen.
         self.check_directives()
         for func in self.program.functions:
-            if not func.type_params and not func.extern:
+            if not func.type_params and not func.extern and not func.proto:
+                # A proto is skipped: its bodyless ir.Function is already an
+                # LLVM declaration; the definition lives in another object.
                 symbol = self.static_funcs.get((func.source, func.name), func.name)
                 ret, params, _ = self.signatures[symbol]
                 self.gen_function(func, self.funcs[symbol], ret, params)

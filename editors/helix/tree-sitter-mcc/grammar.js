@@ -95,7 +95,7 @@ module.exports = grammar({
         $.enum_declaration,
         $.type_alias,
         $.function_definition,
-        $.extern_function,
+        $.function_prototype,
         $.global_variable,
         $.const_declaration,
         $.conditional,
@@ -167,7 +167,11 @@ module.exports = grammar({
         field('body', choice($.block, $.asm_block)),
       ),
 
-    extern_function: ($) =>
+    // A bodyless signature ending in `;`: an `@extern` declaration (C ABI) or
+    // a plain prototype for a concrete mcc function defined in another object
+    // (the form interface stubs emit). Same shape either way; the annotation
+    // is what distinguishes them, and a highlighter need not.
+    function_prototype: ($) =>
       seq(
         repeat($.annotation),
         'fn',

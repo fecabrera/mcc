@@ -29,7 +29,7 @@
 
 ; --------------------------------------------------------------- functions
 (function_definition name: (identifier) @function)
-(extern_function name: (identifier) @function)
+(function_prototype name: (identifier) @function)
 (call_expression function: (identifier_expression (identifier) @function.call))
 (call_expression function: (member_expression field: (identifier) @function.method))
 

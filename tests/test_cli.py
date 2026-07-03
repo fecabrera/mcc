@@ -641,3 +641,44 @@ def test_interface_package_roundtrip(tmp_path):
     assert link.returncode == 0, link.stderr
     out = subprocess.run([exe], capture_output=True, text=True)
     assert out.stdout == "50\n"
+
+
+def test_interface_roundtrip_with_mut_and_const_struct(tmp_path):
+    # The stub re-emits const/mut markers as a bodyless `fn` prototype, so the
+    # consumer calls with the mcc hidden-reference convention and both sides
+    # agree at link time: the library's write through `mut` reaches the
+    # caller's variable in a separately compiled object.
+    lib = tmp_path / "statlib.mc"
+    lib.write_text(
+        "struct pair { a: int64; b: int64; }\n"
+        "fn total(const p: struct pair) -> int64 { return p.a + p.b; }\n"
+        "fn bump(mut n: int32) { n = n + 1; }\n"
+    )
+    assert mcc(lib, "-c", "-o", tmp_path / "statlib.o").returncode == 0
+    assert mcc(lib, "--emit-interface").returncode == 0
+    stub = (tmp_path / "statlib.mci").read_text()
+    assert "fn total(const p: pair) -> int64;" in stub
+    assert "fn bump(mut n: int32);" in stub
+    lib.unlink()  # ship only the .o + .mci
+
+    consumer = tmp_path / "app.mc"
+    consumer.write_text(
+        'import "statlib";\n'
+        "@extern fn printf(fmt: uint8*, ...) -> int32;\n"
+        "fn main() -> int32 {\n"
+        "    let p = struct pair { a = 30, b = 11 };\n"
+        "    let n: int32 = 0;\n"
+        "    bump(n);\n"
+        '    printf("%lld %d\\n", total(p), n);\n'
+        "    return 0;\n"
+        "}"
+    )
+    assert mcc(consumer, "-c", "-I", tmp_path, "-o", tmp_path / "app.o").returncode == 0
+    exe = tmp_path / "app"
+    link = subprocess.run(
+        ["cc", str(tmp_path / "app.o"), str(tmp_path / "statlib.o"), "-o", str(exe)],
+        capture_output=True, text=True,
+    )
+    assert link.returncode == 0, link.stderr
+    out = subprocess.run([exe], capture_output=True, text=True)
+    assert out.stdout == "41 1\n"

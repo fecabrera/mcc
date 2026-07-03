@@ -26,3 +26,7 @@ fn main() -> int32 {
     putchar(10);   // newline
     return 0;
 }
+
+// See also: interfaces.mc -- for a function defined in another *mcc* object,
+// a bodyless `fn` prototype keeps the mcc calling convention (mut/const
+// markers included), where @extern means the C one.

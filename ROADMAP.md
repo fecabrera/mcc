@@ -102,7 +102,8 @@ its reference section in the [language reference](docs/language.md).
       extra object/archive inputs on the command line, all forwarded to the
       `cc` link step
 - [x] [Interface files](docs/language.md#interface-files) — `--emit-interface`
-      writes a `.mci` stub (`@extern` prototypes plus full types/consts/generics)
+      writes a `.mci` stub (bodyless `fn` prototypes, keeping the mcc calling
+      convention with `const`/`mut` markers, plus full types/consts/generics)
       to ship beside an object; a bare `import` resolves to `.mc` then `.mci`
 - [x] [Editor support](README.md#editor-support) — VS Code syntax highlighting
 

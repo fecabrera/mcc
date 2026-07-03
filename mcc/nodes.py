@@ -249,7 +249,11 @@ class Func:
         line: Source line for diagnostics.
         private: ``@private`` -- callable only within its source file.
         static: ``@static`` -- file-scoped name other files may reuse.
-        extern: ``@extern`` -- a declaration only; defined elsewhere.
+        extern: ``@extern`` -- a declaration only; defined elsewhere with the
+            C calling convention.
+        proto: A bodyless ``fn`` prototype -- a concrete mcc function defined
+            in another object, called with the mcc convention (``mut``/``const``
+            hidden references included). Interface stubs emit these.
         variadic: Extern only -- a trailing ``...`` for C-style varargs.
         inline: ``@inline`` -- emit with LLVM's ``alwaysinline`` so the body is
             inlined at every call site when optimizing.
@@ -282,6 +286,7 @@ class Func:
     private: bool = False
     static: bool = False
     extern: bool = False
+    proto: bool = False
     variadic: bool = False
     inline: bool = False
     symbol: str | None = None

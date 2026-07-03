@@ -258,7 +258,7 @@ def _iface(source: str) -> str:
 
 def test_nonnull_round_trips_through_interface():
     out = _iface("fn first(@nonnull p: int32*) -> int32 { return *p; }")
-    assert "@extern fn first(@nonnull p: int32*) -> int32;" in out
+    assert "fn first(@nonnull p: int32*) -> int32;" in out
 
 
 def test_nonnull_and_noalias_round_trip_together():
@@ -267,6 +267,6 @@ def test_nonnull_and_noalias_round_trip_together():
         "n: uint64) {}"
     )
     assert (
-        "@extern fn blit(@noalias @nonnull dst: uint8*, "
+        "fn blit(@noalias @nonnull dst: uint8*, "
         "@noalias @nonnull src: uint8*, n: uint64);" in out
     )

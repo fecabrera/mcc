@@ -1806,8 +1806,12 @@ so the same import works whether you have the sources or just the shipped object
 plus its stub. The stub mixes two forms, by whether a declaration carries a
 linkable symbol:
 
-- A concrete function becomes an `@extern` prototype — its body lives in the
-  object, reached by the symbol the bare name resolves to.
+- A concrete function becomes a [bodyless `fn` prototype](#bodyless-fn-prototypes)
+  — its body lives in the object, reached by the symbol the bare name
+  resolves to and called with the mcc convention, so `const`/`mut` parameter
+  markers are re-emitted and the hidden-reference passing they imply carries
+  over. (A real `@extern` declaration in the source stays verbatim — it keeps
+  meaning "C calling convention".)
 - Types, constants, and generic/`@inline` functions are emitted **in full**:
   the consumer needs their layout, value, or body to type-check and to
   re-instantiate or re-inline them (as C++ keeps templates and `inline` in
@@ -1822,9 +1826,10 @@ declarations are dropped, the original `import` lines are preserved (a
 dependency's own `.mci` is imported in turn), and `@if` is already resolved, so
 each interface matches the target it was generated for.
 
-Two things cannot be expressed and raise an error: a `const` struct parameter
-(passed by hidden pointer, an ABI `@extern` cannot describe) and a reachable
-`@static` concrete function (its symbol is file-local).
+One thing cannot be expressed and raises an error: a reachable `@static`
+concrete function (its symbol is file-local, so no stable name exists to
+prototype). Make the helper `@private`, or generic/`@inline` so its body
+travels instead.
 
 ## Visibility
 
@@ -1934,6 +1939,40 @@ platform:
 
 Code still refers to the declaration by its mcc name (`stdout`, `length`); only
 the emitted symbol changes.
+
+### Bodyless fn prototypes
+
+A plain `fn` may also end with `;` instead of a body. Where `@extern` means
+"a symbol with the **C** calling convention", a bodyless prototype means "a
+concrete **mcc** function defined in another object" — the call uses the mcc
+convention, so `const` struct and `mut` parameters keep their
+[hidden-reference passing](#mut-parameters), which `@extern` deliberately
+rejects:
+
+```c
+fn bump(mut n: int32);                  // defined in a linked object
+fn total(const p: struct pair) -> int64;
+
+fn main() -> int32 {
+    let x: int32 = 40;
+    bump(x);            // the hidden reference reaches the definition
+    ...
+}
+```
+
+Every signature marker (`const`, `mut`, `@noalias`, `@nonnull`) means exactly
+what it does on a definition, and the prototype must match the definition's
+signature — the convention is derived from the signature on each side
+independently. A prototype is **not** a forward declaration: defining the
+same function in the same program is still a duplicate-definition error,
+and generic, `@inline`, `@asm`, and `@static` functions cannot be
+prototypes (their body or symbol cannot live elsewhere).
+
+You rarely write one by hand: [interface files](#interface-files) emit
+prototypes for a library's concrete functions, and the matching object
+supplies the definitions at link time. Against a genuine C function, prefer
+`@extern` — a plain prototype happens to match only while the signature has
+no hidden-reference parameters, and nothing checks that it stays that way.
 
 ## Strings
 

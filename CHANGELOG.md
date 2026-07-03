@@ -10,6 +10,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Bodyless `fn` prototypes** — a plain `fn` may end with `;` instead of a
+  body: `fn bump(mut n: int32);` declares a concrete mcc function defined in
+  another object and called with the **mcc** convention, so `const`-struct
+  and `mut` parameters keep their hidden-reference passing (which `@extern`,
+  meaning C ABI, deliberately rejects). Every signature marker (`const`,
+  `mut`, `@noalias`, `@nonnull`) means what it does on a definition, and the
+  usual gates follow from the signature — no function values of prototypes
+  with hidden-reference parameters, and a prototype plus a definition in one
+  program is still a duplicate-definition error (it is not a forward
+  declaration). Generic, `@inline`, `@asm`, and `@static` functions cannot be
+  prototypes. Interface stubs are the intended writer; see
+  [Bodyless fn prototypes](docs/language.md#bodyless-fn-prototypes).
+
 - **Warning subsystem and the `@warning` directive** — a non-fatal diagnostic
   channel: the compiler collects warnings during code generation and the
   driver prints each as `file: warning: line N: msg` to stderr, in emission
@@ -148,6 +161,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   [examples/basics/helloworld.mc](examples/basics/helloworld.mc)). The
   [index](examples/README.md) and doc links were updated to match, and CI now
   compiles the suite recursively.
+
+### Fixed
+
+- **Interfaces for functions with `mut` or `const`-struct parameters** —
+  `--emit-interface` rejected any concrete exported function with a `mut`
+  parameter or a `const` struct parameter, because stubs rendered concrete
+  functions as `@extern` prototypes and the C ABI cannot express the
+  hidden-reference convention. Stubs now emit every concrete function as a
+  bodyless `fn` prototype carrying its `const`/`mut` markers, so those
+  functions export cleanly and consumers call them correctly. Scalar `const`
+  markers, previously dropped silently from stubs, are re-emitted for
+  signature fidelity too. Only a reachable `@static` concrete function
+  remains inexpressible (its symbol is file-local).
 
 ## [0.4.0] - 2026-07-02
 
