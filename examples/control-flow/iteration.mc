@@ -3,64 +3,37 @@ import "list";
 import "set";
 import "dict";
 
-// `for x in obj` walks anything that provides the `<struct>_it`/`<struct>_next`
-// protocol -- here the growable list from libmc/list.mc (list_it/list_next).
-// The element type is inferred from `<struct>_next`, the loop variable `x` is
-// scoped to the loop, and break/continue work as in any loop.
+// `for x in obj` walks anything that provides the `<struct>_it` / `<struct>_next`
+// protocol -- the lib containers in libmc/ all do. The element type is inferred
+// from `<struct>_next`, the loop variable is scoped to the loop, and
+// `break` / `continue` work as in any loop.
 
 fn main() -> int32 {
+    // A growable list (libmc/list.mc) implements list_it / list_next.
     let nums: struct list<int32>;
     list_init(&nums, 4);
-    defer list_destroy(&nums);          // freed however main exits
+    defer list_destroy(&nums);
 
     let i: int32 = 1;
     while (i <= 6) {
-        list_push(&nums, i * i);      // 1 4 9 16 25 36
+        list_push(&nums, i * i);         // 1 4 9 16 25 36
         i += 1;
     }
 
-    // Sum the squares, stopping once they exceed 20.
+    // Iterate the elements. The & is yours to choose, not required -- a struct
+    // value is borrowed automatically. break/continue steer the walk.
     let sum: int32 = 0;
     for sq in &nums {
         if (sq % 2 == 0) { continue; }   // skip the even squares
-        if (sq > 20) { break; }          // and stop past 20
+        if (sq > 20) { break; }          // stop past 20
         println("odd square: %d", sq);
         sum += sq;
     }
     println("sum of odd squares <= 20: %d", sum);   // 1 + 9 = 10
 
-    // enumerate(obj) is a builtin like `range`: it runs the same iteration
-    // while counting, yielding a builtin `enumerated<T> { index; value }` per
-    // element -- the position as a uint64 and the element itself.
-    for e in enumerate(&nums) {
-        if (e.index == 3) { break; }    // just the first three
-        println("nums[%llu] = %d", e.index, e.value);
-    }
-
-    // As with a bare `for x in`, the & is yours to choose, not required: a
-    // struct value is borrowed automatically, so enumerate(nums) iterates a
-    // snapshot of the container -- no dereference needed.
-    for e in enumerate(nums) {
-        if (e.index > 0) { break; }
-        println("first square (by value): %d", e.value);
-    }
-
-    // A bare { } block is its own scope -- a place for a short-lived helper
-    // and its cleanup, without leaking names into the rest of the function.
-    {
-        let scratch: byte* = alloc<byte>(8);   // `byte` is the alias for uint8
-        defer dealloc(scratch);
-        scratch[0] = 'h';
-        scratch[1] = 'i';
-        scratch[2] = 0;
-        println("%s", scratch);
-    }   // scratch is freed and out of scope here
-
-    // The other lib containers implement the same protocol. Iterating a set
-    // yields a `pair<K, V>` per entry, in unspecified (hash-table) order; read
-    // its fields as x.key and x.value. `pair` -- like the `iterator<T>` cursor
-    // behind every container's _it/_next -- is a builtin struct, so no import
-    // is needed to name it.
+    // The same `for x in` walks any container. A set yields a `pair<K, V>` per
+    // entry, in unspecified (hash-table) order; read its fields as x.key and
+    // x.value. `pair` is a builtin struct, so no import is needed to name it.
     let table: set<uint64, uint64>;
     set_init(&table, 2);
     defer set_destroy(&table);
@@ -73,16 +46,14 @@ fn main() -> int32 {
         println("%llu: %llu", x.key, x.value);
     }
 
-    // A dict iterates the same way: a string key and the value, per entry.
-    // Each x.key borrows the dict's own copy of the key, valid until the dict
-    // changes.
+    // A dict iterates the same way: a string key and its value per entry. Each
+    // x.key borrows the dict's own copy, valid until the dict changes.
     let cmds: dict<char*>;
     dict_init(&cmds, 2);
     defer dict_destroy(&cmds);
 
     dict_set(&cmds, "help", "show this help");
     dict_set(&cmds, "quit", "exit the program");
-    dict_set(&cmds, "nuke", "nuke something or idk");
 
     for x in &cmds {
         println("%s: %s", x.key, x.value);
@@ -90,3 +61,6 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// See also: enumerate.mc for the enumerate position counter, ranges.mc for
+// `for i in range(...)` counting loops, memory/lists.mc for the list itself.

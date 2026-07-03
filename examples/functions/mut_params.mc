@@ -74,3 +74,5 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// See also: const_params.mc (read-only, the dual of mut).

@@ -37,3 +37,8 @@ fn main() -> int32 {
     println("sum = %d", a + b + (c as int32 - 64)); // 40 + 1 + 1 = 42
     return 0;
 }
+
+// @nonnull is orthogonal to @noalias and the two may sit on one parameter
+// (`@noalias @nonnull p: T*`): non-null is checked by the compiler, no-overlap
+// is a promise the caller keeps. See also: noalias.mc; memory/pointers.mc for
+// the pointer basics.

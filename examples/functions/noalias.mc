@@ -27,3 +27,8 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// See also: nonnull.mc for @nonnull, the checked complement of this unchecked
+// promise (the two compose: `@noalias @nonnull p: T*`); const_params.mc and
+// mut_params.mc for the value-parameter modifiers; memory/pointers.mc for the
+// pointer basics these build on.

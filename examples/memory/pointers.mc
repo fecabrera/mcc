@@ -51,3 +51,6 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// See also: functions/nonnull.mc and functions/noalias.mc for the @nonnull and
+// @noalias promises a pointer parameter can carry.

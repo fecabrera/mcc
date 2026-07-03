@@ -32,12 +32,15 @@ Branching, looping, compile-time selection, and the scope-based constructs
 
 | Example | Shows |
 |---------|-------|
-| [control_flow.mc](control-flow/control_flow.mc) | `if` / `else if` / `else`, integer conditions, `and` / `or`, `while`, `until`, nested loops, `break` / `continue` |
+| [branching.mc](control-flow/branching.mc) | `if` / `else if` / `else`, integer (non-zero) conditions, the short-circuiting `and` / `or` logical operators |
+| [while.mc](control-flow/while.mc) | `while` loops, `break` / `continue`, nested loops |
+| [until.mc](control-flow/until.mc) | `until`, the inverse of `while`: loop while the condition is false |
 | [conditional.mc](control-flow/conditional.mc) | `@if` / `@else` compile-time selection over `TARGET_OS` / `TARGET_ARCH`, `@symbol` per platform |
 | [case_when.mc](control-flow/case_when.mc) | `case` / `when` / `else:` with no fall-through, integer and character subjects, multi-value arms |
 | [defer.mc](control-flow/defer.mc) | `defer` cleanup at scope exit (return/break included), LIFO order, the block form |
 | [block_expressions.mc](control-flow/block_expressions.mc) | `{ ...; emit v; }` as a value, contained temporaries, branch emits, `defer` inside |
-| [iteration.mc](control-flow/iteration.mc) | `for x in` over the iter/next protocol (array, set, dict), the builtin `enumerate` position counter, the builtin `iterator<T>`/`pair<K, V>` structs, `break`/`continue`, bare `{ }` block scopes |
+| [iteration.mc](control-flow/iteration.mc) | `for x in` over the `_it`/`_next` protocol (list, set, dict), the builtin `pair<K, V>`, `break` / `continue` |
+| [enumerate.mc](control-flow/enumerate.mc) | the builtin `enumerate` position counter — the `enumerated<T> { index; value }` it yields, and value-vs-`&` borrowing |
 | [ranges.mc](control-flow/ranges.mc) | the builtin `range` — `for i in range(start, end)` / `range(end)` counting loops, lowered directly with no allocation, element type inferred from the bounds |
 
 ## functions/
@@ -80,7 +83,9 @@ Pointers and the builtin container/view types built on them.
 |---------|-------|
 | [pointers.mc](memory/pointers.mc) | `import`, heap allocation, `&` `*` `[]`, `sizeof`, `as` casts |
 | [slices.mc](memory/slices.mc) | the builtin `slice<T>` view: borrowing a `list<T>` or `T[N]` with `as`, `.length`, indexing, `for x in`, passing by value, writing through |
-| [data_structures.mc](memory/data_structures.mc) | the growable lib containers: `list<T>`, `stack<T>` (LIFO), `queue<T>` (FIFO ring buffer) |
+| [lists.mc](memory/lists.mc) | `list<T>`, a growable random-access sequence: `push`, `get` (mut out-param), `from_array`, `append`, `duplicate` |
+| [stacks.mc](memory/stacks.mc) | `stack<T>`, a growable LIFO: push and pop at the top |
+| [queues.mc](memory/queues.mc) | `queue<T>`, a growable FIFO ring buffer: push at the back, pop from the front |
 
 ## systems/
 

@@ -50,3 +50,6 @@ fn main() -> int32 {
     println("scaled = %d", scaled(6, 7) as int32);                 // 42
     return 0;
 }
+
+// See also: mut_params.mc (write-through, the dual of const), and the pointer
+// promises in noalias.mc (@noalias) and nonnull.mc (@nonnull).
