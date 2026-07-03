@@ -8,6 +8,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **`@noalias` parameters** — mcc's `restrict`: mark a pointer parameter
+  (`fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64)`) as not
+  overlapping any other pointer the function reaches, lowered to LLVM's
+  `noalias` argument attribute so the optimizer skips runtime overlap checks
+  and recognizes bulk moves. The promise is unchecked (overlapping pointers
+  are undefined behavior, as in C). It changes no ABI, so it is allowed on
+  `@extern` (the libc `restrict` family — `memcpy`, `strcpy`, and friends —
+  and `bytecopy`/`copy` in `memory` are now marked); it is rejected on `mut`,
+  non-pointer, and `@asm` parameters. `@noalias` combines with `const`. See
+  [@noalias parameters](docs/language.md#noalias-parameters) and
+  [noalias.mc](examples/noalias.mc).
+
 ### Changed
 
 - **`memory` copy/fill API reshaped** — the canonical names are now `bytecopy`

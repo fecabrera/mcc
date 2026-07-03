@@ -53,16 +53,18 @@ fn dealloc<T>(p: T*) {
 /**
  * Byte-copies n elements of type T from src to dst in a single memcpy.
  * The element size is computed from T, so callers count elements, not
- * bytes. The regions must not overlap.
+ * bytes. dst and src are @noalias: the regions must not overlap, or the
+ * behavior is undefined (use a manual loop if they might).
  *
- * @param dst: destination, with room for at least n elements
+ * @param dst: destination, with room for at least n elements; must not
+ *             overlap src
  * @param src: source to read from
  * @param n:   number of elements to copy
  *
  * @return number of bytes copied (n * sizeof(T))
  */
 @inline
-fn bytecopy<T>(dst: T*, src: T*, n: uint64) -> uint64 {
+fn bytecopy<T>(@noalias dst: T*, @noalias src: T*, n: uint64) -> uint64 {
     let count = n * sizeof(T);
     memcpy(dst, src, count);
     return count;
@@ -75,16 +77,19 @@ fn copy_bytes<T>(dst: T*, src: T*, n: uint64) {
 }
 
 /**
- * Copies n elements of type T from src to dst one item at a time.
+ * Copies n elements of type T from src to dst one item at a time. dst and src
+ * are @noalias: the regions must not overlap, or the behavior is undefined
+ * (use a manual loop if they might).
  *
- * @param dst: destination, with room for at least n elements
+ * @param dst: destination, with room for at least n elements; must not
+ *             overlap src
  * @param src: source to read from
  * @param n:   number of elements to copy
  *
  * @return number of elements copied (n)
  */
 @inline
-fn copy<T>(dst: T*, src: T*, n: uint64) -> uint64 {
+fn copy<T>(@noalias dst: T*, @noalias src: T*, n: uint64) -> uint64 {
     for i in range(n) {
         dst[i] = src[i];
     }

@@ -182,6 +182,7 @@ module.exports = grammar({
 
     parameter: ($) =>
       seq(
+        optional($.annotation),
         optional(choice('const', 'mut')),
         field('name', $.identifier),
         ':',

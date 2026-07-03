@@ -12,7 +12,7 @@
  *
  * @return dest
  */
-@extern fn strcpy(dest: char*, src: char*) -> char*;
+@extern fn strcpy(@noalias dest: char*, @noalias src: char*) -> char*;
 
 /**
  * Copies at most count characters from src into dest. If src is shorter than count,
@@ -24,7 +24,7 @@
  *
  * @return dest
  */
-@extern fn strncpy(dest: char*, src: char*, count: uint64) -> char*;
+@extern fn strncpy(@noalias dest: char*, @noalias src: char*, count: uint64) -> char*;
 
 /**
  * Appends the null-terminated string src to the end of dest, overwriting dest's
@@ -36,7 +36,7 @@
  *
  * @return dest
  */
-@extern fn strcat(dest: char*, src: char*) -> char*;
+@extern fn strcat(@noalias dest: char*, @noalias src: char*) -> char*;
 
 /**
  * Appends at most count characters from src to the end of dest, then adds a
@@ -48,7 +48,7 @@
  *
  * @return dest
  */
-@extern fn strncat(dest: char*, src: char*, count: uint64) -> char*;
+@extern fn strncat(@noalias dest: char*, @noalias src: char*, count: uint64) -> char*;
 
 /***************************************
  * String examination
@@ -118,7 +118,7 @@
  * @return the length of the transformed string, excluding the null terminator;
  *         if it is >= count, the contents of dest are indeterminate
  */
-@extern fn strxfrm(dest: char*, src: char*, count: uint64) -> uint64;
+@extern fn strxfrm(@noalias dest: char*, @noalias src: char*, count: uint64) -> uint64;
 
 /***************************************
  * String searching
@@ -250,7 +250,7 @@
  *
  * @return dest
  */
-@extern fn memcpy(dest: byte*, src: byte*, count: uint64) -> byte*;
+@extern fn memcpy(@noalias dest: byte*, @noalias src: byte*, count: uint64) -> byte*;
 
 /**
  * Copies count bytes from src to dest. The objects may overlap.

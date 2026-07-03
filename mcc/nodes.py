@@ -256,6 +256,10 @@ class Func:
             reference to the caller's storage (whatever the type), writable
             through the reference, with ``&`` on them rejected so the
             reference cannot escape.
+        noalias_params: Names of pointer parameters declared ``@noalias`` --
+            promised not to overlap any other pointer the function reaches
+            (C's ``restrict``), lowered to LLVM's ``noalias`` argument
+            attribute. Unchecked: overlapping arguments are undefined behavior.
     """
 
     name: str
@@ -273,6 +277,7 @@ class Func:
     source: str | None = None
     const_params: set[str] = field(default_factory=set)
     mut_params: set[str] = field(default_factory=set)
+    noalias_params: set[str] = field(default_factory=set)
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 

@@ -401,13 +401,16 @@ already do).
         receivers (`const`/`mut self`) — the receiver travels as `data*`, so a
         by-value (consuming) `self` cannot cross the vtable without a copy;
         whether interfaces admit by-value receivers at all is undecided
-- [ ] `@noalias` parameters — C's `restrict`: mark a pointer parameter
+- [x] `@noalias` parameters — C's `restrict`: mark a pointer parameter
       (`fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64)`) as
       not overlapping any other pointer the function can reach, mapping to
       LLVM's `noalias` attribute so loads/stores can be reordered and
       vectorized — meaningful for the `mem*`-shaped functions in the standard
       library. The promise is unchecked: overlapping arguments are undefined
-      behavior, as in C
+      behavior, as in C. Attribute-only, so it is allowed on `@extern` (the
+      libc `restrict` family is marked); rejected on `mut` (aliasing is
+      allowed there) and non-pointer parameters; implemented, see
+      [@noalias parameters](docs/language.md#noalias-parameters)
 - [ ] Native variadic arguments — `fn f(args: slice<const any>)` (with
       `fn f(args...)` as sugar): a trailing `slice<const any>` parameter collects
       the call's extra arguments, so `f(x, a, b, c)` (after `f`'s fixed

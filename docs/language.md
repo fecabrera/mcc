@@ -137,6 +137,35 @@ limitation as `const`, see above).
 
 See [examples/mut_params.mc](../examples/mut_params.mc).
 
+### @noalias parameters
+
+`@noalias` on a **pointer** parameter is mcc's `restrict`: a promise, kept by
+the caller, that the pointer does not overlap any other pointer the function
+can reach. It maps to LLVM's `noalias` argument attribute, letting the
+optimizer assume the regions are disjoint, so a copy loop can skip the runtime
+overlap check and be recognized as a bulk move:
+
+```c
+fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64) {
+    for i in range(n) { dst[i] = src[i]; }
+}
+```
+
+The annotation precedes any `const` and the parameter name (`@noalias const
+p: T*` is allowed — a `const` pointer is read-only but still a single pointer).
+It changes **no ABI**, unlike `const`/`mut`, so it is allowed on `@extern`
+declarations too — the [libc bindings](#reaching-libc) mark `memcpy`, `strcpy`,
+and the rest of the C11 `restrict` family this way (but not `memmove`, whose
+regions may overlap by design).
+
+The promise is **unchecked**: if the pointers actually overlap, the behavior is
+undefined, exactly as with C's `restrict`. mcc does not verify it and does not
+warn when the same variable is passed to two `@noalias` parameters. `@noalias`
+is only a pointer-parameter annotation: it is rejected on a non-pointer
+parameter, on a `mut` parameter (aliasing two `mut` parameters is allowed by
+design, which would contradict the promise), and on `@asm` functions. See
+[examples/noalias.mc](../examples/noalias.mc).
+
 ## Variadic functions
 
 A trailing `...` after at least one named parameter makes a function

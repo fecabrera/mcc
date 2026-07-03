@@ -335,6 +335,35 @@ class CodeGen:
         if func.inline:
             fn.attributes.add("alwaysinline")
 
+    def mark_noalias(self, fn: ir.Function, func: Func, params: list):
+        """Apply ``@noalias`` by attaching LLVM's ``noalias`` argument attribute.
+
+        Each marked parameter must be a pointer (the attribute is meaningless
+        otherwise). The promise -- that the pointer does not overlap any other
+        pointer the function reaches -- is unchecked, exactly C's ``restrict``;
+        violating it is undefined behavior.
+
+        Args:
+            fn: The IR function whose args to annotate.
+            func: The AST function carrying ``noalias_params``.
+            params: The resolved parameter ``LangType``s, in order.
+
+        Raises:
+            LangError: When ``@noalias`` marks a non-pointer parameter.
+        """
+        if not func.noalias_params:
+            return
+        for i, ((pname, _), ptype) in enumerate(zip(func.params, params)):
+            if pname not in func.noalias_params:
+                continue
+            if not is_pointer(ptype):
+                raise LangError(
+                    "@noalias only applies to pointer parameters",
+                    func.line,
+                    source=func.source,
+                )
+            fn.args[i].add_attribute("noalias")
+
     def shared_linkage(self, source: str | None) -> str:
         """The linkage for a file-scoped definition (a @static global).
 
@@ -1424,9 +1453,9 @@ class CodeGen:
                     ret.ir, self.param_irs(params), var_arg=func.variadic
                 )
                 # @symbol overrides the linker name; mcc still calls it by func.name.
-                self.funcs[func.name] = ir.Function(
-                    self.module, fnty, name=func.symbol or func.name
-                )
+                fn = ir.Function(self.module, fnty, name=func.symbol or func.name)
+                self.mark_noalias(fn, func, params)  # @noalias is allowed on @extern
+                self.funcs[func.name] = fn
                 self.signatures[func.name] = (ret, params, func.variadic)
                 self.func_privacy[func.name] = (func.private, func.source)
                 self.extern_decls.add(func.name)
@@ -1456,6 +1485,7 @@ class CodeGen:
                 fn = ir.Function(self.module, fnty, name=symbol)
                 self.link_shared(fn, func.source)
                 self.mark_inline(fn, func)
+                self.mark_noalias(fn, func, params)
                 self.funcs[symbol] = fn
                 self.signatures[symbol] = (ret, params, func.variadic)
                 self.hidden_ref[symbol] = hidden
@@ -1497,6 +1527,7 @@ class CodeGen:
             fn = ir.Function(self.module, fnty, name=func.name)
             self.link_shared(fn, func.source)
             self.mark_inline(fn, func)
+            self.mark_noalias(fn, func, params)
             self.funcs[func.name] = fn
             self.signatures[func.name] = (ret, params, func.variadic)
             self.hidden_ref[func.name] = hidden
@@ -5583,6 +5614,7 @@ class CodeGen:
             # merges like an imported definition rather than colliding.
             self.link_shared(fn, func.source)
             self.mark_inline(fn, func)
+            self.mark_noalias(fn, func, params)
             # Register before generating the body so recursive calls resolve.
             self.funcs[mangled] = fn
             self.signatures[mangled] = (ret, params, False)
