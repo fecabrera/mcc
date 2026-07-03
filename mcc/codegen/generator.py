@@ -17,7 +17,7 @@ from dataclasses import replace as dataclasses_replace
 
 from llvmlite import ir
 
-from mcc.errors import LangError
+from mcc.errors import LangError, Note
 from mcc.nodes import (
     AlignOf,
     ArrayLit,
@@ -718,7 +718,7 @@ class CodeGen:
                 type/alias in the same scope.
         """
         self.current_source = decl.source
-        alias = Alias(decl.target, decl.private, decl.source)
+        alias = Alias(decl.target, decl.private, decl.source, decl.line)
         if decl.static:
             key = (decl.source, decl.name)
             if key in self.static_type_aliases or key in self.static_structs:
@@ -864,7 +864,7 @@ class CodeGen:
                     line,
                 )
             args = tuple(self.lang_type(a, line) for a in ref.args)
-            base = self.instantiate_struct(decl, args)
+            base = self.instantiate_struct(decl, args, line)
         elif (enum := self.lookup_enum(ref.name)) is not None:
             if ref.args:
                 raise LangError(f"enum {ref.name!r} is not generic", line)
@@ -884,7 +884,20 @@ class CodeGen:
             outer_source = self.current_source
             self.current_source = alias.source  # target may name private types
             try:
-                base = self.lang_type(alias.target, line)
+                # The target resolves at the alias's own declaration site, so
+                # an error (or backtrace frame) inside it pairs the declaring
+                # file with a line in that file, not the use site's.
+                base = self.lang_type(alias.target, alias.line)
+            except LangError as err:
+                # An error in the target belongs to the alias's file; then a
+                # backtrace frame for the alias itself, so a chain that goes
+                # through e.g. `string` (= list<char>) names `string`.
+                if err.source is None:
+                    err.source = alias.source
+                err.notes.append(
+                    Note(f"in instantiation of {ref.name}", line, outer_source)
+                )
+                raise
             finally:
                 self.resolving_aliases.discard(ref.name)
                 self.current_source = outer_source
@@ -1096,7 +1109,7 @@ class CodeGen:
         return slice_t
 
     def instantiate_struct(
-        self, decl: StructDecl, args: tuple[LangType, ...]
+        self, decl: StructDecl, args: tuple[LangType, ...], line: int
     ) -> LangType:
         """Return the struct instance for a set of type arguments.
 
@@ -1104,11 +1117,16 @@ class CodeGen:
         registering the instance before resolving fields so self-referential
         structs (e.g. ``node<T>`` holding a ``node<T>*``) can refer to
         themselves. ``@packed``/``@align`` structs get an explicitly laid-out
-        body with padding.
+        body with padding. An error while resolving the body gains an
+        ``in instantiation of ...`` backtrace note naming this request site;
+        a cached instance skips capture, so an error chain always reports the
+        first triggering path (as C++/Rust do).
 
         Args:
             decl: The struct template declaration.
             args: The type arguments to instantiate with.
+            line: Source line of the instantiation site, for the backtrace
+                note when the body fails to resolve.
 
         Returns:
             The cached or newly built struct ``LangType``.
@@ -1172,6 +1190,19 @@ class CodeGen:
                 (fname, self.field_type(ftype, i == len(decl.fields) - 1, decl))
                 for i, (fname, ftype) in enumerate(decl.fields)
             )
+        except LangError as err:
+            # An error inside the template's base/fields belongs to the
+            # template's file, not the requester's -- attribute it here, where
+            # current_source still points at the declaring file. Then record
+            # the instantiation frame against the requesting file (the failed
+            # instance stays registered -- deliberate, for self-reference --
+            # which is harmless while compilation aborts on the first error).
+            if err.source is None:
+                err.source = self.current_source
+            err.notes.append(
+                Note(f"in instantiation of {mangled}", line, outer_source)
+            )
+            raise
         finally:
             self.resolving_bases.discard(mangled)
             self.type_bindings = outer
@@ -2102,7 +2133,7 @@ class CodeGen:
                 line,
             )
         args = tuple(bindings[t] for t in decl.type_params)
-        return self.instantiate_struct(decl, args)
+        return self.instantiate_struct(decl, args, line)
 
     def bind_local(self, name: str, slot, lang_type: LangType):
         """Record a local in the current scope.
@@ -3109,7 +3140,7 @@ class CodeGen:
                 "user declaration shadows it with a different shape",
                 line,
             )
-        elem_struct = self.instantiate_struct(decl, (element,))
+        elem_struct = self.instantiate_struct(decl, (element,), line)
         index_pos, _ = self.struct_field(elem_struct, "index", line)
         value_pos, vtype = self.struct_field(elem_struct, "value", line)
         if vtype != element:
@@ -3331,7 +3362,7 @@ class CodeGen:
         if len(viable) > 1 and viable[0][0] == viable[1][0]:
             raise LangError(f"ambiguous {next_name!r} for {iter_type}", line)
         _, func, bindings = viable[0]
-        fn, ret, params = self.instantiate(func, bindings)
+        fn, ret, params = self.instantiate(func, bindings, line)
         if ret is not BOOL:
             raise LangError(f"{next_name!r} must return bool", line)
         if not is_pointer(params[1]):
@@ -5601,7 +5632,7 @@ class CodeGen:
                 raise LangError(self.not_assignable(i, expr.name), expr.line)
             _, t, align, volatile = addrs[i]
             self.check_mut_storage(expr.args[i], t, align, volatile, expr.line)
-        fn, ret, params = self.instantiate(func, bindings)
+        fn, ret, params = self.instantiate(func, bindings, expr.line)
         # The proof is syntactic, so it runs on the argument expressions even
         # though they were already lowered to values for binding inference.
         for i in self.nonnull_indices(func):
@@ -5812,17 +5843,22 @@ class CodeGen:
         return sum(score(p) for _, p in func.params)
 
     def instantiate(
-        self, func: Func, bindings: dict[str, LangType]
+        self, func: Func, bindings: dict[str, LangType], line: int
     ) -> tuple[ir.Function, LangType, list[LangType]]:
         """Return the monomorphized instance of a generic function.
 
         Generates (and caches) the instance for ``bindings`` on first use,
         registering it before emitting the body so recursive calls resolve. The
-        instance gets mergeable linkage, like an imported definition.
+        instance gets mergeable linkage, like an imported definition. An error
+        inside the body gains an ``in instantiation of ...`` backtrace note
+        naming this request site; a cached instance skips capture, so an error
+        chain always reports the first triggering path (as C++/Rust do).
 
         Args:
             func: The generic function template.
             bindings: The type-parameter bindings to instantiate with.
+            line: Source line of the instantiation site (the call), for the
+                backtrace note when the body fails to compile.
 
         Returns:
             A ``(function, return type, param types)`` tuple for the instance.
@@ -5865,7 +5901,9 @@ class CodeGen:
             self.mark_inline(fn, func)
             self.mark_noalias(fn, func, params)
             self.mark_nonnull(fn, func, params)
-            # Register before generating the body so recursive calls resolve.
+            # Register before generating the body so recursive calls resolve
+            # (a failed instantiation therefore stays memoized -- harmless
+            # while compilation aborts on the first error).
             self.funcs[mangled] = fn
             self.signatures[mangled] = (ret, params, False)
             self.hidden_ref[mangled] = hidden
@@ -5877,9 +5915,14 @@ class CodeGen:
             # An error inside the body belongs to the template's file, not the
             # caller's -- attribute it here, where current_source still points at
             # the instance being generated (the top level otherwise blames the
-            # root module for a line in an imported library).
+            # root module for a line in an imported library). Then record the
+            # instantiation frame against the requesting file; unwinding
+            # appends nested frames innermost first.
             if err.source is None:
                 err.source = self.current_source
+            err.notes.append(
+                Note(f"in instantiation of {mangled}", line, outer_source)
+            )
             raise
         finally:
             (

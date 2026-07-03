@@ -152,11 +152,14 @@ class Alias:
         target: The aliased ``TypeRef``, resolved lazily on each use.
         private: ``@private`` -- usable only within ``source``.
         source: The file the alias was declared in.
+        line: The line the alias was declared on -- where its target
+            resolves, for diagnostics and instantiation backtraces.
     """
 
     target: TypeRef
     private: bool
     source: "str | None"
+    line: int
 
 
 def pointer_to(lang_type: LangType) -> LangType:

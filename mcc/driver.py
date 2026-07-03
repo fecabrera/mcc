@@ -491,6 +491,57 @@ def parse_defines(items: list[str]) -> dict[str, int]:
     return defines
 
 
+def _format_diagnostic(where: Path, severity: str, line: int, message: str) -> str:
+    """Render one diagnostic line as ``{where}: {severity}: line N: {message}``.
+
+    The single severity formatter shared by the error and note channels (and
+    meant for reuse by the planned warning subsystem).
+
+    Args:
+        where: The file the diagnostic refers to.
+        severity: The channel name (``error`` or ``note``).
+        line: The 1-based source line.
+        message: The diagnostic text.
+
+    Returns:
+        The formatted line, without a trailing newline.
+    """
+    return f"{where}: {severity}: line {line}: {message}"
+
+
+def _report_lang_error(err: LangError, fallback: Path) -> None:
+    """Print a compile error and its instantiation notes to stderr.
+
+    The primary line renders as ``file: error: line N: message``; each
+    attached :class:`~mcc.errors.Note` follows as
+    ``file: note: line N: message``, innermost frame first, tracing the
+    instantiation chain that reached the error. Errors outside any
+    instantiation carry no notes and print exactly one line. Paths under the
+    current directory print relative.
+
+    Args:
+        err: The compile error to report.
+        fallback: The file blamed when a frame carries no source of its own
+            (the entry source file).
+    """
+
+    def where(source: str | None) -> Path:
+        """Resolve a frame's file, relative to the cwd when possible."""
+        path = Path(source) if source else fallback
+        if path.is_absolute():  # imported files resolve to absolute paths
+            try:
+                path = path.relative_to(Path.cwd())
+            except ValueError:
+                pass
+        return path
+
+    print(_format_diagnostic(where(err.source), "error", err.line, err.message),
+          file=sys.stderr)
+    for note in err.notes:
+        print(_format_diagnostic(where(note.source), "note", note.line, note.message),
+              file=sys.stderr)
+
+
 def emit_interface(source: Path, search_paths: tuple[Path, ...],
                    target: str | None, defines: dict[str, int],
                    output: Path | None) -> int:
@@ -526,13 +577,7 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
         print(f"mcc: error: cannot read {source}: {err.strerror}", file=sys.stderr)
         return 1
     except LangError as err:
-        where = Path(err.source) if err.source else source
-        if where.is_absolute():
-            try:
-                where = where.relative_to(Path.cwd())
-            except ValueError:
-                pass
-        print(f"{where}: error: {err}", file=sys.stderr)
+        _report_lang_error(err, source)
         return 1
 
     out = output or source.with_suffix(".mci")
@@ -651,13 +696,7 @@ def main() -> int:
         print(f"mcc: error: cannot read {args.source}: {err.strerror}", file=sys.stderr)
         return 1
     except LangError as err:
-        source = Path(err.source) if err.source else args.source
-        if source.is_absolute():  # imported files resolve to absolute paths
-            try:
-                source = source.relative_to(Path.cwd())
-            except ValueError:
-                pass
-        print(f"{source}: error: {err}", file=sys.stderr)
+        _report_lang_error(err, args.source)
         return 1
 
     if args.emit_llvm:

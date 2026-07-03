@@ -10,6 +10,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Instantiation backtraces on errors** — an error inside a monomorphized
+  body used to print as a bare line in the template's file with no trace of
+  how the compiler reached it; it now carries a note chain, one
+  `file: note: line N: in instantiation of ...` line per frame after the
+  unchanged primary `file: error: line N: msg` line, innermost first — the
+  "in instantiation of" backtrace of C++ and Rust. Generic functions, generic
+  structs, and type aliases each contribute a frame (a chain through `string`,
+  the alias for `list<char>`, names `string`), the frames interleave freely,
+  and each names the instance plus the file and line that requested it.
+  Instantiations are memoized, so a cached instance reports the first
+  triggering path; an error outside any instantiation renders exactly as
+  before, with no notes, and `str(LangError)` never includes the chain. The
+  error and note channels share one severity formatter
+  (`{where}: {severity}: line N: {msg}`), ready for reuse by the planned
+  warning subsystem. See
+  [Instantiation backtraces](docs/language.md#instantiation-backtraces).
+
 - **Generic overloads mixing `mut`** — overloads of one generic name may now
   disagree on which positions are `mut` (previously a compile error), so a
   `mut`-taking overload can sit next to a pointer- or value-taking one

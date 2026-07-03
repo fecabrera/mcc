@@ -656,21 +656,22 @@ already do).
 
 ### Tooling and C interop
 
-- [ ] Instantiation backtraces on errors — an error inside a monomorphized body
-      today prints as a bare line in the template file with no trace of how the
-      compiler reached it; attach a source-level note chain to `LangError`
-      (which today carries only message/line/source) so the driver prints
+- [x] Instantiation backtraces on errors — an error inside a monomorphized body
+      used to print as a bare line in the template file with no trace of how
+      the compiler reached it; a source-level note chain on `LangError`
+      (which previously carried only message/line/source) has the driver print
       `file: note: line N: ...` lines after the unchanged primary
       `file: error: line N: msg`:
   ```
-  list.mc: error: line N: <the actual problem>
-    note: in instantiation of list<char> (from string) at string.mc:LL
-    note: in instantiation of string here at yourcode.mc:MM
+  libmc/hashing/splitmix64.mc: error: line 10: cannot cast box to uint64
+  libmc/hash.mc: note: line 12: in instantiation of splitmix64<box>
+  yourcode.mc: note: line 5: in instantiation of hash<box>
   ```
   the "in instantiation of ..." note chain of C++ and Rust. Frames are built on
-  the exception-unwind path through the existing `try`/`except`/`finally` at the
-  two monomorphization entry points (`instantiate` for generic functions,
-  `instantiate_struct` for generic structs), so function and struct instances
+  the exception-unwind path through the `try`/`except`/`finally` at the
+  monomorphization entry points (`instantiate` for generic functions,
+  `instantiate_struct` for generic structs, plus type-alias resolution, so a
+  chain through `string` names `string`), so function and struct instances
   interleave (one `string` call nests a generic-function instance and a
   generic-struct instance) and there is no live push/pop stack to corrupt.
   Instantiations are memoized, so a cached instantiation reports the first
@@ -678,11 +679,13 @@ already do).
   [warning subsystem](#metaprogramming-and-builtins): errors already have their
   own terminal render path, so this extends that path and never touches the
   non-fatal warning channel; the two share only a one-line severity-formatting
-  helper (`{where}: {severity}: line N: {msg}`), introduced by whichever ships
-  first and reused by the other. Test-safe: the primary error line stays
+  helper (`{where}: {severity}: line N: {msg}`), introduced here and reused by
+  whatever ships next. Test-safe: the primary error line stays
   byte-identical and notes appear only when the instantiation chain is
   non-empty, so the suite's `str(LangError)` matches hold and the
-  substring/`startswith` stderr checks in `test_cli.py` are undisturbed:
+  substring/`startswith` stderr checks in `test_cli.py` are undisturbed;
+  implemented, see
+  [Instantiation backtraces](docs/language.md#instantiation-backtraces):
   - [ ] Import / inclusion / macro frames — additive frame sources for the same
         note chain, no new render machinery: the import chain (`merge_imports`),
         `@if`-inclusion (`flatten_conditionals`), and eventual macro expansion.

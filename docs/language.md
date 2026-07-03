@@ -321,6 +321,30 @@ fn hash<T>(key: T*) -> uint64 { return fnv1a(key); }
 Imported files can extend an overload set with new variants. Two equally
 specific viable variants make the call ambiguous — a compile error.
 
+### Instantiation backtraces
+
+Monomorphization means a type error can surface deep inside a template's body,
+in a file you never wrote. When that happens, the error is followed by one
+`note` line per instantiation frame, innermost first, tracing how the compiler
+got there — each note names the instance being stamped out and the file and
+line that requested it. Hashing a by-value struct, for example, fails inside
+the standard library's `splitmix64<T>`, and the chain walks back out to your
+call:
+
+```
+libmc/hashing/splitmix64.mc: error: line 10: cannot cast box to uint64
+libmc/hash.mc: note: line 12: in instantiation of splitmix64<box>
+yourcode.mc: note: line 5: in instantiation of hash<box>
+```
+
+Generic functions, generic structs, and [type aliases](#type-aliases) each
+contribute a frame, and they interleave freely — an error reached through
+`string` (an alias for `list<char>`) shows a `list<char>` frame at the alias
+declaration, then a `string` frame at the use site. Instantiations are
+memoized, so a cached instance reports the first path that triggered it (the
+same convention as C++ and Rust), and an error outside any instantiation
+prints exactly as before, with no notes.
+
 ## Variables
 
 `let` declares a variable, inferring the type from the initializer. A bare
@@ -1649,6 +1673,11 @@ and array suffixes apply on top of the alias, so with `type bytes = uint8*;`,
 variable, or parameter named `type`). An alias may be `@private` to its file or
 `@static` (file-scoped), like a struct or enum; a cyclic alias
 (`type a = b; type b = a;`) is an error.
+
+An error inside an alias's target — say the generic struct it names fails to
+instantiate — reports the alias by name in its
+[instantiation backtrace](#instantiation-backtraces), so a chain through
+`string` says `string`.
 
 ## Imports
 

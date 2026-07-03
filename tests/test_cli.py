@@ -198,6 +198,53 @@ def test_error_paths_under_cwd_print_relative(tmp_path):
     assert result.stderr.startswith("lib.mc: error: line 1:")
 
 
+def test_instantiation_note_names_the_requesting_file(tmp_path):
+    # Mirror of test_error_names_the_file_it_came_from, with the failing line
+    # inside a generic body: the primary line still blames the template's
+    # file, and a note now traces the instantiation back to the requesting
+    # file's call line.
+    (tmp_path / "lib.mc").write_text(
+        "fn wrap<T>(n: T) -> int32* {\n"
+        "    return oops;\n"
+        "}\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text('import "lib";\nfn main() -> int32 { let p = wrap(4); return 0; }')
+    result = mcc(main)
+    assert result.returncode == 1
+    lines = result.stderr.splitlines()
+    assert lines[0] == (
+        f"{tmp_path / 'lib.mc'}: error: line 2: undefined variable 'oops'"
+    )
+    assert lines[1] == f"{main}: note: line 2: in instantiation of wrap<int32>"
+
+
+def test_instantiation_notes_trace_a_stdlib_chain(tmp_path):
+    # An error deep inside a stdlib generic renders one note per
+    # instantiation frame, innermost first: hashing a by-value struct key
+    # fails inside splitmix64<box>, requested by hash<box>, requested by the
+    # user's call. Stdlib lines are asserted loosely so libmc edits don't
+    # break the test; the user-file note is exact.
+    src = tmp_path / "chain.mc"
+    src.write_text(
+        'import "hash";\n'
+        "struct box { x: int32; }\n"
+        "fn main() -> int32 {\n"
+        "    let b: struct box;\n"
+        "    let h = hash(b);\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    result = mcc(src)
+    assert result.returncode == 1
+    lines = result.stderr.splitlines()
+    assert lines[0].startswith("libmc/hashing/splitmix64.mc: error: line ")
+    assert lines[0].endswith("cannot cast box to uint64")
+    assert lines[1].startswith("libmc/hash.mc: note: line ")
+    assert lines[1].endswith("in instantiation of splitmix64<box>")
+    assert lines[2] == f"{src}: note: line 5: in instantiation of hash<box>"
+
+
 def test_missing_file_is_clean_error():
     result = mcc("does-not-exist.mc")
     assert result.returncode == 1

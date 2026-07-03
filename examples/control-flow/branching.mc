@@ -37,5 +37,5 @@ fn main() -> int32 {
     return 0;
 }
 
-// See also: loops.mc for while / until / break / continue; case_when.mc for
-// multi-way dispatch without an if/else-if chain.
+// See also: while.mc and until.mc for loops (break / continue); case_when.mc
+// for multi-way dispatch without an if/else-if chain.

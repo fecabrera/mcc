@@ -46,3 +46,8 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// Monomorphization also shapes diagnostics: if a generic body fails to compile
+// for some T (say, calling max on a struct with no `>`), the error is followed
+// by "note: ... in instantiation of max<T>" lines tracing the chain back to
+// your call site. See "Instantiation backtraces" in docs/language.md.
