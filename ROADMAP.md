@@ -195,6 +195,34 @@ already do).
       keeps each element's static type and a compile-time arity, where erasing
       every slot to `any` would collapse into a fixed-length `slice<any>`. Also
       the door to a statically-typed variadic later (no erasure), if wanted
+- [ ] Literal adaptation to `slice<T>` — a literal in a slice-typed slot
+      borrows from context, the compiler materializing the backing storage:
+  - [x] string literals — `"hi"` adapts to a `slice<char>`/`slice<const char>`
+        expected by a `let` or a parameter (NUL dropped), borrowing the string
+        constant's bytes; implemented, see [Slices](docs/language.md#slices)
+  - [ ] string-literal elements — reach the adaptation into nested/element
+        positions, so `let dirs: slice<char>[2] = ["bin", "usr/bin"];` (an
+        owned array *of slices* whose elements are string literals) works,
+        replacing today's explicit `as` per element
+        (`["bin" as slice<char>, ...]`). The adaptation fires only at
+        top-level slots today, so the array-element path
+        (`store_list_literal`'s plain `coerce`) rejects it with
+        `array element: expected slice<char>, got char*`. The most tractable
+        of this family: each element borrows from a **global string
+        constant** (its `data` points at a `.str` global), so there is no
+        backing-storage or lifetime question — safe even for a `@static`/global
+        array of slices, unlike the array-literals case below
+  - [ ] array literals — the generalization: `let dirs: slice<char*> = ["/bin"];`
+        (or `["/bin", "/usr/bin"]` passed to a `slice<T>` parameter)
+        materializes a hidden fixed-size backing array in the enclosing scope
+        and borrows it, replacing today's two-step
+        `let dirs: char*[2] = [...]; let view = dirs as slice<char*>;`. Design
+        points: a global/`@static` slice needs the backing array promoted to a
+        global constant (or is rejected initially); `slice<const T>` is the
+        safe default target — adapting to a mutable `slice<T>` hands out a
+        writable view of a compiler-materialized temporary and may be
+        rejected; a bare `let v = [1, 2];` stays an ambiguous error (the
+        annotation picks the storage: array = owned, slice = borrowed view)
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:
