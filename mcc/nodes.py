@@ -278,6 +278,11 @@ class Func:
         deprecated_msg: The ``@deprecated("...")`` migration message, or
             ``None``. Every call site (and function-value use) emits a
             warning carrying it; the function stays callable.
+        removed_msg: The ``@removed("...")`` migration message, or ``None``.
+            The declaration is a tombstone: every call site (and
+            function-value use) is a hard compile error carrying it. The
+            signature is never resolved and a body, if any, is never
+            generated.
     """
 
     name: str
@@ -299,6 +304,7 @@ class Func:
     noalias_params: set[str] = field(default_factory=set)
     nonnull_params: set[str] = field(default_factory=set)
     deprecated_msg: str | None = None
+    removed_msg: str | None = None
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 

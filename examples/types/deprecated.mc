@@ -76,5 +76,7 @@ fn main() -> int32 {
 // "Deprecated functions" has the full rules, including the `.mci` interface
 // round-trip for shipped libraries.
 
-// See also: warnings.mc (the warning channel and `-Werror`),
+// See also: removed.mc (the lifecycle's terminal step: the `@removed`
+// tombstone that turns these warnings into hard errors once the
+// implementation is pulled), warnings.mc (the warning channel and `-Werror`),
 // functions/function_pointers.mc (fn values).

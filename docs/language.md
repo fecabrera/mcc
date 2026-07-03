@@ -736,14 +736,75 @@ importers of a compiled library still get warned at their own call sites.
 The standard library uses this for the four renamed [memory](../libmc/memory.mc)
 forwarders — `copy_bytes`, `copy_items`, `set_bytes`, `set_items` — which
 warn with their replacements (`bytecopy`, `copy`, `bytefill`, `fill`).
-The planned terminal step of the lifecycle is the separate `@removed`
-tombstone directive (a hard error at each call site, one release before the
-name disappears entirely); see the [roadmap](../ROADMAP.md).
+The terminal step of the lifecycle is the separate
+[`@removed` tombstone](#removed-functions) below — a hard error at each call
+site, one release before the name disappears entirely.
 
 See [examples/types/deprecated.mc](../examples/types/deprecated.mc) for a
 renamed function kept as a `@deprecated` forwarder, with the old-API call
 sites (a direct call and a function value) behind a `-D`-gated `@if` branch
 and the `-Werror` promotion.
+
+### Removed functions
+
+`@removed("message")` is the terminal state of the lifecycle above, one step
+past `@deprecated`: a function goes from available, to `@deprecated(msg)`
+(warns, still callable), to `@removed(msg)` (a hard compile **error** at
+every call site), to finally deleted (the name gone, a generic "unknown
+function"). The declaration is a *tombstone*: the implementation is gone, so
+it is written bodiless — and a generic tombstone is the one generic function
+that may go bodiless, since it never instantiates:
+
+```c
+@removed("use bytecopy instead")
+fn copy_bytes<T>(dst: T*, src: T*, n: uint64);
+```
+
+A call to `copy_bytes` now fails the build, at the caller's file and line:
+
+```
+main.mc: error: line 12: 'copy_bytes' was removed: use bytecopy instead
+```
+
+The error fires wherever the name would resolve to the removed function — a
+direct call (with or without explicit type arguments, which error before any
+instantiation is attempted), a [`for ... in`](#control-flow) loop whose
+`_it`/`_next` protocol functions are removed, and taking the function as a
+[value](#function-pointers) — and it travels the normal error path, aborting
+compilation like any compile error. There is nothing for
+[`-Werror`](#error-directives) to promote: an uncalled tombstone compiles
+clean and warns nothing. A removed call inside a generic body reports with
+the usual [instantiation backtrace](#instantiation-backtraces) notes.
+
+A tombstone's signature is parsed but never resolved: it registers only the
+name and the message, so it stays valid even when its parameter types were
+deleted along with the implementation, and one tombstone speaks for a whole
+former overload set — mixing a tombstone with a live definition or a live
+generic overload of the same name is a compile error at declaration time. A
+local variable, constant, or file-scoped `@static` function shadows the name
+exactly as it shadows a live function. And since the compiler is single-pass,
+a removed call inside a generic body that is never instantiated is never
+checked — consistent with every other error in an unused template.
+
+`@removed` combines with `@private` and with `@extern` (retiring a C binding
+is meaningful). It rejects `@deprecated` (removal is the lifecycle step after
+deprecation — keep one), `@inline` and `@asm` (an uncallable function has no
+call sites to inline into and no body to lower), and `@static` (a file-local
+tombstone serves no caller in another file). A body-bearing declaration may
+carry `@removed` too — the body is dead and never generated — but the
+bodiless form is the idiomatic tombstone. The message decodes string escapes
+like any literal and must be non-empty. Functions only for now, like
+`@deprecated`.
+
+Removal travels through [interface files](#interface-files): a generic
+tombstone ships as verbatim source, and a concrete one's bodyless prototype
+re-emits the attribute (`@removed("use renamed instead") fn old(x: int32) ->
+int32;`, message re-escaped), so importers of a compiled library get the
+targeted call-site error rather than a bare unknown-function one.
+
+See [examples/types/removed.mc](../examples/types/removed.mc) for a renamed
+function's bodiless generic tombstone next to its replacement, with the
+erroring old-API calls behind a `-D`-gated `@if` branch.
 
 ## Control flow
 

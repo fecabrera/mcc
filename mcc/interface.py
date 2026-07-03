@@ -288,6 +288,11 @@ class InterfaceWriter:
         # decode.
         if func.deprecated_msg is not None:
             head = f'@deprecated("{_escape(func.deprecated_msg)}") {head}'
+        # @removed is re-emitted so the importer's call sites error too (a
+        # generic tombstone travels verbatim, span included); the parser
+        # rejects combining it with @deprecated, so at most one prefix applies.
+        if func.removed_msg is not None:
+            head = f'@removed("{_escape(func.removed_msg)}") {head}'
         return f"{head} {func.name}({', '.join(params)}){ret};"
 
     def _render(self, decl) -> str:

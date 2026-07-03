@@ -290,6 +290,12 @@ class CodeGen:
         # (Generic templates carry the message on the Func node instead and
         # are checked when overload resolution picks them.)
         self.deprecated_syms: dict[str, str] = {}
+        # @removed("msg") tombstones: function name -> the migration message.
+        # Name-keyed and deliberately unresolved: a tombstone's signature is
+        # never type-checked and gets no ir.Function (every use errors before
+        # lowering, and the tombstone must stay valid even when its parameter
+        # types were deleted along with the implementation).
+        self.removed: dict[str, str] = {}
         self.current_source: str | None = None  # file owning the code being generated
         # Non-fatal diagnostics collected during generation, in emission order.
         # The driver prints them after generation succeeds (see warn()).
@@ -342,6 +348,28 @@ class CodeGen:
         """
         if msg is not None:
             self.warn(f"{name!r} is deprecated: {msg}", line)
+
+    def check_removed(self, name: str, line: int) -> None:
+        """Error when ``name`` is an ``@removed`` tombstone.
+
+        The single formatter for tombstone errors: every name-resolution
+        point (call, function value, for-in protocol) funnels through here,
+        so the ``'name' was removed: msg`` wording is emitted uniformly. The
+        check runs after variable/const and file-scoped ``@static`` lookups,
+        which legitimately shadow a global function name, but before any
+        signature resolution or overload dispatch -- a tombstone has nothing
+        resolvable behind it.
+
+        Args:
+            name: The name the caller used, reported repr-quoted.
+            line: The use site's 1-based source line.
+
+        Raises:
+            LangError: When ``name`` is registered as removed.
+        """
+        msg = self.removed.get(name)
+        if msg is not None:
+            raise LangError(f"{name!r} was removed: {msg}", line)
 
     def check_access(self, private: bool, source: str | None, what: str, line: int):
         """Enforce ``@private`` visibility for a referenced declaration.
@@ -1634,6 +1662,36 @@ class CodeGen:
             self.used_symbols.add(var.name)
         declared: set[tuple[str | None, str]] = set()
         for func in self.program.functions:
+            if func.removed_msg is not None:
+                # An @removed tombstone registers its name and message only.
+                # It deliberately skips the declare path: the signature is
+                # never resolved (no lang_type, no ir.Function, no entry in
+                # signatures/hidden_ref) because every use errors before
+                # lowering, and the tombstone must stay valid even when its
+                # parameter types were deleted with the implementation. A body,
+                # if the author kept one around, is never generated either.
+                self.current_source = func.source
+                key = (func.source, func.name)
+                if func.name in self.templates:
+                    # A live generic sharing the name would otherwise join an
+                    # overload set and coexist silently.
+                    raise LangError(
+                        f"function {func.name!r} cannot be both @removed and "
+                        "live: a tombstone replaces the whole overload set",
+                        func.line,
+                    )
+                if (
+                    func.name in self.funcs
+                    or func.name in self.globals
+                    or func.name in self.removed
+                    or key in declared
+                ):
+                    raise LangError(
+                        f"function {func.name!r} already defined", func.line
+                    )
+                declared.add(key)
+                self.removed[func.name] = func.removed_msg
+                continue
             if func.extern:
                 self.current_source = func.source  # signatures may name private structs
                 ret = self.lang_type(func.ret_type, func.line)
@@ -1649,6 +1707,7 @@ class CodeGen:
                     func.name in self.funcs
                     or func.name in self.templates
                     or func.name in self.globals
+                    or func.name in self.removed
                 ):
                     raise LangError(
                         f"function {func.name!r} already defined", func.line
@@ -1712,6 +1771,14 @@ class CodeGen:
                     raise LangError(
                         f"function {func.name!r} already defined", func.line
                     )
+                if func.name in self.removed:
+                    # Joining an overload set with a tombstone would let the
+                    # live overload coexist with the removal silently.
+                    raise LangError(
+                        f"function {func.name!r} cannot be both @removed and "
+                        "live: a tombstone replaces the whole overload set",
+                        func.line,
+                    )
                 overloads = self.templates.setdefault(func.name, [])
                 if overloads:
                     base = f"{func.name}#{len(overloads)}"
@@ -1727,6 +1794,7 @@ class CodeGen:
                 func.name in self.funcs
                 or func.name in self.templates
                 or func.name in self.globals
+                or func.name in self.removed
             ):
                 raise LangError(f"function {func.name!r} already defined", func.line)
             self.func_privacy[func.name] = (func.private, func.source)
@@ -1773,9 +1841,16 @@ class CodeGen:
         # assertion aborts the build without wasting work on codegen.
         self.check_directives()
         for func in self.program.functions:
-            if not func.type_params and not func.extern and not func.proto:
+            if (
+                not func.type_params
+                and not func.extern
+                and not func.proto
+                and func.removed_msg is None
+            ):
                 # A proto is skipped: its bodyless ir.Function is already an
                 # LLVM declaration; the definition lives in another object.
+                # An @removed tombstone is skipped too: it was never declared,
+                # and a body the author kept around is dead.
                 symbol = self.static_funcs.get((func.source, func.name), func.name)
                 ret, params, _ = self.signatures[symbol]
                 self.gen_function(func, self.funcs[symbol], ret, params)
@@ -3403,6 +3478,10 @@ class CodeGen:
         # A concrete (non-generic) <struct>_next: match its resolved signature.
         if next_name not in self.templates and key not in self.static_templates:
             symbol = self.static_funcs.get(key)
+            if symbol is None:
+                # `_next` is resolved here, outside gen_call, so the tombstone
+                # check must ride along (`_it` goes through gen_call as usual).
+                self.check_removed(next_name, line)
             if symbol is None and next_name in self.funcs:
                 symbol = next_name
             if symbol is None:
@@ -5052,6 +5131,12 @@ class CodeGen:
             return self.gen_generic_call(expr, [self.static_templates[key]])
         if key in self.static_funcs:
             return self.gen_direct_call(expr, self.static_funcs[key])
+        # An @removed tombstone errors before any resolution or dispatch: the
+        # name is dead even though nothing resolvable remains behind it, and an
+        # explicit-type-arg call must error before instantiation is attempted.
+        # (A variable, const, or file-scoped @static legitimately shadows a
+        # global function name -- all checked above.)
+        self.check_removed(expr.name, expr.line)
         if expr.name in self.templates:
             return self.gen_generic_call(expr, self.templates[expr.name])
         if expr.name not in self.funcs:
@@ -5175,6 +5260,10 @@ class CodeGen:
                 f"{name!r} is generic; a function value needs a single function", line
             )
         symbol = self.static_funcs.get(key)
+        if symbol is None:
+            # No file-scoped shadow: a removed name errors here too -- a
+            # function value is a call site in waiting.
+            self.check_removed(name, line)
         if symbol is None and name in self.funcs:
             private, source = self.func_privacy.get(name, (False, None))
             self.check_access(private, source, f"function {name!r}", line)

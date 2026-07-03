@@ -750,3 +750,34 @@ def test_interface_roundtrip_with_mut_and_const_struct(tmp_path):
     assert link.returncode == 0, link.stderr
     out = subprocess.run([exe], capture_output=True, text=True)
     assert out.stdout == "41 1\n"
+
+
+# ---------------------------------------------------------------- @removed
+
+def test_removed_call_fails_the_build_with_the_migration_message(tmp_path):
+    src = tmp_path / "gone.mc"
+    src.write_text(
+        '@removed("use renamed instead")\n'
+        "fn old(x: int32) -> int32;\n"
+        "fn main() -> int32 { return old(41); }\n"
+    )
+    result = mcc(src, "--emit-llvm")
+    assert result.returncode == 1
+    assert (
+        f"{src}: error: line 3: 'old' was removed: use renamed instead\n"
+        in result.stderr
+    )
+
+
+def test_uncalled_tombstone_builds_clean_under_werror(tmp_path):
+    # A tombstone is naturally -Werror-clean: it compiles, warns nothing, and
+    # only ever errors at a use site.
+    src = tmp_path / "gone.mc"
+    src.write_text(
+        '@removed("use bytecopy instead")\n'
+        "fn copy_bytes<T>(dst: T*, src: T*, n: uint64);\n"
+        "fn main() -> int32 { return 0; }\n"
+    )
+    result = mcc(src, "-Werror", "--emit-llvm")
+    assert result.returncode == 0
+    assert result.stderr == ""

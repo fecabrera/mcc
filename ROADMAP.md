@@ -598,7 +598,7 @@ already do).
         [`@removed` tombstone](#metaprogramming-and-builtins) directive below;
         implemented, see
         [Deprecated functions](docs/language.md#deprecated-functions)
-- [ ] `@removed(msg)` tombstones (the `@removed` name is tentative) — the
+- [x] `@removed(msg)` tombstones — the
       terminal state of the function-availability lifecycle, one step past
       [`@deprecated`](#metaprogramming-and-builtins) above: a function goes from
       available, to `@deprecated(msg)` (warns, still callable), to `@removed(msg)`
@@ -621,11 +621,11 @@ already do).
       the tombstone is a **bodiless** declaration, since the implementation is
       gone, and for concrete functions that form already parses (bodyless `fn`
       prototypes, the shipped `.mci` stub form), so the residual parser work
-      is one carve-out: lift the "a generic function cannot be a bodyless
+      was one carve-out: lift the "a generic function cannot be a bodyless
       prototype (its body must travel to be instantiated)" rejection when
       `@removed` is present, since a tombstone never instantiates
       (`@removed("use bytecopy") fn copy_bytes<T>(dst: T*, src: T*, n: uint64);`
-      trips exactly that rejection today). Prior art: Swift's
+      tripped exactly that rejection before). Prior art: Swift's
       `@available(..., obsoleted:)` and C#'s `[Obsolete(msg, error: true)]`.
       Bodiless is the settled shape (not a dead stub body): a stub would fight
       the shipped prototype form, since it must still compile, keeps its
@@ -636,7 +636,9 @@ already do).
       and a `@removed` example is naturally `-Werror`-clean in CI, since the
       tombstone itself compiles and only ever errors (unlike `@deprecated`'s,
       which needs the dead-`@if` trick that
-      [examples/types/warnings.mc](examples/types/warnings.mc) established)
+      [examples/types/warnings.mc](examples/types/warnings.mc) established);
+      implemented, see
+      [Removed functions](docs/language.md#removed-functions)
 - [ ] [Inline assembly](docs/language.md#inline-assembly) — arch-specific (pair with `@if` on
       `TARGET_ARCH`), preferring intrinsics where they exist:
   - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an

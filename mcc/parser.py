@@ -372,8 +372,8 @@ class Parser:
 
         Leading annotations (``@private``, ``@static``, ``@extern``,
         ``@packed``, ``@volatile``, ``@inline``, ``@align``, ``@symbol``,
-        ``@deprecated``) are collected and validated against the declaration
-        they precede.
+        ``@deprecated``, ``@removed``) are collected and validated against
+        the declaration they precede.
 
         Returns:
             The parsed ``StructDecl``, ``GlobalVar``, ``Const``, ``Func``, or
@@ -402,6 +402,7 @@ class Parser:
         align = None
         symbol = None
         deprecated = None
+        removed = None
         clobbers = []
         while self.cur.kind == "ANNOT":
             annot = self.advance()
@@ -450,6 +451,16 @@ class Parser:
                     raise LangError(
                         "@deprecated needs a non-empty message", annot.line
                     )
+            elif annot.text == "@removed":
+                self.expect("(")
+                # The message decodes like any string literal, so it reads the
+                # same as an @error/@warning directive message.
+                removed = _unescape(self.expect("STRING").text[1:-1])
+                self.expect(")")
+                if not removed:
+                    raise LangError(
+                        "@removed needs a non-empty message", annot.line
+                    )
             else:
                 raise LangError(f"unknown annotation {annot.text!r}", annot.line)
         if extern and static:
@@ -474,6 +485,34 @@ class Parser:
         if deprecated is not None and self.cur.kind != "fn":
             # v1 scope: functions only (types, enums, and globals later).
             raise LangError("@deprecated only applies to functions", self.cur.line)
+        if removed is not None:
+            if self.cur.kind != "fn":
+                # v1 scope: functions only (types, enums, and globals later).
+                raise LangError("@removed only applies to functions", self.cur.line)
+            if deprecated is not None:
+                raise LangError(
+                    "@deprecated and @removed cannot be combined (a removed "
+                    "function already errors at every call site)",
+                    self.cur.line,
+                )
+            if inline:
+                raise LangError(
+                    "@removed and @inline cannot be combined (a removed "
+                    "function is uncallable, so there is nothing to inline)",
+                    self.cur.line,
+                )
+            if asm:
+                raise LangError(
+                    "@removed and @asm cannot be combined (a removed "
+                    "function is uncallable, so an asm body is meaningless)",
+                    self.cur.line,
+                )
+            if static:
+                raise LangError(
+                    "@removed and @static cannot be combined (a file-local "
+                    "tombstone serves no caller in another file)",
+                    self.cur.line,
+                )
         if self.cur.kind in ("struct", "union"):
             if extern:
                 raise LangError("@extern does not apply to structs", self.cur.line)
@@ -565,7 +604,8 @@ class Parser:
                 self.cur.line,
             )
         return self.parse_function(
-            private, static, extern, symbol, inline, asm, clobbers, deprecated
+            private, static, extern, symbol, inline, asm, clobbers, deprecated,
+            removed,
         )
 
     # Tokens that can begin an expression; used to settle the `as T * x`
@@ -934,6 +974,7 @@ class Parser:
         asm: bool = False,
         clobbers: list[str] | None = None,
         deprecated: str | None = None,
+        removed: str | None = None,
     ) -> Func:
         """Parse a function definition, an ``@extern`` declaration, or a proto.
 
@@ -952,6 +993,7 @@ class Parser:
             asm: Whether ``@asm`` was applied (the body is one asm expression).
             clobbers: Registers clobbered by an ``@asm fn`` body, or ``None``.
             deprecated: The ``@deprecated("...")`` message, or ``None``.
+            removed: The ``@removed("...")`` tombstone message, or ``None``.
 
         Returns:
             The parsed ``Func``.
@@ -959,7 +1001,9 @@ class Parser:
         Raises:
             LangError: On a generic-extern, generic-variadic, or malformed
                 ``...`` parameter, or a generic/``@inline``/``@asm``/``@static``
-                prototype (their body or symbol cannot live elsewhere).
+                prototype (their body or symbol cannot live elsewhere) -- except
+                a generic ``@removed`` tombstone, which never instantiates and
+                so may (and idiomatically does) go bodiless.
         """
         line = self.expect("fn").line
         name = self.expect("IDENT").text
@@ -1063,6 +1107,7 @@ class Parser:
                 noalias_params=noalias_params,
                 nonnull_params=nonnull_params,
                 deprecated_msg=deprecated,
+                removed_msg=removed,
             )
         if asm:
             # `@asm fn` is sugar for a function whose body is one @asm(...)
@@ -1119,7 +1164,9 @@ class Parser:
             # function of the signature, so the prototype carries everything a
             # caller needs. Interface stubs are the usual writer.
             self.advance()
-            if type_params:
+            if type_params and removed is None:
+                # An @removed tombstone is the one generic that may go
+                # bodyless: it never instantiates, so no body needs to travel.
                 raise LangError(
                     "a generic function cannot be a bodyless prototype "
                     "(its body must travel to be instantiated)",
@@ -1153,6 +1200,7 @@ class Parser:
                 noalias_params=noalias_params,
                 nonnull_params=nonnull_params,
                 deprecated_msg=deprecated,
+                removed_msg=removed,
             )
         return Func(
             name,
@@ -1170,6 +1218,7 @@ class Parser:
             noalias_params=noalias_params,
             nonnull_params=nonnull_params,
             deprecated_msg=deprecated,
+            removed_msg=removed,
         )
 
     def parse_asm(self):

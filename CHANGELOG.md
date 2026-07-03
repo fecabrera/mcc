@@ -10,6 +10,32 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`@removed(msg)` function tombstones** — the terminal state of the
+  function-availability lifecycle, one step past `@deprecated`: a declaration
+  attribute that turns every *call site* into a hard compile error carrying
+  the migration message (`file: error: line N: 'copy_bytes' was removed: use
+  bytecopy instead`), so pulling an implementation still points callers at
+  the replacement for a release cycle rather than leaving them a bare
+  unknown-function error. The tombstone is a bodiless declaration — including
+  a generic one
+  (`@removed("use bytecopy instead") fn copy_bytes<T>(dst: T*, src: T*, n: uint64);`),
+  the one generic function allowed to go bodiless, since it never
+  instantiates. The error fires wherever the name would resolve — direct
+  calls (explicit type arguments included, before any instantiation),
+  function values, `for ... in` over a removed `_it`/`_next` — and gains the
+  usual instantiation-backtrace notes when the call sits inside a generic
+  body; an uncalled tombstone compiles clean, warns nothing, and passes
+  `-Werror`. The signature is parsed but never resolved, so a tombstone stays
+  valid even when its parameter types were deleted along with the
+  implementation, and one tombstone claims the whole name — mixing it with a
+  live definition or a live generic overload is a declaration-time error.
+  Combines with `@private` and `@extern`; rejects `@deprecated`, `@inline`,
+  `@asm`, and `@static`. Round-trips through `.mci` interface stubs (verbatim
+  for generic tombstones, re-emitted on concrete prototypes), so importers of
+  a compiled library get the targeted call-site error. Functions only for
+  now, matching `@deprecated`. See
+  [Removed functions](docs/language.md#removed-functions).
+
 - **`@deprecated(msg)` function attribute** — marks a function deprecated
   without breaking its callers: the function stays fully callable, and every
   call site emits `file: warning: line N: 'name' is deprecated: msg` on the
@@ -25,7 +51,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   for generic/`@inline` functions, re-emitted (message re-escaped) on
   concrete prototypes, so importers of a compiled library are warned at their
   own call sites. Functions only for now; the escalation to a hard error is
-  the planned `@removed` tombstone. See
+  the `@removed` tombstone above. See
   [Deprecated functions](docs/language.md#deprecated-functions).
 
 - **Bodyless `fn` prototypes** — a plain `fn` may end with `;` instead of a
