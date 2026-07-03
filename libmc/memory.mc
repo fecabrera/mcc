@@ -58,6 +58,8 @@ fn dealloc<T>(p: T*) {
  * @param dst: destination, with room for at least n elements
  * @param src: source to read from
  * @param n:   number of elements to copy
+ *
+ * @return number of bytes copied (n * sizeof(T))
  */
 @inline
 fn bytecopy<T>(dst: T*, src: T*, n: uint64) -> uint64 {
@@ -78,6 +80,7 @@ fn copy_bytes<T>(dst: T*, src: T*, n: uint64) {
  * @param dst: destination, with room for at least n elements
  * @param src: source to read from
  * @param n:   number of elements to copy
+ *
  * @return number of elements copied (n)
  */
 @inline
@@ -97,27 +100,31 @@ fn copy_items<T>(dst: T*, src: T*, n: uint64) {
 /**
  * Zeroes the n elements of type T at dst by clearing every byte, in a single
  * memset. The element size is computed from T, so callers count elements, not
- * bytes. Shorthand for set_bytes(dst, 0, n).
+ * bytes. Shorthand for bytefill(dst, 0, n).
  *
  * @param dst: destination, with room for at least n elements
  * @param n:   number of elements to zero
+ *
+ * @return number of bytes zeroed (n * sizeof(T))
  */
 @inline
-fn bytezero<T>(dst: T*, n: uint64) {
-    set_bytes(dst, 0, n);
+fn bytezero<T>(dst: T*, n: uint64) -> uint64 {
+    return bytefill(dst, 0, n);
 }
 
 /**
  * Zeroes the n elements of type T at dst one item at a time, writing a whole
  * zero-valued T to each element rather than a byte pattern. Shorthand for
- * set_items(dst, 0, n).
+ * fill(dst, 0, n).
  *
  * @param dst: destination, with room for at least n elements
  * @param n:   number of elements to zero
+ *
+ * @return number of elements zeroed (n)
  */
 @inline
-fn zero<T>(dst: T*, n: uint64) {
-    set_items(dst, 0, n);
+fn zero<T>(dst: T*, n: uint64) -> uint64 {
+    return fill(dst, 0, n);
 }
 
 /**
@@ -128,10 +135,20 @@ fn zero<T>(dst: T*, n: uint64) {
  * @param dst:   destination, with room for at least n elements
  * @param value: the byte written to every byte of the region
  * @param n:     number of elements to fill
+ *
+ * @return number of bytes filled (n * sizeof(T))
  */
 @inline
+fn bytefill<T>(dst: T*, value: byte, n: uint64) -> uint64 {
+    let count = n * sizeof(T);
+    memset(dst, value as int32, count);   // libc memset takes an int
+    return count;
+}
+
+// deprecated
+@inline
 fn set_bytes<T>(dst: T*, value: byte, n: uint64) {
-    memset(dst, value as int32, n * sizeof(T));   // libc memset takes an int
+    bytefill(dst, value, n);
 }
 
 /**
@@ -140,11 +157,20 @@ fn set_bytes<T>(dst: T*, value: byte, n: uint64) {
  *
  * @param dst:   destination, with room for at least n elements
  * @param value: the value written to each element
- * @param n:     number of elements to set
+ * @param n:     number of elements to fill
+ *
+ * @return number of elements filled (n)
  */
 @inline
-fn set_items<T>(dst: T*, value: T, n: uint64) {
+fn fill<T>(dst: T*, value: T, n: uint64) -> uint64 {
     for i in range(n) {
         dst[i] = value;
     }
+    return n;
+}
+
+// deprecated
+@inline
+fn set_items<T>(dst: T*, value: T, n: uint64) {
+    fill(dst, value, n);
 }

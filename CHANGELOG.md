@@ -8,6 +8,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **`memory` copy/fill API reshaped** — the canonical names are now `bytecopy`
+  and `copy` (byte-wise vs. item-at-a-time copy) and `bytefill` and `fill`
+  (byte-wise vs. item-at-a-time fill); the old `copy_bytes`/`copy_items`/
+  `set_bytes`/`set_items` remain as deprecated `@inline` aliases. The copy and
+  fill functions now return the count they processed (bytes for the
+  `memcpy`/`memset`-backed variants, elements otherwise), and `bytezero`/`zero`
+  return their counts too.
+
 ## [0.4.0] - 2026-07-02
 
 ### Added
