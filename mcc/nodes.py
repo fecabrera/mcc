@@ -117,8 +117,9 @@ class Program:
         conditionals: Top-level ``@if`` blocks selecting whole declarations.
         enums: Enumeration declarations.
         aliases: Type-alias declarations.
-        directives: Top-level ``@static_assert``/``@error`` directives, checked
-            during code generation after types and constants are known.
+        directives: Top-level ``@static_assert``/``@error``/``@warning``
+            directives, checked during code generation after types and
+            constants are known.
     """
 
     imports: list[tuple[str, int]]
@@ -613,21 +614,26 @@ class StaticAssert:
 
 @dataclass
 class ErrorDirective:
-    """An ``@error("msg");`` unconditional compile error.
+    """An ``@error("msg");`` or ``@warning("msg");`` diagnostic directive.
 
-    Fails the compile at its position with ``message``. Most useful guarded by
-    a top-level ``@if`` (``@if (!TARGET_OS) { @error("unsupported OS"); }``),
-    where the dead branch is dropped and only a live one aborts the build.
+    ``@error`` fails the compile at its position with ``message``; ``@warning``
+    is its non-fatal twin, collecting a warning instead of aborting. Both are
+    most useful guarded by a top-level ``@if``
+    (``@if (!TARGET_OS) { @error("unsupported OS"); }``), where the dead
+    branch is dropped and only a live one fires.
 
     Attributes:
-        message: The error message, reported verbatim.
+        message: The diagnostic message, reported verbatim.
         line: Source line for diagnostics.
         source: Defining file, stamped by the driver.
+        warning: ``True`` for ``@warning`` (collect, keep compiling);
+            ``False`` for ``@error`` (abort).
     """
 
     message: str
     line: int
     source: str | None = None
+    warning: bool = False
 
 
 @dataclass

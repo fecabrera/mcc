@@ -578,10 +578,11 @@ folded.
 
 ## Error directives
 
-Two directives turn a bad build into a compile error before it ever links:
-`@static_assert(cond, "message")` fails when a condition is false, and
-`@error("message")` fails unconditionally at its position. Both live at the top
-level, alongside declarations.
+Three directives report a build's problems at compile time, before it ever
+links: `@static_assert(cond, "message")` fails when a condition is false,
+`@error("message")` fails unconditionally at its position, and
+`@warning("message")` is `@error`'s non-fatal twin, reporting without
+aborting. All live at the top level, alongside declarations.
 
 `@static_assert` checks an invariant at compile time: a struct's layout, a
 type's size or alignment, an enum value the code depends on. Its condition is
@@ -629,12 +630,57 @@ does not support:
 }
 ```
 
-Both directives are checked during code generation, once every type, constant,
-enum, and global is known but before any function body is compiled, and they
-fire in source order, so the first failure wins. A directive imported from another
-module is checked too, and reports the file that defined it. Directive messages
-are decoded with the same escapes as any [string](#strings) literal, so `\n`
-and friends work.
+`@warning` emits on the warning channel instead of failing: the compiler
+collects each one it reaches and, once generation has succeeded, prints them
+to stderr in emission order,
+
+```
+example.mc: warning: line 3: message
+```
+
+and the build carries on — the executable, object, or IR is still produced,
+and under `--run` the warnings print before the program executes. An imported
+`@warning` reports the file that declared it, with the same
+relative-to-the-current-directory paths as errors. Like `@error`, a bare
+`@warning` fires on every build, so it earns its keep guarded by an
+[`@if`](#conditional-compilation) — flagging a build configuration as suspect
+without rejecting it:
+
+```c
+@if (FAST_MATH and DEBUG) {
+    @warning("FAST_MATH under DEBUG: results will not be reproducible");
+}
+```
+
+The channel is collect-then-print: warnings are reported only *after* a
+successful generation, so a build that stops with a hard error prints only
+the error — any warnings collected before it are dropped with the failed
+build.
+
+The `-Werror` flag promotes warnings to the failure exit path. Every
+collected warning still prints (collect-all-then-fail, not stop-at-first),
+each rendered as an error line carrying a ` [-Werror]` marker:
+
+```
+example.mc: error: line 3: message [-Werror]
+```
+
+The exit status is 1 and no outputs are written — no executable, no object,
+no `.mci` from `--emit-interface` — and `--run` does not execute the program.
+`-Werror` is off by default; this repository's CI turns it on, so the
+examples stay warning-clean.
+
+All three directives are checked during code generation, once every type,
+constant, enum, and global is known but before any function body is compiled,
+and they fire in source order, so the first failure wins. A directive imported
+from another module is checked too, and reports the file that defined it.
+Directive messages are decoded with the same escapes as any [string](#strings)
+literal, so `\n` and friends work.
+
+See [examples/types/static_assert.mc](../examples/types/static_assert.mc) for
+`@static_assert` and `@error` guarding a build, and
+[examples/types/warnings.mc](../examples/types/warnings.mc) for a `-D`-gated
+`@warning` and the `-Werror` promotion.
 
 (For now these are top-level only; a statement-position form, and the
 per-instantiation behavior it gives inside a generic body, are planned.)

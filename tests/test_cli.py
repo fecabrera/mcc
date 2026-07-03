@@ -515,6 +515,103 @@ def test_link_input_may_not_collide_with_intermediate_object(tmp_path):
     assert (tmp_path / "app.o").exists()  # the input was left alone
 
 
+# ------------------------------------------------------ warnings / -Werror
+
+WARN_SRC = (
+    'import "libc/stdio";\n'
+    '@warning("engage bespoke mode");\n'
+    'fn main() -> int32 { puts("ran anyway"); return 7; }\n'
+)
+
+
+def test_warning_prints_after_success_and_does_not_abort(tmp_path):
+    src = tmp_path / "warn.mc"
+    src.write_text(WARN_SRC)
+    exe = tmp_path / "warn"
+    result = mcc(src, "-o", exe)
+    assert result.returncode == 0
+    assert f"{src}: warning: line 2: engage bespoke mode\n" in result.stderr
+    assert exe.exists()
+
+
+def test_warning_paths_under_cwd_print_relative(tmp_path):
+    (tmp_path / "warn.mc").write_text(WARN_SRC)
+    result = subprocess.run(
+        [sys.executable, "-m", "mcc", "warn.mc", "-o", str(tmp_path / "warn")],
+        cwd=tmp_path, capture_output=True, text=True,
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+    )
+    assert result.returncode == 0
+    assert result.stderr.startswith("warn.mc: warning: line 2: engage bespoke mode")
+
+
+def test_run_prints_warnings_before_the_program_executes(tmp_path):
+    src = tmp_path / "warn.mc"
+    src.write_text(WARN_SRC)
+    # Merge the streams so the warning's position relative to the program's
+    # own output is observable: it must print before main runs.
+    result = subprocess.run(
+        [sys.executable, "-m", "mcc", str(src), "--run"],
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    assert result.returncode == 7  # the program's own exit status is kept
+    warning = f"{src}: warning: line 2: engage bespoke mode"
+    assert result.stdout.index(warning) < result.stdout.index("ran anyway")
+
+
+def test_werror_promotes_fails_and_writes_no_output(tmp_path):
+    src = tmp_path / "warn.mc"
+    src.write_text(WARN_SRC)
+    exe = tmp_path / "warn"
+    result = mcc(src, "-Werror", "-o", exe)
+    assert result.returncode == 1
+    assert f"{src}: error: line 2: engage bespoke mode [-Werror]\n" in result.stderr
+    assert not exe.exists()  # promoted failure produces no executable
+    assert not exe.with_suffix(".o").exists()  # and no intermediate object
+
+
+def test_werror_run_does_not_execute_the_program(tmp_path):
+    src = tmp_path / "warn.mc"
+    src.write_text(WARN_SRC)
+    result = mcc(src, "-Werror", "--run")
+    assert result.returncode == 1
+    assert "[-Werror]" in result.stderr
+    assert "ran anyway" not in result.stdout
+
+
+def test_emit_llvm_prints_warnings_on_stderr_and_ir_on_stdout(tmp_path):
+    src = tmp_path / "warn.mc"
+    src.write_text(WARN_SRC)
+    result = mcc(src, "--emit-llvm")
+    assert result.returncode == 0
+    assert f"{src}: warning: line 2: engage bespoke mode\n" in result.stderr
+    assert 'define i32 @"main"()' in result.stdout
+
+
+def test_emit_interface_prints_warnings(tmp_path):
+    src = tmp_path / "warn.mc"
+    src.write_text(WARN_SRC)
+    result = mcc(src, "--emit-interface")
+    assert result.returncode == 0
+    assert f"{src}: warning: line 2: engage bespoke mode\n" in result.stderr
+    assert (tmp_path / "warn.mci").exists()
+
+
+def test_emit_interface_werror_writes_no_mci(tmp_path):
+    src = tmp_path / "warn.mc"
+    src.write_text(WARN_SRC)
+    result = mcc(src, "--emit-interface", "-Werror")
+    assert result.returncode == 1
+    assert f"{src}: error: line 2: engage bespoke mode [-Werror]\n" in result.stderr
+    assert not (tmp_path / "warn.mci").exists()
+
+
+def test_werror_without_warnings_is_a_no_op(tmp_path):
+    result = mcc(HELLO, "-Werror", "--emit-llvm")
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
 def test_interface_package_roundtrip(tmp_path):
     # Build a library to an object + interface, drop the source, then compile a
     # consumer that imports it by bare name (resolving to the .mci) and links

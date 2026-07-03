@@ -10,6 +10,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Warning subsystem and the `@warning` directive** — a non-fatal diagnostic
+  channel: the compiler collects warnings during code generation and the
+  driver prints each as `file: warning: line N: msg` to stderr, in emission
+  order, once generation has succeeded and before any output is produced
+  (under `--run`, before the program executes). `@warning("msg")` is the
+  channel's first producer and `@error`'s non-fatal twin: a top-level
+  directive that reports at its position instead of aborting, most useful
+  guarded by an `@if` to flag a suspect build configuration without rejecting
+  it. The new `-Werror` flag promotes warnings to the failure exit path:
+  every collected warning still prints (collect-all-then-fail), each rendered
+  as `file: error: line N: msg [-Werror]`, the exit status is 1, and no
+  outputs are written — no executable, no object, no `.mci`, and `--run` does
+  not execute the program. The channel reports only after success, so
+  warnings collected before a hard compile error are dropped with the failed
+  build. For embedders, `compile_to_ir` gains a backward-compatible
+  `warnings` out-list keyword. `-Werror` is off by default and on in this
+  repo's CI, keeping the examples warning-clean. See
+  [Error directives](docs/language.md#error-directives).
+
 - **Enum member reuse** — a derived enum inherits a base enum's members by
   naming it in the existing `:` slot: `enum x_status: x_error { RETRY = 100 }`
   copies `x_error`'s member table and adopts its underlying type (pointer

@@ -66,16 +66,18 @@ jobs:
         # Examples are grouped into topical subdirectories, so recurse. Skip
         # baremetal/ -- it is freestanding and cross-compiled with --target in
         # the next step, not linkable for the host here. Basenames are unique
-        # across folders, so the -o output names never collide.
+        # across folders, so the -o output names never collide. -Werror keeps
+        # the examples warning-clean (the decided default: off in normal
+        # builds, on in CI).
         run: |
           find examples -name '*.mc' -not -path 'examples/baremetal/*' | while read -r f; do
             echo "== $f =="
-            pipenv run python -m mcc "$f" -o "$RUNNER_TEMP/$(basename "$f" .mc)"
+            pipenv run python -m mcc "$f" -Werror -o "$RUNNER_TEMP/$(basename "$f" .mc)"
           done
 
       - name: Cross-compile the bare-metal kernel
         run: |
-          pipenv run python -m mcc examples/baremetal/kernel.mc \
+          pipenv run python -m mcc examples/baremetal/kernel.mc -Werror \
             --target aarch64-unknown-none-elf -o "$RUNNER_TEMP/kernel.o"
 
   # The precompiled standard library is experimental: it builds, but linking a
@@ -152,8 +154,8 @@ jobs:
           fn main() -> int32 { println("packaged ok: %d", 30); return 0; }
           MC
           cd "$tmp"
-          mcc hi.mc --run             # JIT: exercises codegen + the bundled stdlib
-          mcc hi.mc -o hi && ./hi     # native: object emission + linking
+          mcc hi.mc -Werror --run             # JIT: exercises codegen + the bundled stdlib
+          mcc hi.mc -Werror -o hi && ./hi     # native: object emission + linking
 
       # The wheel is pure Python (py3-none-any), identical on every runner, so
       # publish it once -- from Linux -- to avoid a duplicate-name upload.

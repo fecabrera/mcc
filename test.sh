@@ -34,8 +34,8 @@ fn main() -> int32 { println("packaged ok: %d", 30); return 0; }
 MC
 cd "$WORK" || exit 1
 
-run_echo "$VENV/bin/mcc" hi.mc --run      # JIT: codegen + the bundled stdlib
-run_echo "$VENV/bin/mcc" hi.mc -o hi      # native: object emission and linking
+run_echo "$VENV/bin/mcc" hi.mc -Werror --run      # JIT: codegen + the bundled stdlib
+run_echo "$VENV/bin/mcc" hi.mc -Werror -o hi      # native: object emission and linking
 run_echo ./hi
 
 echo "smoke test passed"

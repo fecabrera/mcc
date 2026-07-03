@@ -286,6 +286,9 @@ class CodeGen:
         # name -> (private, source file); for @private access checks
         self.func_privacy: dict[str, tuple[bool, str | None]] = {}
         self.current_source: str | None = None  # file owning the code being generated
+        # Non-fatal diagnostics collected during generation, in emission order.
+        # The driver prints them after generation succeeds (see warn()).
+        self.warnings: list[Note] = []
         self.builder: ir.IRBuilder | None = None
         self.locals: dict[str, tuple[ir.AllocaInstr, LangType]] = {}
         self.scope_names: set[str] = set()  # names declared in the current block
@@ -299,6 +302,22 @@ class CodeGen:
         # last. See BlockExprCtx.
         self.block_exprs: list[BlockExprCtx] = []
         self.str_count = 0
+
+    def warn(self, message: str, line: int) -> None:
+        """Record a non-fatal diagnostic on the warning channel.
+
+        The warning is stamped with :attr:`current_source` at emission time
+        (unlike errors, whose source is filled in as they unwind), collected on
+        :attr:`warnings` in emission order, and never aborts generation. The
+        driver prints the list as ``file: warning: line N: message`` lines
+        after generation succeeds; warnings collected before a hard compile
+        error are dropped with the failed build.
+
+        Args:
+            message: The diagnostic text, reported verbatim.
+            line: The 1-based source line the warning refers to.
+        """
+        self.warnings.append(Note(message, line, self.current_source))
 
     def check_access(self, private: bool, source: str | None, what: str, line: int):
         """Enforce ``@private`` visibility for a referenced declaration.
@@ -587,16 +606,17 @@ class CodeGen:
                     self.program.functions.append(item)
 
     def check_directives(self):
-        """Evaluate top-level ``@static_assert`` / ``@error`` directives.
+        """Evaluate top-level ``@static_assert``/``@error``/``@warning`` directives.
 
         Each directive fires in source order. ``@error`` fails the compile
-        unconditionally at its position; ``@static_assert`` folds its condition
-        with :meth:`eval_const` (so ``sizeof``/``alignof``/``offsetof`` and
-        ``const``/enum references resolve against the fully-registered type
-        system) and fails when the condition is a zero integer or ``bool``
-        constant. Directives dropped with the dead branch of a top-level ``@if``
-        never reach here, so a guarded ``@error`` only fires when its branch is
-        live.
+        unconditionally at its position; ``@warning`` collects a non-fatal
+        diagnostic via :meth:`warn` and keeps compiling; ``@static_assert``
+        folds its condition with :meth:`eval_const` (so
+        ``sizeof``/``alignof``/``offsetof`` and ``const``/enum references
+        resolve against the fully-registered type system) and fails when the
+        condition is a zero integer or ``bool`` constant. Directives dropped
+        with the dead branch of a top-level ``@if`` never reach here, so a
+        guarded ``@error``/``@warning`` only fires when its branch is live.
 
         Raises:
             LangError: When an ``@error`` is reached, a ``@static_assert``
@@ -606,6 +626,9 @@ class CodeGen:
         for directive in self.program.directives:
             self.current_source = directive.source
             if isinstance(directive, ErrorDirective):
+                if directive.warning:
+                    self.warn(directive.message, directive.line)
+                    continue
                 raise LangError(directive.message, directive.line)
             value = self.eval_const(directive.cond, directive.line)
             if not isinstance(value.value, ir.Constant) or not (

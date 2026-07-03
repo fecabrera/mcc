@@ -557,22 +557,25 @@ already do).
       implemented, see
       [Error directives](docs/language.md#error-directives); statement position
       (and the per-instantiation generic behavior it unlocks) is the later add
-- [ ] Warning subsystem — a non-fatal diagnostic channel, the foundation the
-      warning directives below and enum-exhaustiveness checking both build on.
-      Today every diagnostic is a hard `file: error: line N: msg` that aborts;
-      this collects warnings on the `CodeGen` instance and has the driver print
+- [x] Warning subsystem — a non-fatal diagnostic channel, the foundation the
+      `@deprecated` directive below and enum-exhaustiveness checking both build
+      on. Warnings collect on the `CodeGen` instance and the driver prints
       `file: warning: line N: msg` to stderr *after* generation succeeds,
-      without aborting, plus a `-Werror` toggle that promotes warnings to the
-      failure exit path. Decided default: `-Werror` off in normal builds, on in
-      CI. No user-facing surface of its own; its consumers are the warning
-      directives below and enum
-      [`case` exhaustiveness](#types-and-generics):
-  - [ ] Warning directives — `@warning(msg)` and `@deprecated(msg)` over the
-        channel above. `@warning(msg)` is `@error`'s non-fatal twin, emitting a
-        warning at its position. `@deprecated(msg)` is different in kind: a
-        declaration attribute on a function that fires a diagnostic (a
-        **warning by default**, not an error) at each *call site*, pointing at
-        the caller with a migration message. Storage mirrors the
+      without aborting; the `-Werror` toggle promotes warnings to the failure
+      exit path (each rendered as `file: error: line N: msg [-Werror]`, exit 1,
+      no outputs written). Shipped with the decided default: `-Werror` off in
+      normal builds, on in this repo's CI and `test.sh`. `@warning(msg)`
+      shipped alongside as the channel's first producer (moved up from the
+      directives item below): `@error`'s non-fatal twin, a top-level directive
+      emitting a warning at its position, most useful under `@if`, riding the
+      existing `ErrorDirective` node and parse rule. The enum
+      [`case` exhaustiveness](#types-and-generics) consumer remains future
+      work; implemented, see
+      [Error directives](docs/language.md#error-directives)
+  - [ ] `@deprecated(msg)` over the channel above — a declaration attribute
+        on a function that fires a diagnostic (a **warning by default**, not
+        an error) at each *call site*, pointing at the caller with a migration
+        message. Storage mirrors the
         `@noalias`/`const`/`mut` param-set pattern on the `Func` node; the
         call-site hook lives in `gen_call`. It round-trips through `.mci` for
         free for generic and `@inline` functions (verbatim source-span

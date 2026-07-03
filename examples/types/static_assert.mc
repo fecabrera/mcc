@@ -74,5 +74,7 @@ fn main() -> int32 {
     return 0;
 }
 
-// See also: types/structs.mc (offsetof and layout constants), types/enums.mc
-// (Enum::Member), control-flow/conditional.mc (@if compile-time selection).
+// See also: warnings.mc (@warning, the non-fatal sibling directive, and the
+// -Werror flag), types/structs.mc (offsetof and layout constants),
+// types/enums.mc (Enum::Member), control-flow/conditional.mc (@if compile-time
+// selection).

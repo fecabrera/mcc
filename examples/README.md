@@ -62,7 +62,8 @@ Defining and calling functions: void/recursion, the parameter modifiers
 ## types/
 
 The type system: aliases, arrays and strings, enums, structs (and their
-literals, flexible array members), unions, and generics.
+literals, flexible array members), unions, and generics, plus the compile-time
+directives that check a build's invariants and configuration.
 
 | Example | Shows |
 |---------|-------|
@@ -76,6 +77,7 @@ literals, flexible array members), unions, and generics.
 | [flexible_array_members.mc](types/flexible_array_members.mc) | a trailing `field: T[]` flexible array member: adds 0 to `sizeof`, decays to a `T*` at the struct's tail, one allocation for header plus elements |
 | [unions.mc](types/unions.mc) | `union Name { ... }` members sharing one storage (all at offset 0): literals with one live member, cross-member byte reinterpretation (float bit patterns), generic unions |
 | [static_assert.mc](types/static_assert.mc) | the top-level compile-time directives `@static_assert(cond, "msg")` and `@error("msg")`: guarding a struct's layout with `sizeof`/`offsetof`/`alignof`, `const`- and `Enum::Member`-based checks, and an `@error` guarded by a dead `@if` branch to reject a target |
+| [warnings.mc](types/warnings.mc) | `@warning("msg")`, `@error`'s non-fatal twin: `-D`-gated `@if` branches flagging a suspect build configuration without rejecting it, the collect-then-print warning channel, and the `-Werror` flag promoting warnings to a failed build |
 | [generics.mc](types/generics.mc) | type inference, generic recursion, multiple type parameters |
 
 ## memory/

@@ -19,7 +19,7 @@ from mcc.codegen import (
     compute_target_facts,
     eval_static_cond,
 )
-from mcc.errors import LangError
+from mcc.errors import LangError, Note
 from mcc.lexer import tokenize
 from mcc.nodes import Conditional, Import, Program
 from mcc.parser import Parser
@@ -262,7 +262,8 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
 def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
                   target: str | None = None,
                   defines: dict[str, int] | None = None,
-                  freestanding: bool = False) -> ir.Module:
+                  freestanding: bool = False,
+                  warnings: list[Note] | None = None) -> ir.Module:
     """Load a source file and lower it to an LLVM IR module.
 
     Args:
@@ -274,6 +275,11 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
             available to ``@if`` conditions.
         freestanding: When true, mark definitions ``"no-builtins"`` so LLVM
             does not assume a hosted C library (see :func:`mark_freestanding`).
+        warnings: An out-list the non-fatal diagnostics collected during
+            generation (e.g. from ``@warning``) are appended to, in emission
+            order, when generation succeeds; ``None`` discards them. Warnings
+            collected before a hard compile error are dropped with the raised
+            :class:`LangError`.
 
     Returns:
         The generated, unverified LLVM IR module.
@@ -282,8 +288,11 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
         search_paths = (STDLIB_DIR,)
     facts = compute_target_facts(target, defines)
     program = load_program(path, tuple(search_paths), facts)
-    module = CodeGen(program, path.name, root_source=str(path.resolve()),
-                     target=target, defines=defines).generate()
+    cg = CodeGen(program, path.name, root_source=str(path.resolve()),
+                 target=target, defines=defines)
+    module = cg.generate()
+    if warnings is not None:
+        warnings.extend(cg.warnings)
     if freestanding:
         mark_freestanding(module)
     return module
@@ -494,12 +503,12 @@ def parse_defines(items: list[str]) -> dict[str, int]:
 def _format_diagnostic(where: Path, severity: str, line: int, message: str) -> str:
     """Render one diagnostic line as ``{where}: {severity}: line N: {message}``.
 
-    The single severity formatter shared by the error and note channels (and
-    meant for reuse by the planned warning subsystem).
+    The single severity formatter shared by the error, note, and warning
+    channels.
 
     Args:
         where: The file the diagnostic refers to.
-        severity: The channel name (``error`` or ``note``).
+        severity: The channel name (``error``, ``note``, or ``warning``).
         line: The 1-based source line.
         message: The diagnostic text.
 
@@ -507,6 +516,28 @@ def _format_diagnostic(where: Path, severity: str, line: int, message: str) -> s
         The formatted line, without a trailing newline.
     """
     return f"{where}: {severity}: line {line}: {message}"
+
+
+def _where(source: str | None, fallback: Path) -> Path:
+    """Resolve a diagnostic's file, relative to the cwd when possible.
+
+    Args:
+        source: The path recorded on the diagnostic, or ``None`` when it
+            carries no source of its own.
+        fallback: The file blamed when ``source`` is ``None`` (the entry
+            source file).
+
+    Returns:
+        The file to print, relativized when it lies under the current
+        directory.
+    """
+    path = Path(source) if source else fallback
+    if path.is_absolute():  # imported files resolve to absolute paths
+        try:
+            path = path.relative_to(Path.cwd())
+        except ValueError:
+            pass
+    return path
 
 
 def _report_lang_error(err: LangError, fallback: Path) -> None:
@@ -524,33 +555,54 @@ def _report_lang_error(err: LangError, fallback: Path) -> None:
         fallback: The file blamed when a frame carries no source of its own
             (the entry source file).
     """
-
-    def where(source: str | None) -> Path:
-        """Resolve a frame's file, relative to the cwd when possible."""
-        path = Path(source) if source else fallback
-        if path.is_absolute():  # imported files resolve to absolute paths
-            try:
-                path = path.relative_to(Path.cwd())
-            except ValueError:
-                pass
-        return path
-
-    print(_format_diagnostic(where(err.source), "error", err.line, err.message),
-          file=sys.stderr)
+    print(_format_diagnostic(_where(err.source, fallback), "error", err.line,
+                             err.message), file=sys.stderr)
     for note in err.notes:
-        print(_format_diagnostic(where(note.source), "note", note.line, note.message),
-              file=sys.stderr)
+        print(_format_diagnostic(_where(note.source, fallback), "note", note.line,
+                                 note.message), file=sys.stderr)
+
+
+def _report_warnings(warnings: list[Note], fallback: Path, werror: bool) -> bool:
+    """Print collected warnings to stderr; return whether the build must fail.
+
+    Each warning renders as ``file: warning: line N: message``, in emission
+    order, with the same cwd-relative path treatment as errors. Under
+    ``-Werror`` every warning is instead promoted to
+    ``file: error: line N: message [-Werror]`` and the build fails after all
+    of them have printed (collect-all-then-fail).
+
+    Args:
+        warnings: The warnings collected during a successful generation.
+        fallback: The file blamed when a warning carries no source of its own
+            (the entry source file).
+        werror: Whether ``-Werror`` promotes the warnings to errors.
+
+    Returns:
+        ``True`` when ``werror`` promoted at least one warning, so the caller
+        must take the failure exit path without writing any outputs.
+    """
+    for warning in warnings:
+        if werror:
+            line = _format_diagnostic(_where(warning.source, fallback), "error",
+                                      warning.line, f"{warning.message} [-Werror]")
+        else:
+            line = _format_diagnostic(_where(warning.source, fallback), "warning",
+                                      warning.line, warning.message)
+        print(line, file=sys.stderr)
+    return werror and bool(warnings)
 
 
 def emit_interface(source: Path, search_paths: tuple[Path, ...],
                    target: str | None, defines: dict[str, int],
-                   output: Path | None) -> int:
+                   output: Path | None, werror: bool = False) -> int:
     """Write a ``.mci`` interface stub for ``source`` and return an exit status.
 
     Compiles the source the same way as a normal build (so ``@if`` is resolved
     and constants/enums are folded for the chosen target), then renders its
     public surface as an importable stub. Compile and I/O errors are reported as
-    ``file: error: ...`` on stderr.
+    ``file: error: ...`` on stderr. Warnings collected during generation print
+    as ``file: warning: ...`` after it succeeds; under ``-Werror`` they are
+    promoted to errors and no ``.mci`` is written.
 
     Args:
         source: The entry source file to describe.
@@ -559,6 +611,7 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
             ``@if`` branches and constant values the interface reflects.
         defines: Command-line ``-D`` values for ``@if`` conditions.
         output: The ``.mci`` path to write, or ``None`` for ``source.mci``.
+        werror: Whether ``-Werror`` promotes warnings to the failure path.
 
     Returns:
         0 on success, 1 on a reported error.
@@ -580,6 +633,9 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
         _report_lang_error(err, source)
         return 1
 
+    if _report_warnings(cg.warnings, source, werror):
+        return 1  # promoted by -Werror: fail without writing the stub
+
     out = output or source.with_suffix(".mci")
     out.write_text(stub)
     return 0
@@ -593,7 +649,9 @@ def main() -> int:
     cross target (``--target``), JIT-executes ``main`` (``--run``), or links a
     native executable with ``cc``, forwarding any extra object/archive inputs
     and ``-l``/``-L`` options to the link. Compile and I/O errors are reported
-    as ``file: error: ...`` on stderr.
+    as ``file: error: ...`` on stderr; warnings collected during a successful
+    generation print as ``file: warning: ...`` before any output is produced,
+    and ``-Werror`` promotes them to the failure exit path.
 
     Returns:
         A process exit status: 0 on success, 1 on a reported error, or the
@@ -639,6 +697,9 @@ def main() -> int:
     cli.add_argument("-D", "--define", action="append", default=[], metavar="NAME[=VALUE]",
                      help="define a name for @if conditions; NAME alone is 1, NAME=VALUE "
                           "sets an integer (repeatable). An @if name with no -D reads as 0")
+    cli.add_argument("-Werror", dest="werror", action="store_true",
+                     help="promote warnings to errors: each warning reports as an "
+                          "error and the build fails without writing any output")
     args = cli.parse_args()
 
     # Split the positionals: exactly one .mc source; everything else (objects,
@@ -687,16 +748,24 @@ def main() -> int:
 
     if args.emit_interface:
         return emit_interface(args.source, tuple(search_paths), args.target, defines,
-                              args.output)
+                              args.output, args.werror)
 
+    warnings: list[Note] = []
     try:
         module = compile_to_ir(args.source, search_paths, args.target, defines,
-                               args.freestanding)
+                               args.freestanding, warnings)
     except OSError as err:
         print(f"mcc: error: cannot read {args.source}: {err.strerror}", file=sys.stderr)
         return 1
     except LangError as err:
         _report_lang_error(err, args.source)
+        return 1
+
+    # Warnings print once generation has succeeded, before any output is
+    # produced -- so they precede the IR under --emit-llvm and the program's
+    # own output under --run. -Werror promotes them and fails here, writing
+    # no object, executable, or IR.
+    if _report_warnings(warnings, args.source, args.werror):
         return 1
 
     if args.emit_llvm:

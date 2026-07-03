@@ -337,17 +337,17 @@ class Parser:
         return StaticAssert(cond, message, line)
 
     def parse_error_directive(self):
-        """Parse an ``@error("msg");`` directive.
+        """Parse an ``@error("msg");`` or ``@warning("msg");`` directive.
 
         Returns:
-            An ``ErrorDirective`` node.
+            An ``ErrorDirective`` node, with ``warning`` set for ``@warning``.
         """
-        line = self.advance().line  # @error
+        annot = self.advance()  # @error or @warning
         self.expect("(")
         message = _unescape(self.expect("STRING").text[1:-1])
         self.expect(")")
         self.expect(";")
-        return ErrorDirective(message, line)
+        return ErrorDirective(message, annot.line, warning=annot.text == "@warning")
 
     def parse_toplevel_item(self):
         """Parse one top-level item and record its source byte span.
@@ -388,7 +388,7 @@ class Parser:
             raise LangError("@else without a matching @if", self.cur.line)
         if self.cur.kind == "ANNOT" and self.cur.text == "@static_assert":
             return self.parse_static_assert()
-        if self.cur.kind == "ANNOT" and self.cur.text == "@error":
+        if self.cur.kind == "ANNOT" and self.cur.text in ("@error", "@warning"):
             return self.parse_error_directive()
         if self.cur.kind == "import":
             # Only valid inside an @if branch (parse_toplevel_block); a stray one
