@@ -10,6 +10,22 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Flow-narrowing for `@nonnull`** — a plain `T*` local now narrows to
+  non-null from a null check, so idiomatic guarded code needs no escape
+  hatch: `if (p != null) { first(p); }` proves `p` inside the then branch
+  (and `if (p == null) {A} else {B}` proves it in `B`), while the
+  C-idiomatic early guard — an else-less `if (p == null)` whose body always
+  diverges (`return`/`break`/`continue`, or every nested path returning) —
+  proves `p` for the remainder of the enclosing scope. The narrowing is
+  syntax-directed on the AST (no CFG pass), purely static (no instructions
+  emitted), and deliberately conservative: only bare local pointer
+  variables narrow (never globals, `mut` parameters, or member/index
+  expressions), taking `&p` anywhere in the function disables narrowing of
+  `p`, the fact dies on reassignment / a `mut` argument / a shadowing
+  `let`, and all narrowed facts drop at loop entry (guard inside the body
+  instead). Compound conditions (`and`/`or`), `while (p != null)` headers,
+  and fact-seeding through `let` are follow-on work. See
+  [@nonnull parameters](docs/language.md#nonnull-parameters).
 - **Postfix `p!` non-null assertion** — the `@nonnull` escape hatch: a heap
   or returned `T*` carries no syntactic non-null proof, and `p!` is the
   programmer's explicit assertion that lets it cross into a `@nonnull`

@@ -4,7 +4,9 @@ import "memory";
 // The postfix `p!` non-null assertion: the escape hatch into @nonnull.
 // A @nonnull parameter (see nonnull.mc) only accepts arguments the compiler
 // can prove non-null, and a heap pointer or a returned `T*` carries no such
-// proof. `p!` is the programmer's explicit assertion that the pointer is
+// proof. Where a null-check guard cannot narrow it either (see
+// nonnull_narrowing.mc), `p!` is the programmer's explicit assertion that
+// the pointer is
 // non-null: it evaluates to its operand unchanged, emits no instructions and
 // no runtime check, and the assertion alone satisfies the @nonnull proof.
 // The compiler trusts it, so asserting a pointer that is actually null is
@@ -30,7 +32,8 @@ fn main() -> int32 {
     let b = *(p!);
 
     // The assertion covers only the expression it wraps. A binding made from
-    // it is a fresh, unproven pointer (flow-narrowing will lift this later):
+    // it is a fresh, unproven pointer (fact-seeding through `let` is a
+    // planned narrowing extension):
     let q = p!;
     // first(q);         // error: q is a plain, unproven int32*
 
@@ -44,5 +47,6 @@ fn main() -> int32 {
 }
 
 // See also: nonnull.mc for @nonnull parameters and the always-non-null proof
-// sources that need no assertion; memory/pointers.mc for heap allocation and
-// the pointer basics.
+// sources that need no assertion; nonnull_narrowing.mc for the null-check
+// guards that avoid the hatch in idiomatic code; memory/pointers.mc for heap
+// allocation and the pointer basics.

@@ -13,6 +13,8 @@ arguments, exactly like generic functions monomorphize.
 from __future__ import annotations
 
 import re
+from dataclasses import fields as dataclass_fields
+from dataclasses import is_dataclass
 from dataclasses import replace as dataclasses_replace
 
 from llvmlite import ir
@@ -130,6 +132,32 @@ from mcc.codegen.types import (
     _host_triple,
 )
 
+
+def collect_addr_taken(obj, names: set[str]) -> None:
+    """Accumulate every name whose address is taken (``&name``) into ``names``.
+
+    Recurses through dataclass fields and lists, so one pass over a function
+    body (``defer`` bodies included) finds every ``&x`` on a bare variable.
+    Flow-narrowing uses the result as a blanket ban: once a local's address
+    exists, a stored pointer could null the variable without ever naming it,
+    so per-site invalidation cannot be sound -- the name is simply never
+    narrowable anywhere in the function.
+
+    Args:
+        obj: An AST node, list, or scalar to scan.
+        names: The set to add address-taken names to, in place.
+    """
+    if isinstance(obj, Unary) and obj.op == "&" and isinstance(obj.operand, Var):
+        names.add(obj.operand.name)
+        return
+    if is_dataclass(obj):
+        for f in dataclass_fields(obj):
+            collect_addr_taken(getattr(obj, f.name), names)
+    elif isinstance(obj, (list, tuple)):
+        for item in obj:
+            collect_addr_taken(item, names)
+
+
 # Builtin struct templates, available in every program with no import: the
 # shared `iterator<T>` cursor behind the `_it`/`_next` protocol, and the
 # `pair<K, V>` element the keyed containers yield from `_next`. They are
@@ -239,6 +267,16 @@ class CodeGen:
         # non-null facts, so forwarding one to another @nonnull slot needs no
         # proof. A shadowing `let` drops the name (see bind_local).
         self.nonnull_locals: set[str] = set()
+        # Plain pointer locals flow-narrowed to non-null by a null-check guard
+        # (`if (p != null)` / a diverging `if (p == null)`). Unlike
+        # nonnull_locals these bindings stay reassignable and addressable --
+        # the fact is just dropped on any event that could null the variable
+        # (see narrowable_guard_name for the invalidation rules).
+        self.narrowed_nonnull: set[str] = set()
+        # Names whose address is taken (&x) anywhere in the current function's
+        # body -- such locals are never narrowable (a stored pointer could
+        # null them without naming them).
+        self.addr_taken: set[str] = set()
         # Generic functions: a name maps to its overload set, distinguished
         # by parameter patterns (e.g. hash<T>(T) vs hash<T>(T*)).
         self.templates: dict[str, list[Func]] = {}
@@ -1961,6 +1999,9 @@ class CodeGen:
         self.const_locals = set(func.const_params)
         self.mut_locals = set(func.mut_params)
         self.nonnull_locals = set(func.nonnull_params)
+        self.narrowed_nonnull = set()
+        self.addr_taken = set()
+        collect_addr_taken(func.body, self.addr_taken)
         for i, ((pname, _), ptype, arg) in enumerate(zip(func.params, params, fn.args)):
             arg.name = pname
             if i in hidden:
@@ -2003,6 +2044,7 @@ class CodeGen:
         # one (the outer binding is restored on exit). Allocas live for the
         # whole function regardless, so this only governs name visibility.
         outer_locals, outer_names = dict(self.locals), self.scope_names
+        outer_narrowed = set(self.narrowed_nonnull)
         self.scope_names = set()
         self.defer_stack.append([])
         try:
@@ -2017,6 +2059,10 @@ class CodeGen:
         finally:
             self.defer_stack.pop()
             self.locals, self.scope_names = outer_locals, outer_names
+            # Narrowed facts established inside the block (early-guard
+            # narrowing, shadowed names) end with it; invalidations from
+            # inside persist outward. Intersecting achieves both.
+            self.narrowed_nonnull &= outer_narrowed
 
     def run_deferred_scope(self, scope: list):
         """Emit one block's deferred actions, last-registered first.
@@ -2324,8 +2370,10 @@ class CodeGen:
         self.locals[name] = (slot, lang_type)
         self.scope_names.add(name)
         # A shadowing binding is a fresh, possibly-null variable: the shadowed
-        # @nonnull parameter's fact must not transfer to it.
+        # @nonnull parameter's fact must not transfer to it. Ditto for a
+        # flow-narrowed fact on the shadowed name.
         self.nonnull_locals.discard(name)
+        self.narrowed_nonnull.discard(name)
 
     def coerce(
         self, tv: TypedValue, expected: LangType, line: int, context: str
@@ -2641,6 +2689,8 @@ class CodeGen:
                     "reassignment could drop the non-null guarantee",
                     stmt.line,
                 )
+            # A reassignment may store null: any flow-narrowed fact dies here.
+            self.narrowed_nonnull.discard(stmt.name)
             slot, var_type, volatile = self.var_addr(stmt.name, stmt.line)
             if var_type.const:
                 raise LangError(
@@ -2657,13 +2707,22 @@ class CodeGen:
             self.gen_compound_assign(stmt)
         elif isinstance(stmt, If):
             cond = self.gen_cond(stmt.cond)
+            # Flow-narrowing: `if (p != null)` proves p non-null in the then
+            # branch; `if (p == null)` proves it in the else branch (at most
+            # one of the two matches, since the operator differs).
+            then_fact = self.narrowable_guard_name(stmt.cond, "!=")
+            else_fact = self.narrowable_guard_name(stmt.cond, "==")
             if stmt.otherwise:
                 with self.builder.if_else(cond) as (then, otherwise):
                     with then:
+                        added = self.narrow_nonnull(then_fact)
                         self.gen_block(stmt.then)
+                        self.narrowed_nonnull -= added
                         then_diverged = self.builder.block.is_terminated
                     with otherwise:
+                        added = self.narrow_nonnull(else_fact)
                         self.gen_block(stmt.otherwise)
+                        self.narrowed_nonnull -= added
                         else_diverged = self.builder.block.is_terminated
                 # When both arms diverge (return/emit/break), the merge block
                 # the builder now sits in is unreachable; terminate it so the
@@ -2672,9 +2731,25 @@ class CodeGen:
                     self.builder.unreachable()
             else:
                 with self.builder.if_then(cond):
+                    added = self.narrow_nonnull(then_fact)
                     self.gen_block(stmt.then)
+                    self.narrowed_nonnull -= added
+                    then_diverged = self.builder.block.is_terminated
+                # The C-idiomatic early guard: a diverging `if (p == null)`
+                # body with no else proves p non-null for the remainder of
+                # the enclosing scope (the fact ends with it -- gen_block
+                # intersects on exit). Assignments inside the diverging body
+                # cannot reach the remainder, so they do not invalidate it.
+                if else_fact is not None and then_diverged:
+                    self.narrowed_nonnull.add(else_fact)
         elif isinstance(stmt, While):
             kind = "until" if stmt.until else "while"
+            # A loop's condition and body re-run on the back edge, where a
+            # later iteration may already have invalidated a fact proved
+            # before the loop -- so all flow-narrowed facts drop at loop
+            # entry. (Keeping the facts a body provably cannot invalidate is
+            # a planned refinement; see ROADMAP.)
+            self.narrowed_nonnull.clear()
             cond_bb = self.builder.append_basic_block(f"{kind}.cond")
             body_bb = self.builder.append_basic_block(f"{kind}.body")
             end_bb = self.builder.append_basic_block(f"{kind}.end")
@@ -2870,6 +2945,8 @@ class CodeGen:
                     "reassignment could drop the non-null guarantee",
                     line,
                 )
+            # `p += n` moves the pointer; any flow-narrowed fact dies here.
+            self.narrowed_nonnull.discard(target.name)
             slot, var_type, volatile = self.var_addr(target.name, line)
             if var_type.const:
                 raise LangError(
@@ -2939,6 +3016,11 @@ class CodeGen:
             LangError: When the iterable is not a struct, or its ``S_it`` /
                 matching ``S_next`` is not in scope.
         """
+        # Like `while`: the body re-runs on the back edge, where a later
+        # iteration may already have invalidated a fact proved before the
+        # loop -- all flow-narrowed facts drop at loop entry, for every
+        # `for` variant (range/enumerate/slice/protocol).
+        self.narrowed_nonnull.clear()
         # `for x in range(...)` is a builtin counting loop, lowered directly to
         # a counter with no struct or protocol calls. A user-defined `range`
         # function, if any, takes precedence.
@@ -5478,6 +5560,61 @@ class CodeGen:
             args.append(value)
         return args
 
+    def narrowable_guard_name(self, cond, op: str) -> str | None:
+        """Return the local a null-comparison guard can flow-narrow, if any.
+
+        Matches ``p <op> null`` or ``null <op> p`` where ``p`` is a bare
+        variable eligible for narrowing: a plain pointer **local** (a global
+        never narrows -- any call could store null into it) that is not a
+        ``mut`` parameter (a callee taking two ``mut`` references can alias
+        it, so per-name invalidation at the call would miss the write), not
+        already ``@nonnull`` (nothing to narrow), and whose address is never
+        taken anywhere in the function (see :func:`collect_addr_taken`).
+        Compound conditions (``and``/``or``), member/index expressions, and
+        ``while`` headers do not narrow ([roadmap](ROADMAP.md)).
+
+        Args:
+            cond: The ``if`` condition expression.
+            op: The comparison to match: ``"!="`` (proves the then branch)
+                or ``"=="`` (proves the else branch / the remainder after a
+                diverging then body).
+
+        Returns:
+            The narrowable variable's name, or ``None``.
+        """
+        if not isinstance(cond, Binary) or cond.op != op:
+            return None
+        if isinstance(cond.lhs, Var) and isinstance(cond.rhs, NullLit):
+            name = cond.lhs.name
+        elif isinstance(cond.rhs, Var) and isinstance(cond.lhs, NullLit):
+            name = cond.rhs.name
+        else:
+            return None
+        entry = self.locals.get(name)
+        if entry is None or not is_pointer(entry[1]):
+            return None
+        if name in self.mut_locals or name in self.nonnull_locals:
+            return None
+        if name in self.addr_taken:
+            return None
+        return name
+
+    def narrow_nonnull(self, name: str | None) -> set[str]:
+        """Record a flow-narrowed non-null fact for a guard's branch.
+
+        Args:
+            name: The name to narrow, or ``None`` for no fact.
+
+        Returns:
+            The names actually added -- what the guard must remove again at
+            branch exit. Empty when the name was already narrowed (an outer
+            guard's fact must survive this one's exit).
+        """
+        if name is None or name in self.narrowed_nonnull:
+            return set()
+        self.narrowed_nonnull.add(name)
+        return {name}
+
     def proves_nonnull(self, expr) -> bool:
         """Whether an argument expression is provably non-null.
 
@@ -5486,9 +5623,10 @@ class CodeGen:
         fresh storage), an array variable decaying to a pointer (local,
         ``@static``, or global -- all named storage), a ``@nonnull``
         parameter of the current function (the guarantee travels
-        transitively), and a postfix ``p!`` assertion (the programmer's
-        explicit, unchecked claim). Narrowing a plain pointer from an
-        ``if (p != null)`` check is planned but not implemented.
+        transitively), a plain pointer local flow-narrowed by a null-check
+        guard (``if (p != null) { ... }`` or a diverging
+        ``if (p == null) ...``), and a postfix ``p!`` assertion (the
+        programmer's explicit, unchecked claim).
 
         Args:
             expr: The argument expression.
@@ -5503,7 +5641,7 @@ class CodeGen:
         if isinstance(expr, Unary) and expr.op == "&":
             return True
         if isinstance(expr, Var):
-            if expr.name in self.nonnull_locals:
+            if expr.name in self.nonnull_locals or expr.name in self.narrowed_nonnull:
                 return True
             var_type = self.var_type_of(expr.name)
             return var_type is not None and is_array(var_type)
@@ -5529,7 +5667,8 @@ class CodeGen:
             raise LangError(
                 f"cannot pass a possibly-null pointer as {context}: the "
                 "parameter is @nonnull (pass &x, a string or array literal, "
-                "an array, a @nonnull parameter, or assert with postfix '!')",
+                "an array, a @nonnull parameter, a pointer narrowed by a "
+                "null check, or assert with postfix '!')",
                 line,
             )
 
@@ -5642,6 +5781,13 @@ class CodeGen:
                 "alignment is not guaranteed",
                 line,
             )
+        # Lending the storage as mut lets the callee store null through the
+        # reference: any flow-narrowed fact for the name dies here. The point
+        # invalidation is sound because & of a mut parameter is banned and a
+        # function with mut parameters cannot become a function value, so the
+        # callee cannot leak the address past the call.
+        if isinstance(arg_expr, Var):
+            self.narrowed_nonnull.discard(arg_expr.name)
 
     def mut_ref_arg(
         self, arg_expr, ptype: LangType, line: int, context: str
@@ -6129,6 +6275,8 @@ class CodeGen:
             self.const_locals,
             self.mut_locals,
             self.nonnull_locals,
+            self.narrowed_nonnull,
+            self.addr_taken,
         )
         self.type_bindings = bindings
         self.current_source = func.source  # the signature may name private structs
@@ -6180,6 +6328,8 @@ class CodeGen:
                 self.const_locals,
                 self.mut_locals,
                 self.nonnull_locals,
+                self.narrowed_nonnull,
+                self.addr_taken,
             ) = saved
             self.type_bindings = outer_bindings
             self.current_source = outer_source

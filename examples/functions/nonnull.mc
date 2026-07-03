@@ -32,8 +32,10 @@ fn main() -> int32 {
     // first(null);           // error: cannot pass null
     // let p: int32* = &x;
     // first(p);              // error: a plain int32* carries no proof
-    // (For heap or returned pointers with no proof to offer, the postfix
-    // `p!` assertion is the escape hatch: see nonnull_assert.mc.)
+    // (A null-check `if` guard narrows a plain local like p into a proof at
+    // no cost: see nonnull_narrowing.mc. For pointers with no invariant the
+    // compiler can see, the postfix `p!` assertion is the escape hatch: see
+    // nonnull_assert.mc.)
 
     println("a = %d, b = %d, head = %c", a, b, c as int32);
     println("sum = %d", a + b + (c as int32 - 64)); // 40 + 1 + 1 = 42
@@ -42,6 +44,7 @@ fn main() -> int32 {
 
 // @nonnull is orthogonal to @noalias and the two may sit on one parameter
 // (`@noalias @nonnull p: T*`): non-null is checked by the compiler, no-overlap
-// is a promise the caller keeps. See also: nonnull_assert.mc for the postfix
-// `p!` assertion that lets unproven pointers cross; noalias.mc;
-// memory/pointers.mc for the pointer basics.
+// is a promise the caller keeps. See also: nonnull_narrowing.mc for the
+// null-check guards that narrow a plain T* into a proof; nonnull_assert.mc
+// for the postfix `p!` assertion that lets unproven pointers cross;
+// noalias.mc; memory/pointers.mc for the pointer basics.

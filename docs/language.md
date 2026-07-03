@@ -225,9 +225,61 @@ The accepted proofs are the always-non-null sources: `&x` (the address of
 named storage), a string or array literal, an array decaying to a pointer
 (local, `@static`, or global), transitively a `@nonnull` parameter of
 the calling function (so a `@nonnull` callee forwards its own parameter
-onward with no check), and the explicit escape hatch below. Narrowing a
-plain `T*` from an `if (p != null)` check is planned
-([roadmap](../ROADMAP.md#planned)).
+onward with no check), a plain pointer local flow-narrowed by a null check
+(below), and the explicit escape hatch (further below).
+
+**Flow-narrowing.** Idiomatic null-checked code needs no escape hatch: the
+compiler narrows a plain `T*` local to non-null from either of the two `if`
+guard shapes. `if (p != null) { ... }` proves `p` inside the then branch
+(with an `else`, `if (p == null) {A} else {B}` symmetrically proves `p` in
+`B`), and the C-idiomatic early guard — an else-less `if (p == null)` whose
+body always diverges (`return`, `break`, `continue`, or every nested path
+returning) — proves `p` for the remainder of the enclosing scope:
+
+```c
+fn get(p: int32*) -> int32 {
+    if (p == null) { return 0; }
+    return first(p);      // ok: the early guard proved p non-null
+}
+
+fn show(p: int32*) -> int32 {
+    if (p != null) {
+        return first(p);  // ok: narrowed inside the then branch
+    }
+    return -1;            // outside the guard p is unproven again
+}
+```
+
+Narrowing is purely static — it emits no instructions — and it is
+deliberately conservative, so the fact only exists where nothing can null
+the pointer between the check and the use:
+
+- **Only bare local pointer variables narrow.** Globals never narrow (any
+  call in between could store null into one), `mut` parameters never narrow
+  (a callee taking two `mut` references can alias one, so a call could null
+  it without naming it here), and member/index expressions like `s.p` or
+  `a[i]` carry no per-name fact — assert those with `!` instead.
+- **Taking `&p` anywhere in the function disables narrowing of `p`**
+  entirely: once its address exists, a stored pointer could null `p`
+  without ever naming it.
+- **The fact dies on anything that could null the variable**: reassigning
+  `p` (including `p += n`), passing `p` as a `mut` argument, or a shadowing
+  `let p`. An invalidation inside a nested block persists outward, and it is
+  path-insensitive: invalidating `p` in one branch of an inner `if` drops
+  the fact for the code after it, whichever branch runs.
+- **All narrowed facts drop at loop entry** (`while`, `until`, `for`): the
+  body re-runs on the back edge, where a later iteration may already have
+  invalidated a fact proved before the loop. Guard *inside* the body
+  instead; a body-local guard re-establishes the fact every iteration.
+  (Keeping pre-loop facts a body provably cannot invalidate is a planned
+  refinement, [roadmap](../ROADMAP.md#planned).)
+
+The condition must be exactly a `p != null` / `p == null` comparison
+(either operand order). Compound conditions (`p != null and q != null`),
+`while (p != null)` headers, and ternary conditions do not narrow yet, and
+`let q = p;` does not carry `p`'s fact to `q` — all follow-on work
+([roadmap](../ROADMAP.md#planned)). Where narrowing cannot see the
+invariant, the escape hatch below is the pressure valve.
 
 **The escape hatch: postfix `!`.** A heap or returned `T*` carries no
 syntactic proof, so it cannot cross into a `@nonnull` slot on its own. The
@@ -248,7 +300,8 @@ where you know the invariant holds (e.g. right after a checked allocation).
 
 The assertion covers exactly the expression it wraps, not the binding it
 lands in: `let q = p!; first(q);` is still a compile error, because `q` is a
-fresh, unproven `T*` (flow-narrowing will lift this later). `p!` is legal on
+fresh, unproven `T*` (fact-seeding through `let` is a planned narrowing
+extension). `p!` is legal on
 any pointer expression anywhere; outside a `@nonnull` argument it is simply
 the identity. `null!` is rejected outright (always wrong), as is `!` on a
 non-pointer operand.
@@ -273,8 +326,10 @@ parameters, on `mut` (a `mut` parameter is passed by reference and is never
 null), and on `@asm` functions. At the LLVM level the established fact is
 handed to the optimizer as the `nonnull` and `dereferenceable(sizeof(T))`
 argument attributes. See
-[examples/functions/nonnull.mc](../examples/functions/nonnull.mc) and, for
-the escape hatch,
+[examples/functions/nonnull.mc](../examples/functions/nonnull.mc); for
+flow-narrowing,
+[examples/functions/nonnull_narrowing.mc](../examples/functions/nonnull_narrowing.mc);
+and for the escape hatch,
 [examples/functions/nonnull_assert.mc](../examples/functions/nonnull_assert.mc).
 
 ## Variadic functions

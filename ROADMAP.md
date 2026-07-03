@@ -500,18 +500,33 @@ already do).
         the identity anywhere else. `!=` lexes greedily, so `p != q` stays a
         comparison and `(p!) == q` needs the parentheses; implemented, see
         [@nonnull parameters](docs/language.md#nonnull-parameters)
-  - [ ] flow-narrowing — narrow a plain `T*` to non-null from a null check, so
-        idiomatic code needs no escape hatch: `if (p != null) { ... }` narrows
-        the then-branch, and the C-idiomatic guard `if (p == null) return;`
-        narrows the remainder of the enclosing scope. Tractable because mcc has
-        only structured control flow (no `goto`): syntax-directed narrowing on
-        the AST, not a general CFG dataflow pass. Starts with those two `if`
-        guards; `and`/`or` threading, loop bodies, and divergence-awareness are
-        follow-on. Synergy with
-        [`@noreturn`/`unreachable`](#functions-and-methods): once `@noreturn`
-        lets `if (p == null) abort();` count as divergence, early-guard
-        narrowing covers more cases (not a blocker, since
-        `return`/`break`/`continue` already diverge):
+  - [x] flow-narrowing — narrows a plain `T*` local to non-null from a null
+        check, so idiomatic code needs no escape hatch: `if (p != null)`
+        narrows the then branch, `if (p == null) {A} else {B}` narrows `B`,
+        and the C-idiomatic else-less guard `if (p == null)` whose body
+        always diverges narrows the remainder of the enclosing scope.
+        Divergence is read off the builder's terminated-block state rather
+        than a `return`/`break`/`continue` scan, so nested all-diverging
+        `if`s already count, and a future
+        [`@noreturn`/`unreachable`](#functions-and-methods) (letting
+        `if (p == null) abort();` guard) is absorbed with zero narrowing
+        changes. Sound and conservative: only bare local pointer variables
+        narrow (globals, `mut` parameters, and member/index expressions
+        never do), taking `&p` anywhere in the function bans narrowing of
+        `p`, facts die on reassignment, on passing as a `mut` argument, and
+        on a shadowing `let`, and every fact drops at loop entry (see the
+        follow-on below). This opens the gate to adopting `@nonnull` across
+        `libmc`, itself a separate future change set; implemented, see
+        [@nonnull parameters](docs/language.md#nonnull-parameters):
+    - [ ] loop-body fact preservation — replace the shipped blanket rule
+          (all narrowed facts drop at loop entry) with a pre-scan of the
+          loop body that keeps the facts the loop provably cannot
+          invalidate, preserving the guard-then-loop idiom
+          (`if (p == null) return; while (...) { use(p); }`) that `libmc`
+          adoption leans on. Folds in the remaining condition-shape
+          follow-ons: `and`/`or` threading
+          (`if (p != null and q != null)`), `while (p != null)` header
+          narrowing, and fact-seeding through `let q = p;`
     - [ ] first-class `T!` type — non-null on return types, locals, struct
           fields, and function-pointer types, which needs a real distinct type
           rather than a per-binding fact (a larger blast radius). Optional and
