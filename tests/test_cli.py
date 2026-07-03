@@ -612,6 +612,74 @@ def test_werror_without_warnings_is_a_no_op(tmp_path):
     assert result.stderr == ""
 
 
+# ------------------------------------------------------------- @deprecated
+
+DEPRECATED_SRC = (
+    '@deprecated("use renamed instead")\n'
+    "fn old(x: int32) -> int32 { return x + 1; }\n"
+    "fn main() -> int32 { return old(41) - 42; }\n"
+)
+
+
+def test_deprecated_call_prints_a_warning_and_still_builds(tmp_path):
+    src = tmp_path / "dep.mc"
+    src.write_text(DEPRECATED_SRC)
+    result = mcc(src, "--run")
+    assert result.returncode == 0  # deprecated stays callable
+    assert (
+        f"{src}: warning: line 3: 'old' is deprecated: use renamed instead\n"
+        in result.stderr
+    )
+
+
+def test_werror_promotes_a_deprecation(tmp_path):
+    src = tmp_path / "dep.mc"
+    src.write_text(DEPRECATED_SRC)
+    result = mcc(src, "-Werror", "--emit-llvm")
+    assert result.returncode == 1
+    assert (
+        f"{src}: error: line 3: 'old' is deprecated: use renamed instead "
+        "[-Werror]\n" in result.stderr
+    )
+
+
+def test_deprecated_call_site_prints_once_across_instantiations(tmp_path):
+    # A call site inside a generic body re-emits per instantiation; the
+    # printer deduplicates on (file, line, message), so the offending line
+    # reports once, not once per type.
+    src = tmp_path / "dep.mc"
+    src.write_text(
+        '@deprecated("use g instead")\n'
+        "fn f() -> int32 { return 0; }\n"
+        "fn wrap<T>(v: T) -> int32 { return f(); }\n"
+        "fn main() -> int32 { return wrap(1) + wrap(true); }\n"
+    )
+    result = mcc(src, "--emit-llvm")
+    assert result.returncode == 0
+    warning = f"{src}: warning: line 3: 'f' is deprecated: use g instead\n"
+    assert result.stderr.count(warning) == 1
+
+
+def test_stdlib_deprecated_forwarder_blames_the_callers_line(tmp_path):
+    src = tmp_path / "dep.mc"
+    src.write_text(
+        'import "memory";\n'
+        "fn main() -> int32 {\n"
+        "    let a = alloc<int32>(2);\n"
+        "    let b = alloc<int32>(2);\n"
+        "    copy_bytes(a, b, 2);\n"
+        "    dealloc(a); dealloc(b);\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    result = mcc(src, "--emit-llvm")
+    assert result.returncode == 0
+    assert (
+        f"{src}: warning: line 5: 'copy_bytes' is deprecated: "
+        "use bytecopy instead\n" in result.stderr
+    )
+
+
 def test_interface_package_roundtrip(tmp_path):
     # Build a library to an object + interface, drop the source, then compile a
     # consumer that imports it by bare name (resolving to the .mci) and links

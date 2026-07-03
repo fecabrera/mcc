@@ -69,7 +69,7 @@ fn str_eq(a: char*, b: char*) -> bool {
 fn str_clone(s: char*) -> char* {
     let n = strlen(s) + 1;
     let copy = alloc<char>(n);
-    copy_bytes(copy, s, n);
+    bytecopy(copy, s, n);
     return copy;
 }
 

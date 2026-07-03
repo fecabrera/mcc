@@ -103,7 +103,7 @@ fn md5(data: uint8*, length: uint64, digest: uint8*) {
     // little-endian uint64.
     let total = ((length + 8) / 64 + 1) * 64;
     let buf = alloc<uint8>(total);
-    copy_bytes(buf, data, length);
+    bytecopy(buf, data, length);
     buf[length] = 128;
     memset(&buf[length + 1], 0, total - length - 1);
     let bits = length * 8;

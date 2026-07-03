@@ -70,7 +70,7 @@ fn bytecopy<T>(@noalias dst: T*, @noalias src: T*, n: uint64) -> uint64 {
     return count;
 }
 
-// deprecated
+@deprecated("use bytecopy instead")
 @inline
 fn copy_bytes<T>(dst: T*, src: T*, n: uint64) {
     bytecopy(dst, src, n);
@@ -96,7 +96,7 @@ fn copy<T>(@noalias dst: T*, @noalias src: T*, n: uint64) -> uint64 {
     return n;
 }
 
-// deprecated
+@deprecated("use copy instead")
 @inline
 fn copy_items<T>(dst: T*, src: T*, n: uint64) {
     copy(dst, src, n);
@@ -150,7 +150,7 @@ fn bytefill<T>(dst: T*, value: byte, n: uint64) -> uint64 {
     return count;
 }
 
-// deprecated
+@deprecated("use bytefill instead")
 @inline
 fn set_bytes<T>(dst: T*, value: byte, n: uint64) {
     bytefill(dst, value, n);
@@ -174,7 +174,7 @@ fn fill<T>(dst: T*, value: T, n: uint64) -> uint64 {
     return n;
 }
 
-// deprecated
+@deprecated("use fill instead")
 @inline
 fn set_items<T>(dst: T*, value: T, n: uint64) {
     fill(dst, value, n);

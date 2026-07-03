@@ -685,6 +685,66 @@ See [examples/types/static_assert.mc](../examples/types/static_assert.mc) for
 (For now these are top-level only; a statement-position form, and the
 per-instantiation behavior it gives inside a generic body, are planned.)
 
+### Deprecated functions
+
+`@deprecated("message")` is a declaration attribute on a function: the
+function stays fully callable, but every *call site* emits a warning on the
+channel above, pointing at the caller with the migration message:
+
+```c
+@deprecated("use bytecopy instead")
+@inline
+fn copy_bytes<T>(dst: T*, src: T*, n: uint64) {
+    bytecopy(dst, src, n);
+}
+```
+
+A call to `copy_bytes` now reports, at the caller's file and line:
+
+```
+main.mc: warning: line 12: 'copy_bytes' is deprecated: use bytecopy instead
+```
+
+The warning fires wherever the name resolves to the deprecated function: a
+direct call, a generic call (including through an overload set — a set mixing
+deprecated and current overloads warns only when resolution picks a deprecated
+one), a [`for ... in`](#control-flow) loop whose `_it`/`_next` protocol
+functions are deprecated, and taking the function as a
+[value](#function-pointers) (`let p: fn(int32) -> int32 = f;`) — a call site
+in waiting, warned at the point the value is formed since later indirect calls
+cannot be attributed. The attribute combines with `@private`, `@static`,
+`@extern`, `@inline`, and `@asm`, and applies to functions only for now
+(types, enums, and globals later). The message decodes string escapes like any
+literal, and must be non-empty.
+
+There is no suppression: every call site warns, even one inside another
+deprecated function — a migration cannot hide behind a second alias. What *is*
+folded is repetition of a single site: warnings are deduplicated at print time
+on their (file, line, message), so one offending call inside a generic body
+reports once, not once per instantiation. (The deduplication is print-time
+only; embedders reading the collected list see every emission.) Everything
+else follows the warning channel's rules: warnings print after a successful
+generation, and [`-Werror`](#error-directives) promotes each to
+`file: error: ... [-Werror]` and fails the build.
+
+Deprecation travels through [interface files](#interface-files): a
+generic or `@inline` function ships as verbatim source, carrying the
+attribute for free, and a concrete function's bodyless prototype re-emits it
+(`@deprecated("use renamed instead") fn old(x: int32) -> int32;`), so
+importers of a compiled library still get warned at their own call sites.
+
+The standard library uses this for the four renamed [memory](../libmc/memory.mc)
+forwarders — `copy_bytes`, `copy_items`, `set_bytes`, `set_items` — which
+warn with their replacements (`bytecopy`, `copy`, `bytefill`, `fill`).
+The planned terminal step of the lifecycle is the separate `@removed`
+tombstone directive (a hard error at each call site, one release before the
+name disappears entirely); see the [roadmap](../ROADMAP.md).
+
+See [examples/types/deprecated.mc](../examples/types/deprecated.mc) for a
+renamed function kept as a `@deprecated` forwarder, with the old-API call
+sites (a direct call and a function value) behind a `-D`-gated `@if` branch
+and the `-Werror` promotion.
+
 ## Control flow
 
 ```c

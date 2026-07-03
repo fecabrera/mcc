@@ -40,6 +40,31 @@ from mcc.nodes import (
 )
 
 
+# The parser decodes string escapes at parse time, so re-emitting a message
+# into a stub must re-encode it: the inverse of the lexer/parser STRING_ESCAPES
+# table for every character that cannot appear bare inside a string literal
+# (a STRING token cannot span lines, so the control characters must re-encode
+# too). Characters outside this table are emitted as themselves.
+_STRING_ESCAPES = {
+    "\\": "\\\\",
+    '"': '\\"',
+    "\a": "\\a",
+    "\b": "\\b",
+    "\x1b": "\\e",
+    "\f": "\\f",
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+    "\v": "\\v",
+    "\0": "\\0",
+}
+
+
+def _escape(text: str) -> str:
+    """Re-encode ``text`` as the inside of an mcc string literal."""
+    return "".join(_STRING_ESCAPES.get(c, c) for c in text)
+
+
 def _is_void(ref: TypeRef) -> bool:
     """Whether a return ``TypeRef`` is plain ``void`` (no pointer/array)."""
     return (
@@ -257,6 +282,12 @@ class InterfaceWriter:
             params.append("...")
         ret = "" if _is_void(func.ret_type) else f" -> {func.ret_type}"
         head = "@private fn" if func.private else "fn"
+        # @deprecated is re-emitted so the importer's call sites warn too
+        # (generic/@inline functions get this for free from their verbatim
+        # source span); the message is re-escaped, undoing the parse-time
+        # decode.
+        if func.deprecated_msg is not None:
+            head = f'@deprecated("{_escape(func.deprecated_msg)}") {head}'
         return f"{head} {func.name}({', '.join(params)}){ret};"
 
     def _render(self, decl) -> str:

@@ -573,27 +573,31 @@ already do).
       [`case` exhaustiveness](#types-and-generics) consumer remains future
       work; implemented, see
       [Error directives](docs/language.md#error-directives)
-  - [ ] `@deprecated(msg)` over the channel above — a declaration attribute
+  - [x] `@deprecated(msg)` over the channel above — a declaration attribute
         on a function that fires a diagnostic (a **warning by default**, not
         an error) at each *call site*, pointing at the caller with a migration
-        message. Storage mirrors the
-        `@noalias`/`const`/`mut` param-set pattern on the `Func` node; the
-        call-site hook lives in `gen_call`. It round-trips through `.mci` for
-        free for generic and `@inline` functions (verbatim source-span
-        emission), needing explicit re-emission only for concrete exported
+        message (`'copy_bytes' is deprecated: use bytecopy instead`). Message
+        storage landed on the `Func` node; the warning fires at each name
+        resolution point (direct call, generic overload pick — a mixed set
+        warns only when a deprecated overload wins — function values, and the
+        `for ... in` `_it`/`_next` protocol), with no suppression, and the
+        driver deduplicates repeats of one (file, line, message) at print
+        time so a call site inside a generic body reports once, not once per
+        instantiation. It round-trips through `.mci`: for free for generic
+        and `@inline` functions (verbatim source-span emission), and by
+        explicit re-emission (message re-escaped) on concrete exported
         prototypes. Default severity is warn deliberately: a hard error would
         make a deprecated alias uncallable and break importers, defeating the
-        purpose. Motivating use case: the four generic `// deprecated`
+        purpose. The motivating use case shipped with it: the four generic
         forwarders in [memory](libmc/memory.mc) (`copy_bytes`, `copy_items`,
-        `set_bytes`, `set_items`) forward silently today, where a
-        `@deprecated("use bytecopy instead")` that warns is exactly right and,
-        being generic, round-trips through `.mci` with no extra work. Scope v1
-        to functions (types/enums/globals later); the terminal escalation to a
-        hard error is not a flag on `@deprecated` but its own
-        [`@removed` tombstone](#metaprogramming-and-builtins) directive below.
-        Known task before it lands: repoint the internal stdlib and example
-        calls to the deprecated forwarders onto the new names (a one-time
-        cleanup, since CI runs `-Werror`)
+        `set_bytes`, `set_items`) now carry `@deprecated` with their
+        replacements, and the internal stdlib/test callers were repointed to
+        the new names (CI runs `-Werror`). Scope v1 is functions only
+        (types/enums/globals later); the terminal escalation to a hard error
+        is not a flag on `@deprecated` but its own
+        [`@removed` tombstone](#metaprogramming-and-builtins) directive below;
+        implemented, see
+        [Deprecated functions](docs/language.md#deprecated-functions)
 - [ ] `@removed(msg)` tombstones (the `@removed` name is tentative) — the
       terminal state of the function-availability lifecycle, one step past
       [`@deprecated`](#metaprogramming-and-builtins) above: a function goes from
@@ -604,17 +608,14 @@ already do).
       message, so pulling an implementation still gives callers a targeted
       `copy_bytes was removed: use bytecopy instead` for a release cycle rather
       than a bare `unknown function 'copy_bytes'`. A small delta sharing
-      `@deprecated`'s machinery: the call-site hook in `gen_call`, the `.mci`
-      round-trip (so importers of a removed stdlib function get the error), and
-      the `Func`-node message storage. That plumbing is unbuilt in both items,
-      so whichever ships first builds it and the other reuses it; the
-      recommended order is still `@deprecated` first, both for lifecycle
-      discipline (jumping the [memory](libmc/memory.mc) forwarders straight to
-      removed would hard-break downstream users without a warn cycle) and
-      because the shared known task, repointing the live internal callers of
-      the deprecated forwarders ([dict](libmc/dict.mc),
-      [md5](libmc/hashing/md5.mc), and `tests/test_structs.py`), gates both
-      features equally. Two differences from `@deprecated`: (1) it emits
+      `@deprecated`'s machinery — now built and ready to reuse: the call-site
+      hooks at the name-resolution points, the `.mci` round-trip (so importers
+      of a removed stdlib function get the error), and the `Func`-node message
+      storage all shipped with `@deprecated`, and the shared prerequisite
+      (repointing the live internal callers of the deprecated forwarders in
+      [dict](libmc/dict.mc), [md5](libmc/hashing/md5.mc), and
+      `tests/test_structs.py`) is done. Two differences from `@deprecated`:
+      (1) it emits
       through the existing error/abort path, where `@deprecated` warns over
       the now-shipped [warning channel](#metaprogramming-and-builtins); (2)
       the tombstone is a **bodiless** declaration, since the implementation is

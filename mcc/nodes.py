@@ -275,6 +275,9 @@ class Func:
             prove the argument non-null, and the callee may pass the
             parameter onward as proof. Lowered to LLVM's ``nonnull`` (plus
             ``dereferenceable``) argument attributes.
+        deprecated_msg: The ``@deprecated("...")`` migration message, or
+            ``None``. Every call site (and function-value use) emits a
+            warning carrying it; the function stays callable.
     """
 
     name: str
@@ -295,6 +298,7 @@ class Func:
     mut_params: set[str] = field(default_factory=set)
     noalias_params: set[str] = field(default_factory=set)
     nonnull_params: set[str] = field(default_factory=set)
+    deprecated_msg: str | None = None
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 

@@ -566,7 +566,11 @@ def _report_warnings(warnings: list[Note], fallback: Path, werror: bool) -> bool
     """Print collected warnings to stderr; return whether the build must fail.
 
     Each warning renders as ``file: warning: line N: message``, in emission
-    order, with the same cwd-relative path treatment as errors. Under
+    order, with the same cwd-relative path treatment as errors. Repeats of one
+    ``(file, line, message)`` triple print once: a call site inside a generic
+    body re-emits its deprecation warning per instantiation, and the reader
+    needs the offending line reported once, not once per type. (The dedup is
+    print-time only -- the collected list keeps every emission.) Under
     ``-Werror`` every warning is instead promoted to
     ``file: error: line N: message [-Werror]`` and the build fails after all
     of them have printed (collect-all-then-fail).
@@ -581,7 +585,12 @@ def _report_warnings(warnings: list[Note], fallback: Path, werror: bool) -> bool
         ``True`` when ``werror`` promoted at least one warning, so the caller
         must take the failure exit path without writing any outputs.
     """
+    seen: set[tuple[str | None, int, str]] = set()
     for warning in warnings:
+        key = (warning.source, warning.line, warning.message)
+        if key in seen:
+            continue
+        seen.add(key)
         if werror:
             line = _format_diagnostic(_where(warning.source, fallback), "error",
                                       warning.line, f"{warning.message} [-Werror]")

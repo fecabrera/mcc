@@ -285,6 +285,11 @@ class CodeGen:
         self.type_bindings: dict[str, LangType] = {}  # active type-parameter bindings
         # name -> (private, source file); for @private access checks
         self.func_privacy: dict[str, tuple[bool, str | None]] = {}
+        # @deprecated("msg") on concrete functions: resolved symbol -> the
+        # migration message, warned at every call site and function-value use.
+        # (Generic templates carry the message on the Func node instead and
+        # are checked when overload resolution picks them.)
+        self.deprecated_syms: dict[str, str] = {}
         self.current_source: str | None = None  # file owning the code being generated
         # Non-fatal diagnostics collected during generation, in emission order.
         # The driver prints them after generation succeeds (see warn()).
@@ -318,6 +323,25 @@ class CodeGen:
             line: The 1-based source line the warning refers to.
         """
         self.warnings.append(Note(message, line, self.current_source))
+
+    def warn_deprecated(self, name: str, msg: str | None, line: int) -> None:
+        """Warn that a ``@deprecated`` function was resolved, when ``msg`` is set.
+
+        The single formatter for deprecation warnings: every resolution point
+        (direct call, generic overload pick, function value, for-in protocol)
+        funnels through here, so the ``'name' is deprecated: msg`` wording is
+        emitted uniformly. There is no suppression -- a call from another
+        deprecated function warns too; the driver deduplicates repeats of one
+        call site (e.g. per-instantiation re-emissions) at print time.
+
+        Args:
+            name: The name the caller used, reported repr-quoted.
+            msg: The migration message, or ``None`` for "not deprecated"
+                (a no-op, so lookups can be passed straight in).
+            line: The call site's 1-based source line.
+        """
+        if msg is not None:
+            self.warn(f"{name!r} is deprecated: {msg}", line)
 
     def check_access(self, private: bool, source: str | None, what: str, line: int):
         """Enforce ``@private`` visibility for a referenced declaration.
@@ -1643,6 +1667,8 @@ class CodeGen:
                 self.func_privacy[func.name] = (func.private, func.source)
                 self.extern_decls.add(func.name)
                 self.used_symbols.add(func.name)
+                if func.deprecated_msg is not None:
+                    self.deprecated_syms[func.name] = func.deprecated_msg
                 continue
             key = (func.source, func.name)
             is_overloadable = func.type_params and not func.static
@@ -1676,6 +1702,8 @@ class CodeGen:
                 self.mut_ref[symbol] = self.mut_indices(func)
                 self.nonnull_ref[symbol] = self.nonnull_indices(func)
                 self.static_funcs[key] = symbol
+                if func.deprecated_msg is not None:
+                    self.deprecated_syms[symbol] = func.deprecated_msg
                 continue
             if func.type_params:
                 # Generic: no code yet -- instances are stamped out per call.
@@ -1722,6 +1750,10 @@ class CodeGen:
             self.hidden_ref[func.name] = hidden
             self.mut_ref[func.name] = self.mut_indices(func)
             self.nonnull_ref[func.name] = self.nonnull_indices(func)
+            if func.deprecated_msg is not None:
+                # A proto registers too: @deprecated on an interface stub's
+                # prototype warns the importer's call sites.
+                self.deprecated_syms[func.name] = func.deprecated_msg
         # Functions are declared now, so consts and @static globals that name a
         # function can be folded to its address. Consts come first, since a
         # deferred global's initializer may reference one.
@@ -3391,6 +3423,9 @@ class CodeGen:
                 raise LangError(
                     f"{next_name!r} second parameter must be an out-pointer", line
                 )
+            # `_next` is resolved here, outside gen_call, so the deprecation
+            # check must ride along (`_it` goes through gen_call as usual).
+            self.warn_deprecated(next_name, self.deprecated_syms.get(symbol), line)
             return self.funcs[symbol], params[1].pointee
         candidates = list(self.templates.get(next_name, []))
         static = self.static_templates.get(key)
@@ -3435,6 +3470,7 @@ class CodeGen:
             raise LangError(
                 f"{next_name!r} second parameter must be an out-pointer", line
             )
+        self.warn_deprecated(next_name, func.deprecated_msg, line)
         return fn, params[1].pointee
 
     def gen_cond(self, expr) -> ir.Value:
@@ -5162,6 +5198,9 @@ class CodeGen:
                 "parameters, which a plain function type cannot express",
                 line,
             )
+        # A function value is a call site in waiting: warn here, since calls
+        # through the pointer are indirect and can no longer be attributed.
+        self.warn_deprecated(name, self.deprecated_syms.get(symbol), line)
         ret, params, variadic = self.signatures[symbol]
         return TypedValue(
             self.funcs[symbol], function_type(ret, tuple(params), variadic)
@@ -5183,6 +5222,7 @@ class CodeGen:
         """
         if expr.type_args:
             raise LangError(f"{expr.name!r} is not a generic function", expr.line)
+        self.warn_deprecated(expr.name, self.deprecated_syms.get(symbol), expr.line)
         ret, params, variadic = self.signatures[symbol]
         args = self.marshal_args(
             expr.args,
@@ -5681,6 +5721,9 @@ class CodeGen:
                     f"call to {expr.name!r} is ambiguous between overloads", expr.line
                 )
             _, func, bindings = viable[0]
+        # The winner is known; a mixed overload set warns only when resolution
+        # picks a deprecated candidate.
+        self.warn_deprecated(expr.name, func.deprecated_msg, expr.line)
         self.check_access(
             func.private, func.source, f"function {expr.name!r}", expr.line
         )

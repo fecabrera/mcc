@@ -425,3 +425,87 @@ def test_function_value_of_mut_proto_is_rejected():
             "fn set(mut out: int32);\n"
             "fn main() -> int32 { let p = set; return 0; }"
         )
+
+
+# -------------------------------------------------------------- @deprecated
+
+def test_deprecated_concrete_fn_is_re_emitted_on_the_prototype():
+    out = iface(
+        '@deprecated("use renamed instead")\n'
+        "fn old(x: int32) -> int32 { return x + 1; }\n"
+    )
+    assert (
+        '@deprecated("use renamed instead") fn old(x: int32) -> int32;' in out
+    )
+
+
+def test_deprecated_generic_fn_travels_verbatim():
+    out = iface(
+        '@deprecated("use bytecopy instead")\n'
+        "@inline\n"
+        "fn copy_bytes<T>(dst: T*, src: T*, n: uint64) { }\n"
+    )
+    # The verbatim source span already carries the attribute.
+    assert '@deprecated("use bytecopy instead")' in out
+    assert "fn copy_bytes<T>" in out
+
+
+def test_deprecated_message_escapes_survive_re_emission():
+    # The parser decodes escapes at parse time, so the writer must re-encode:
+    # quotes and backslashes in the message round-trip unharmed.
+    src = (
+        '@deprecated("gone \\"soon\\": path is C:\\\\tmp")\n'
+        "fn old() -> int32 { return 0; }\n"
+    )
+    out = iface(src)
+    assert '@deprecated("gone \\"soon\\": path is C:\\\\tmp") fn old() -> int32;' in out
+    # Re-parsing the stub restores the decoded message exactly.
+    (fn,) = Parser(tokenize(out)).parse_program().functions
+    assert fn.deprecated_msg == 'gone "soon": path is C:\\tmp'
+
+
+def test_deprecated_proto_round_trips_through_mci(tmp_path):
+    # Emit a stub for a library with a deprecated concrete function, drop the
+    # source, and compile a consumer against the stub: the importer's call
+    # site warns, so the deprecation follows the shipped interface.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        '@deprecated("use renamed instead")\n'
+        "fn old(x: int32) -> int32 { return x + 1; }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    lib.unlink()  # force the import to resolve through the stub
+    main = tmp_path / "main.mc"
+    main.write_text('import "lib";\nfn main() -> int32 { return old(1); }')
+    program = load_program(main, (tmp_path,))
+    cg = CodeGen(program, main.name, root_source=str(main.resolve()))
+    cg.generate()
+    assert [(w.message, w.line, w.source) for w in cg.warnings] == [
+        ("'old' is deprecated: use renamed instead", 2, str(main.resolve())),
+    ]
+
+
+def test_deprecated_generic_round_trips_through_mci(tmp_path):
+    # A generic forwarder ships as verbatim source in the stub, so the
+    # attribute rides for free and the importer's call site warns.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "fn fresh<T>(v: T) -> T { return v; }\n"
+        '@deprecated("use fresh instead")\n'
+        "@inline\n"
+        "fn stale<T>(v: T) -> T { return fresh(v); }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    lib.unlink()
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\nfn main() -> int32 { return stale(0 as int32); }'
+    )
+    program = load_program(main, (tmp_path,))
+    cg = CodeGen(program, main.name, root_source=str(main.resolve()))
+    cg.generate()
+    assert [(w.message, w.line, w.source) for w in cg.warnings] == [
+        ("'stale' is deprecated: use fresh instead", 2, str(main.resolve())),
+    ]

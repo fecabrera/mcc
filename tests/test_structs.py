@@ -221,8 +221,8 @@ def test_memory_lib_copies(tmp_path, capfd):
             src[0] = 10; src[1] = 20; src[2] = 30;
             let a = alloc<int64>(3);
             let b = alloc<int64>(3);
-            copy_bytes(a, src, 3);
-            copy_items(b, src, 3);
+            bytecopy(a, src, 3);
+            copy(b, src, 3);
             printf("%lld %lld\\n", a[2], b[2]);
 
             // item-by-item copy of struct elements
@@ -230,7 +230,7 @@ def test_memory_lib_copies(tmp_path, capfd):
             pts[0].x = 1; pts[0].y = 2;
             pts[1].x = 3; pts[1].y = 4;
             let out = alloc<struct point>(2);
-            copy_items(out, pts, 2);
+            copy(out, pts, 2);
             printf("%d %d\\n", out[1].x, out[1].y);
 
             dealloc(src); dealloc(a); dealloc(b);

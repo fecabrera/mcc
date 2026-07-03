@@ -277,7 +277,7 @@ CHAR = LangType("char", ir.IntType(8), signed=False)
 TYPES["char"] = CHAR
 
 # `byte` is a transparent builtin alias for uint8 -- the raw one-byte unit of
-# memory. It reads as intent at a raw-memory boundary (copy_bytes, memcpy, the
+# memory. It reads as intent at a raw-memory boundary (bytecopy, memcpy, the
 # allocators) without being a distinct type: it resolves to the interned uint8
 # object, so `byte` and `uint8` are interchangeable everywhere.
 TYPES["byte"] = TYPES["uint8"]

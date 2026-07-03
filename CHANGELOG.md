@@ -10,6 +10,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`@deprecated(msg)` function attribute** — marks a function deprecated
+  without breaking its callers: the function stays fully callable, and every
+  call site emits `file: warning: line N: 'name' is deprecated: msg` on the
+  warning channel, pointing at the caller with the migration message. The
+  warning fires wherever the name resolves to the deprecated function —
+  direct calls, generic calls (a mixed overload set warns only when a
+  deprecated overload wins), `for ... in` over a deprecated `_it`/`_next`
+  protocol, and taking the function as a value — with no suppression (a call
+  from another deprecated function warns too). Repeats of one (file, line,
+  message) print once, so a call site inside a generic body reports once
+  across instantiations, and `-Werror` promotes deprecations like any
+  warning. The attribute round-trips through `.mci` interface stubs: verbatim
+  for generic/`@inline` functions, re-emitted (message re-escaped) on
+  concrete prototypes, so importers of a compiled library are warned at their
+  own call sites. Functions only for now; the escalation to a hard error is
+  the planned `@removed` tombstone. See
+  [Deprecated functions](docs/language.md#deprecated-functions).
+
 - **Bodyless `fn` prototypes** — a plain `fn` may end with `;` instead of a
   body: `fn bump(mut n: int32);` declares a concrete mcc function defined in
   another object and called with the **mcc** convention, so `const`-struct
@@ -146,6 +164,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **The `memory` forwarders now warn as `@deprecated`** — the four renamed
+  aliases `copy_bytes`/`copy_items`/`set_bytes`/`set_items` carry
+  `@deprecated` attributes naming their replacements (`bytecopy`, `copy`,
+  `bytefill`, `fill`), so each call site gets a targeted migration warning
+  instead of silently forwarding. The standard library's own internal callers
+  ([dict](libmc/dict.mc), [md5](libmc/hashing/md5.mc)) were repointed to the
+  new names, keeping the stdlib warning-clean.
 - **`memory` copy/fill API reshaped** — the canonical names are now `bytecopy`
   and `copy` (byte-wise vs. item-at-a-time copy) and `bytefill` and `fill`
   (byte-wise vs. item-at-a-time fill); the old `copy_bytes`/`copy_items`/

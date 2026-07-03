@@ -371,8 +371,9 @@ class Parser:
         """Parse one top-level item: a struct, global, const, function, or @if.
 
         Leading annotations (``@private``, ``@static``, ``@extern``,
-        ``@packed``, ``@volatile``, ``@inline``, ``@align``, ``@symbol``) are
-        collected and validated against the declaration they precede.
+        ``@packed``, ``@volatile``, ``@inline``, ``@align``, ``@symbol``,
+        ``@deprecated``) are collected and validated against the declaration
+        they precede.
 
         Returns:
             The parsed ``StructDecl``, ``GlobalVar``, ``Const``, ``Func``, or
@@ -400,6 +401,7 @@ class Parser:
         private = static = extern = packed = volatile = inline = asm = False
         align = None
         symbol = None
+        deprecated = None
         clobbers = []
         while self.cur.kind == "ANNOT":
             annot = self.advance()
@@ -438,6 +440,16 @@ class Parser:
                 self.expect(")")
                 if not symbol:
                     raise LangError("@symbol needs a non-empty name", annot.line)
+            elif annot.text == "@deprecated":
+                self.expect("(")
+                # The message decodes like any string literal, so it reads the
+                # same as an @error/@warning directive message.
+                deprecated = _unescape(self.expect("STRING").text[1:-1])
+                self.expect(")")
+                if not deprecated:
+                    raise LangError(
+                        "@deprecated needs a non-empty message", annot.line
+                    )
             else:
                 raise LangError(f"unknown annotation {annot.text!r}", annot.line)
         if extern and static:
@@ -459,6 +471,9 @@ class Parser:
             raise LangError("@asm only applies to functions with a body", self.cur.line)
         if clobbers and not asm:
             raise LangError("@clobbers only applies to @asm", self.cur.line)
+        if deprecated is not None and self.cur.kind != "fn":
+            # v1 scope: functions only (types, enums, and globals later).
+            raise LangError("@deprecated only applies to functions", self.cur.line)
         if self.cur.kind in ("struct", "union"):
             if extern:
                 raise LangError("@extern does not apply to structs", self.cur.line)
@@ -550,7 +565,7 @@ class Parser:
                 self.cur.line,
             )
         return self.parse_function(
-            private, static, extern, symbol, inline, asm, clobbers
+            private, static, extern, symbol, inline, asm, clobbers, deprecated
         )
 
     # Tokens that can begin an expression; used to settle the `as T * x`
@@ -918,6 +933,7 @@ class Parser:
         inline: bool = False,
         asm: bool = False,
         clobbers: list[str] | None = None,
+        deprecated: str | None = None,
     ) -> Func:
         """Parse a function definition, an ``@extern`` declaration, or a proto.
 
@@ -935,6 +951,7 @@ class Parser:
             inline: Whether ``@inline`` was applied (``alwaysinline``).
             asm: Whether ``@asm`` was applied (the body is one asm expression).
             clobbers: Registers clobbered by an ``@asm fn`` body, or ``None``.
+            deprecated: The ``@deprecated("...")`` message, or ``None``.
 
         Returns:
             The parsed ``Func``.
@@ -1045,6 +1062,7 @@ class Parser:
                 # Both attribute-only: no ABI change, so allowed on @extern.
                 noalias_params=noalias_params,
                 nonnull_params=nonnull_params,
+                deprecated_msg=deprecated,
             )
         if asm:
             # `@asm fn` is sugar for a function whose body is one @asm(...)
@@ -1092,6 +1110,7 @@ class Parser:
                 private=private,
                 static=static,
                 inline=inline,
+                deprecated_msg=deprecated,
             )
         if self.cur.kind == ";":
             # A bodyless prototype: a concrete mcc function defined in another
@@ -1133,6 +1152,7 @@ class Parser:
                 mut_params=mut_params,
                 noalias_params=noalias_params,
                 nonnull_params=nonnull_params,
+                deprecated_msg=deprecated,
             )
         return Func(
             name,
@@ -1149,6 +1169,7 @@ class Parser:
             mut_params=mut_params,
             noalias_params=noalias_params,
             nonnull_params=nonnull_params,
+            deprecated_msg=deprecated,
         )
 
     def parse_asm(self):
