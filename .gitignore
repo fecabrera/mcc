@@ -26,11 +26,13 @@ __pycache__/
 *.so
 *.dylib
 
-# mcc writes executables next to the source by default, so anything directly
-# in examples/ that is not a source file or the index is a build product. The
-# baremetal subdirectory holds sources (its build products land in the repo
-# root), so keep it in full.
-examples/*
-!examples/*.mc
-!examples/README.md
-!examples/baremetal/
+# mcc writes executables next to the source by default, so anything under
+# examples/ that is not a source file or an index is a build product. The
+# examples are grouped into topical subdirectories, so ignore everything and
+# whitelist the sources (.mc), the boot stub (.S), and the index README.md at
+# any depth -- the executables dropped next to each source stay ignored.
+examples/**
+!examples/**/
+!examples/**/*.mc
+!examples/**/*.S
+!examples/**/README.md

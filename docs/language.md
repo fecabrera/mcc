@@ -135,7 +135,7 @@ as a function value or exported to an [interface file](#interface-files) —
 the bare `fn(...)` type cannot express the convention (the same liftable
 limitation as `const`, see above).
 
-See [examples/mut_params.mc](../examples/mut_params.mc).
+See [examples/functions/mut_params.mc](../examples/functions/mut_params.mc).
 
 ### @noalias parameters
 
@@ -164,7 +164,7 @@ warn when the same variable is passed to two `@noalias` parameters. `@noalias`
 is only a pointer-parameter annotation: it is rejected on a non-pointer
 parameter, on a `mut` parameter (aliasing two `mut` parameters is allowed by
 design, which would contradict the promise), and on `@asm` functions. See
-[examples/noalias.mc](../examples/noalias.mc).
+[examples/functions/noalias.mc](../examples/functions/noalias.mc).
 
 ## Variadic functions
 
@@ -223,7 +223,7 @@ dispatch. When type arguments are omitted, they are inferred from the
 argument types (variables take priority over literals), and typed arguments
 that disagree are an error: `conflicting types for type parameter T`.
 Generic functions can call themselves recursively. See
-[examples/generics.mc](../examples/generics.mc).
+[examples/types/generics.mc](../examples/types/generics.mc).
 
 Generic functions with the same name form an _overload set_, dispatched by
 parameter pattern — a call picks the most specific viable variant (`T*`
@@ -556,7 +556,7 @@ for v in &nums { ... }   // by reference: iterate nums itself
 Define `<struct>_it` and `<struct>_next` to make your own types iterable; a
 struct built with [`extends`](#structs) can reuse its base's by forwarding
 through an upcast. The `list`, `set`, `dict`, and `string` libraries all do
-this — see [examples/iteration.mc](../examples/iteration.mc).
+this — see [examples/control-flow/iteration.mc](../examples/control-flow/iteration.mc).
 
 A builtin [`slice<T>`](#slices) is the exception: it iterates natively, with no
 `_it`/`_next` of its own. `for x in s` (or `for x in &s`) walks the slice's
@@ -665,7 +665,7 @@ deferred code is evaluated when it runs, not when it is scheduled, so it sees
 the latest values of the variables it names (unlike Go, which snapshots the
 arguments). A returned value is computed _before_ the defers run, so freeing a
 buffer in a defer can't clobber what you return. See
-[examples/defer.mc](../examples/defer.mc).
+[examples/control-flow/defer.mc](../examples/control-flow/defer.mc).
 
 ## Block expressions
 
@@ -788,7 +788,7 @@ far overflows its width and needs `(v as uint64) << 40`.
 Signedness changes behavior, not representation: unsigned types use unsigned
 division, remainder, and comparisons, and zero-extend instead of sign-extend
 when promoted. Unary `-` is not allowed on unsigned values. See
-[examples/unsigned.mc](../examples/unsigned.mc).
+[examples/basics/unsigned.mc](../examples/basics/unsigned.mc).
 
 ## Operators
 
@@ -902,7 +902,7 @@ implicitly coerces to it, which is why `free(nums)` works without a cast.
 A [string literal](#strings) is a `char[N]` array that decays to a `char*`
 (which coerces to `uint8*`), so `"hi"[0]` is the byte `104`. There is
 no pointer arithmetic (`p + 1`); use `&p[1]`. See
-[examples/pointers.mc](../examples/pointers.mc) and
+[examples/memory/pointers.mc](../examples/memory/pointers.mc) and
 [libmc/memory.mc](../libmc/memory.mc) for a generic typed allocator.
 
 ## Function pointers
@@ -1106,7 +1106,7 @@ buffer keeps every byte. This is the one struct-producing `as` (ordinary struct
 casts are rejected). A slice is a plain value: it passes to and returns from
 functions by value (two words). Because it is two words it is **not** C-ABI by
 value — across a C boundary, pass a `T*` and a length separately instead. See
-[examples/slices.mc](../examples/slices.mc).
+[examples/memory/slices.mc](../examples/memory/slices.mc).
 
 ### Read-only slices
 
@@ -1358,7 +1358,7 @@ fn main() -> int32 {
 The member has no storage of its own, so it cannot be set in a struct literal
 (or given a default) and cannot be borrowed as a `slice<T>` — its length is not
 known statically. Reach it through `p->data`, indexing as far as the allocation
-runs. See [examples/flexible_array_members.mc](../examples/flexible_array_members.mc).
+runs. See [examples/types/flexible_array_members.mc](../examples/types/flexible_array_members.mc).
 
 The [layout constants](#pointers) describe a flexible array member precisely:
 `offsetof(struct S, data)` is where its elements **begin** — the tight base for
@@ -1372,7 +1372,7 @@ bytes of trailing padding; both over-allocate safely, offsetof exactly.
 `alloc<struct node<int32>>(n)` allocates correctly. Struct values can be
 passed to and returned from functions, but not to variadic functions like
 printf — pass a pointer or a field instead. See
-[examples/structs.mc](../examples/structs.mc) and the data structures built on
+[examples/types/structs.mc](../examples/types/structs.mc) and the data structures built on
 them: the growable [libmc/list.mc](../libmc/list.mc), the open-addressing hash
 table [libmc/set.mc](../libmc/set.mc) (borrowing, identity-keyed), and the
 string-keyed [libmc/dict.mc](../libmc/dict.mc), which owns copies of its keys and
@@ -1432,7 +1432,7 @@ runtime instead).
 Like a by-value struct, a by-value union is not
 [C-ABI compatible](../README.md#c-abi-compatibility) across the C boundary
 yet; pass a pointer to it instead, as C interop code does anyway. See
-[examples/unions.mc](../examples/unions.mc).
+[examples/types/unions.mc](../examples/types/unions.mc).
 
 ## Enums
 
@@ -1726,7 +1726,7 @@ context with no `as` at all (the way an untyped constant takes its type): at a
 function argument (including a `const`-by-reference slice parameter, so
 `writeln("hi")` works), a `let` slot, or a `return`. The borrow drops the NUL,
 and only *literals* adapt — a typed owned value still needs the explicit `as`.
-See [examples/strings.mc](../examples/strings.mc).
+See [examples/types/strings.mc](../examples/types/strings.mc).
 
 A character literal in single quotes is a `char` — the byte value of a single
 character, using the same escapes (`'a'`, `'\n'`, `'\0'`, `'\''`, `'\\'`). Like

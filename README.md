@@ -96,7 +96,7 @@ bundles the [standard library](libmc/README.md):
 
 ```bash
 pip install git+https://github.com/fecabrera/mcc
-mcc examples/helloworld.mc --run
+mcc examples/basics/helloworld.mc --run
 ```
 
 ### From source
@@ -105,7 +105,7 @@ For development, work in a checkout with [pipenv](https://pipenv.pypa.io/):
 
 ```bash
 pipenv install
-pipenv run python -m mcc examples/helloworld.mc --run
+pipenv run python -m mcc examples/basics/helloworld.mc --run
 ```
 
 `pipenv run python -m mcc` and an installed `mcc` are interchangeable; the
@@ -114,13 +114,13 @@ examples below use the `mcc` command.
 ## Usage
 
 ```bash
-mcc examples/helloworld.mc              # compile to a native executable
-mcc examples/helloworld.mc -o hello     # choose the output name
-mcc examples/helloworld.mc --run        # JIT-compile and run immediately
-mcc examples/helloworld.mc --emit-llvm  # print the LLVM IR instead of compiling
+mcc examples/basics/helloworld.mc              # compile to a native executable
+mcc examples/basics/helloworld.mc -o hello     # choose the output name
+mcc examples/basics/helloworld.mc --run        # JIT-compile and run immediately
+mcc examples/basics/helloworld.mc --emit-llvm  # print the LLVM IR instead of compiling
 mcc libmc/list.mc -c                      # compile to an object (.o), don't link
 mcc libmc/list.mc --emit-interface        # write an importable .mci stub
-mcc examples/helloworld.mc -O3          # optimization level (0-3, default 2)
+mcc examples/basics/helloworld.mc -O3          # optimization level (0-3, default 2)
 mcc main.mc -I vendor -I deps           # extra import search paths
 mcc main.mc --nostdlib                  # don't put libmc/ on the import path
 mcc main.mc util.o -lcurl               # link extra objects and libraries

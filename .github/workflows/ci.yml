@@ -63,8 +63,12 @@ jobs:
         run: pipenv sync --dev
 
       - name: Compile every example
+        # Examples are grouped into topical subdirectories, so recurse. Skip
+        # baremetal/ -- it is freestanding and cross-compiled with --target in
+        # the next step, not linkable for the host here. Basenames are unique
+        # across folders, so the -o output names never collide.
         run: |
-          for f in examples/*.mc; do
+          find examples -name '*.mc' -not -path 'examples/baremetal/*' | while read -r f; do
             echo "== $f =="
             pipenv run python -m mcc "$f" -o "$RUNNER_TEMP/$(basename "$f" .mc)"
           done

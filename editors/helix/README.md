@@ -61,7 +61,7 @@ is what Helix compiles; regenerate it after editing `grammar.js` with:
 ```bash
 cd editors/helix/tree-sitter-mcc
 tree-sitter generate
-tree-sitter parse ../../../examples/structs.mc   # sanity-check a file
+tree-sitter parse ../../../examples/types/structs.mc   # sanity-check a file
 ```
 
 One known limitation: a cast immediately followed by a multiplication without

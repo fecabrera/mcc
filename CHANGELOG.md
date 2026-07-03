@@ -20,7 +20,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and `bytecopy`/`copy` in `memory` are now marked); it is rejected on `mut`,
   non-pointer, and `@asm` parameters. `@noalias` combines with `const`. See
   [@noalias parameters](docs/language.md#noalias-parameters) and
-  [noalias.mc](examples/noalias.mc).
+  [noalias.mc](examples/functions/noalias.mc).
 
 ### Changed
 
@@ -31,6 +31,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   fill functions now return the count they processed (bytes for the
   `memcpy`/`memset`-backed variants, elements otherwise), and `bytezero`/`zero`
   return their counts too.
+- **Examples grouped into topical folders** — the flat `examples/` tour is now
+  organized into `basics/`, `control-flow/`, `functions/`, `types/`, `memory/`,
+  `systems/`, and `programs/` (with `baremetal/` unchanged), so the progression
+  is legible from the directory tree. Every example keeps its name; only its
+  path changed (`examples/helloworld.mc` is now
+  [examples/basics/helloworld.mc](examples/basics/helloworld.mc)). The
+  [index](examples/README.md) and doc links were updated to match, and CI now
+  compiles the suite recursively.
 
 ## [0.4.0] - 2026-07-02
 
@@ -40,7 +48,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   parameters: `swap(a, b)` exchanges two values in place and
   `replace(dst, value)` stores a new value and returns the old one, both
   generic (`@inline`) and pointer-free at the call site. See
-  [libmc/std.mc](libmc/std.mc) and [mut_params.mc](examples/mut_params.mc).
+  [libmc/std.mc](libmc/std.mc) and [mut_params.mc](examples/functions/mut_params.mc).
 - **Editor support catch-up** — the VS Code grammar and the Helix tree-sitter
   grammar now highlight `mut` and `union`; the tree-sitter grammar also
   learned the syntax it was missing: compound assignment operators, `const T`
@@ -62,7 +70,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   function value or export to a `.mci` interface (the hidden-reference
   convention is not expressible there). `mut` is now a reserved keyword. See
   [mut parameters](docs/language.md#mut-parameters) and
-  [mut_params.mc](examples/mut_params.mc).
+  [mut_params.mc](examples/functions/mut_params.mc).
 - **Unions** — `union Name { i: int64; f: float64; }`: an aggregate whose
   members share one storage, sized by the largest member with every member at
   offset 0, for C-layout interop and deliberate type punning (a cross-member
@@ -72,7 +80,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   parameters, and `.mci` interfaces like structs. The struct-only forms
   (`extends`, member defaults, flexible array members) are rejected, and a
   global/`@static` union initializer is not supported yet. See
-  [Unions](docs/language.md#unions) and [unions.mc](examples/unions.mc).
+  [Unions](docs/language.md#unions) and [unions.mc](examples/types/unions.mc).
 - **Compound assignment** — `target op= value` for every arithmetic, bitwise,
   and shift operator (`+= -= *= /= %= &= |= ^= <<= >>=`), meaning
   `target = target op value`. The target may be any assignable lvalue (a
@@ -80,7 +88,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   plain assignment, and is evaluated exactly once — so a complex lvalue like
   `arr[next()] += 1` runs its side effects a single time. See
   [Variables](docs/language.md#variables) and
-  [compound_assignment.mc](examples/compound_assignment.mc).
+  [compound_assignment.mc](examples/basics/compound_assignment.mc).
 - **`for x in` over a struct value** — the `_it`/`_next` protocol takes the
   container by pointer, but `for x in r` no longer needs the `&`: a struct
   value is borrowed automatically (iterating a snapshot), while `for x in &r`
@@ -107,7 +115,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   position is the `for x in <expr> { ... }` header, where the `{` always starts
   the loop body — parenthesize (`for x in (A { ... })`) or use the keyword form
   there. See [Structs](docs/language.md#structs) and
-  [struct_literals.mc](examples/struct_literals.mc).
+  [struct_literals.mc](examples/types/struct_literals.mc).
 - **Builtin `enumerate`** — `for e in enumerate(obj)` runs `obj`'s ordinary
   iteration (the `_it`/`_next` protocol, or a slice's native walk) while
   keeping a position counter, yielding a builtin
@@ -119,7 +127,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   function takes precedence, as does a user `enumerated` struct;
   `enumerate(range(...))` is rejected since the counter is the value. See
   [Control flow](docs/language.md#control-flow) and
-  [iteration.mc](examples/iteration.mc).
+  [iteration.mc](examples/control-flow/iteration.mc).
 - **Linker passthrough** — the `mcc` command line now takes `-l<name>` libraries
   and `-L<dir>` search paths, plus extra object/archive inputs alongside the
   `.mc` source (`mcc app.mc util.o -L build/lib -lmylib`), all forwarded to the
@@ -191,7 +199,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   a fixed array `T[N]` (`{&arr[0], N}`). A `char[N]` is NUL-terminated text, so
   its borrow drops the terminator (`length` is `N - 1`); a `uint8[N]` raw buffer
   keeps every byte. See [Slices](docs/language.md#slices) and
-  [examples/slices.mc](examples/slices.mc).
+  [examples/memory/slices.mc](examples/memory/slices.mc).
 - **Read-only slices** — `slice<const T>`, the element-mutability axis: indexing
   yields a non-assignable element (`s[i] = x` is rejected), while a loaded value
   or `for`-loop variable is a mutable copy. A mutable `slice<T>` widens
@@ -200,7 +208,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `const`-typed value) borrows only to `slice<const T>`, preserving immutability.
   `const` is a general type qualifier (`let pi: const float64 = 3.14;`). See
   [Read-only slices](docs/language.md#read-only-slices) and
-  [examples/slices.mc](examples/slices.mc).
+  [examples/memory/slices.mc](examples/memory/slices.mc).
 - **String-literal slice adaptation** — a string literal now *adapts* to a
   `slice<char>` (or `slice<const char>`) from context with no `as`, the way an
   untyped constant takes its type: at a function argument (including a
@@ -230,7 +238,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   dimension; a struct ending in one cannot be an `extends` base, and the member
   cannot be set in a literal or borrowed as a `slice<T>` (its length is not
   static) — index it through its pointer. See [Structs](docs/language.md#structs)
-  and [examples/flexible_array_members.mc](examples/flexible_array_members.mc).
+  and [examples/types/flexible_array_members.mc](examples/types/flexible_array_members.mc).
 - **`alignof` and `offsetof`** — two more compile-time `uint64` layout
   constants, the C counterparts of the same name. `alignof(T)` is a type's
   alignment in bytes (and, like `sizeof`, also accepts a variable —
@@ -250,7 +258,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   alongside `alloc` / `resize` / `dealloc`.
 - **`range<T>` library** — a half-open `[start, end)` integer interval that
   supplies the iterator protocol, so `for i in &r` counts; generic over the
-  integer width. See [examples/ranges.mc](examples/ranges.mc).
+  integer width. See [examples/control-flow/ranges.mc](examples/control-flow/ranges.mc).
 - **`--strict-align`** — forbid the backend from emitting unaligned memory
   accesses (gcc's `-mstrict-align`), for bare-metal targets running with the MMU
   off where an unaligned wide load/store traps. Composes with
