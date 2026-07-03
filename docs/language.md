@@ -1648,6 +1648,36 @@ underlying type and do not silently adapt to other types — assign across types
 with an explicit [cast](#casts). An enum may be `@private` to its file or
 `@static` (file-scoped, so other files may reuse the name), like a struct.
 
+Naming another enum in the `:` slot **derives** from it: the new enum copies
+the base's member table and adopts its underlying type, then adds its own
+members:
+
+```c
+enum x_error:  int32   { SUCCESS = 0, NOT_FOUND = 4 }
+enum x_status: x_error { RETRY = 100 }
+// x_status::NOT_FOUND resolves, and folds equal to x_error::NOT_FOUND
+```
+
+An inherited member resolves through the derived scope anywhere the base's
+spelling would, compile-time contexts (`@static_assert` conditions, array
+dimensions) included, and a new member may reference an inherited one
+(`enum b: a { Y = b::X + 1 }`). Chains are transitive: `enum c: b` where `b`
+derives from `a` carries all three member sets. The base must be a previously
+declared enum — earlier in the file or in an imported one — and a `@private`
+base cannot be extended from another file. Redefining an inherited member in
+the derived enum is an error, even with an identical value.
+
+Only a bare, direct enum name in the slot derives. Anything else keeps its
+plain meaning as an underlying type, with no member merge: a pointer to an
+enum (`enum b: a*`), a `const`-qualified type, or a `type` alias to an enum
+(the alias hands over the underlying type, as an alias always has, but no
+members). And derivation is compile-time reuse only, with **no new type
+safety**: enum values remain transparent integers of the underlying type, so
+a derived value is indistinguishable from a base value or a plain integer.
+The directional base/derived checking this shape suggests is the separate
+nominal-enums item on the [roadmap](../ROADMAP.md#planned). See
+[examples/types/derived_enums.mc](../examples/types/derived_enums.mc).
+
 ## Type aliases
 
 `type <name> = <type>;` introduces a name for an existing type, usable anywhere

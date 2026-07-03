@@ -70,6 +70,7 @@ literals, flexible array members), unions, and generics.
 | [arrays.mc](types/arrays.mc) | fixed-size `T[N]` arrays (`N` a constant expression), indexing, `sizeof`, pointer decay, multi-dim, a `@static` buffer |
 | [strings.mc](types/strings.mc) | string literals as `char[N]` text arrays (NUL counted): owned vs `char*`, inferred/oversize sizes, decay, mutation, `len`, indexing, borrowing as `slice<char>`; contrast with a raw `uint8[N]` byte buffer |
 | [enums.mc](types/enums.mc) | `enum Name: T { M = v, ... }`, `Enum::Member`, the enum name as a type, custom underlying types (uint64 flags, string members), members referencing earlier ones |
+| [derived_enums.mc](types/derived_enums.mc) | `enum b: a` member reuse: the derived enum copies the base's members and adopts its underlying type (pointers too), inherited members fold equal and are referenceable by new ones, transitive chains; compile-time only, no new type checking |
 | [structs.mc](types/structs.mc) | structs, generic structs, `->` / `.`, `null`, struct literals, a hand-built linked list |
 | [struct_literals.mc](types/struct_literals.mc) | `Name { field = value, ... }` literals (the `struct` keyword optional): omitted fields zeroed or set to a `= default`, free field order, generics (inferred type args), nesting, as args/returns/through a pointer |
 | [flexible_array_members.mc](types/flexible_array_members.mc) | a trailing `field: T[]` flexible array member: adds 0 to `sizeof`, decays to a `T*` at the struct's tail, one allocation for header plus elements |

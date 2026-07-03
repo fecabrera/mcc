@@ -10,6 +10,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Enum member reuse** — a derived enum inherits a base enum's members by
+  naming it in the existing `:` slot: `enum x_status: x_error { RETRY = 100 }`
+  copies `x_error`'s member table and adopts its underlying type (pointer
+  underlyings included), then folds its own members on top, so
+  `x_status::NOT_FOUND` resolves and folds equal to `x_error::NOT_FOUND`,
+  in compile-time contexts too, and a new member may reference an inherited
+  one (`enum b: a { Y = b::X + 1 }`). Chains are transitive, and a `@private`
+  base cannot be extended from another file. Only a bare, direct enum name in
+  the slot derives; a pointer to an enum, a `const`-qualified type, or a
+  `type` alias to an enum keeps its plain underlying-type meaning with no
+  member merge. Compile-time reuse only: no runtime or ABI change, and no new
+  type safety (enum values remain transparent integers; nominal enums stay on
+  the roadmap). One previously-legal pattern is now rejected: a derived enum
+  redeclaring an inherited member's name used to compile as an independent
+  member and is now a hard error, even with an identical value. See
+  [Enums](docs/language.md#enums).
+
 - **Instantiation backtraces on errors** — an error inside a monomorphized
   body used to print as a bare line in the template's file with no trace of
   how the compiler reached it; it now carries a note chain, one

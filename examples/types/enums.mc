@@ -84,3 +84,6 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// See also: derived_enums.mc for reusing one enum's members in another
+// (`enum b: a` copies a's members and adopts its underlying type).

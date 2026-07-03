@@ -14,6 +14,7 @@ from mcc.errors import LangError
 from mcc.interface import render_interface
 from mcc.lexer import tokenize
 from mcc.parser import Parser
+from helpers import run_path
 
 
 def iface(source: str) -> str:
@@ -74,6 +75,24 @@ def test_union_is_emitted_in_full():
 def test_enum_is_emitted_in_full():
     out = iface("enum Color: int32 { Red = 0, Blue = 7 }")
     assert "enum Color: int32 { Red = 0, Blue = 7 }" in out
+
+
+def test_derived_enum_round_trips_through_mci(tmp_path):
+    # The stub keeps the `: base` reference; re-importing it re-registers both
+    # enums and recomputes the member merge, so an inherited member resolves
+    # through the derived scope on the other side.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "enum x_error: int32 { OK = 0, NOT_FOUND = 4 }\n"
+        "enum x_status: x_error { RETRY = 100 }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    assert "enum x_status: x_error { RETRY = 100 }" in out.read_text()
+    lib.unlink()  # force the import to resolve through the stub
+    main = tmp_path / "main.mc"
+    main.write_text('import "lib";\nfn main() -> int32 { return x_status::NOT_FOUND; }')
+    assert run_path(main) == 4
 
 
 def test_const_is_emitted_in_full():

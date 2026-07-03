@@ -140,26 +140,28 @@ already do).
           [interfaces](#functions-and-methods) dispatch; depends on
           interface declarations and the methods they are made of, so it
           lands after both
-- [ ] Enum member reuse — a derived enum inherits a base enum's members by
+- [x] Enum member reuse — a derived enum inherits a base enum's members by
       naming it in the existing `:` slot:
       `enum x_status: x_error { SUCCESS = 0 }` copies `x_error`'s member table
       and adopts its underlying type, then adds its own, so `x_status::NOT_FOUND`
-      resolves and folds equal to `x_error::NOT_FOUND`. Compile-time only and
-      purely additive (no currently-legal program changes meaning), with no
-      runtime or ABI change: a single-function change in `register_enum` (merge
-      the base member table, adopt its underlying type, run the base's access
-      check so a `@private` base cannot be extended cross-file), leaving the
-      parser, the tree-sitter/tmLanguage grammars, and the `.mci` round-trip
-      untouched (the `:` slot already parses an enum name). A name collision
-      with an inherited member is a hard error; value aliasing across base and
-      derived is allowed (enums already allow it); the base must be a single,
-      direct enum name (not a `type` alias to an enum) appearing textually
-      before the derived enum or in an imported file. Delivers DRY reuse plus
-      the `x_status::NOT_FOUND` spelling, but **zero new type safety**: enum
-      values are transparent integers today, so a derived value stays
-      indistinguishable from its base and from a plain int. The directional
-      base-to-derived safety that reuse suggests needs
-      [nominal enums](#types-and-generics) below
+      resolves and folds equal to `x_error::NOT_FOUND`. Compile-time only, with
+      no runtime or ABI change: a single-function change in `register_enum`
+      (merge the base member table, adopt its underlying type, run the base's
+      access check so a `@private` base cannot be extended cross-file), leaving
+      the parser, the tree-sitter/tmLanguage grammars, and the `.mci`
+      round-trip untouched (the `:` slot already parses an enum name). A name
+      collision with an inherited member is a hard error, even with an
+      identical value (the one newly-rejected pattern: a derived enum
+      redeclaring a base member's name used to get an independent member);
+      value aliasing across base and derived is allowed (enums already allow
+      it); the base must be a single, direct enum name (not a `type` alias to
+      an enum) appearing textually before the derived enum or in an imported
+      file. Delivers DRY reuse plus the `x_status::NOT_FOUND` spelling, but
+      **zero new type safety**: enum values are transparent integers today, so
+      a derived value stays indistinguishable from its base and from a plain
+      int. The directional base-to-derived safety that reuse suggests needs
+      [nominal enums](#types-and-generics) below; implemented, see
+      [Enums](docs/language.md#enums)
 - [ ] Nominal enums — make an enum value carry its type identity instead of
       collapsing to its underlying integer. Today an enum used as a type
       becomes a raw `int32` (or its declared underlying), so `x_status` and

@@ -742,12 +742,21 @@ class CodeGen:
         is folded as a compile-time constant and coerced to the underlying type,
         which it then carries (non-adaptable, like a typed ``const``).
 
+        When the ``:`` slot names another enum directly (a bare name -- no
+        pointer ``*``, generic arguments, array dims, or ``const``), the new
+        enum *derives* from it: it copies the base's member table and adopts
+        its underlying type, then folds its own members on top. Anything else
+        in the slot -- a pointer to an enum, a ``type`` alias to one, a plain
+        type -- keeps its usual meaning as a bare underlying type, with no
+        member merge.
+
         Args:
             decl: The enum declaration to register.
 
         Raises:
-            LangError: On a name clash, a duplicate member, or a member value
-                that is not a constant of the underlying type.
+            LangError: On a name clash, a duplicate member, a member that
+                redefines an inherited one, or a member value that is not a
+                constant of the underlying type.
         """
         self.current_source = decl.source
         underlying = (
@@ -757,7 +766,30 @@ class CodeGen:
         )
         if underlying is VOID:
             raise LangError(f"enum {decl.name!r} cannot have a void type", decl.line)
+        base = None
+        uref = decl.underlying
+        if (
+            uref is not None
+            and uref.params is None
+            and not uref.args
+            and uref.stars == 0
+            and not uref.dims
+            and not uref.const
+        ):
+            base = self.lookup_enum(uref.name)
+            # A base only counts when lang_type actually resolved the slot to
+            # this enum (its arm returns the enum's own underlying object);
+            # otherwise something else -- e.g. a @static struct -- shadows the
+            # name and the slot keeps its plain-underlying meaning.
+            if base is not None and underlying is not base.underlying:
+                base = None
         enum = EnumType(underlying, {}, decl.private, decl.source)
+        if base is not None:
+            # Copy the entries rather than sharing the TypedValues: the planned
+            # nominal-enums feature will re-type inherited members here.
+            for mname, member in base.members.items():
+                enum.members[mname] = TypedValue(member.value, member.type)
+        inherited = frozenset(enum.members)
         if decl.static:
             key = (decl.source, decl.name)
             if key in self.static_enums or key in self.static_structs:
@@ -772,6 +804,12 @@ class CodeGen:
                 raise LangError(f"type {decl.name!r} already defined", decl.line)
             self.enums[decl.name] = enum
         for mname, vexpr in decl.members:
+            if mname in inherited:
+                raise LangError(
+                    f"enum {decl.name!r} redefines member {mname!r} "
+                    f"inherited from {uref.name!r}",
+                    decl.line,
+                )
             if mname in enum.members:
                 raise LangError(
                     f"enum {decl.name!r} has a duplicate member {mname!r}", decl.line

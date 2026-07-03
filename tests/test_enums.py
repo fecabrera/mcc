@@ -3,7 +3,9 @@
 ``enum Name[: type] { Member = value, ... }`` introduces ``Name`` as a type
 aliasing its underlying type (``int32`` when omitted), plus a constant
 ``Name::Member`` of that type per member. A member's value is any constant
-expression of the underlying type.
+expression of the underlying type. Naming another enum in the ``:`` slot
+derives from it: the new enum copies the base's members and adopts its
+underlying type.
 """
 
 import pytest
@@ -185,6 +187,157 @@ def test_name_clash_with_struct_is_rejected():
 def test_bad_annotation_on_enum_is_rejected():
     with pytest.raises(LangError, match="@volatile only applies"):
         parse("@volatile enum Dir { N = 0 }")
+
+
+# ----------------------------------------------------------------- derivation
+
+def test_derived_enum_inherits_base_members():
+    assert run(
+        "enum x_error: int32 { SUCCESS = 0, NOT_FOUND = 4 }\n"
+        "enum x_status: x_error { RETRY = 100 }\n"
+        "fn main() -> int32 { return x_status::NOT_FOUND * 10 + x_status::RETRY; }"
+    ) == 140
+
+
+def test_inherited_member_folds_equal_to_the_base_member():
+    # Fold equality holds in compile-time contexts too: @static_assert and a
+    # fixed array dimension both see the inherited member as a constant.
+    assert run(
+        "enum a: int32 { N = 3 }\n"
+        "enum b: a { M = 5 }\n"
+        '@static_assert(b::N == a::N, "inherited member folds equal");\n'
+        "fn main() -> int32 {\n"
+        "    let arr: int32[b::N];\n"
+        "    arr[b::N - 1] = 7;\n"
+        "    return arr[2];\n"
+        "}"
+    ) == 7
+
+
+def test_derived_adopts_the_base_underlying_type():
+    # The base is uint64, so a wide derived member keeps its width.
+    assert run(
+        "enum a: uint64 { High = 1 << 40 }\n"
+        "enum b: a { Higher = 1 << 41 }\n"
+        "fn main() -> int32 { return ((b::High + b::Higher) >> 40) as int32; }"
+    ) == 3
+
+
+def test_derived_adopts_a_pointer_underlying_type():
+    assert run(
+        "@extern fn strcmp(a: uint8*, b: uint8*) -> int32;\n"
+        'enum Msg: uint8* { Hi = "hello" }\n'
+        'enum MoreMsg: Msg { Bye = "bye" }\n'
+        "fn main() -> int32 {\n"
+        '    return strcmp(MoreMsg::Hi, "hello") + strcmp(MoreMsg::Bye, "bye");\n'
+        "}"
+    ) == 0
+
+
+def test_transitive_derivation_chain():
+    assert run(
+        "enum a: uint8 { X = 1 }\n"
+        "enum b: a { Y = 2 }\n"
+        "enum c: b { Z = 4 }\n"
+        "fn main() -> int32 { return (c::X + c::Y + c::Z) as int32; }"
+    ) == 7
+
+
+def test_derived_member_may_reference_an_inherited_one():
+    # The merge happens before the derived's own members fold, so an inherited
+    # member is reachable through the derived scope.
+    assert run(
+        "enum a { X = 5 }\n"
+        "enum b: a { Y = b::X + 1 }\n"
+        "fn main() -> int32 { return b::Y; }"
+    ) == 6
+
+
+def test_redefining_an_inherited_member_is_rejected():
+    with pytest.raises(
+        LangError, match="enum 'b' redefines member 'OK' inherited from 'a'"
+    ):
+        compile_ir(
+            "enum a { OK = 0 }\n"
+            "enum b: a { OK = 1 }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_redefining_with_an_identical_value_is_also_rejected():
+    with pytest.raises(
+        LangError, match="enum 'b' redefines member 'OK' inherited from 'a'"
+    ):
+        compile_ir(
+            "enum a { OK = 0 }\n"
+            "enum b: a { OK = 0 }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_alias_to_an_enum_adopts_underlying_but_does_not_merge():
+    # A `type` alias in the slot is not a base: the underlying type carries
+    # over (as it always has), but no members do.
+    with pytest.raises(LangError, match="enum 'b' has no member 'X'"):
+        compile_ir(
+            "enum a: uint8 { X = 1 }\n"
+            "type t = a;\n"
+            "enum b: t { Y = 2 }\n"
+            "fn main() -> int32 { return b::X; }"
+        )
+
+
+def test_pointer_to_an_enum_is_a_plain_underlying_not_a_base():
+    with pytest.raises(LangError, match="enum 'b' has no member 'X'"):
+        compile_ir(
+            "enum a { X = 1 }\n"
+            "enum b: a* { P = null }\n"
+            "fn main() -> int32 { return b::X; }"
+        )
+
+
+def test_derived_member_out_of_the_adopted_range_is_rejected():
+    with pytest.raises(LangError, match="constant 300 is out of range for uint8"):
+        compile_ir(
+            "enum a: uint8 { X = 1 }\n"
+            "enum b: a { Big = 300 }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_base_must_appear_before_the_derived_enum():
+    with pytest.raises(LangError, match="unknown type 'b'"):
+        compile_ir(
+            "enum a: b { X = 1 }\n"
+            "enum b { Y = 2 }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_private_base_cannot_be_extended_across_files(tmp_path):
+    (tmp_path / "lib.mc").write_text("@private enum Secret: int32 { A = 1 }")
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\n'
+        "enum Mine: Secret { B = 2 }\n"
+        "fn main() -> int32 { return 0; }"
+    )
+    with pytest.raises(LangError, match="enum 'Secret' is private to lib.mc"):
+        run_path(main)
+
+
+def test_static_base_shadows_a_global_one_for_derivation(tmp_path):
+    # The derived enum in main merges main's own @static Mode, not lib's
+    # global one, exactly as a plain Mode::On reference would resolve.
+    (tmp_path / "lib.mc").write_text("enum Mode: int32 { On = 1 }")
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\n'
+        "@static enum Mode: int32 { On = 5 }\n"
+        "enum Derived: Mode { Extra = 9 }\n"
+        "fn main() -> int32 { return Derived::On + Derived::Extra; }"
+    )
+    assert run_path(main) == 14
 
 
 # ---------------------------------------------------------- privacy / scoping
