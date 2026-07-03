@@ -25,6 +25,17 @@ hello from bare-metal mcc
 
 (Exit qemu with `Ctrl-A` then `X`.)
 
+To eyeball the cross-compiled aarch64 assembly without a foreign-toolchain
+objdump, pass [`-S`](../../README.md#usage) instead of `-o kernel.o`:
+
+```bash
+pipenv run python -m mcc examples/baremetal/kernel.mc --target aarch64-unknown-none-elf -S
+```
+
+This writes `kernel.s` next to the source and stops before assembling. The
+`@volatile` busy-wait on the UART flag register is visible as a `ldr`/`tbnz`
+loop that really re-reads the register each iteration.
+
 ## How it fits together
 
 - **[kernel.mc](kernel.mc)** — the kernel. The PL011's registers are

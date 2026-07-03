@@ -724,9 +724,10 @@ already do).
       (today whatever the driver `cc` defaults to)
 - [ ] Compiler-driver selection — `--cc=/path/to/cc` to choose the C driver used
       for linking (today the system `cc` on `PATH`)
-- [ ] Assembly output — `--emit-asm` (`-S`) to write target `.s` assembly text
+- [x] Assembly output — `--emit-asm` (`-S`) to write target `.s` assembly text
       (alongside `--emit-llvm` for IR and `-c` for an object), for inspection or
-      handing to an external assembler
+      handing to an external assembler; implemented, see
+      [Usage](README.md#usage)
 - [ ] C struct-passing ABI — classify by-value struct arguments and returns
       into registers/`byval`/`sret` per the platform ABI, so structs cross the
       C boundary correctly (today only scalars and pointers are ABI-compatible;

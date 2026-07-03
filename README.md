@@ -119,6 +119,7 @@ mcc examples/basics/helloworld.mc -o hello     # choose the output name
 mcc examples/basics/helloworld.mc --run        # JIT-compile and run immediately
 mcc examples/basics/helloworld.mc --emit-llvm  # print the LLVM IR instead of compiling
 mcc libmc/list.mc -c                      # compile to an object (.o), don't link
+mcc libmc/list.mc -S                      # emit target assembly (.s), don't assemble
 mcc libmc/list.mc --emit-interface        # write an importable .mci stub
 mcc examples/basics/helloworld.mc -O3          # optimization level (0-3, default 2)
 mcc main.mc -I vendor -I deps           # extra import search paths
@@ -133,8 +134,9 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 | Option                    | Description                                                                                                                                                                                   |
 | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `source`                  | The `.mc` file to compile (exactly one). Its imports are resolved and compiled with it. Any other input (a `.o` object, `.a` archive, or shared library) is forwarded to the linker.          |
-| `-o`, `--output FILE`     | Name of the generated file. Defaults to the source name without its extension (a native executable), or with a `.o` suffix when `--target` is given.                                          |
+| `-o`, `--output FILE`     | Name of the generated file. Defaults to the source name without its extension (a native executable), with a `.o` suffix when `--target` is given, or with a `.s` suffix under `-S`.           |
 | `-c`, `--compile`         | Compile to an object file (`.o`) for the host and stop, without linking an executable. Defaults the output to the source name with a `.o` suffix.                                             |
+| `-S`, `--emit-asm`        | Write the target's assembly text (`.s`) and stop, without assembling or linking, for inspection or handing to an external assembler. Honors `-O` and `--target` (cross assembly).             |
 | `-l NAME`                 | Link against a library, forwarded to `cc` as `-lNAME` (repeatable). `libm` is always linked, so `-lm` is implied.                                                                             |
 | `-L DIR`                  | Add a library search path, forwarded to `cc` as `-LDIR` (repeatable).                                                                                                                         |
 | `--emit-interface`        | Write a [`.mci` interface stub](docs/language.md#interface-files) describing the file's public surface (to ship beside an object) and exit.                                                   |

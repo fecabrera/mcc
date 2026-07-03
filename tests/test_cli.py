@@ -421,6 +421,57 @@ def test_compile_only_rejects_run(tmp_path):
     assert result.returncode == 1 and "compile only" in result.stderr
 
 
+# ------------------------------------------------------ -S assembly output
+
+def test_emit_asm_writes_assembly(tmp_path):
+    src = tmp_path / "lib.mc"
+    src.write_text("fn main() -> int32 { return 0; }")
+    asm = tmp_path / "out.s"
+    result = mcc(src, "-S", "-o", asm)
+    assert result.returncode == 0, result.stderr
+    text = asm.read_text()
+    # Loose, dialect-neutral assertions: macOS spells the symbol _main and
+    # Linux main, and directive sets differ per platform assembler.
+    assert "main" in text
+    assert ".globl" in text or ".section" in text
+    assert not (tmp_path / "lib.o").exists()  # no object
+    assert not (tmp_path / "lib").exists()  # no executable, no link step
+
+
+def test_emit_asm_default_name_beside_source(tmp_path):
+    src = tmp_path / "lib.mc"
+    src.write_text("fn one() -> int32 { return 1; }")
+    assert mcc(src, "-S").returncode == 0
+    assert "one" in (tmp_path / "lib.s").read_text()
+
+
+def test_emit_asm_rejects_run(tmp_path):
+    src = tmp_path / "lib.mc"
+    src.write_text("fn main() -> int32 { return 0; }")
+    result = mcc(src, "-S", "--run")
+    assert result.returncode == 1 and "assembly only" in result.stderr
+
+
+def test_emit_asm_wins_over_compile(tmp_path):
+    # -S and -c together: assembly wins silently, like --emit-llvm beats -c.
+    src = tmp_path / "lib.mc"
+    src.write_text("fn main() -> int32 { return 0; }")
+    assert mcc(src, "-S", "-c").returncode == 0
+    assert (tmp_path / "lib.s").exists()
+    assert not (tmp_path / "lib.o").exists()
+
+
+def test_emit_asm_cross_target_produces_target_assembly(tmp_path):
+    # -S is checked before the --target object branch: a cross build yields
+    # the foreign target's assembly text, not an ELF object.
+    asm = tmp_path / "hello.s"
+    result = mcc(HELLO, "--target", "aarch64-unknown-none-elf", "-S", "-o", asm)
+    assert result.returncode == 0, result.stderr
+    text = asm.read_text()
+    assert "main" in text and ".globl" in text
+    assert not text.startswith("\x7fELF")
+
+
 # ------------------------------------------------------- linker passthrough
 
 TWICE_LIB = "fn twice(n: int32) -> int32 { return n * 2; }"
@@ -471,7 +522,7 @@ def test_explicit_lm_does_not_duplicate(tmp_path):
 
 def test_link_extras_rejected_when_not_linking(tmp_path):
     obj = build_twice_object(tmp_path)
-    for flag in ("--run", "-c", "--emit-llvm"):
+    for flag in ("--run", "-c", "-S", "--emit-llvm"):
         result = mcc(tmp_path / "app.mc", obj, flag)
         assert result.returncode == 1
         assert "apply only when linking" in result.stderr and flag in result.stderr
@@ -568,6 +619,19 @@ def test_werror_promotes_fails_and_writes_no_output(tmp_path):
     assert f"{src}: error: line 2: engage bespoke mode [-Werror]\n" in result.stderr
     assert not exe.exists()  # promoted failure produces no executable
     assert not exe.with_suffix(".o").exists()  # and no intermediate object
+
+
+def test_werror_emit_asm_writes_no_assembly(tmp_path):
+    src = tmp_path / "warn.mc"
+    src.write_text(WARN_SRC)
+    result = mcc(src, "-S")
+    assert result.returncode == 0  # a plain warning still emits
+    assert (tmp_path / "warn.s").exists()
+    (tmp_path / "warn.s").unlink()
+    result = mcc(src, "-S", "-Werror")
+    assert result.returncode == 1
+    assert f"{src}: error: line 2: engage bespoke mode [-Werror]\n" in result.stderr
+    assert not (tmp_path / "warn.s").exists()  # promoted failure writes no .s
 
 
 def test_werror_run_does_not_execute_the_program(tmp_path):

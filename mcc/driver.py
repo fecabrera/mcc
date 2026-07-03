@@ -654,10 +654,11 @@ def main() -> int:
     """Run the ``mcc`` command-line interface.
 
     Parses arguments, compiles the source file to IR, and then -- depending on
-    the flags -- prints the IR (``--emit-llvm``), emits an object file for a
-    cross target (``--target``), JIT-executes ``main`` (``--run``), or links a
-    native executable with ``cc``, forwarding any extra object/archive inputs
-    and ``-l``/``-L`` options to the link. Compile and I/O errors are reported
+    the flags -- prints the IR (``--emit-llvm``), writes target assembly text
+    (``-S``), emits an object file for a cross target (``--target``),
+    JIT-executes ``main`` (``--run``), or links a native executable with
+    ``cc``, forwarding any extra object/archive inputs and ``-l``/``-L``
+    options to the link. Compile and I/O errors are reported
     as ``file: error: ...`` on stderr; warnings collected during a successful
     generation print as ``file: warning: ...`` before any output is produced,
     and ``-Werror`` promotes them to the failure exit path.
@@ -679,6 +680,9 @@ def main() -> int:
                      help="add a library search path, forwarded to cc as -LDIR (repeatable)")
     cli.add_argument("-c", "--compile", action="store_true",
                      help="compile to an object file (.o) without linking")
+    cli.add_argument("-S", "--emit-asm", action="store_true",
+                     help="write target assembly text (.s) without assembling "
+                          "or linking, for inspection or an external assembler")
     cli.add_argument("-O", type=int, default=2, choices=range(4), help="optimization level")
     cli.add_argument("--run", action="store_true", help="JIT-compile and run immediately")
     cli.add_argument("--emit-llvm", action="store_true", help="print LLVM IR and exit")
@@ -730,8 +734,14 @@ def main() -> int:
               file=sys.stderr)
         return 1
 
+    if args.emit_asm and args.run:
+        print("mcc: error: --run cannot be combined with -S (assembly only)",
+              file=sys.stderr)
+        return 1
+
     if link_inputs or args.libs or args.lib_dirs:
         skips_link = ("--run" if args.run else "-c" if args.compile
+                      else "-S" if args.emit_asm
                       else "--target" if args.target
                       else "--emit-llvm" if args.emit_llvm
                       else "--emit-interface" if args.emit_interface else None)
@@ -787,6 +797,14 @@ def main() -> int:
     except RuntimeError as err:
         print(f"mcc: error: {err}", file=sys.stderr)
         return 1
+
+    if args.emit_asm:
+        # Assembly only: write the target's .s text and stop. Checked before
+        # the --target object branch so a cross -S yields cross assembly, and
+        # silently preferred over -c, matching how --emit-llvm wins today.
+        output = args.output or args.source.with_suffix(".s")
+        output.write_text(target_machine.emit_assembly(native))
+        return 0
 
     if args.target:
         # No host linker for a foreign target: emit the object file and let

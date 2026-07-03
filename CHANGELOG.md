@@ -10,6 +10,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`-S` / `--emit-asm` assembly output** — writes the target's `.s` assembly
+  text and stops, without assembling or linking: the textual sibling of `-c`
+  (object) and `--emit-llvm` (IR), for inspecting generated code or handing
+  it to an external assembler. The output defaults to the source name with a
+  `.s` suffix, `-o` overrides it, and the flag honors `-O` and codegen flags
+  like `--general-regs-only`. Combined with `--target` it emits the *cross*
+  target's assembly, making it the quickest way to eyeball bare-metal codegen
+  without a foreign-toolchain `objdump`. Like the other compile-only modes it
+  rejects `--run` and any `-l`/`-L`/extra link inputs, and `-Werror` fails
+  the build before any `.s` is written.
+
 - **`@removed(msg)` function tombstones** — the terminal state of the
   function-availability lifecycle, one step past `@deprecated`: a declaration
   attribute that turns every *call site* into a hard compile error carrying
