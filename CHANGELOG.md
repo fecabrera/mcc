@@ -44,6 +44,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Editor grammar catch-up** — the Helix tree-sitter grammar now parses the
+  syntax it had fallen behind on: the `@static_assert`/`@error`/`@warning`
+  compile-time directives (standalone, `;`-terminated, full constant
+  expressions as arguments), generic bodiless prototypes (the `@removed`
+  tombstone form `fn f<T>(...);`), and stacked per-parameter annotations
+  (`@noalias @nonnull p: T*`). The documented `as T * n` cast-star ambiguity
+  is gone: the GLR parser now forks on `x as T * ...` and keeps the reading
+  that survives, breaking genuine ties toward multiplication exactly like
+  the compiler's lookahead rule — so `md5.mc`'s `g as uint64 * 4`, the one
+  known exception, parses. Every `.mc` file in the repo now parses with zero
+  errors. The VS Code grammar needed no change (its generic `@`-annotation
+  pattern already covers the new directive names).
 - **`@nonnull` parameters can no longer be passed as `mut` arguments** —
   a `mut` callee writes through a hidden reference into the caller's
   storage, so `fn clobber(mut q: int32*) { q = null; }` called as

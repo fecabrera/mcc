@@ -58,6 +58,11 @@ module.exports = grammar({
     // block statement; the literal's dynamic precedence settles it.
     [$.struct_literal, $.identifier_expression],
     [$.struct_literal, $.identifier_expression, $._type_name],
+    // `x as T * ...`: the `*` is a pointer star (`x as int32*`) or a
+    // multiplication (`x as uint64 * 4`); fork and let the surviving reading
+    // win (pointer_type's dynamic precedence breaks genuine ties toward
+    // multiplication, matching the compiler's lookahead rule).
+    [$.pointer_type, $.cast_expression],
   ],
 
   rules: {
@@ -99,6 +104,26 @@ module.exports = grammar({
         $.global_variable,
         $.const_declaration,
         $.conditional,
+        $.directive,
+      ),
+
+    // Compile-time diagnostic directives: `@static_assert(cond, "msg");`,
+    // `@error("msg");`, `@warning("msg");`. Unlike annotations they stand
+    // alone (ending in `;`) and take full constant expressions, so their
+    // names lex as dedicated tokens, like `@if`/`@else` do.
+    directive: ($) =>
+      seq(
+        field(
+          'name',
+          alias(
+            choice('@static_assert', '@error', '@warning'),
+            $.annotation_name,
+          ),
+        ),
+        '(',
+        commaSep1($._expression),
+        ')',
+        ';',
       ),
 
     // A `union` shares the struct shape (the compiler rejects `extends` and
@@ -171,11 +196,14 @@ module.exports = grammar({
     // a plain prototype for a concrete mcc function defined in another object
     // (the form interface stubs emit). Same shape either way; the annotation
     // is what distinguishes them, and a highlighter need not.
+    // A generic prototype is the `@removed` tombstone form: it never
+    // instantiates, so it is the one generic that may go bodiless.
     function_prototype: ($) =>
       seq(
         repeat($.annotation),
         'fn',
         field('name', $.identifier),
+        optional($.type_parameters),
         $.parameter_list,
         optional(seq('->', field('return_type', $._type))),
         ';',
@@ -186,7 +214,8 @@ module.exports = grammar({
 
     parameter: ($) =>
       seq(
-        optional($.annotation),
+        // Per-parameter annotations stack (`@noalias @nonnull p: T*`).
+        repeat($.annotation),
         optional(choice('const', 'mut')),
         field('name', $.identifier),
         ':',
@@ -264,12 +293,14 @@ module.exports = grammar({
 
     type_arguments: ($) => seq('<', commaSep1($._type), '>'),
 
-    // A `*` following a cast type is taken as a pointer star (the common
-    // `x as int32*`), winning over multiplication. The rare `x as T * y` (cast
-    // then multiply without parens) is the cost; parenthesize it. Settling this
-    // perfectly needs lexer lookahead (an external scanner), which a
-    // highlighting grammar does without.
-    pointer_type: ($) => prec(PREC.unary, seq($._type, repeat1('*'))),
+    // A `*` following a cast type is ambiguous: pointer star (`x as int32*`)
+    // or multiplication (`x as uint64 * 4`). The compiler settles it by
+    // lookahead (a `*` whose next token can begin an expression multiplies);
+    // here the GLR parser explores both and the reading that survives wins.
+    // When both survive (`x as T * *p`) the negative dynamic precedence makes
+    // multiplication win, matching the compiler.
+    pointer_type: ($) =>
+      prec.dynamic(-1, prec(PREC.as, seq($._type, repeat1('*')))),
     array_type: ($) => prec(1, seq($._type, repeat1($.dimension))),
     // A dimension is any constant expression (e.g. `[N + 1]`); `[]` is an
     // inferred (or flexible-array-member) dimension.
@@ -414,8 +445,11 @@ module.exports = grammar({
       );
     },
 
+    // No associativity: at `x as T . *` the cast's precedence ties with
+    // pointer_type's and the declared conflict lets the GLR parser fork
+    // (see pointer_type). Chained casts (`x as T as U`) stay unambiguous.
     cast_expression: ($) =>
-      prec.left(PREC.as, seq($._expression, 'as', field('type', $._type))),
+      prec(PREC.as, seq($._expression, 'as', field('type', $._type))),
 
     unary_expression: ($) =>
       prec.right(PREC.unary, seq(field('operator', choice('-', '!', '*', '&', '~')), $._expression)),
