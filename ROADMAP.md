@@ -192,7 +192,7 @@ already do).
           whose fall-through is `unreachable`). Introduced as a warning first —
           a hard error would break today's legal non-exhaustive `case`s — with
           a later flip to an error once the stdlib and examples are clean. That
-          non-fatal first phase depends on the
+          non-fatal first phase rides the shipped
           [warning subsystem](#metaprogramming-and-builtins)
 
 ### Modules and imports
@@ -603,20 +603,39 @@ already do).
       that turns each *call site* into a compile error carrying the migration
       message, so pulling an implementation still gives callers a targeted
       `copy_bytes was removed: use bytecopy instead` for a release cycle rather
-      than a bare `unknown function 'copy_bytes'`. A small delta on `@deprecated`,
-      reusing the same machinery: the call-site hook in `gen_call`, the `.mci`
+      than a bare `unknown function 'copy_bytes'`. A small delta sharing
+      `@deprecated`'s machinery: the call-site hook in `gen_call`, the `.mci`
       round-trip (so importers of a removed stdlib function get the error), and
-      the `Func`-node message storage. Two differences only: (1) it emits through
-      the existing error/abort path, **not** the warning channel, so unlike
-      `@warning`/`@deprecated` it does **not** depend on the
-      [warning subsystem](#metaprogramming-and-builtins); its only real
-      dependency is `@deprecated`'s call-site attribution plumbing above; (2) it
-      allows a **bodiless tombstone** declaration
+      the `Func`-node message storage. That plumbing is unbuilt in both items,
+      so whichever ships first builds it and the other reuses it; the
+      recommended order is still `@deprecated` first, both for lifecycle
+      discipline (jumping the [memory](libmc/memory.mc) forwarders straight to
+      removed would hard-break downstream users without a warn cycle) and
+      because the shared known task, repointing the live internal callers of
+      the deprecated forwarders ([dict](libmc/dict.mc),
+      [md5](libmc/hashing/md5.mc), and `tests/test_structs.py`), gates both
+      features equally. Two differences from `@deprecated`: (1) it emits
+      through the existing error/abort path, where `@deprecated` warns over
+      the now-shipped [warning channel](#metaprogramming-and-builtins); (2)
+      the tombstone is a **bodiless** declaration, since the implementation is
+      gone, and for concrete functions that form already parses (bodyless `fn`
+      prototypes, the shipped `.mci` stub form), so the residual parser work
+      is one carve-out: lift the "a generic function cannot be a bodyless
+      prototype (its body must travel to be instantiated)" rejection when
+      `@removed` is present, since a tombstone never instantiates
       (`@removed("use bytecopy") fn copy_bytes<T>(dst: T*, src: T*, n: uint64);`
-      with no body, a small parser allowance like an `@extern` prototype), since
-      the implementation is gone. Prior art: Swift's `@available(..., obsoleted:)`
-      and C#'s `[Obsolete(msg, error: true)]`. Open question: the bodiless
-      tombstone (recommended) versus keeping a dead stub body
+      trips exactly that rejection today). Prior art: Swift's
+      `@available(..., obsoleted:)` and C#'s `[Obsolete(msg, error: true)]`.
+      Bodiless is the settled shape (not a dead stub body): a stub would fight
+      the shipped prototype form, since it must still compile, keeps its
+      callees alive, and could itself call removed functions. Two freebies
+      fall out of what shipped alongside:
+      [instantiation backtraces](#tooling-and-c-interop) attach their note
+      chain to a removed-call error inside a generic body at no extra cost,
+      and a `@removed` example is naturally `-Werror`-clean in CI, since the
+      tombstone itself compiles and only ever errors (unlike `@deprecated`'s,
+      which needs the dead-`@if` trick that
+      [examples/types/warnings.mc](examples/types/warnings.mc) established)
 - [ ] [Inline assembly](docs/language.md#inline-assembly) — arch-specific (pair with `@if` on
       `TARGET_ARCH`), preferring intrinsics where they exist:
   - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an
