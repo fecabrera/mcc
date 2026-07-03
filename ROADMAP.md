@@ -162,14 +162,23 @@ already do).
       a derived value stays indistinguishable from its base and from a plain
       int. The directional base-to-derived safety that reuse suggests needs
       [nominal enums](#types-and-generics) below; implemented, see
-      [Enums](docs/language.md#enums)
+      [Enums](docs/language.md#enums):
+  - [ ] empty derived enum as re-export — `enum local_status: x_error {}`
+        (a base, no members of its own) re-exports the base's member table
+        under a new name; today the "enum has no members" rule rejects the
+        empty body even when a base is named. Relax that rule only when a
+        base is present — a baseless `enum e {}` stays an error, since it
+        genuinely has no values. A naming convenience while enums are
+        transparent; under [nominal enums](#types-and-generics) below it
+        becomes a genuine distinct type over the same value set
 - [ ] Nominal enums — make an enum value carry its type identity instead of
       collapsing to its underlying integer. Today an enum used as a type
       becomes a raw `int32` (or its declared underlying), so `x_status` and
       `x_error` values mix freely with each other and with plain ints. A large,
       **backward-incompatible** semantics change: nominal enums begin rejecting
       some code that compiles now (implicit enum/int and enum/enum mixing), so
-      it needs a migration story (staged warnings before errors). It is the
+      it needs a migration story: staged warnings, over the shipped
+      [warning subsystem](#metaprogramming-and-builtins), before errors. It is the
       genuine prerequisite for both dependents nested below: the directional
       conversion safety that [enum member reuse](#types-and-generics) above
       suggests, and enum-aware `case` exhaustiveness (today `case` is pure
@@ -358,7 +367,12 @@ already do).
         `mut`/pointer parameter or a global — never from a local or a by-value
         parameter**; this conservative, checkable rule fits the `string_at`
         case (the result derives from `self`) and preserves the non-escape
-        guarantee
+        guarantee. The groundwork has shipped: generic overloads mixing `mut`
+        (above) already defer the lvalue/value decision past overload
+        resolution — the exact decision point an assignable call expression
+        needs — and a `-> mut T` stub in a `.mci` is pure return-type
+        rendering on the shipped
+        [bodyless prototypes](#functions-and-methods)
   - [ ] motivating use case: method receivers — once methods / OOP (the item
         below) land, `const`/`mut`/by-value on `self` express
         read-only / mutating / consuming methods directly, replacing today's raw
@@ -499,6 +513,28 @@ already do).
           appears. A non-null return type extends return types the same way
           [`mut` returns](#functions-and-methods) does, so sequence it after
           that work if it happens
+- [ ] Bodyless `fn` prototypes — a plain `fn` ending in `;`, beyond the
+      `.mci` stub form:
+  - [x] concrete prototypes — `fn bump(mut n: int32);` declares a concrete
+        mcc function defined in another object, called with the **mcc**
+        convention, so `const`-struct and `mut` parameters keep their
+        hidden-reference passing (which `@extern`, meaning C ABI,
+        deliberately rejects). Generic, `@inline`, `@asm`, and `@static`
+        functions cannot be prototypes (their body or symbol cannot live
+        elsewhere), with one carve-out: a
+        [`@removed`](#metaprogramming-and-builtins) tombstone, which never
+        instantiates. Interface stubs are the intended writer; implemented,
+        see [Bodyless fn prototypes](docs/language.md#bodyless-fn-prototypes)
+  - [ ] forward declarations — a prototype plus its definition in one program
+        is a duplicate-definition error today, and declaration order never
+        needs one (signatures are declared before any body generates, so
+        names resolve regardless of definition order). Accepting a matching
+        pair — the prototype checked against the definition, then discarded —
+        would let a build that imports a module's `.mci` also compile that
+        module's `.mc` source without tripping the duplicate error. Must not
+        weaken genuine duplicate detection or `@removed`'s
+        one-tombstone-claims-the-name rule (a tombstone plus a live
+        definition stays a declaration-time error)
 - [ ] Native variadic arguments — `fn f(args: slice<const any>)` (with
       `fn f(args...)` as sugar): a trailing `slice<const any>` parameter collects
       the call's extra arguments, so `f(x, a, b, c)` (after `f`'s fixed
@@ -548,16 +584,17 @@ already do).
       requirements, or type sizes before linking; `@error(msg)` fails
       unconditionally at its position, useful guarded by `@if`
       (`@if(!TARGET_OS) @error("unsupported OS");`). No new subsystem, reusing
-      error emission and `eval_const`. Minimal surface first: top-level
-      position (where struct-layout assertions live), with statement position
-      a later add. Generics synergy: inside a generic body each fires *per
-      instantiation* at monomorphization, a lightweight type-parameter
-      constraint that complements the planned
-      [interface bounds](#types-and-generics), and an assert in a
-      never-instantiated generic correctly never fires. Top-level position is
-      implemented, see
-      [Error directives](docs/language.md#error-directives); statement position
-      (and the per-instantiation generic behavior it unlocks) is the later add
+      error emission and `eval_const`. Top-level position (where struct-layout
+      assertions live) is implemented, see
+      [Error directives](docs/language.md#error-directives):
+  - [ ] statement position — allow both directives inside function bodies.
+        Unlocks the generics synergy: inside a generic body each fires *per
+        instantiation* at monomorphization, a lightweight type-parameter
+        constraint that complements the planned
+        [interface bounds](#types-and-generics) (an assert in a
+        never-instantiated generic correctly never fires), and a failing
+        assert in a generic body gains the shipped
+        [instantiation-backtrace](#tooling-and-c-interop) notes for free
 - [x] Warning subsystem — a non-fatal diagnostic channel, the foundation the
       `@deprecated` directive below and enum-exhaustiveness checking both build
       on. Warnings collect on the `CodeGen` instance and the driver prints
@@ -598,6 +635,14 @@ already do).
         [`@removed` tombstone](#metaprogramming-and-builtins) directive below;
         implemented, see
         [Deprecated functions](docs/language.md#deprecated-functions)
+  - [ ] dedup relaxation — warnings deduplicate at print time on their
+        (file, line, message), so a call site inside a generic body reports
+        once across instantiations; an opt-in to name the triggering
+        instantiations — per-instantiation repeats, or the
+        [instantiation-backtrace](#tooling-and-c-interop) note chain attached
+        to a warning the way errors already carry it — for when the collapsed
+        repeats hide which type is at fault. Print-time only either way: the
+        collected list embedders read already keeps every emission
 - [x] `@removed(msg)` tombstones — the
       terminal state of the function-availability lifecycle, one step past
       [`@deprecated`](#metaprogramming-and-builtins) above: a function goes from
@@ -720,6 +765,11 @@ already do).
         The macro-frame part is gated on
         [`@macro`](#metaprogramming-and-builtins) existing, so it rides in
         whenever macros land; the import and inclusion frames can come first
+  - [ ] note-depth cap — a deeply nested instantiation chain prints every
+        frame today; cap the rendered chain, keeping the innermost and
+        outermost frames and eliding the middle (`... N more`). A print-time
+        change to the note renderer only — the primary error line stays
+        byte-identical, so the suite's exact-string matches hold
 - [ ] Linker selection — `--linker=/path/to/ld` to pick a specific linker
       (today whatever the driver `cc` defaults to)
 - [ ] Compiler-driver selection — `--cc=/path/to/cc` to choose the C driver used
