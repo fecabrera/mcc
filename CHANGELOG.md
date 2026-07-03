@@ -8,6 +8,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-03
+
 ### Added
 
 - **`-S` / `--emit-asm` assembly output** — writes the target's `.s` assembly
@@ -598,7 +600,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `mcc` console script and bundling the `lib/` standard library into the wheel,
   with the stdlib resolved from the installed location or a source checkout.
 
-[Unreleased]: https://github.com/fecabrera/mcc/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/fecabrera/mcc/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/fecabrera/mcc/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/fecabrera/mcc/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/fecabrera/mcc/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/fecabrera/mcc/compare/v0.2.0...v0.3.0
