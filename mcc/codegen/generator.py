@@ -5611,12 +5611,19 @@ class CodeGen:
             line: Source line for diagnostics.
 
         Raises:
-            LangError: When the storage is read-only, is ``@volatile``, or sits
-                at an unguaranteed (packed) alignment.
+            LangError: When the storage is read-only, is ``@volatile``, sits
+                at an unguaranteed (packed) alignment, or is a ``@nonnull``
+                parameter (the callee could store null through the reference).
         """
         if self.writes_const(arg_expr):
             raise LangError(
                 "cannot pass a const parameter as a mut argument; it is read-only",
+                line,
+            )
+        if isinstance(arg_expr, Var) and arg_expr.name in self.nonnull_locals:
+            raise LangError(
+                "cannot pass a @nonnull parameter as a mut argument; "
+                "null could be stored through the reference",
                 line,
             )
         if t.const:

@@ -258,7 +258,9 @@ compares; asserting and then comparing needs parentheses: `(p!) == q`.
 
 To keep the per-binding fact sound, a `@nonnull` parameter cannot be
 reassigned, cannot have its address taken (a `T**` could store null through
-it), and a shadowing `let` of the same name is a fresh, unproven binding. A
+it), cannot be passed as a `mut` argument (the callee writes through a
+hidden reference and could store null into the parameter's storage), and a
+shadowing `let` of the same name is a fresh, unproven binding. A
 function with `@nonnull` parameters cannot be used as a function value — the
 plain `fn(...)` type cannot carry the contract, and a call through the
 pointer would skip the proof check.

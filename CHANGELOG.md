@@ -26,6 +26,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   stubs in generic and `@inline` bodies. See
   [@nonnull parameters](docs/language.md#nonnull-parameters).
 
+### Fixed
+
+- **`@nonnull` parameters can no longer be passed as `mut` arguments** —
+  a `mut` callee writes through a hidden reference into the caller's
+  storage, so `fn clobber(mut q: int32*) { q = null; }` called as
+  `clobber(p)` could silently null a `@nonnull p` while it stayed "known
+  non-null" — a soundness hole in the shipped reassignment/address-of bans.
+  Lending a `@nonnull` parameter's storage to a `mut` slot is now a compile
+  error on both the concrete and the generic call path; passing its *value*
+  to ordinary (non-`mut`) parameters is unaffected.
+
 ## [0.5.0] - 2026-07-03
 
 ### Added

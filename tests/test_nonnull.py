@@ -220,6 +220,57 @@ def test_address_of_nonnull_param_rejected():
         )
 
 
+def test_nonnull_param_as_mut_argument_rejected():
+    # A mut callee writes through a hidden reference into the caller's slot;
+    # it could store null while the parameter stays "known non-null".
+    with pytest.raises(
+        LangError, match="cannot pass a @nonnull parameter as a mut argument"
+    ):
+        compile_ir(
+            "fn clobber(mut q: int32*) { q = null; }\n"
+            "fn f(@nonnull p: int32*) { clobber(p); }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_nonnull_param_as_generic_mut_argument_rejected():
+    # The mut legality checks are deferred in a generic call until after
+    # overload resolution; the ban must still fire on that path.
+    with pytest.raises(
+        LangError, match="cannot pass a @nonnull parameter as a mut argument"
+    ):
+        compile_ir(
+            "fn clobber<T>(mut q: T) { }\n"
+            "fn f(@nonnull p: int32*) { clobber(p); }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_plain_pointer_still_passes_to_mut():
+    # The ban is specific to @nonnull parameters; an ordinary pointer
+    # variable is still a fine mut argument.
+    assert run(
+        "fn clobber(mut q: int32*) { q = null; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 1;\n"
+        "    let p: int32* = &x;\n"
+        "    clobber(p);\n"
+        "    return (p == null) ? 0 : 1;\n"
+        "}"
+    ) == 0
+
+
+def test_nonnull_param_still_passes_by_value():
+    # Passing the parameter's value (a non-mut slot) is untouched; only
+    # lending its storage is banned.
+    assert run(
+        FIRST + "fn outer(@nonnull p: int32*) -> int32 { return first(p); }\n"
+        "fn peek(q: int32*) -> int32 { return (q == null) ? -1 : *q; }\n"
+        "fn wrap(@nonnull p: int32*) -> int32 { return peek(p); }\n"
+        "fn main() -> int32 { let x: int32 = 5; return outer(&x) + wrap(&x); }"
+    ) == 10
+
+
 def test_shadowing_let_drops_the_fact():
     # A shadowing binding is a fresh, possibly-null variable; it must not
     # inherit the parameter's non-null proof.
