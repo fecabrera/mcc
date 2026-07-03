@@ -10,6 +10,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Error directives**: two top-level directives that turn a bad build into a
+  compile error before it links. `@static_assert(cond, "message")` fails when
+  its condition is false; the condition is folded during code generation (like
+  a `const` initializer), so it may use `sizeof`/`alignof`/`offsetof`, other
+  `const`s, and `Enum::Member` values, useful for guarding struct layouts,
+  sizes, and alignment. Any nonzero integer or `true` passes; a zero or `false`
+  fails with `static assertion failed: {message}`, and a condition that folds
+  to a non-integer/non-bool constant is rejected. `@error("message")` fails
+  unconditionally at its position, meant to be guarded by an `@if` so it only
+  fires on an unsupported target (a dead `@if` branch drops it). Both are
+  checked once types, constants, enums, and globals are known but before any
+  function body, fire in source order (first failure wins), work across
+  imported modules (reporting the defining file), and decode the usual string
+  escapes in their messages. Top-level only for now; a statement-position form
+  is planned. Reuses the existing error path and `eval_const`, with no new
+  subsystem. See
+  [Error directives](docs/language.md#error-directives) and
+  [static_assert.mc](examples/types/static_assert.mc).
+
 - **`@nonnull` parameters** — a *checked* "definitely non-null" refinement
   over the nullable-by-default `T*`: mark a pointer parameter
   (`fn first(@nonnull p: int32*) -> int32`) and the callee is statically

@@ -117,6 +117,8 @@ class Program:
         conditionals: Top-level ``@if`` blocks selecting whole declarations.
         enums: Enumeration declarations.
         aliases: Type-alias declarations.
+        directives: Top-level ``@static_assert``/``@error`` directives, checked
+            during code generation after types and constants are known.
     """
 
     imports: list[tuple[str, int]]
@@ -127,6 +129,9 @@ class Program:
     conditionals: list["Conditional"] = field(default_factory=list)
     enums: list["EnumDecl"] = field(default_factory=list)
     aliases: list["TypeAlias"] = field(default_factory=list)
+    directives: list["StaticAssert | ErrorDirective"] = field(
+        default_factory=list
+    )
 
 
 @dataclass
@@ -580,6 +585,49 @@ class Conditional:
     then: list
     otherwise: list
     line: int
+
+
+@dataclass
+class StaticAssert:
+    """A ``@static_assert(cond, "msg");`` compile-time check.
+
+    The condition is folded by ``eval_const`` during code generation (not at
+    parse time), so it may use ``sizeof``/``alignof``/``offsetof``/``const``
+    references, which need the type system. The compile fails with ``message``
+    when the condition folds to a false (zero) integer or ``bool`` constant;
+    any nonzero constant passes. Used to validate struct layouts, alignment
+    requirements, or type sizes before linking.
+
+    Attributes:
+        cond: The condition expression, folded at code-generation time.
+        message: The failure message, reported verbatim.
+        line: Source line for diagnostics.
+        source: Defining file, stamped by the driver.
+    """
+
+    cond: object
+    message: str
+    line: int
+    source: str | None = None
+
+
+@dataclass
+class ErrorDirective:
+    """An ``@error("msg");`` unconditional compile error.
+
+    Fails the compile at its position with ``message``. Most useful guarded by
+    a top-level ``@if`` (``@if (!TARGET_OS) { @error("unsupported OS"); }``),
+    where the dead branch is dropped and only a live one aborts the build.
+
+    Attributes:
+        message: The error message, reported verbatim.
+        line: Source line for diagnostics.
+        source: Defining file, stamped by the driver.
+    """
+
+    message: str
+    line: int
+    source: str | None = None
 
 
 @dataclass

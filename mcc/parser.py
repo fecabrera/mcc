@@ -30,6 +30,7 @@ from mcc.nodes import (
     Emit,
     EnumAccess,
     EnumDecl,
+    ErrorDirective,
     ExprStmt,
     Import,
     FloatLit,
@@ -48,6 +49,7 @@ from mcc.nodes import (
     Program,
     Return,
     SizeOf,
+    StaticAssert,
     StoreDeref,
     StoreIndex,
     StoreMember,
@@ -80,6 +82,20 @@ STRING_ESCAPES = {
     "?": "?",
     "\\": "\\",
 }
+
+
+def _unescape(raw: str) -> str:
+    """Apply :data:`STRING_ESCAPES` to a string literal's inner text.
+
+    ``raw`` is the token text with its surrounding quotes already stripped.
+    Every ``\\x`` sequence is replaced by its escape (an unknown escape keeps
+    the bare character), matching how ordinary string literals are decoded so
+    directive messages read the same as any other string.
+    """
+    return re.sub(
+        r"\\(.)", lambda m: STRING_ESCAPES.get(m.group(1), m.group(1)), raw
+    )
+
 
 # Compound-assignment operators mapped to the base binary operator they apply:
 # `target op= value` means `target = target op value` (target evaluated once).
@@ -226,6 +242,7 @@ class Parser:
         imports = []
         structs, functions, globals_, consts, conditionals, enums, aliases = (
             [], [], [], [], [], [], [])
+        directives = []
         while self.cur.kind == "import":
             line = self.advance().line
             path = self.expect("STRING").text[1:-1]
@@ -246,11 +263,13 @@ class Parser:
                 Conditional: conditionals,
                 EnumDecl: enums,
                 TypeAlias: aliases,
+                StaticAssert: directives,
+                ErrorDirective: directives,
             }[type(item)]
             target.append(item)
         return Program(
             imports, structs, functions, globals_, consts, conditionals, enums,
-            aliases,
+            aliases, directives,
         )
 
     def parse_toplevel_block(self) -> list:
@@ -297,6 +316,39 @@ class Parser:
                 otherwise = parse_block()
         return Conditional(cond, then, otherwise, line)
 
+    def parse_static_assert(self):
+        """Parse a ``@static_assert(cond, "msg");`` directive.
+
+        The condition is any expression; it is not evaluated here -- the fold
+        waits for code generation, where ``sizeof``/``alignof``/``offsetof`` and
+        ``const`` references resolve against the type system. The message is a
+        string literal, decoded with the usual escapes.
+
+        Returns:
+            A ``StaticAssert`` node.
+        """
+        line = self.advance().line  # @static_assert
+        self.expect("(")
+        cond = self.parse_expr()
+        self.expect(",")
+        message = _unescape(self.expect("STRING").text[1:-1])
+        self.expect(")")
+        self.expect(";")
+        return StaticAssert(cond, message, line)
+
+    def parse_error_directive(self):
+        """Parse an ``@error("msg");`` directive.
+
+        Returns:
+            An ``ErrorDirective`` node.
+        """
+        line = self.advance().line  # @error
+        self.expect("(")
+        message = _unescape(self.expect("STRING").text[1:-1])
+        self.expect(")")
+        self.expect(";")
+        return ErrorDirective(message, line)
+
     def parse_toplevel_item(self):
         """Parse one top-level item and record its source byte span.
 
@@ -334,6 +386,10 @@ class Parser:
             return self.parse_conditional(self.parse_toplevel_block)
         if self.cur.kind == "ANNOT" and self.cur.text == "@else":
             raise LangError("@else without a matching @if", self.cur.line)
+        if self.cur.kind == "ANNOT" and self.cur.text == "@static_assert":
+            return self.parse_static_assert()
+        if self.cur.kind == "ANNOT" and self.cur.text == "@error":
+            return self.parse_error_directive()
         if self.cur.kind == "import":
             # Only valid inside an @if branch (parse_toplevel_block); a stray one
             # in the declaration section is rejected by parse_program.
@@ -1113,12 +1169,7 @@ class Parser:
         lines = []
         while self.cur.kind != "}":
             tok = self.expect("STRING")
-            raw = tok.text[1:-1]
-            lines.append(
-                re.sub(
-                    r"\\(.)", lambda m: STRING_ESCAPES.get(m.group(1), m.group(1)), raw
-                )
-            )
+            lines.append(_unescape(tok.text[1:-1]))
         self.expect("}")
         if not lines:
             raise LangError("an @asm block needs at least one instruction line", line)
@@ -1482,11 +1533,7 @@ class Parser:
         if tok.kind == "null":
             return NullLit(tok.line)
         if tok.kind == "STRING":
-            raw = tok.text[1:-1]
-            text = re.sub(
-                r"\\(.)", lambda m: STRING_ESCAPES.get(m.group(1), m.group(1)), raw
-            )
-            return StrLit(text, tok.line)
+            return StrLit(_unescape(tok.text[1:-1]), tok.line)
         if tok.kind == "CHAR":
             inner = tok.text[1:-1]  # the single character between the quotes
             char = STRING_ESCAPES.get(inner[1], inner[1]) if inner[0] == "\\" else inner

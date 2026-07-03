@@ -531,7 +531,7 @@ already do).
   - [ ] over the builtin `range` — today `enumerate` rejects `range` (the
         counter *is* the value); allow it for a non-zero `start`, where the
         index (from 0) and the counter (from `start`) genuinely differ
-- [ ] Error directives — `@static_assert(cond, msg)` and `@error(msg)`, both
+- [x] Error directives — `@static_assert(cond, msg)` and `@error(msg)`, both
       emitting a hard compile error through the existing error path, with the
       condition folded by `eval_const` **during code generation** (not during
       parsing: `sizeof(T)`/`alignof`/`offsetof`/`const` references need the
@@ -547,7 +547,10 @@ already do).
       instantiation* at monomorphization, a lightweight type-parameter
       constraint that complements the planned
       [interface bounds](#types-and-generics), and an assert in a
-      never-instantiated generic correctly never fires
+      never-instantiated generic correctly never fires. Top-level position is
+      implemented, see
+      [Error directives](docs/language.md#error-directives); statement position
+      (and the per-instantiation generic behavior it unlocks) is the later add
 - [ ] Warning subsystem — a non-fatal diagnostic channel, the foundation the
       warning directives below and enum-exhaustiveness checking both build on.
       Today every diagnostic is a hard `file: error: line N: msg` that aborts;

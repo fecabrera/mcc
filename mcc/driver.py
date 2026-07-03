@@ -94,6 +94,8 @@ def _stamp_sources(program: Program, source: str) -> None:
         enum.source = source
     for alias in program.aliases:
         alias.source = source
+    for directive in program.directives:
+        directive.source = source
     # A top-level @if's branches hold declarations too; stamp them so their
     # source survives flattening in codegen.
     _stamp_conditionals(program.conditionals, source)
@@ -186,6 +188,7 @@ def merge_imports(program: Program, base_dir: Path,
         visited = set()
     structs, functions = [], []
     globals_, consts, conditionals, enums, aliases = [], [], [], [], []
+    directives = []
     imports = program.imports + _conditional_imports(program.conditionals, facts)
     for import_path, line in imports:
         candidates = []
@@ -204,6 +207,7 @@ def merge_imports(program: Program, base_dir: Path,
         conditionals += imported.conditionals
         enums += imported.enums
         aliases += imported.aliases
+        directives += imported.directives
     structs += program.structs
     functions += program.functions
     globals_ += program.globals
@@ -211,8 +215,9 @@ def merge_imports(program: Program, base_dir: Path,
     conditionals += program.conditionals
     enums += program.enums
     aliases += program.aliases
+    directives += program.directives
     return Program([], structs, functions, globals_, consts, conditionals, enums,
-                   aliases)
+                   aliases, directives)
 
 
 def load_program(path: Path, search_paths: tuple[Path, ...] = (),

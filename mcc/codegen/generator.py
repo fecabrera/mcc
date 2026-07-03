@@ -41,6 +41,7 @@ from mcc.nodes import (
     Emit,
     EnumAccess,
     EnumDecl,
+    ErrorDirective,
     ExprStmt,
     FloatLit,
     For,
@@ -59,6 +60,7 @@ from mcc.nodes import (
     Program,
     Return,
     SizeOf,
+    StaticAssert,
     StoreDeref,
     StoreIndex,
     StoreMember,
@@ -577,10 +579,48 @@ class CodeGen:
                     self.program.enums.append(item)
                 elif isinstance(item, TypeAlias):
                     self.program.aliases.append(item)
+                elif isinstance(item, (StaticAssert, ErrorDirective)):
+                    self.program.directives.append(item)
                 elif isinstance(item, Import):
                     pass  # already merged by the driver
                 else:
                     self.program.functions.append(item)
+
+    def check_directives(self):
+        """Evaluate top-level ``@static_assert`` / ``@error`` directives.
+
+        Each directive fires in source order. ``@error`` fails the compile
+        unconditionally at its position; ``@static_assert`` folds its condition
+        with :meth:`eval_const` (so ``sizeof``/``alignof``/``offsetof`` and
+        ``const``/enum references resolve against the fully-registered type
+        system) and fails when the condition is a zero integer or ``bool``
+        constant. Directives dropped with the dead branch of a top-level ``@if``
+        never reach here, so a guarded ``@error`` only fires when its branch is
+        live.
+
+        Raises:
+            LangError: When an ``@error`` is reached, a ``@static_assert``
+                condition is false, or a condition does not fold to a bool or
+                integer constant.
+        """
+        for directive in self.program.directives:
+            self.current_source = directive.source
+            if isinstance(directive, ErrorDirective):
+                raise LangError(directive.message, directive.line)
+            value = self.eval_const(directive.cond, directive.line)
+            if not isinstance(value.value, ir.Constant) or not (
+                is_integer(value.type) or value.type is BOOL
+            ):
+                raise LangError(
+                    "@static_assert condition must fold to a bool or integer "
+                    "constant",
+                    directive.line,
+                )
+            if value.value.constant == 0:
+                raise LangError(
+                    f"static assertion failed: {directive.message}",
+                    directive.line,
+                )
 
     def param_irs(self, params, hidden: frozenset[int] = frozenset()) -> list:
         """Map a function's parameter types to their LLVM argument types.
@@ -1600,6 +1640,11 @@ class CodeGen:
         for glob, var, var_type in deferred_static_inits:
             self.current_source = var.source
             glob.initializer = self.const_initializer(var.init, var_type, var.line)
+        # Error directives run once every type, const, enum, and global is
+        # known, so @static_assert conditions can fold sizeof/alignof/offsetof
+        # and const/enum references; before function bodies, so a failed layout
+        # assertion aborts the build without wasting work on codegen.
+        self.check_directives()
         for func in self.program.functions:
             if not func.type_params and not func.extern:
                 symbol = self.static_funcs.get((func.source, func.name), func.name)

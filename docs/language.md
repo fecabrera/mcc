@@ -519,6 +519,69 @@ precede all declarations, as before; only a conditional one lives inside an
 defines — not user `const`s — since imports are resolved before constants are
 folded.
 
+## Error directives
+
+Two directives turn a bad build into a compile error before it ever links:
+`@static_assert(cond, "message")` fails when a condition is false, and
+`@error("message")` fails unconditionally at its position. Both live at the top
+level, alongside declarations.
+
+`@static_assert` checks an invariant at compile time: a struct's layout, a
+type's size or alignment, an enum value the code depends on. Its condition is
+folded the way a [`const`](#constants) initializer is, so it may use
+`sizeof`/`alignof`/`offsetof`, other `const`s, and `Enum::Member` values, all of
+which need the type system:
+
+```c
+struct Header {
+    magic: uint32;
+    length: uint32;
+}
+
+// Guard the on-wire layout: catch an accidental field or padding change here,
+// not as a corrupt packet at runtime.
+@static_assert(sizeof(struct Header) == 8, "Header must stay 8 bytes");
+@static_assert(offsetof(struct Header, length) == 4, "length must follow magic");
+```
+
+The condition must fold to an integer or `bool` constant. Any nonzero integer or
+`true` passes silently; a zero or `false` fails the compile with the message:
+
+```
+example.mc: error: line 9: static assertion failed: Header must stay 8 bytes
+```
+
+A condition that folds to some other constant (a float, a string, `null`) is
+rejected as ill-typed (`condition must fold to a bool or integer constant`), and
+one that does not fold at all (it names a runtime variable, say) fails with the
+usual "is not a constant" diagnostic.
+
+`@error` is the unconditional twin: reaching it always fails the compile. On its
+own it would just break every build, so it is meant to be guarded by an
+[`@if`](#conditional-compilation), so the dead branch is dropped and the error
+only fires when its branch is live. This is how a program rejects a target it
+does not support:
+
+```c
+@if (TARGET_OS == OS_DARWIN) {
+    import "platform/darwin";
+} @else @if (TARGET_OS == OS_LINUX) {
+    import "platform/linux";
+} @else {
+    @error("this platform is not supported");
+}
+```
+
+Both directives are checked during code generation, once every type, constant,
+enum, and global is known but before any function body is compiled, and they
+fire in source order, so the first failure wins. A directive imported from another
+module is checked too, and reports the file that defined it. Directive messages
+are decoded with the same escapes as any [string](#strings) literal, so `\n`
+and friends work.
+
+(For now these are top-level only; a statement-position form, and the
+per-instantiation behavior it gives inside a generic body, are planned.)
+
 ## Control flow
 
 ```c
