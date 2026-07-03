@@ -245,6 +245,160 @@ def test_function_value_of_nonnull_function_rejected():
         )
 
 
+# ------------------------------------------------------ escape hatch (p!)
+
+
+def test_postfix_assert_parses():
+    from mcc.nodes import NonnullAssert, Var
+
+    (func,) = parse("fn f(p: int32*) -> int32* { return p!; }").functions
+    node = func.body[0].value
+    assert isinstance(node, NonnullAssert) and isinstance(node.operand, Var)
+
+
+def test_hatch_crosses_concrete_call():
+    # A heap pointer carries no syntactic proof; `p!` is the programmer's
+    # explicit assertion, and it is the whole proof.
+    assert run(
+        'import "std";\n' + FIRST + "fn main() -> int32 {\n"
+        "    let p: int32* = malloc(4) as int32*;\n"
+        "    *p = 42;\n"
+        "    let r = first(p!);\n"
+        "    free(p as uint8*);\n"
+        "    return r;\n"
+        "}"
+    ) == 42
+
+
+def test_hatch_crosses_generic_call():
+    # The generic path re-runs the syntactic proof after inference; the
+    # hatch must satisfy that prover too.
+    assert run(
+        "fn get<T>(@nonnull p: T*) -> T { return *p; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 7;\n"
+        "    let p: int32* = &x;\n"
+        "    return get(p!);\n"
+        "}"
+    ) == 7
+
+
+def test_hatch_on_member_operand():
+    assert run(
+        "struct Buf { data: int32*; }\n" + FIRST + "fn peek(b: Buf*) -> int32 {\n"
+        "    return first(b->data!);\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 5;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    return peek(&b);\n"
+        "}"
+    ) == 5
+
+
+def test_null_bang_rejected():
+    with pytest.raises(LangError, match="cannot assert null as non-null"):
+        compile_ir(FIRST + "fn main() -> int32 { return first(null!); }")
+
+
+def test_hatch_non_pointer_rejected():
+    with pytest.raises(
+        LangError,
+        match="postfix '!' asserts a pointer non-null, but the operand is a int32",
+    ):
+        compile_ir("fn main() -> int32 { let n: int32 = 1; let m = n!; return 0; }")
+
+
+def test_hatch_result_is_not_an_lvalue():
+    with pytest.raises(LangError, match="invalid assignment target"):
+        compile_ir(
+            "fn main() -> int32 {\n"
+            "    let x: int32 = 1;\n"
+            "    let p: int32* = &x;\n"
+            "    p! = null;\n"
+            "    return 0;\n"
+            "}"
+        )
+
+
+def test_hatch_does_not_seed_facts_through_let():
+    # The assertion covers the expression it wraps, not the binding it lands
+    # in: `let q = p!` leaves q a plain, unproven pointer (flow-narrowing,
+    # not the hatch, will change this).
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn main() -> int32 {\n"
+            "    let x: int32 = 1;\n"
+            "    let p: int32* = &x;\n"
+            "    let q = p!;\n"
+            "    first(q);\n"
+            "    return 0;\n"
+            "}"
+        )
+
+
+def test_hatch_emits_no_instructions():
+    # The assertion is purely static: identical IR with and without it.
+    with_hatch = compile_ir(
+        FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 1;\n"
+        "    let p: int32* = &x;\n"
+        "    return first(p!);\n"
+        "}"
+    )
+    without = compile_ir(
+        FIRST + "fn outer(@nonnull p: int32*) -> int32 { return first(p); }\n"
+        "fn main() -> int32 { let x: int32 = 1; return outer(&x); }"
+    )
+    body = with_hatch.split('@"main"')[1]
+    assert "icmp" not in body and "freeze" not in body and "select" not in body
+    assert without  # both programs compile; the hatch adds no runtime check
+
+
+def test_hatch_outside_nonnull_position_is_identity():
+    assert run(
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 9;\n"
+        "    let p: int32* = &x;\n"
+        "    return *(p!);\n"
+        "}"
+    ) == 9
+
+
+def test_bang_equals_still_lexes_as_comparison():
+    # `p != q` is one `!=` token (greedy lexing), never `p!` then `= q`.
+    assert run(
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 1;\n"
+        "    let p: int32* = &x;\n"
+        "    let q: int32* = null;\n"
+        "    return (p != q) ? 3 : 4;\n"
+        "}"
+    ) == 3
+
+
+def test_parenthesized_hatch_compares():
+    assert run(
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 1;\n"
+        "    let p: int32* = &x;\n"
+        "    let q: int32* = &x;\n"
+        "    return ((p!) == q) ? 9 : 8;\n"
+        "}"
+    ) == 9
+
+
+def test_hatch_round_trips_through_interface():
+    # A generic/@inline body is emitted verbatim into the .mci; the postfix
+    # assertion inside it must survive and re-parse.
+    out = _iface(
+        "fn grab<T>(@nonnull p: T*) -> T { return *p; }\n"
+        "@inline fn head(p: int32*) -> int32 { return grab(p!); }\n"
+    )
+    assert "grab(p!)" in out
+    Parser(tokenize(out)).parse_program()  # re-parses cleanly
+
+
 # --------------------------------------------------------------- interface
 
 

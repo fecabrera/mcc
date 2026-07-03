@@ -425,8 +425,14 @@ module.exports = grammar({
         $.index_expression,
         $.member_expression,
         $.call_expression,
+        $.nonnull_assert_expression,
         $._primary_expression,
       ),
+
+    // Postfix `p!`, the non-null assertion. It never collides with `!=`:
+    // the lexer folds `!=` into a single comparison token greedily.
+    nonnull_assert_expression: ($) =>
+      prec(PREC.postfix, seq(field('operand', $._expression), '!')),
 
     index_expression: ($) =>
       prec(PREC.postfix, seq(field('base', $._expression), '[', field('index', $._expression), ']')),

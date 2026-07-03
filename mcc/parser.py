@@ -44,6 +44,7 @@ from mcc.nodes import (
     Let,
     Logical,
     Member,
+    NonnullAssert,
     NullLit,
     OffsetOf,
     Program,
@@ -1581,10 +1582,14 @@ class Parser:
         return self.parse_postfix()
 
     def parse_postfix(self):
-        """Parse postfix operators: indexing, member access, and calls.
+        """Parse postfix operators: indexing, member access, calls, and ``!``.
 
-        Applies ``[i]``, ``.field`` / ``->field``, and ``(args)`` (a call
-        through a function-pointer expression) left to right onto a primary.
+        Applies ``[i]``, ``.field`` / ``->field``, ``(args)`` (a call through
+        a function-pointer expression), and the non-null assertion ``!`` left
+        to right onto a primary. Postfix ``!`` never collides with the ``!=``
+        comparison: the lexer folds ``!=`` into a single token greedily, so
+        ``p != q`` is always a comparison and asserting before comparing
+        needs parentheses (``(p!) == q``).
 
         Returns:
             The parsed expression node.
@@ -1607,6 +1612,9 @@ class Parser:
                 # parse_primary, where it can also carry generic type arguments.
                 line = self.cur.line
                 expr = CallExpr(expr, self.parse_call_args(), line)
+            elif self.cur.kind == "!":
+                line = self.advance().line
+                expr = NonnullAssert(expr, line)
             else:
                 return expr
 

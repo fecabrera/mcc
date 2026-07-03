@@ -8,6 +8,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Postfix `p!` non-null assertion** — the `@nonnull` escape hatch: a heap
+  or returned `T*` carries no syntactic non-null proof, and `p!` is the
+  programmer's explicit assertion that lets it cross into a `@nonnull`
+  parameter slot (both the concrete and the generic call path accept it).
+  The assertion is purely static and costs nothing at runtime: it evaluates
+  to its operand unchanged and emits no instructions, so **asserting a
+  pointer that is actually null is undefined behavior**. It covers exactly
+  the expression it wraps: `let q = p!;` leaves `q` a plain, unproven `T*`
+  (fact-seeding through bindings waits for flow-narrowing). `null!` and a
+  non-pointer operand are compile errors; anywhere outside a `@nonnull`
+  argument, `p!` is simply the identity. `!=` still lexes greedily as one
+  token, so `p != q` is always a comparison and asserting before comparing
+  needs parentheses (`(p!) == q`). Round-trips through `.mci` interface
+  stubs in generic and `@inline` bodies. See
+  [@nonnull parameters](docs/language.md#nonnull-parameters).
+
 ## [0.5.0] - 2026-07-03
 
 ### Added

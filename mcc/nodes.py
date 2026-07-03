@@ -957,6 +957,24 @@ class Cast:
 
 
 @dataclass
+class NonnullAssert:
+    """A postfix non-null assertion: ``p!``.
+
+    A purely static, zero-cost assertion that a pointer expression is
+    non-null -- the escape hatch into a ``@nonnull`` parameter slot. It
+    evaluates to its operand unchanged (no code is emitted); asserting a
+    pointer that is actually null is undefined behavior.
+
+    Attributes:
+        operand: The pointer expression being asserted.
+        line: Source line for diagnostics.
+    """
+
+    operand: object
+    line: int
+
+
+@dataclass
 class Asm:
     """An inline-assembly expression: ``@asm(in0, ...) [-> type] { "line"... }``.
 

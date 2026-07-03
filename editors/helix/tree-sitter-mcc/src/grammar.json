@@ -2510,9 +2510,34 @@
         },
         {
           "type": "SYMBOL",
+          "name": "nonnull_assert_expression"
+        },
+        {
+          "type": "SYMBOL",
           "name": "_primary_expression"
         }
       ]
+    },
+    "nonnull_assert_expression": {
+      "type": "PREC",
+      "value": 13,
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "FIELD",
+            "name": "operand",
+            "content": {
+              "type": "SYMBOL",
+              "name": "_expression"
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "!"
+          }
+        ]
+      }
     },
     "index_expression": {
       "type": "PREC",

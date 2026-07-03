@@ -223,12 +223,38 @@ fn main() -> int32 {
 
 The accepted proofs are the always-non-null sources: `&x` (the address of
 named storage), a string or array literal, an array decaying to a pointer
-(local, `@static`, or global), and — transitively — a `@nonnull` parameter of
-the calling function, so a `@nonnull` callee forwards its own parameter onward
-with no check. Narrowing a plain `T*` from an `if (p != null)` check, and an
-explicit escape hatch for heap or returned pointers, are planned
-([roadmap](../ROADMAP.md#planned)); until then a plain pointer crosses into a
-`@nonnull` slot only through one of the sources above.
+(local, `@static`, or global), transitively a `@nonnull` parameter of
+the calling function (so a `@nonnull` callee forwards its own parameter
+onward with no check), and the explicit escape hatch below. Narrowing a
+plain `T*` from an `if (p != null)` check is planned
+([roadmap](../ROADMAP.md#planned)).
+
+**The escape hatch: postfix `!`.** A heap or returned `T*` carries no
+syntactic proof, so it cannot cross into a `@nonnull` slot on its own. The
+postfix non-null assertion `p!` is the programmer's explicit claim that it
+is safe:
+
+```c
+let p: int32* = malloc(4) as int32*;
+*p = 42;
+first(p!);    // ok: the assertion is the proof
+```
+
+`p!` is **purely static and costs nothing at runtime**: it evaluates to its
+operand unchanged, emits no instructions, and no check is ever inserted.
+**Asserting a pointer that is actually null is undefined behavior**: the
+callee was promised non-null and skips its defensive check. Use it only
+where you know the invariant holds (e.g. right after a checked allocation).
+
+The assertion covers exactly the expression it wraps, not the binding it
+lands in: `let q = p!; first(q);` is still a compile error, because `q` is a
+fresh, unproven `T*` (flow-narrowing will lift this later). `p!` is legal on
+any pointer expression anywhere; outside a `@nonnull` argument it is simply
+the identity. `null!` is rejected outright (always wrong), as is `!` on a
+non-pointer operand.
+
+One lexing gotcha: `!=` is a single comparison token, so `p != q` always
+compares; asserting and then comparing needs parentheses: `(p!) == q`.
 
 To keep the per-binding fact sound, a `@nonnull` parameter cannot be
 reassigned, cannot have its address taken (a `T**` could store null through
@@ -245,7 +271,9 @@ parameters, on `mut` (a `mut` parameter is passed by reference and is never
 null), and on `@asm` functions. At the LLVM level the established fact is
 handed to the optimizer as the `nonnull` and `dereferenceable(sizeof(T))`
 argument attributes. See
-[examples/functions/nonnull.mc](../examples/functions/nonnull.mc).
+[examples/functions/nonnull.mc](../examples/functions/nonnull.mc) and, for
+the escape hatch,
+[examples/functions/nonnull_assert.mc](../examples/functions/nonnull_assert.mc).
 
 ## Variadic functions
 

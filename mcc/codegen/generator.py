@@ -55,6 +55,7 @@ from mcc.nodes import (
     Logical,
     Len,
     Member,
+    NonnullAssert,
     NullLit,
     OffsetOf,
     Program,
@@ -3773,6 +3774,8 @@ class CodeGen:
             )
         if isinstance(expr, Unary):
             return self.gen_unary(expr)
+        if isinstance(expr, NonnullAssert):
+            return self.gen_nonnull_assert(expr)
         if isinstance(expr, Logical):
             return self.gen_logical(expr)
         if isinstance(expr, Ternary):
@@ -4225,6 +4228,38 @@ class CodeGen:
         if tv.type is not BOOL:
             raise LangError("'!' requires a bool operand", expr.line)
         return TypedValue(self.builder.not_(tv.value), BOOL)
+
+    def gen_nonnull_assert(self, expr: NonnullAssert) -> TypedValue:
+        """Evaluate a postfix non-null assertion: ``p!``.
+
+        The assertion is purely static: the operand's value passes through
+        unchanged and no instructions are emitted -- no runtime check, ever.
+        Its only effect is on the compile-time proof (:meth:`proves_nonnull`
+        accepts it), so a heap or returned pointer can cross into a
+        ``@nonnull`` slot. Asserting a pointer that is actually null is
+        undefined behavior. Asserting the ``null`` literal -- always wrong --
+        is rejected outright, as is a non-pointer operand.
+
+        Args:
+            expr: The ``NonnullAssert`` node.
+
+        Returns:
+            The operand's value, unchanged.
+
+        Raises:
+            LangError: When the operand is the ``null`` literal or not a
+                pointer.
+        """
+        if isinstance(expr.operand, NullLit):
+            raise LangError("cannot assert null as non-null", expr.line)
+        tv = self.gen_expr(expr.operand)
+        if not is_pointer(tv.type):
+            raise LangError(
+                f"postfix '!' asserts a pointer non-null, but the operand "
+                f"is a {tv.type}",
+                expr.line,
+            )
+        return tv
 
     def gen_asm(self, expr: Asm) -> TypedValue:
         """Emit an inline-assembly call from an ``@asm(...)`` expression.
@@ -5449,10 +5484,11 @@ class CodeGen:
         The proof is syntactic, over the always-non-null sources: ``&x`` (the
         address of named storage), a string or array literal (the address of
         fresh storage), an array variable decaying to a pointer (local,
-        ``@static``, or global -- all named storage), and a ``@nonnull``
+        ``@static``, or global -- all named storage), a ``@nonnull``
         parameter of the current function (the guarantee travels
-        transitively). Narrowing a plain pointer from an ``if (p != null)``
-        check is planned but not implemented.
+        transitively), and a postfix ``p!`` assertion (the programmer's
+        explicit, unchecked claim). Narrowing a plain pointer from an
+        ``if (p != null)`` check is planned but not implemented.
 
         Args:
             expr: The argument expression.
@@ -5460,6 +5496,8 @@ class CodeGen:
         Returns:
             ``True`` when the expression cannot evaluate to null.
         """
+        if isinstance(expr, NonnullAssert):
+            return True
         if isinstance(expr, (StrLit, ArrayLit)):
             return True
         if isinstance(expr, Unary) and expr.op == "&":
@@ -5491,7 +5529,7 @@ class CodeGen:
             raise LangError(
                 f"cannot pass a possibly-null pointer as {context}: the "
                 "parameter is @nonnull (pass &x, a string or array literal, "
-                "an array, or a @nonnull parameter)",
+                "an array, a @nonnull parameter, or assert with postfix '!')",
                 line,
             )
 

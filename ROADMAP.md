@@ -490,10 +490,16 @@ already do).
       `@noalias`; allowed on `@extern` (attribute-only, like `@noalias`);
       `@nonnull mut` rejected initially; implemented, see
       [@nonnull parameters](docs/language.md#nonnull-parameters):
-  - [ ] escape hatch — crossing from a heap or returned `T*` into a `@nonnull`
-        slot needs an explicit programmer assertion (postfix `p!` or
-        `assume_nonnull(p)`, spelling undecided); until it (or flow-narrowing
-        below) lands, only the always-non-null sources cross
+  - [x] escape hatch — crossing from a heap or returned `T*` into a `@nonnull`
+        slot needs an explicit programmer assertion: postfix `p!`, a purely
+        static, zero-runtime-cost claim (no check is ever emitted; asserting
+        an actually-null pointer is undefined behavior). The assertion covers
+        only the expression it wraps: `let q = p!;` leaves `q` a plain,
+        unproven `T*` (seeding facts through bindings is flow-narrowing's job
+        below). `null!` and a non-pointer operand are compile errors; `p!` is
+        the identity anywhere else. `!=` lexes greedily, so `p != q` stays a
+        comparison and `(p!) == q` needs the parentheses; implemented, see
+        [@nonnull parameters](docs/language.md#nonnull-parameters)
   - [ ] flow-narrowing — narrow a plain `T*` to non-null from a null check, so
         idiomatic code needs no escape hatch: `if (p != null) { ... }` narrows
         the then-branch, and the C-idiomatic guard `if (p == null) return;`
