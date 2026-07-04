@@ -158,6 +158,34 @@ def collect_addr_taken(obj, names: set[str]) -> None:
             collect_addr_taken(item, names)
 
 
+def contains_break(obj) -> bool:
+    """Whether a loop body contains a ``break`` targeting *this* loop.
+
+    Recurses like :func:`collect_addr_taken` but does not descend into
+    nested ``while``/``for`` loops -- a ``break`` inside one targets the
+    inner loop, never this one. Used to gate post-exit narrowing: a loop's
+    normal exit leaves from its condition, but a ``break`` jumps straight
+    to the end block without re-testing it.
+
+    Args:
+        obj: An AST node, list, or scalar to scan.
+
+    Returns:
+        ``True`` when a ``break`` can exit the loop being scanned.
+    """
+    if isinstance(obj, Break):
+        return True
+    if isinstance(obj, (While, For)):
+        return False  # its breaks are the inner loop's
+    if is_dataclass(obj):
+        return any(
+            contains_break(getattr(obj, f.name)) for f in dataclass_fields(obj)
+        )
+    if isinstance(obj, (list, tuple)):
+        return any(contains_break(item) for item in obj)
+    return False
+
+
 # Builtin struct templates, available in every program with no import: the
 # shared `iterator<T>` cursor behind the `_it`/`_next` protocol, and the
 # `pair<K, V>` element the keyed containers yield from `_next`. They are
@@ -271,7 +299,7 @@ class CodeGen:
         # (`if (p != null)` / a diverging `if (p == null)`). Unlike
         # nonnull_locals these bindings stay reassignable and addressable --
         # the fact is just dropped on any event that could null the variable
-        # (see narrowable_guard_name for the invalidation rules).
+        # (see narrowable_guard_names for the invalidation rules).
         self.narrowed_nonnull: set[str] = set()
         # Names whose address is taken (&x) anywhere in the current function's
         # body -- such locals are never narrowable (a stored pointer could
@@ -2794,6 +2822,18 @@ class CodeGen:
                 slot.align = type_align(tv.type)
             self.builder.store(tv.value, slot)
             self.bind_local(stmt.name, slot, tv.type)
+            # Fact-seeding through let: a pointer local initialized from a
+            # provably non-null value (`let q = p!`, `let q = p` under a
+            # guard, `let s: uint8* = "..."`) starts flow-narrowed, under
+            # the usual eligibility rules (never a name whose address is
+            # taken somewhere, nor one shadowing a mut parameter).
+            if (
+                is_pointer(tv.type)
+                and stmt.name not in self.addr_taken
+                and stmt.name not in self.mut_locals
+                and self.proves_nonnull(stmt.value)
+            ):
+                self.narrowed_nonnull.add(stmt.name)
         elif isinstance(stmt, Assign):
             if stmt.name in self.const_locals:
                 raise LangError(
@@ -2825,18 +2865,19 @@ class CodeGen:
             cond = self.gen_cond(stmt.cond)
             # Flow-narrowing: `if (p != null)` proves p non-null in the then
             # branch; `if (p == null)` proves it in the else branch (at most
-            # one of the two matches, since the operator differs).
-            then_fact = self.narrowable_guard_name(stmt.cond, "!=")
-            else_fact = self.narrowable_guard_name(stmt.cond, "==")
+            # one of the two matches on a bare comparison, since the operator
+            # differs; `and`/`or` chains thread through the collector).
+            then_facts = self.narrowable_guard_names(stmt.cond, "!=")
+            else_facts = self.narrowable_guard_names(stmt.cond, "==")
             if stmt.otherwise:
                 with self.builder.if_else(cond) as (then, otherwise):
                     with then:
-                        added = self.narrow_nonnull(then_fact)
+                        added = self.narrow_nonnull(then_facts)
                         self.gen_block(stmt.then)
                         self.narrowed_nonnull -= added
                         then_diverged = self.builder.block.is_terminated
                     with otherwise:
-                        added = self.narrow_nonnull(else_fact)
+                        added = self.narrow_nonnull(else_facts)
                         self.gen_block(stmt.otherwise)
                         self.narrowed_nonnull -= added
                         else_diverged = self.builder.block.is_terminated
@@ -2847,7 +2888,7 @@ class CodeGen:
                     self.builder.unreachable()
             else:
                 with self.builder.if_then(cond):
-                    added = self.narrow_nonnull(then_fact)
+                    added = self.narrow_nonnull(then_facts)
                     self.gen_block(stmt.then)
                     self.narrowed_nonnull -= added
                     then_diverged = self.builder.block.is_terminated
@@ -2856,16 +2897,17 @@ class CodeGen:
                 # the enclosing scope (the fact ends with it -- gen_block
                 # intersects on exit). Assignments inside the diverging body
                 # cannot reach the remainder, so they do not invalidate it.
-                if else_fact is not None and then_diverged:
-                    self.narrowed_nonnull.add(else_fact)
+                if then_diverged:
+                    self.narrowed_nonnull |= else_facts
         elif isinstance(stmt, While):
             kind = "until" if stmt.until else "while"
             # A loop's condition and body re-run on the back edge, where a
             # later iteration may already have invalidated a fact proved
-            # before the loop -- so all flow-narrowed facts drop at loop
-            # entry. (Keeping the facts a body provably cannot invalidate is
-            # a planned refinement; see ROADMAP.)
-            self.narrowed_nonnull.clear()
+            # before the loop -- so a pre-scan drops exactly the facts the
+            # loop could invalidate (an assignment, a shadowing let, or a
+            # mut lend anywhere in the condition or body); the rest survive
+            # the loop, and past it.
+            self.narrowed_nonnull -= self.loop_kill_set(stmt)
             cond_bb = self.builder.append_basic_block(f"{kind}.cond")
             body_bb = self.builder.append_basic_block(f"{kind}.body")
             end_bb = self.builder.append_basic_block(f"{kind}.end")
@@ -2877,15 +2919,33 @@ class CodeGen:
             else:
                 self.builder.cbranch(cond, body_bb, end_bb)
             self.builder.position_at_end(body_bb)
+            # Header narrowing: the body only runs with the condition true
+            # (`while`) / false (`until`), so `while (p != null)` proves p at
+            # the top of every iteration -- no kill set needed, the header
+            # re-proves on each back edge (a mid-body invalidation still
+            # drops the fact for the rest of that iteration, as anywhere).
+            header = self.narrowable_guard_names(
+                stmt.cond, "==" if stmt.until else "!="
+            )
+            added = self.narrow_nonnull(header)
             # Record the defer depth so break/continue unwind the body's defers.
             self.loops.append((cond_bb, end_bb, len(self.defer_stack)))
             try:
                 self.gen_block(stmt.body)
             finally:
                 self.loops.pop()
+            self.narrowed_nonnull -= added
             if not self.builder.block.is_terminated:
                 self.builder.branch(cond_bb)
             self.builder.position_at_end(end_bb)
+            # Post-exit narrowing: the normal exit edge leaves the condition
+            # false (`while`) / true (`until`), so `while (p == null) { ... }`
+            # proves p after the loop no matter what the body did -- unless a
+            # `break` can reach the end without re-testing the condition.
+            if not contains_break(stmt.body):
+                self.narrowed_nonnull |= self.narrowable_guard_names(
+                    stmt.cond, "!=" if stmt.until else "=="
+                )
         elif isinstance(stmt, Conditional):
             # Compile-time @if: emit only the live branch's statements, inline
             # in the current scope. The dead branch is never type-checked.
@@ -3134,9 +3194,10 @@ class CodeGen:
         """
         # Like `while`: the body re-runs on the back edge, where a later
         # iteration may already have invalidated a fact proved before the
-        # loop -- all flow-narrowed facts drop at loop entry, for every
-        # `for` variant (range/enumerate/slice/protocol).
-        self.narrowed_nonnull.clear()
+        # loop -- a pre-scan drops exactly the facts the loop could
+        # invalidate, for every `for` variant (range/enumerate/slice/
+        # protocol); the rest survive the loop, and past it.
+        self.narrowed_nonnull -= self.loop_kill_set(stmt)
         # `for x in range(...)` is a builtin counting loop, lowered directly to
         # a counter with no struct or protocol calls. A user-defined `range`
         # function, if any, takes precedence.
@@ -3796,7 +3857,14 @@ class CodeGen:
         else:
             self.builder.cbranch(lhs, end_block, rhs_block)
         self.builder.position_at_end(rhs_block)
+        # The rhs only runs when the lhs was true (`and`) / false (`or`), so
+        # the lhs's null-check facts hold while it evaluates:
+        # `p != null and use(p)` proves p for the call.
+        added = self.narrow_nonnull(
+            self.narrowable_guard_names(expr.lhs, "!=" if expr.op == "and" else "==")
+        )
         rhs = self.gen_cond(expr.rhs)
+        self.narrowed_nonnull -= added
         rhs_block = self.builder.block  # the rhs may have added blocks of its own
         self.builder.branch(end_block)
         self.builder.position_at_end(end_block)
@@ -5676,60 +5744,149 @@ class CodeGen:
             args.append(value)
         return args
 
-    def narrowable_guard_name(self, cond, op: str) -> str | None:
-        """Return the local a null-comparison guard can flow-narrow, if any.
+    def narrowable_guard_names(self, cond, op: str) -> set[str]:
+        """Collect the locals a null-comparison guard flow-narrows.
 
-        Matches ``p <op> null`` or ``null <op> p`` where ``p`` is a bare
-        variable eligible for narrowing: a plain pointer **local** (a global
-        never narrows -- any call could store null into it) that is not a
-        ``mut`` parameter (a callee taking two ``mut`` references can alias
-        it, so per-name invalidation at the call would miss the write), not
-        already ``@nonnull`` (nothing to narrow), and whose address is never
-        taken anywhere in the function (see :func:`collect_addr_taken`).
-        Compound conditions (``and``/``or``), member/index expressions, and
-        ``while`` headers do not narrow ([roadmap](ROADMAP.md)).
+        A bare comparison matches ``p <op> null`` or ``null <op> p`` where
+        ``p`` is a bare variable eligible for narrowing: a plain pointer
+        **local** (a global never narrows -- any call could store null into
+        it) that is not a ``mut`` parameter (a callee taking two ``mut``
+        references can alias it, so per-name invalidation at the call would
+        miss the write), not already ``@nonnull`` (nothing to narrow), and
+        whose address is never taken anywhere in the function (see
+        :func:`collect_addr_taken`).
+
+        ``and``/``or`` chains thread through: for the ``"!="`` query (facts
+        that hold when the condition is *true*) an ``and`` unions both
+        operands' facts, since both conjuncts held; for the ``"=="`` query
+        (facts that hold when the condition is *false*) an ``or`` unions
+        both, since both disjuncts failed. The other operator contributes
+        nothing for that query -- a false ``and`` (or a true ``or``) pins
+        down neither operand. Member/index expressions still carry no
+        per-name fact.
 
         Args:
-            cond: The ``if`` condition expression.
-            op: The comparison to match: ``"!="`` (proves the then branch)
-                or ``"=="`` (proves the else branch / the remainder after a
-                diverging then body).
+            cond: The guard condition expression.
+            op: The comparison to match: ``"!="`` collects the facts implied
+                by the condition being true (then branch / loop body),
+                ``"=="`` the facts implied by it being false (else branch /
+                the remainder after a diverging then body / a loop's exit).
 
         Returns:
-            The narrowable variable's name, or ``None``.
+            The narrowable variable names (possibly empty).
         """
+        if isinstance(cond, Logical):
+            if cond.op != ("and" if op == "!=" else "or"):
+                return set()
+            return self.narrowable_guard_names(
+                cond.lhs, op
+            ) | self.narrowable_guard_names(cond.rhs, op)
         if not isinstance(cond, Binary) or cond.op != op:
-            return None
+            return set()
         if isinstance(cond.lhs, Var) and isinstance(cond.rhs, NullLit):
             name = cond.lhs.name
         elif isinstance(cond.rhs, Var) and isinstance(cond.lhs, NullLit):
             name = cond.rhs.name
         else:
-            return None
+            return set()
         entry = self.locals.get(name)
         if entry is None or not is_pointer(entry[1]):
-            return None
+            return set()
         if name in self.mut_locals or name in self.nonnull_locals:
-            return None
+            return set()
         if name in self.addr_taken:
-            return None
-        return name
+            return set()
+        return {name}
 
-    def narrow_nonnull(self, name: str | None) -> set[str]:
-        """Record a flow-narrowed non-null fact for a guard's branch.
+    def narrow_nonnull(self, names: set[str]) -> set[str]:
+        """Record flow-narrowed non-null facts for a guard's branch.
 
         Args:
-            name: The name to narrow, or ``None`` for no fact.
+            names: The names to narrow (possibly empty).
 
         Returns:
             The names actually added -- what the guard must remove again at
-            branch exit. Empty when the name was already narrowed (an outer
+            branch exit. A name already narrowed is excluded (an outer
             guard's fact must survive this one's exit).
         """
-        if name is None or name in self.narrowed_nonnull:
-            return set()
-        self.narrowed_nonnull.add(name)
-        return {name}
+        added = names - self.narrowed_nonnull
+        self.narrowed_nonnull |= added
+        return added
+
+    def loop_kill_set(self, obj, kills: set[str] | None = None) -> set[str]:
+        """Names whose flow-narrowed facts a loop could invalidate.
+
+        A lexical pre-scan of the whole loop statement (condition and body,
+        nested statements, ``defer`` bodies, and both branches of an ``@if``
+        included), modeled on :func:`collect_addr_taken`. A name is killed by
+        exactly the events that invalidate a narrowed fact during generation:
+        an assignment (``Assign``), a compound assignment to the bare
+        variable, a shadowing ``let`` (conservative: any redeclaration of
+        the name), or lending the bare variable to a ``mut`` position of any
+        callable sharing the callee's name (see :meth:`call_mut_positions`).
+        Passing the name as a plain, ``const``, or ``@nonnull`` argument,
+        ``*p = x``, and member/index stores do not kill -- none can change
+        which address the variable holds. Facts that survive the kill set
+        hold in the condition, the body, and past the loop's exit.
+
+        Args:
+            obj: The loop's AST node (or any subtree during recursion).
+            kills: The accumulator during recursion; leave ``None``.
+
+        Returns:
+            The set of killed names.
+        """
+        if kills is None:
+            kills = set()
+        if isinstance(obj, Assign):
+            kills.add(obj.name)
+        elif isinstance(obj, CompoundAssign) and isinstance(obj.target, Var):
+            kills.add(obj.target.name)
+        elif isinstance(obj, Let):
+            kills.add(obj.name)
+        elif isinstance(obj, Call):
+            for i in self.call_mut_positions(obj.name):
+                if i < len(obj.args) and isinstance(obj.args[i], Var):
+                    kills.add(obj.args[i].name)
+        if is_dataclass(obj):
+            for f in dataclass_fields(obj):
+                self.loop_kill_set(getattr(obj, f.name), kills)
+        elif isinstance(obj, (list, tuple)):
+            for item in obj:
+                self.loop_kill_set(item, kills)
+        return kills
+
+    def call_mut_positions(self, name: str) -> set[int]:
+        """Argument indices any callable named ``name`` takes as ``mut``.
+
+        Resolves by name only -- the union across the concrete function, every
+        generic overload, and this file's ``@static`` function or template of
+        that name -- because the kill-set pre-scan runs before overload
+        resolution. Over-approximating is safe (an extra kill is merely
+        conservative); a call through a function pointer needs no entry,
+        since a function with ``mut`` parameters cannot become a function
+        value.
+
+        Args:
+            name: The callee name as written at the call site.
+
+        Returns:
+            The union of ``mut`` parameter indices (possibly empty).
+        """
+        positions: set[int] = set()
+        func = self.concrete_decls.get(name)
+        if func is not None:
+            positions |= self.mut_indices(func)
+        for overload in self.templates.get(name, ()):
+            positions |= self.mut_indices(overload)
+        key = (self.current_source, name)
+        static_template = self.static_templates.get(key)
+        if static_template is not None:
+            positions |= self.mut_indices(static_template)
+        static_symbol = self.static_funcs.get(key)
+        if static_symbol is not None:
+            positions |= self.mut_ref.get(static_symbol, frozenset())
+        return positions
 
     def proves_nonnull(self, expr) -> bool:
         """Whether an argument expression is provably non-null.
@@ -5741,8 +5898,11 @@ class CodeGen:
         parameter of the current function (the guarantee travels
         transitively), a plain pointer local flow-narrowed by a null-check
         guard (``if (p != null) { ... }`` or a diverging
-        ``if (p == null) ...``), and a postfix ``p!`` assertion (the
-        programmer's explicit, unchecked claim).
+        ``if (p == null) ...``), a postfix ``p!`` assertion (the
+        programmer's explicit, unchecked claim), and an ``as`` cast to a
+        pointer type of any of these (a pointer reinterpretation preserves
+        the address; a non-pointer intermediate, e.g. an integer round-trip,
+        severs the proof).
 
         Args:
             expr: The argument expression.
@@ -5756,6 +5916,12 @@ class CodeGen:
             return True
         if isinstance(expr, Unary) and expr.op == "&":
             return True
+        if isinstance(expr, Cast):
+            # Resolve the target (an alias like `type cstr = uint8*` counts),
+            # so the proof threads through pointer-to-pointer casts only.
+            return is_pointer(
+                self.lang_type(expr.type_name, expr.line)
+            ) and self.proves_nonnull(expr.value)
         if isinstance(expr, Var):
             if expr.name in self.nonnull_locals or expr.name in self.narrowed_nonnull:
                 return True

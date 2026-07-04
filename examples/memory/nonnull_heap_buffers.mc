@@ -10,12 +10,12 @@ import "hashing/crc32";
 // list_from_array/string_from_array. Every such call must prove the
 // pointer non-null. A stack buffer (&x, an array) or a string literal is
 // already a proof; a heap buffer comes back from alloc<T> as a plain,
-// possibly-null pointer, and the migration is two idioms: one diverging
-// null guard after the allocation covers the straight-line calls, and the
-// postfix `!` assertion covers calls inside loops, where narrowed facts
-// drop.
+// possibly-null pointer, and the whole migration is one idiom: a single
+// diverging null guard after the allocation. The narrowed fact carries
+// through every later call, including calls inside loops, because a loop
+// only drops the facts it could invalidate and these loops never touch buf.
 // Prerequisites: pointers.mc (alloc/dealloc) and the functions/nonnull.mc
-// trio.
+// family.
 
 fn main() -> int32 {
     // alloc<T> returns a plain uint8*: no proof, so no @nonnull call
@@ -24,27 +24,26 @@ fn main() -> int32 {
 
     // The one-line diverging guard (shape 2 in functions/nonnull_narrowing.mc)
     // narrows buf for the rest of the scope. This is the whole migration
-    // cost for straight-line code:
+    // cost:
     if (buf == null) return 1;
 
     bytezero(buf, 16);               // ok: the narrowed buf satisfies @nonnull
     bytefill(buf, 0xAB as byte, 8);  // first half 0xAB, second half stays zero
 
-    // Narrowed facts drop at loop entry, so inside the body buf is unproven
-    // again, even though the guard above dominates it. Here the idiom is the
-    // postfix `!` assertion (functions/nonnull_assert.mc): still zero-cost,
-    // and sound because the guard already handled null.
+    // The guard covers loops too. Nothing in this loop assigns to buf,
+    // shadows it, or lends it as a mut argument, so the fact survives loop
+    // entry and every iteration crosses into crc32's @nonnull slot with no
+    // in-body guard and no `buf!` hatch. (A loop that did touch buf would
+    // drop the fact at entry: see functions/nonnull_loops.mc.)
     let n: uint64 = 4;
     while (n <= 16) {
-        // crc32(buf, n);            // error: possibly-null pointer
-        println("crc32 of the first %llu bytes: %u", n, crc32(buf!, n));
+        println("crc32 of the first %llu bytes: %u", n, crc32(buf, n));
         n += 4;
     }
 
-    // The fact does not come back after the loop either; code past the loop
-    // entry stays on the dropped side. Assert again (or re-guard).
-    fill(buf!, 0x11 as uint8, 16);
-    println("crc32 after the refill: %u", crc32(buf!, 16));
+    // The surviving fact also holds past the loop's exit: still no hatch.
+    fill(buf, 0x11 as uint8, 16);
+    println("crc32 after the refill: %u", crc32(buf, 16));
 
     // dealloc keeps the plain T* on purpose: null is meaningful there (a
     // no-op), so it needs no proof.
@@ -53,7 +52,8 @@ fn main() -> int32 {
 }
 
 // See also: functions/nonnull_narrowing.mc for the guard shapes and the
-// exact rules on when facts drop; functions/nonnull_assert.mc for the `!`
-// assertion; pointers.mc for alloc/dealloc; lists.mc for the container
-// APIs, whose self parameters stay plain T* until they become mut/const
-// receivers.
+// exact rules on when facts die; functions/nonnull_loops.mc for narrowed
+// facts crossing loops; functions/nonnull_assert.mc for the `!` assertion
+// where no guard fits; pointers.mc for alloc/dealloc; lists.mc for the
+// container APIs, whose self parameters stay plain T* until they become
+// mut/const receivers.

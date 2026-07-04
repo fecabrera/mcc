@@ -123,11 +123,13 @@ def test_null_literal_rejected():
 
 
 def test_plain_pointer_rejected():
+    # A pointer from an unproven source (here a call's return value) carries
+    # no proof. (`let p = &x;` would seed a fact -- see the let-seeding tests.)
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
-            FIRST + "fn main() -> int32 {\n"
-            "    let x: int32 = 1;\n"
-            "    let p: int32* = &x;\n"
+            FIRST + "fn make() -> int32* { return null; }\n"
+            "fn main() -> int32 {\n"
+            "    let p: int32* = make();\n"
             "    return first(p);\n"
             "}"
         )
@@ -574,34 +576,532 @@ def test_invalidation_in_nested_block_persists_outward():
         )
 
 
-def test_while_entry_drops_narrowed_facts():
-    # Loop bodies re-run on the back edge, where a later iteration may have
-    # invalidated the fact -- all narrowed facts drop at loop entry.
+def test_guard_then_while_keeps_uninvalidated_fact():
+    # The loop-entry pre-scan keeps facts the loop cannot invalidate: the
+    # guard-then-loop idiom needs no in-body guard or hatch.
+    assert run(
+        FIRST + "fn get(p: int32*) -> int32 {\n"
+        "    if (p == null) { return 0; }\n"
+        "    let total: int32 = 0;\n"
+        "    let i: int32 = 0;\n"
+        "    while (i < 2) {\n"
+        "        total = total + first(p);\n"
+        "        i = i + 1;\n"
+        "    }\n"
+        "    return total;\n"
+        "}\n"
+        "fn main() -> int32 { let x: int32 = 3; return get(&x); }"
+    ) == 6
+
+
+def test_guard_then_until_keeps_uninvalidated_fact():
+    assert run(
+        FIRST + "fn get(p: int32*) -> int32 {\n"
+        "    if (p == null) { return 0; }\n"
+        "    let total: int32 = 0;\n"
+        "    let i: int32 = 0;\n"
+        "    until (i == 2) {\n"
+        "        total = total + first(p);\n"
+        "        i = i + 1;\n"
+        "    }\n"
+        "    return total;\n"
+        "}\n"
+        "fn main() -> int32 { let x: int32 = 4; return get(&x); }"
+    ) == 8
+
+
+def test_guard_then_for_range_keeps_uninvalidated_fact():
+    assert run(
+        FIRST + "fn get(p: int32*) -> int32 {\n"
+        "    if (p == null) { return 0; }\n"
+        "    let total: int32 = 0;\n"
+        "    for i in range(0, 2) { total = total + first(p); }\n"
+        "    return total;\n"
+        "}\n"
+        "fn main() -> int32 { let x: int32 = 5; return get(&x); }"
+    ) == 10
+
+
+def test_fact_survives_past_loop_exit():
+    # A fact the loop cannot invalidate holds after the loop too.
+    assert run(
+        FIRST + "fn get(p: int32*) -> int32 {\n"
+        "    if (p == null) { return 0; }\n"
+        "    let i: int32 = 0;\n"
+        "    while (i < 2) { i = i + 1; }\n"
+        "    return first(p);\n"
+        "}\n"
+        "fn main() -> int32 { let x: int32 = 7; return get(&x); }"
+    ) == 7
+
+
+def test_loop_body_assignment_kills_fact_at_entry():
+    # The body reassigns p, so the back edge can carry null into the *next*
+    # iteration: the fact dies at loop entry, before even the first use.
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
             FIRST + "fn get(p: int32*) -> int32 {\n"
             "    if (p == null) { return 0; }\n"
-            "    let total: int32 = 0;\n"
             "    let i: int32 = 0;\n"
             "    while (i < 2) {\n"
-            "        total = total + first(p);\n"
+            "        first(p);\n"
+            "        p = null;\n"
             "        i = i + 1;\n"
             "    }\n"
-            "    return total;\n"
+            "    return 0;\n"
             "}\n"
             "fn main() -> int32 { return 0; }"
         )
 
 
-def test_for_entry_drops_narrowed_facts():
+def test_for_body_assignment_kills_fact_at_entry():
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
             FIRST + "fn get(p: int32*) -> int32 {\n"
             "    if (p == null) { return 0; }\n"
-            "    let total: int32 = 0;\n"
-            "    for i in range(0, 2) { total = total + first(p); }\n"
-            "    return total;\n"
+            "    for i in range(0, 2) { first(p); p = null; }\n"
+            "    return 0;\n"
             "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_loop_body_mut_lend_kills_fact_at_entry():
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            "fn clobber(mut q: int32*) { q = null; }\n"
+            + FIRST + "fn get(p: int32*) -> int32 {\n"
+            "    if (p == null) { return 0; }\n"
+            "    let i: int32 = 0;\n"
+            "    while (i < 2) {\n"
+            "        first(p);\n"
+            "        clobber(p);\n"
+            "        i = i + 1;\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_loop_body_generic_mut_lend_kills_fact_at_entry():
+    # The pre-scan resolves mut positions by name across every template
+    # overload -- before overload resolution, over-approximating is safe.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            "fn clobber<T>(mut q: T) { }\n"
+            + FIRST + "fn get(p: int32*) -> int32 {\n"
+            "    if (p == null) { return 0; }\n"
+            "    let i: int32 = 0;\n"
+            "    while (i < 2) { first(p); clobber(p); i = i + 1; }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_loop_body_static_mut_lend_kills_fact_at_entry():
+    # @static functions resolve by (file, name); their mut positions must
+    # feed the pre-scan too.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            "@static fn clobber(mut q: int32*) { q = null; }\n"
+            + FIRST + "fn get(p: int32*) -> int32 {\n"
+            "    if (p == null) { return 0; }\n"
+            "    let i: int32 = 0;\n"
+            "    while (i < 2) { first(p); clobber(p); i = i + 1; }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_loop_condition_mut_lend_kills_fact_at_entry():
+    # The condition re-runs on the back edge too; a mut lend there kills.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            "fn advance(mut q: int32*) -> bool { q = null; return false; }\n"
+            + FIRST + "fn get(p: int32*) -> int32 {\n"
+            "    if (p == null) { return 0; }\n"
+            "    while (advance(p)) { first(p); }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_loop_body_compound_assign_kills_fact_at_entry():
+    # `p += n` moves the pointer; the pre-scan treats it like an assignment.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn get(p: int32*) -> int32 {\n"
+            "    if (p == null) { return 0; }\n"
+            "    let i: int32 = 0;\n"
+            "    while (i < 2) { first(p); p += 1; i = i + 1; }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_loop_body_shadowing_let_kills_fact_at_entry():
+    # A shadowing `let p` anywhere in the body kills conservatively, even
+    # for uses lexically before it (the shadow's scope is a nested block).
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn get(p: int32*) -> int32 {\n"
+            "    if (p == null) { return 0; }\n"
+            "    let i: int32 = 0;\n"
+            "    while (i < 2) {\n"
+            "        first(p);\n"
+            "        { let p: int32* = null; }\n"
+            "        i = i + 1;\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_nested_if_assignment_in_loop_kills_fact_at_entry():
+    # The pre-scan is a whole-subtree walk: an assignment buried in a nested
+    # branch still kills, whichever path runs.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn get(p: int32*, flag: bool) -> int32 {\n"
+            "    if (p == null) { return 0; }\n"
+            "    let i: int32 = 0;\n"
+            "    while (i < 2) {\n"
+            "        first(p);\n"
+            "        if (flag) { p = null; }\n"
+            "        i = i + 1;\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+# ---------------------------------------------- and/or condition threading
+
+
+def test_and_guard_narrows_both_operands():
+    # `if (p != null and q != null)`: both conjuncts held in the then branch.
+    assert run(
+        FIRST + "fn both(p: int32*, q: int32*) -> int32 {\n"
+        "    if (p != null and q != null) { return first(p) + first(q); }\n"
+        "    return -1;\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 2;\n"
+        "    let y: int32 = 3;\n"
+        "    return both(&x, &y) + both(&x, null);\n"
+        "}"
+    ) == 4
+
+
+def test_or_guard_narrows_diverging_remainder():
+    # `if (p == null or q == null) { return; }`: past the guard both
+    # disjuncts failed, so both pointers are non-null.
+    assert run(
+        FIRST + "fn both(p: int32*, q: int32*) -> int32 {\n"
+        "    if (p == null or q == null) { return -1; }\n"
+        "    return first(p) + first(q);\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 4;\n"
+        "    let y: int32 = 5;\n"
+        "    return both(&x, &y) + both(null, &y);\n"
+        "}"
+    ) == 8
+
+
+def test_or_guard_does_not_narrow_then_branch():
+    # A true `or` pins down neither operand: `p != null or q != null`
+    # proves nothing inside the then branch.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn get(p: int32*, q: int32*) -> int32 {\n"
+            "    if (p != null or q != null) { return first(p); }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_and_guard_does_not_narrow_else_remainder():
+    # A false `and` pins down neither operand either.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn get(p: int32*, q: int32*) -> int32 {\n"
+            "    if (p == null and q == null) { return 0; }\n"
+            "    return first(p);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_and_rhs_sees_lhs_fact():
+    # Short-circuiting: the rhs only runs when the lhs held, so the lhs's
+    # fact is live while the rhs evaluates.
+    assert run(
+        FIRST + "fn get(p: int32*) -> int32 {\n"
+        "    if (p != null and first(p) == 6) { return 1; }\n"
+        "    return 0;\n"
+        "}\n"
+        "fn main() -> int32 { let x: int32 = 6; return get(&x); }"
+    ) == 1
+
+
+def test_or_rhs_sees_lhs_fact():
+    # For `or` the rhs runs when the lhs was false: `p == null or use(p)`.
+    assert run(
+        FIRST + "fn get(p: int32*) -> int32 {\n"
+        "    if (p == null or first(p) == 0) { return -1; }\n"
+        "    return first(p);\n"
+        "}\n"
+        "fn main() -> int32 { let x: int32 = 9; return get(&x); }"
+    ) == 9
+
+
+# ------------------------------------------------- loop header narrowing
+
+
+def test_while_header_narrows_body():
+    # `while (p != null)` proves p at the top of every iteration; a mid-body
+    # reassignment is fine because the header re-proves on the back edge.
+    assert run(
+        FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 5;\n"
+        "    let p: int32* = &x;\n"
+        "    let total: int32 = 0;\n"
+        "    while (p != null) {\n"
+        "        total = total + first(p);\n"
+        "        p = null;\n"
+        "    }\n"
+        "    return total;\n"
+        "}"
+    ) == 5
+
+
+def test_until_header_narrows_body():
+    # `until (p == null)` runs the body while p != null: same proof.
+    assert run(
+        FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 8;\n"
+        "    let p: int32* = &x;\n"
+        "    let total: int32 = 0;\n"
+        "    until (p == null) {\n"
+        "        total = total + first(p);\n"
+        "        p = null;\n"
+        "    }\n"
+        "    return total;\n"
+        "}"
+    ) == 8
+
+
+def test_while_header_fact_dies_after_reassignment():
+    # Within one iteration the usual invalidation still applies: after
+    # `p = ...` the header's fact is gone for the rest of the body.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn main() -> int32 {\n"
+            "    let x: int32 = 1;\n"
+            "    let p: int32* = &x;\n"
+            "    while (p != null) {\n"
+            "        p = null;\n"
+            "        first(p);\n"
+            "    }\n"
+            "    return 0;\n"
+            "}"
+        )
+
+
+def test_while_header_does_not_prove_after_loop():
+    # The `while (p != null)` exit edge implies p == null -- never a proof.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn main() -> int32 {\n"
+            "    let x: int32 = 1;\n"
+            "    let p: int32* = &x;\n"
+            "    while (p != null) { p = null; }\n"
+            "    return first(p);\n"
+            "}"
+        )
+
+
+def test_while_exit_condition_narrows_after_loop():
+    # The flipped header: `while (p == null)` can only exit with p non-null,
+    # regardless of what the body did (the exit edge leaves the condition).
+    assert run(
+        FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 6;\n"
+        "    let p: int32* = null;\n"
+        "    while (p == null) { p = &x; }\n"
+        "    return first(p);\n"
+        "}"
+    ) == 6
+
+
+def test_until_exit_condition_narrows_after_loop():
+    assert run(
+        FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 7;\n"
+        "    let p: int32* = null;\n"
+        "    until (p != null) { p = &x; }\n"
+        "    return first(p);\n"
+        "}"
+    ) == 7
+
+
+def test_break_blocks_post_exit_narrowing():
+    # A `break` jumps to the loop's end without re-testing the condition,
+    # so the exit-edge fact is unsound and must not be added.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn get(flag: bool) -> int32 {\n"
+            "    let x: int32 = 1;\n"
+            "    let p: int32* = null;\n"
+            "    while (p == null) {\n"
+            "        if (flag) { break; }\n"
+            "        p = &x;\n"
+            "    }\n"
+            "    return first(p);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_nested_loop_break_does_not_block_post_exit():
+    # A break inside a nested loop targets the inner loop; the outer loop
+    # still always exits through its own condition.
+    assert run(
+        FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 4;\n"
+        "    let p: int32* = null;\n"
+        "    while (p == null) {\n"
+        "        p = &x;\n"
+        "        while (true) { break; }\n"
+        "    }\n"
+        "    return first(p);\n"
+        "}"
+    ) == 4
+
+
+# ----------------------------------------------- fact-seeding through let
+
+
+def test_let_seeds_fact_from_address_of():
+    # `let p = &x` binds a provably non-null value: p starts narrowed.
+    assert run(
+        FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 42;\n"
+        "    let p: int32* = &x;\n"
+        "    return first(p);\n"
+        "}"
+    ) == 42
+
+
+def test_let_carries_narrowed_fact():
+    # `let q = p;` under a guard: p's fact seeds q.
+    assert run(
+        FIRST + "fn get(p: int32*) -> int32 {\n"
+        "    if (p == null) { return 0; }\n"
+        "    let q = p;\n"
+        "    return first(q);\n"
+        "}\n"
+        "fn main() -> int32 { let x: int32 = 3; return get(&x); }"
+    ) == 3
+
+
+def test_let_from_unproven_pointer_does_not_seed():
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn get(p: int32*) -> int32 {\n"
+            "    let q = p;\n"
+            "    return first(q);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_let_seeded_fact_dies_on_reassignment():
+    # A seeded fact is an ordinary narrowed fact: the usual invalidations
+    # (reassignment, mut lend, loops that kill) all apply.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn main() -> int32 {\n"
+            "    let x: int32 = 1;\n"
+            "    let q: int32* = &x;\n"
+            "    q = null;\n"
+            "    return first(q);\n"
+            "}"
+        )
+
+
+def test_addr_taken_let_does_not_seed():
+    # The whole-function &q ban applies to seeded facts too.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn snoop(r: int32**) { }\n"
+            "fn main() -> int32 {\n"
+            "    let x: int32 = 1;\n"
+            "    let q: int32* = &x;\n"
+            "    snoop(&q);\n"
+            "    return first(q);\n"
+            "}"
+        )
+
+
+# ------------------------------------------------- proof through as casts
+
+
+def test_cast_to_pointer_preserves_proof():
+    # `"A" as uint8*` stays in pointer land: the literal's proof threads
+    # through (previously the cast stripped it).
+    assert run(
+        "fn head(@nonnull s: uint8*) -> int32 { return *s as int32; }\n"
+        'fn main() -> int32 { return head("A" as uint8*); }'
+    ) == 65
+
+
+def test_cast_to_alias_pointer_preserves_proof():
+    # The target is resolved, not read off the syntax: an alias whose
+    # underlying type is a pointer counts.
+    assert run(
+        "type cstr = uint8*;\n"
+        "fn head(@nonnull s: uint8*) -> int32 { return *s as int32; }\n"
+        'fn main() -> int32 { return head("B" as cstr); }'
+    ) == 66
+
+
+def test_cast_of_narrowed_pointer_preserves_proof():
+    assert run(
+        "fn head(@nonnull s: uint8*) -> int32 { return *s as int32; }\n"
+        "fn get(p: uint8*) -> int32 {\n"
+        "    if (p == null) { return 0; }\n"
+        "    return head(p as uint8*);\n"
+        "}\n"
+        'fn main() -> int32 { let b: uint8 = 9; return get(&b); }'
+    ) == 9
+
+
+def test_cast_through_integer_severs_proof():
+    # A non-pointer intermediate severs the chain: an address that visited
+    # integer land carries no proof, even if it started from one.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn main() -> int32 {\n"
+            "    let x: int32 = 1;\n"
+            "    return first((&x as uint64) as int32*);\n"
+            "}"
+        )
+
+
+def test_cast_of_unproven_pointer_does_not_prove():
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            FIRST + "fn get(p: int32*) -> int32 { return first(p as int32*); }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -698,20 +1198,17 @@ def test_hatch_result_is_not_an_lvalue():
         )
 
 
-def test_hatch_does_not_seed_facts_through_let():
-    # The assertion covers the expression it wraps, not the binding it lands
-    # in: `let q = p!` leaves q a plain, unproven pointer (seeding facts
-    # through `let` is a planned narrowing extension, not the hatch's job).
-    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
-        compile_ir(
-            FIRST + "fn main() -> int32 {\n"
-            "    let x: int32 = 1;\n"
-            "    let p: int32* = &x;\n"
-            "    let q = p!;\n"
-            "    first(q);\n"
-            "    return 0;\n"
-            "}"
-        )
+def test_hatch_seeds_fact_through_let():
+    # Fact-seeding through `let`: the binding's initializer proves (the
+    # assertion is the proof), so `q` starts flow-narrowed -- one hatch at
+    # the binding covers every later use.
+    assert run(
+        FIRST + "fn get(p: int32*) -> int32 {\n"
+        "    let q = p!;\n"
+        "    return first(q);\n"
+        "}\n"
+        "fn main() -> int32 { let x: int32 = 7; return get(&x); }"
+    ) == 7
 
 
 def test_hatch_emits_no_instructions():

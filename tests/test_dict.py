@@ -87,12 +87,13 @@ def test_dict_owns_key_copies(tmp_path, capfd):
             dict_init(d, 2);
 
             let scratch = alloc<char>(3);
+            if (scratch == null) { return 1; }  // narrows scratch, loops keep it
             let i: int32 = 0;
             while (i < 100) {
                 scratch[0] = (65 + i / 10) as char;
                 scratch[1] = (65 + i % 10) as char;
                 scratch[2] = 0;
-                dict_set(d, scratch!, i * 7);   // heap key into @nonnull, in-loop
+                dict_set(d, scratch, i * 7);    // heap key into @nonnull, in-loop
                 i = i + 1;
             }
             scratch[0] = 90;  // clobber the caller's buffer
@@ -105,7 +106,7 @@ def test_dict_owns_key_copies(tmp_path, capfd):
                 scratch[0] = (65 + i / 10) as char;
                 scratch[1] = (65 + i % 10) as char;
                 scratch[2] = 0;
-                if (!dict_get(d, scratch!, v))
+                if (!dict_get(d, scratch, v))
                     errors = errors + 1;
                 else if (v != i * 7)
                     errors = errors + 1;

@@ -216,8 +216,7 @@ fn main() -> int32 {
     let x: int32 = 42;
     return first(&x);      // ok: &x is always non-null
     // first(null);        // compile error: null literal
-    // let p: int32* = &x;
-    // first(p);           // compile error: a plain T* carries no proof
+    // first(make());      // compile error: a returned T* carries no proof
 }
 ```
 
@@ -226,7 +225,9 @@ named storage), a string or array literal, an array decaying to a pointer
 (local, `@static`, or global), transitively a `@nonnull` parameter of
 the calling function (so a `@nonnull` callee forwards its own parameter
 onward with no check), a plain pointer local flow-narrowed by a null check
-(below), and the explicit escape hatch (further below).
+(below), an `as` cast to a pointer type of any proven source (aliases of
+pointer types count; a non-pointer intermediate like `p as uint64 as T*`
+severs the proof), and the explicit escape hatch (further below).
 
 **Flow-narrowing.** Idiomatic null-checked code needs no escape hatch: the
 compiler narrows a plain `T*` local to non-null from either of the two `if`
@@ -234,7 +235,15 @@ guard shapes. `if (p != null) { ... }` proves `p` inside the then branch
 (with an `else`, `if (p == null) {A} else {B}` symmetrically proves `p` in
 `B`), and the C-idiomatic early guard — an else-less `if (p == null)` whose
 body always diverges (`return`, `break`, `continue`, or every nested path
-returning) — proves `p` for the remainder of the enclosing scope:
+returning) — proves `p` for the remainder of the enclosing scope.
+`and`/`or` chains thread through both shapes:
+`if (p != null and q != null)` proves both in the then branch, and a
+diverging `if (p == null or q == null)` proves both for the remainder
+(a true `or` / false `and` pins down neither operand, so those directions
+prove nothing). Short-circuiting itself narrows too: in
+`p != null and use(p)` the right operand only runs when the left held, so
+`p` is proven while it evaluates (symmetrically after a false
+`p == null or ...`):
 
 ```c
 fn get(p: int32*) -> int32 {
@@ -267,19 +276,39 @@ the pointer between the check and the use:
   `let p`. An invalidation inside a nested block persists outward, and it is
   path-insensitive: invalidating `p` in one branch of an inner `if` drops
   the fact for the code after it, whichever branch runs.
-- **All narrowed facts drop at loop entry** (`while`, `until`, `for`): the
-  body re-runs on the back edge, where a later iteration may already have
-  invalidated a fact proved before the loop. Guard *inside* the body
-  instead; a body-local guard re-establishes the fact every iteration.
-  (Keeping pre-loop facts a body provably cannot invalidate is a planned
-  refinement, [roadmap](../ROADMAP.md#planned).)
+- **A loop drops exactly the facts it could invalidate.** A loop's body and
+  condition re-run on the back edge, where a later iteration may already
+  have nulled the pointer, so at loop entry (`while`, `until`, `for`) a
+  pre-scan of the whole loop kills the facts for every name the loop
+  reassigns (`p = ...`, `p += n`), shadows with a `let p`, or lends as a
+  bare `mut` argument, anywhere in the subtree (nested branches, `case`
+  arms, `defer` bodies, and both branches of an `@if` included; `mut`
+  positions are resolved by callee name across all overloads,
+  conservatively). Everything else survives (the guard-then-loop idiom
+  `if (p == null) return; while (...) { use(p); }` just works), and a
+  surviving fact holds past the loop's end too. When the loop does kill a
+  fact, guard *inside* the body; a body-local guard re-establishes it every
+  iteration.
 
-The condition must be exactly a `p != null` / `p == null` comparison
-(either operand order). Compound conditions (`p != null and q != null`),
-`while (p != null)` headers, and ternary conditions do not narrow yet, and
-`let q = p;` does not carry `p`'s fact to `q` — all follow-on work
-([roadmap](../ROADMAP.md#planned)). Where narrowing cannot see the
-invariant, the escape hatch below is the pressure valve.
+Loop headers narrow like guards. `while (p != null)` (or
+`until (p == null)`) proves `p` at the top of every iteration, even when
+the body reassigns `p`, since the condition re-proves it on each back edge.
+And a loop that can only exit through its condition proves the exit
+direction after it: `while (p == null) { p = next(); }` leaves `p` non-null
+for the code after the loop, whatever the body did (a `break` in the body
+disables this, because it reaches the end without re-testing the
+condition).
+
+Facts also seed through `let`: a pointer binding whose initializer is
+provably non-null (`let q = p;` under a guard, `let p = &x;`,
+`let s: uint8* = "...";`, `let q = p!;`) starts narrowed, under the same
+eligibility rules, and dies on the same events.
+
+Each null comparison must be exactly `p != null` / `p == null` (either
+operand order), possibly chained with `and`/`or` as above. Ternary
+conditions do not narrow, and member/index expressions still carry no
+per-name fact. Where narrowing cannot see the invariant, the escape hatch
+below is the pressure valve.
 
 **The escape hatch: postfix `!`.** A heap or returned `T*` carries no
 syntactic proof, so it cannot cross into a `@nonnull` slot on its own. The
@@ -298,10 +327,10 @@ operand unchanged, emits no instructions, and no check is ever inserted.
 callee was promised non-null and skips its defensive check. Use it only
 where you know the invariant holds (e.g. right after a checked allocation).
 
-The assertion covers exactly the expression it wraps, not the binding it
-lands in: `let q = p!; first(q);` is still a compile error, because `q` is a
-fresh, unproven `T*` (fact-seeding through `let` is a planned narrowing
-extension). `p!` is legal on
+The assertion covers exactly the expression it wraps, but a binding
+initialized from it seeds a narrowed fact (above), so
+`let q = p!; first(q);` compiles: one hatch at the binding covers every
+later use, until an invalidation kills the fact as usual. `p!` is legal on
 any pointer expression anywhere; outside a `@nonnull` argument it is simply
 the identity. `null!` is rejected outright (always wrong), as is `!` on a
 non-pointer operand.
@@ -336,8 +365,8 @@ and the raw-array sources of `list_from_array` and `string_from_array`.
 Passing an unproven pointer to any of them is a compile error instead of
 a latent crash. A stack buffer (`&x`, an array) or a string literal is
 already a proof; a heap buffer needs a one-line diverging guard after the
-allocation (`if (p == null) return 1;`), or a `!` assertion inside loops,
-where narrowed facts drop. Container `self` parameters deliberately stay
+allocation (`if (p == null) return 1;`), which loops that do not touch
+the pointer preserve. Container `self` parameters deliberately stay
 plain `T*`: they are slated to become `mut`/`const` receivers, where
 non-null holds by construction, so they pick up the guarantee in that
 migration rather than through annotations. Parameters for which null is
@@ -349,6 +378,8 @@ See
 [examples/functions/nonnull.mc](../examples/functions/nonnull.mc); for
 flow-narrowing,
 [examples/functions/nonnull_narrowing.mc](../examples/functions/nonnull_narrowing.mc);
+for narrowed facts crossing loops,
+[examples/functions/nonnull_loops.mc](../examples/functions/nonnull_loops.mc);
 for the escape hatch,
 [examples/functions/nonnull_assert.mc](../examples/functions/nonnull_assert.mc);
 and for the heap-buffer migration,

@@ -27,15 +27,18 @@ fn main() -> int32 {
     let a = outer(&x);        // &x -- the address of named storage
     let b = first(pair);      // an array decaying to a pointer
     let c = head("A");        // a string literal
+    // (An `as` cast to a pointer type keeps these proofs, aliases of pointer
+    // types included; a non-pointer intermediate like `&x as uint64 as T*`
+    // severs the proof. And a `let` bound to a proven source, like
+    // `let p: int32* = &x;`, starts proven itself: see nonnull_narrowing.mc.)
 
     // Everything else is a compile error until proven:
     // first(null);           // error: cannot pass null
-    // let p: int32* = &x;
-    // first(p);              // error: a plain int32* carries no proof
-    // (A null-check `if` guard narrows a plain local like p into a proof at
-    // no cost: see nonnull_narrowing.mc. For pointers with no invariant the
-    // compiler can see, the postfix `p!` assertion is the escape hatch: see
-    // nonnull_assert.mc.)
+    // A heap or returned T* carries no proof either. A null-check `if` guard
+    // narrows a plain local into a proof at no cost: see
+    // nonnull_narrowing.mc. For pointers with no invariant the compiler can
+    // see, the postfix `p!` assertion is the escape hatch: see
+    // nonnull_assert.mc.
 
     println("a = %d, b = %d, head = %c", a, b, c as int32);
     println("sum = %d", a + b + (c as int32 - 64)); // 40 + 1 + 1 = 42

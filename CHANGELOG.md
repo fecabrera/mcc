@@ -10,6 +10,34 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Loop-body fact preservation and full proof plumbing for flow-narrowing**
+  — narrowed non-null facts no longer all drop at loop entry. A pre-scan of
+  the whole loop (condition and body, nested statements, `defer` bodies, and
+  both `@if` branches) kills only the facts the loop could invalidate: an
+  assignment (`p = ...`, `p += n`), a shadowing `let p`, or lending the bare
+  name as a `mut` argument (resolved by callee name across all overloads,
+  conservatively). The guard-then-loop idiom
+  (`if (p == null) return 1; while (...) { use(p); }`) the annotated stdlib
+  leans on now compiles without in-body guards or `!` hatches, and a
+  surviving fact holds past the loop's exit. The remaining proof-plumbing
+  follow-ons landed with it: `and`/`or` guard threading
+  (`if (p != null and q != null)` proves both in the then branch, a
+  diverging `if (p == null or q == null)` proves both after it, and a
+  short-circuit right operand sees the left's fact, so
+  `p != null and use(p)` proves); `while (p != null)` / `until (p == null)`
+  header narrowing, re-proven per back edge so mid-body reassignment is
+  fine, plus the exit-edge fact after a `while (p == null)`-style loop
+  (disabled when the body can `break` past the re-test); fact-seeding
+  through `let` (`let q = p;` under a guard, `let q = p!;`, `let p = &x;`
+  all start narrowed, under the usual eligibility rules); and proof
+  threading through `as` casts whose resolved target is a pointer type
+  (aliases like `type cstr = uint8*` count; a non-pointer intermediate
+  severs the proof), so `md5("abc" as uint8*, n)` now proves like
+  `md5("abc", n)`. Narrowing stays purely static and syntax-directed: no
+  instructions emitted, no CFG pass. See
+  [@nonnull parameters](docs/language.md#nonnull-parameters),
+  [nonnull_loops.mc](examples/functions/nonnull_loops.mc), and
+  [nonnull_narrowing.mc](examples/functions/nonnull_narrowing.mc).
 - **Forward declarations** — a bodyless `fn` prototype plus its matching
   definition in one program is now accepted, same-file or cross-file: the
   prototype is checked against the definition and discarded (the body

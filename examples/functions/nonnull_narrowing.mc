@@ -2,7 +2,7 @@ import "std";
 
 // Flow-narrowing: a null-check `if` guard proves a plain `T*` local non-null,
 // so idiomatic checked code crosses into a @nonnull parameter (see nonnull.mc)
-// with no postfix `p!` assertion. Two guard shapes narrow, one per helper
+// with no postfix `p!` assertion. Three guard shapes narrow, one per helper
 // below. The proof is purely compile-time: the guard's branch is the only
 // code emitted, the narrowing itself adds no instructions.
 // Prerequisites: nonnull.mc.
@@ -30,6 +30,27 @@ fn get(p: int32*) -> int32 {
     return first(p);     // ok: the early guard already handled null
 }
 
+// Shape 3: and/or chains thread through both shapes. A positive `and` guard
+// proves every operand it pins down inside the then branch; a diverging
+// `or` guard proves them all for the remainder. (The other directions, a
+// true `or` or a false `and`, pin down neither operand, so they prove
+// nothing.) Short-circuiting itself narrows too: in `p != null and first(p)`
+// the right operand only runs when the left held, so p is proven while it
+// evaluates.
+fn add(p: int32*, q: int32*) -> int32 {
+    if (p == null or q == null) {
+        return -1;
+    }
+    return first(p) + first(q); // ok: both proven for the remainder
+}
+
+fn max_of(p: int32*, q: int32*) -> int32 {
+    if (p != null and q != null and first(p) > first(q)) {
+        return first(p);        // ok: both proven in the then branch
+    }
+    return -1;
+}
+
 fn main() -> int32 {
     let x: int32 = 42;
 
@@ -38,19 +59,26 @@ fn main() -> int32 {
     // path at compile time.
     println("show(&x) = %d, show(null) = %d", show(&x), show(null));
     println("get(&x) = %d, get(null) = %d", get(&x), get(null));
+
+    let y: int32 = 7;
+    println("add(&x, &y) = %d, add(&x, null) = %d", add(&x, &y), add(&x, null));
+    println("max_of(&x, &y) = %d", max_of(&x, &y));
     return 0;
 }
 
 // Narrowing is deliberately conservative: only bare local pointer variables
 // narrow. Globals, mut parameters, and member/index expressions like s.p or
 // a[i] never do; taking &p anywhere in the function disables narrowing of p;
-// the fact dies on reassigning p, passing p as a mut argument, or a shadowing
-// `let p`; and all facts drop at loop entry, so guard inside the loop body
-// (a body-local guard re-establishes the fact each iteration). Where
-// narrowing cannot see the invariant, the postfix `p!` assertion is the
-// escape hatch: see nonnull_assert.mc.
+// and the fact dies on anything that could null the variable: reassigning p,
+// passing p as a mut argument, or a shadowing `let p`. A loop drops exactly
+// the facts it could invalidate, and no others: see nonnull_loops.mc for the
+// full loop story (guard-then-loop, loop-header guards, post-exit proofs).
+// Facts also seed through `let`: a pointer binding whose initializer is
+// proven (`let q = p;` under a guard, `let p = &x;`, `let q = p!;`) starts
+// narrowed under the same rules. Where narrowing cannot see the invariant,
+// the postfix `p!` assertion is the escape hatch: see nonnull_assert.mc.
 // See also: nonnull.mc for @nonnull itself and the always-non-null sources;
+// nonnull_loops.mc for narrowed facts crossing loops;
 // nonnull_assert.mc for the `p!` escape hatch;
-// memory/nonnull_heap_buffers.mc for both idioms working together against
-// the stdlib's @nonnull contracts (guard the straight line, assert in
-// loops).
+// memory/nonnull_heap_buffers.mc for the one-guard migration of heap
+// buffers across the stdlib's @nonnull contracts.

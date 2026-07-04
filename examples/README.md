@@ -58,8 +58,9 @@ function pointers.
 | [mut_overloads.mc](functions/mut_overloads.mc) | generic overloads mixing `mut` and non-`mut` positions: a `mut` overload next to a pointer one, rvalues dropping `mut` candidates, writability judged against the chosen overload, single argument evaluation |
 | [noalias.mc](functions/noalias.mc) | `@noalias` pointer parameters (C's `restrict`): the unchecked no-overlap promise that lets the optimizer treat a copy's regions as disjoint |
 | [nonnull.mc](functions/nonnull.mc) | `@nonnull` pointer parameters: the checked "definitely non-null" refinement — call sites must prove the argument non-null, the callee skips the re-check |
-| [nonnull_narrowing.mc](functions/nonnull_narrowing.mc) | flow-narrowing for @nonnull: the two null-check guard shapes (the `if (p != null)` then branch, the diverging early `if (p == null)` guard) that prove a plain `T*` local with no `p!`, purely at compile time |
-| [nonnull_assert.mc](functions/nonnull_assert.mc) | the postfix `p!` non-null assertion, @nonnull's escape hatch where narrowing cannot see the invariant: a zero-cost static proof for heap/returned pointers (null is then UB), covering only the wrapped expression, and the `!=` lexing gotcha |
+| [nonnull_narrowing.mc](functions/nonnull_narrowing.mc) | flow-narrowing for @nonnull: the three null-check guard shapes (the `if (p != null)` then branch, the diverging early `if (p == null)` guard, `and`/`or` chains threading both) that prove a plain `T*` local with no `p!`, purely at compile time |
+| [nonnull_loops.mc](functions/nonnull_loops.mc) | narrowed facts crossing loops: a loop kills only the facts it could invalidate (so guard-then-loop just works, in the body and past the exit), `while (p != null)` proves p on every iteration, and a `while (p == null)` retry loop proves p after it |
+| [nonnull_assert.mc](functions/nonnull_assert.mc) | the postfix `p!` non-null assertion, @nonnull's escape hatch where narrowing cannot see the invariant: a zero-cost static proof for heap/returned pointers (null is then UB), one hatch at a `let` seeding all later uses, and the `!=` lexing gotcha |
 | [variadic.mc](functions/variadic.mc) | variadic `...` definitions, `va_list`, `va_start`/`va_end`, forwarding to `vsnprintf` |
 | [function_pointers.mc](functions/function_pointers.mc) | `fn(...) -> R` types (incl. variadic `fn(A, ...)`), callbacks in structs, dispatch tables, `const`/`@static` function aliases, `null` callbacks |
 
@@ -98,7 +99,7 @@ Pointers and the builtin container/view types built on them.
 | [lists.mc](memory/lists.mc) | `list<T>`, a growable random-access sequence: `push`, `get` (mut out-param), `from_array`, `append`, `duplicate` |
 | [stacks.mc](memory/stacks.mc) | `stack<T>`, a growable LIFO: push and pop at the top |
 | [queues.mc](memory/queues.mc) | `queue<T>`, a growable FIFO ring buffer: push at the back, pop from the front |
-| [nonnull_heap_buffers.mc](memory/nonnull_heap_buffers.mc) | a heap buffer crossing the stdlib's @nonnull contracts (memory copy/fill family, hashing digests): one diverging null guard after `alloc` for the straight-line calls, the postfix `!` assertion inside loops where narrowed facts drop |
+| [nonnull_heap_buffers.mc](memory/nonnull_heap_buffers.mc) | a heap buffer crossing the stdlib's @nonnull contracts (memory copy/fill family, hashing digests): one diverging null guard after `alloc` covers every later call, the loops that leave the buffer alone included |
 
 ## systems/
 

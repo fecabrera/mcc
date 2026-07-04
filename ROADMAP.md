@@ -705,9 +705,9 @@ already do).
         slot needs an explicit programmer assertion: postfix `p!`, a purely
         static, zero-runtime-cost claim (no check is ever emitted; asserting
         an actually-null pointer is undefined behavior). The assertion covers
-        only the expression it wraps: `let q = p!;` leaves `q` a plain,
-        unproven `T*` (seeding facts through bindings is flow-narrowing's job
-        below). `null!` and a non-pointer operand are compile errors; `p!` is
+        only the expression it wraps, though since loop-body fact preservation
+        below shipped, a `let q = p!;` binding seeds a narrowed fact for `q`.
+        `null!` and a non-pointer operand are compile errors; `p!` is
         the identity anywhere else. `!=` lexes greedily, so `p != q` stays a
         comparison and `(p!) == q` needs the parentheses; implemented, see
         [@nonnull parameters](docs/language.md#nonnull-parameters)
@@ -739,8 +739,8 @@ already do).
           sources of `list_from_array`/`string_from_array`, so an unproven
           pointer at those call sites is a compile error instead of a latent
           null dereference (a heap or returned `T*` takes a one-line null
-          guard, or `p!` inside loops, where narrowed facts still drop; see
-          loop-body fact preservation below). Container `self` parameters
+          guard, preserved across loops that cannot invalidate it since
+          loop-body fact preservation below shipped). Container `self` parameters
           are deliberately not annotated: every container self is slated to
           become a `mut`/`const` receiver in the
           [receiver-kind migration](#functions-and-methods), and `@nonnull`
@@ -791,18 +791,31 @@ already do).
           between this wave and that class is forced; this repo opts in
           by enabling the class under its existing `-Werror` CI, which
           is what makes the wave enforceable at home
-    - [ ] loop-body fact preservation — replace the shipped blanket rule
+    - [x] loop-body fact preservation — replaced the shipped blanket rule
           (all narrowed facts drop at loop entry) with a pre-scan of the
-          loop body that keeps the facts the loop provably cannot
-          invalidate, preserving the guard-then-loop idiom
+          whole loop (condition and body, nested statements, `defer`
+          bodies, and both `@if` branches) that kills only the facts the
+          loop could invalidate (an assignment, a shadowing `let`, or a
+          bare-name `mut` lend, resolved by callee name across all
+          overloads, conservatively), preserving the guard-then-loop idiom
           (`if (p == null) return; while (...) { use(p); }`) that the
-          shipped `libmc` adoption above leans on. Folds in the remaining
-          proof-plumbing follow-ons: `and`/`or` threading
-          (`if (p != null and q != null)`), `while (p != null)` header
-          narrowing, fact-seeding through `let q = p;`, and proof
-          threading through `as` casts (today a cast strips a string
-          literal's non-null proof: `md5("abc" as uint8*, n)` fails where
-          `md5("abc", n)` proves)
+          shipped `libmc` adoption above leans on; surviving facts also
+          hold past the loop's exit. Folded in the remaining proof-plumbing
+          follow-ons: `and`/`or` threading (`if (p != null and q != null)`
+          proves both in the then branch, a diverging
+          `if (p == null or q == null)` proves both after, and a
+          short-circuit rhs sees the lhs's fact), `while (p != null)` /
+          `until (p == null)` header narrowing (re-proven per back edge, so
+          body invalidations are fine) plus the exit-edge fact after a
+          `while (p == null)`-style loop (disabled when the body can
+          `break`, which skips the re-test), fact-seeding through
+          `let q = p;` (any provably non-null initializer, `p!` included,
+          under the usual eligibility rules), and proof threading through
+          `as` casts whose *resolved* target is a pointer type (alias
+          targets count; a non-pointer intermediate severs the proof — so
+          `md5("abc" as uint8*, n)` now proves like `md5("abc", n)`);
+          implemented, see
+          [@nonnull parameters](docs/language.md#nonnull-parameters)
     - [ ] first-class `T!` type — non-null on return types, locals, struct
           fields, and function-pointer types, which needs a real distinct type
           rather than a per-binding fact (a larger blast radius). Optional and
