@@ -68,6 +68,7 @@ fn main() -> int32 {
     return 0;
 }
 
-// See also: memory/intrusive_list.mc for the intrusive twist on this list,
-// where the payload is embedded as the entry's layout prefix with `extends T`
-// instead of sitting behind a `value` field.
+// See also: extends.mc for `extends`, which lays a base struct's fields out
+// as a derived struct's prefix; memory/intrusive_list.mc for the intrusive
+// twist on this list, where the payload is embedded as the entry's layout
+// prefix with `extends T` instead of sitting behind a `value` field.

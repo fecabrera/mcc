@@ -67,7 +67,8 @@ function pointers.
 ## types/
 
 The type system: aliases, arrays and strings, enums, structs (and their
-literals, flexible array members), unions, and generics, plus the compile-time
+literals, `extends` bases, flexible array members), unions, and generics, plus
+the compile-time
 directives that check a build's invariants, its configuration, and its use of
 deprecated or removed functions.
 
@@ -80,6 +81,8 @@ deprecated or removed functions.
 | [derived_enums.mc](types/derived_enums.mc) | `enum b: a` member reuse: the derived enum copies the base's members and adopts its underlying type (pointers too), inherited members fold equal and are referenceable by new ones, transitive chains; compile-time only, no new type checking |
 | [structs.mc](types/structs.mc) | structs, generic structs, `->` / `.`, `null`, struct literals, a hand-built linked list |
 | [struct_literals.mc](types/struct_literals.mc) | `Name { field = value, ... }` literals (the `struct` keyword optional): omitted fields zeroed or set to a `= default`, free field order, generics (inferred type args), nesting, as args/returns/through a pointer |
+| [extends.mc](types/extends.mc) | named-base `struct point3 extends point`: base fields laid out first as a true prefix, inherited fields named directly (in literals too), the explicit pointer/value upcasts, base field defaults carrying into a derived literal, bodyless specialization as a branding type |
+| [generic_extends.mc](types/generic_extends.mc) | a generic struct extending a generic base built from its own parameters (`entry<K, V> extends cell<K, V>`), monomorphized together per instantiation; the per-instantiation upcast, and the literal caveat: inference sees only the extender's own fields, so base fields need explicit type args |
 | [flexible_array_members.mc](types/flexible_array_members.mc) | a trailing `field: T[]` flexible array member: adds 0 to `sizeof`, decays to a `T*` at the struct's tail, one allocation for header plus elements |
 | [unions.mc](types/unions.mc) | `union Name { ... }` members sharing one storage (all at offset 0): literals with one live member, cross-member byte reinterpretation (float bit patterns), generic unions |
 | [static_assert.mc](types/static_assert.mc) | the top-level compile-time directives `@static_assert(cond, "msg")` and `@error("msg")`: guarding a struct's layout with `sizeof`/`offsetof`/`alignof`, `const`- and `Enum::Member`-based checks, and an `@error` guarded by a dead `@if` branch to reject a target |

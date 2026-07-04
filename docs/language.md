@@ -1836,7 +1836,10 @@ interconvert). Only the upcast direction is allowed: narrowing a base value
 back to a derived one would read past it. With no body of its own,
 `struct meters extends int_wrapper;` is a **specialization** — a distinct
 type with the base's exact layout, useful for branding values so the compiler
-keeps them apart.
+keeps them apart. See
+[examples/types/extends.mc](../examples/types/extends.mc) for a runnable tour
+of the named-base form: the prefix layout, both upcasts, defaults carrying
+down, and a specialization brand.
 
 The base's `@packed`, `@align`, and `@volatile` are **inherited**: an
 extending struct is volatile if its base is, takes at least the base's
@@ -1851,6 +1854,9 @@ which is monomorphized together with it:
 struct pair<K, V>  { key: K; value: V; }
 struct entry<K, V> extends pair<K, V> { state: uint8; }   // key, value, state
 ```
+
+See [examples/types/generic_extends.mc](../examples/types/generic_extends.mc)
+for a runnable version of this shape.
 
 The base may also be a **bare type parameter** — the intrusive-container
 shape, where a generic struct embeds whatever payload it is instantiated

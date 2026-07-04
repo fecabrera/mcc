@@ -64,5 +64,7 @@ fn main() -> int32 {
     return 0;
 }
 
-// See also: types/structs.mc for the non-intrusive list that wraps its
-// payload in a named `value` field; pointers.mc for `as` pointer casts.
+// See also: types/extends.mc for the named-base form of extends, where the
+// prefix layout and explicit-upcast rules used here originate;
+// types/structs.mc for the non-intrusive list that wraps its payload in a
+// named `value` field; pointers.mc for `as` pointer casts.
