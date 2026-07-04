@@ -33,6 +33,21 @@ Highlighting additionally needs the compiled parser.
 
 ### 2. Install the parser
 
+**With Neovim's builtin tree-sitter (no plugin)** — the parser is a single
+checked-in C file, so any C compiler can build it, and Neovim loads the
+resulting `.so` from a `parser/` folder in your config directory
+(`:echo stdpath('config')`, usually `~/.config/nvim`):
+
+```bash
+cd editors/helix/tree-sitter-mcc
+cc -O2 -fPIC -shared -Isrc src/parser.c -o mcc.so
+mkdir -p ~/.config/nvim/parser
+mv mcc.so ~/.config/nvim/parser/
+```
+
+Any `parser/` folder on the runtime path works the same
+(`~/.local/share/nvim/site/parser/`, or one inside this plugin's directory).
+
 **With nvim-treesitter** — register the grammar, then `:TSInstall mcc`.
 On the `main` branch (needs the `tree-sitter` CLI):
 
@@ -62,16 +77,6 @@ require('nvim-treesitter.parsers').get_parser_configs().mcc = {
 
 For local development against a checkout, use an absolute path as the `url`.
 
-**Without any plugin** — the parser is a single checked-in C file, so any C
-compiler can build it:
-
-```bash
-cd editors/helix/tree-sitter-mcc
-cc -O2 -fPIC -shared -Isrc src/parser.c -o mcc.so
-mkdir -p ~/.local/share/nvim/site/parser
-mv mcc.so ~/.local/share/nvim/site/parser/
-```
-
 Open any `.mc` file; `:set filetype?` should report **mcc** and the buffer
 should be highlighted (the `ftplugin` calls `vim.treesitter.start()`).
 
@@ -94,6 +99,14 @@ vim.bo.indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
 [nvim-treesitter-textobjects](https://github.com/nvim-treesitter/nvim-treesitter-textobjects);
 this plugin ships the `@function.outer`/`.inner` and
 `@parameter.outer`/`.inner` queries it reads.
+
+Auto-closing `(){}[]""''` comes from your autopair plugin of choice
+([mini.pairs](https://github.com/echasnovski/mini.pairs),
+[nvim-autopairs](https://github.com/windwp/nvim-autopairs), …) — Neovim has
+no builtin autopairing, so there is nothing for this plugin to enable; the
+generic defaults of either plugin already handle mcc. (The VS Code and Helix
+supports configure these pairs themselves, since those editors pair
+natively.)
 
 ## Files
 
