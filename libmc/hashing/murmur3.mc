@@ -36,7 +36,7 @@ fn load_le(p: uint8*) -> uint32 {
  *
  * @return 32-bit hash of the buffer's contents
  */
-fn murmur3(key: uint8*, length: uint64, seed: uint32) -> uint32 {
+fn murmur3(@nonnull key: uint8*, length: uint64, seed: uint32) -> uint32 {
     let h: uint32 = seed;
     let nblocks = length / 4;
 

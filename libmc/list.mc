@@ -43,7 +43,7 @@ fn list_duplicate<T>(dst: struct list<T>*, src: struct list<T>*) {
  * @param arr:  source array to copy from
  * @param n:    number of elements to copy from arr
  */
-fn list_from_array<T>(self: struct list<T>*, arr: T*, n: uint64) {
+fn list_from_array<T>(self: struct list<T>*, @nonnull arr: T*, n: uint64) {
     list_init(self, n);
 
     for i in range(n) {

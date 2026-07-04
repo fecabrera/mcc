@@ -325,12 +325,34 @@ and so is allowed on `@extern` declarations and rides along on
 parameters, on `mut` (a `mut` parameter is passed by reference and is never
 null), and on `@asm` functions. At the LLVM level the established fact is
 handed to the optimizer as the `nonnull` and `dereferenceable(sizeof(T))`
-argument attributes. See
+argument attributes.
+
+**The standard library is annotated.** The data, source, key, and
+destination pointer parameters of the stdlib declare their contracts with
+`@nonnull`: the `memory` copy/fill family (`bytecopy`, `copy`, `bytezero`,
+`zero`, `bytefill`, `fill`), the `hashing/` digests (`md5`, `crc32`,
+`murmur3`), `dict`'s string keys (`dict_set`/`dict_get`/`dict_remove`),
+and the raw-array sources of `list_from_array` and `string_from_array`.
+Passing an unproven pointer to any of them is a compile error instead of
+a latent crash. A stack buffer (`&x`, an array) or a string literal is
+already a proof; a heap buffer needs a one-line diverging guard after the
+allocation (`if (p == null) return 1;`), or a `!` assertion inside loops,
+where narrowed facts drop. Container `self` parameters deliberately stay
+plain `T*`: they are slated to become `mut`/`const` receivers, where
+non-null holds by construction, so they pick up the guarantee in that
+migration rather than through annotations. Parameters for which null is
+meaningful also stay plain: `resize` (null allocates fresh) and `dealloc`
+(null is a no-op). The `libc/` bindings follow as a separate pass
+([roadmap](../ROADMAP.md#planned)).
+
+See
 [examples/functions/nonnull.mc](../examples/functions/nonnull.mc); for
 flow-narrowing,
 [examples/functions/nonnull_narrowing.mc](../examples/functions/nonnull_narrowing.mc);
-and for the escape hatch,
-[examples/functions/nonnull_assert.mc](../examples/functions/nonnull_assert.mc).
+for the escape hatch,
+[examples/functions/nonnull_assert.mc](../examples/functions/nonnull_assert.mc);
+and for the heap-buffer migration,
+[examples/memory/nonnull_heap_buffers.mc](../examples/memory/nonnull_heap_buffers.mc).
 
 ## Variadic functions
 

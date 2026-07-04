@@ -515,16 +515,47 @@ already do).
         never do), taking `&p` anywhere in the function bans narrowing of
         `p`, facts die on reassignment, on passing as a `mut` argument, and
         on a shadowing `let`, and every fact drops at loop entry (see the
-        follow-on below). This opens the gate to adopting `@nonnull` across
-        `libmc`, itself a separate future change set; implemented, see
+        follow-on below). This opened the gate to adopting `@nonnull` across
+        `libmc` (the adoption items below; wave 1 shipped); implemented, see
         [@nonnull parameters](docs/language.md#nonnull-parameters):
+    - [x] `libmc` adoption, wave 1 — `@nonnull` on the standard library's
+          data/source/key/destination pointer parameters: the `memory`
+          copy/fill family (`bytecopy`, `copy`, `bytezero`, `zero`,
+          `bytefill`, `fill`, and the four `@deprecated` forwarders), the
+          `hashing/` digests (`md5` data and digest, `crc32` data, `murmur3`
+          key), `dict`'s string keys (`dict_set`, `dict_get`, `dict_remove`,
+          and the `@private` `str_eq`/`str_clone` helpers), and the raw-array
+          sources of `list_from_array`/`string_from_array`, so an unproven
+          pointer at those call sites is a compile error instead of a latent
+          null dereference (a heap or returned `T*` takes a one-line null
+          guard, or `p!` inside loops, where narrowed facts still drop; see
+          loop-body fact preservation below). Container `self` parameters
+          are deliberately not annotated: every container self is slated to
+          become a `mut`/`const` receiver in the
+          [receiver-kind migration](#functions-and-methods), and `@nonnull`
+          is rejected on `mut` (a `mut` parameter is passed by reference and
+          is never null), so annotating selves now would be throwaway work;
+          they pick up non-null by construction when that migration lands,
+          and the iteration-protocol functions (`*_it`/`*_next`) ride the
+          same receiver rework via the
+          [`for … in` protocol over `mut`](#functions-and-methods) item.
+          Null-meaningful parameters stay plain `T*`: `resize` (null
+          allocates fresh) and `dealloc` (null is a no-op), and `set`'s
+          generic `key: K` is untouched (it is a non-pointer per
+          instantiation, so the `hash<T>`/`fnv1a`/`splitmix64` chain stays
+          unannotated); implemented, see
+          [@nonnull parameters](docs/language.md#nonnull-parameters)
+    - [ ] `libc/` bindings, wave 2 — annotate the `@extern` libc surface
+          (attribute-only there, like `@noalias` on the `restrict` family:
+          the C side is never checked, only callers are), a separate change
+          set from wave 1 above
     - [ ] loop-body fact preservation — replace the shipped blanket rule
           (all narrowed facts drop at loop entry) with a pre-scan of the
           loop body that keeps the facts the loop provably cannot
           invalidate, preserving the guard-then-loop idiom
-          (`if (p == null) return; while (...) { use(p); }`) that `libmc`
-          adoption leans on. Folds in the remaining condition-shape
-          follow-ons: `and`/`or` threading
+          (`if (p == null) return; while (...) { use(p); }`) that the
+          shipped `libmc` adoption above leans on. Folds in the remaining
+          condition-shape follow-ons: `and`/`or` threading
           (`if (p != null and q != null)`), `while (p != null)` header
           narrowing, and fact-seeding through `let q = p;`
     - [ ] first-class `T!` type — non-null on return types, locals, struct

@@ -50,7 +50,7 @@ fn string_duplicate(dst: struct string*, src: struct string*) {
  * @param str:  source byte array to copy from
  * @param n:    number of bytes to copy from str
  */
-fn string_from_array(self: struct string*, str: char*) {
+fn string_from_array(self: struct string*, @nonnull str: char*) {
     string_init(self);
 
     let i: uint64 = 0;

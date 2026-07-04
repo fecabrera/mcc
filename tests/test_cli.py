@@ -730,7 +730,9 @@ def test_stdlib_deprecated_forwarder_blames_the_callers_line(tmp_path):
         'import "memory";\n'
         "fn main() -> int32 {\n"
         "    let a = alloc<int32>(2);\n"
+        "    if (a == null) return 1;\n"
         "    let b = alloc<int32>(2);\n"
+        "    if (b == null) return 1;\n"
         "    copy_bytes(a, b, 2);\n"
         "    dealloc(a); dealloc(b);\n"
         "    return 0;\n"
@@ -739,7 +741,7 @@ def test_stdlib_deprecated_forwarder_blames_the_callers_line(tmp_path):
     result = mcc(src, "--emit-llvm")
     assert result.returncode == 0
     assert (
-        f"{src}: warning: line 5: 'copy_bytes' is deprecated: "
+        f"{src}: warning: line 7: 'copy_bytes' is deprecated: "
         "use bytecopy instead\n" in result.stderr
     )
 

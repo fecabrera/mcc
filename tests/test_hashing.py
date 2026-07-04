@@ -71,6 +71,7 @@ def test_crc32(tmp_path, capfd):
         'import "hashing/crc32";\n'
         "fn main() -> int32 {\n"
         '    let embedded_nul = alloc<uint8>(3);\n'
+        "    if (embedded_nul == null) return 1;\n"  # narrows for crc32's @nonnull
         "    embedded_nul[0] = 97; embedded_nul[1] = 0; embedded_nul[2] = 98;\n"
         '    printf("%u %u %u\\n",\n'
         '        crc32("hello", 5), crc32("", 0), crc32(embedded_nul, 3));\n'
@@ -87,8 +88,9 @@ def test_md5(tmp_path, capfd):
     run_program(
         tmp_path,
         'import "hashing/md5";\n'
-        "fn show(data: uint8*, n: uint64) {\n"
+        "fn show(@nonnull data: uint8*, n: uint64) {\n"  # forwards into md5's @nonnull
         "    let digest = alloc<uint8>(16);\n"
+        "    if (digest == null) return;\n"
         "    md5(data, n, digest);\n"
         "    let i: int32 = 0;\n"
         '    while (i < 16) { printf("%02x", digest[i]); i = i + 1; }\n'

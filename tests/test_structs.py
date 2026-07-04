@@ -218,18 +218,23 @@ def test_memory_lib_copies(tmp_path, capfd):
         struct point { x: int32; y: int32; }
         fn main() -> int32 {
             let src = alloc<int64>(3);
+            if (src == null) return 1;   // each guard narrows one heap pointer
             src[0] = 10; src[1] = 20; src[2] = 30;
             let a = alloc<int64>(3);
+            if (a == null) return 1;
             let b = alloc<int64>(3);
+            if (b == null) return 1;
             bytecopy(a, src, 3);
             copy(b, src, 3);
             printf("%lld %lld\\n", a[2], b[2]);
 
             // item-by-item copy of struct elements
             let pts = alloc<struct point>(2);
+            if (pts == null) return 1;
             pts[0].x = 1; pts[0].y = 2;
             pts[1].x = 3; pts[1].y = 4;
             let out = alloc<struct point>(2);
+            if (out == null) return 1;
             copy(out, pts, 2);
             printf("%d %d\\n", out[1].x, out[1].y);
 

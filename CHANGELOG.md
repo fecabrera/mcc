@@ -42,6 +42,28 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   stubs in generic and `@inline` bodies. See
   [@nonnull parameters](docs/language.md#nonnull-parameters).
 
+### Changed
+
+- **The standard library's pointer contracts are now `@nonnull`-checked**
+  (**breaking**) — the data, source, key, and destination pointer
+  parameters of the stdlib annotate themselves `@nonnull`: the `memory`
+  copy/fill family (`bytecopy`, `copy`, `bytezero`, `zero`, `bytefill`,
+  `fill`, and the deprecated forwarders), the `hashing/` digests (`md5`,
+  `crc32`, `murmur3`), `dict`'s string keys
+  (`dict_set`/`dict_get`/`dict_remove`), and the raw-array sources of
+  `list_from_array`/`string_from_array`. An unproven pointer at one of
+  those call sites is now a compile error instead of a latent null
+  dereference. Code passing `&x`, an array, or a string literal is
+  unaffected; **a heap buffer or heap-built key now needs a one-line null
+  guard after the allocation** (`if (p == null) return 1;`) **or a `!`
+  assertion** (inside loops, where narrowed facts drop). Container `self`
+  parameters deliberately stay plain `T*` for now, since they are slated
+  to become `mut`/`const` receivers, where non-null holds by construction.
+  Parameters for which null is meaningful also stay plain: `resize` (null
+  allocates fresh) and `dealloc` (null is a no-op). The `libc/` bindings
+  follow as a separate pass. See
+  [@nonnull parameters](docs/language.md#nonnull-parameters).
+
 ### Fixed
 
 - **Editor grammar catch-up** — the Helix tree-sitter grammar now parses the

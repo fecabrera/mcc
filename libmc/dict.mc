@@ -48,7 +48,7 @@ struct dict<V> {
  * @return true if the contents are equal
  */
 @private
-fn str_eq(a: char*, b: char*) -> bool {
+fn str_eq(@nonnull a: char*, @nonnull b: char*) -> bool {
     let i: uint64 = 0;
     while (a[i] == b[i]) {
         if (a[i] == 0)
@@ -66,10 +66,10 @@ fn str_eq(a: char*, b: char*) -> bool {
  * @return owned copy; release with dealloc
  */
 @private
-fn str_clone(s: char*) -> char* {
+fn str_clone(@nonnull s: char*) -> char* {
     let n = strlen(s) + 1;
     let copy = alloc<char>(n);
-    bytecopy(copy, s, n);
+    bytecopy(copy!, s, n);   // allocation assumed to succeed
     return copy;
 }
 
@@ -116,7 +116,7 @@ fn dict_destroy<V>(self: struct dict<V>*) {
  * @param key:   string key; the caller keeps ownership
  * @param value: value to associate with key
  */
-fn dict_set<V>(self: struct dict<V>*, key: char*, value: V) {
+fn dict_set<V>(self: struct dict<V>*, @nonnull key: char*, value: V) {
     if (self->length * 10 >= self->capacity * 7)
         dict_grow(self);
 
@@ -126,7 +126,8 @@ fn dict_set<V>(self: struct dict<V>*, key: char*, value: V) {
 
     while (self->entries[slot].state != dict_entry_state::EMPTY) {
         if (self->entries[slot].state == dict_entry_state::OCCUPIED) {
-            if (str_eq(self->entries[slot].key, key)) {
+            // OCCUPIED slots always hold an owned key copy
+            if (str_eq(self->entries[slot].key!, key)) {
                 self->entries[slot].value = value;
                 return;
             }
@@ -156,12 +157,13 @@ fn dict_set<V>(self: struct dict<V>*, key: char*, value: V) {
  *
  * @return true if key was found, false otherwise
  */
-fn dict_get<V>(self: struct dict<V>*, key: char*, mut out: V) -> bool {
+fn dict_get<V>(self: struct dict<V>*, @nonnull key: char*, mut out: V) -> bool {
     let slot = hash(key) % self->capacity;
 
     while (self->entries[slot].state != dict_entry_state::EMPTY) {
         if (self->entries[slot].state == dict_entry_state::OCCUPIED) {
-            if (str_eq(self->entries[slot].key, key)) {
+            // OCCUPIED slots always hold an owned key copy
+            if (str_eq(self->entries[slot].key!, key)) {
                 out = self->entries[slot].value;
                 return true;
             }
@@ -179,12 +181,13 @@ fn dict_get<V>(self: struct dict<V>*, key: char*, mut out: V) -> bool {
  * @param self: dict to remove from
  * @param key:  string key to remove
  */
-fn dict_remove<V>(self: struct dict<V>*, key: char*) {
+fn dict_remove<V>(self: struct dict<V>*, @nonnull key: char*) {
     let slot = hash(key) % self->capacity;
 
     while (self->entries[slot].state != dict_entry_state::EMPTY) {
         if (self->entries[slot].state == dict_entry_state::OCCUPIED) {
-            if (str_eq(self->entries[slot].key, key)) {
+            // OCCUPIED slots always hold an owned key copy
+            if (str_eq(self->entries[slot].key!, key)) {
                 dealloc(self->entries[slot].key);
                 self->entries[slot].key = null;
                 self->entries[slot].state = dict_entry_state::TOMBSTONE;

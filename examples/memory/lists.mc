@@ -40,4 +40,7 @@ fn main() -> int32 {
 }
 
 // See also: stacks.mc and queues.mc for the other growable containers;
-// control-flow/iteration.mc to walk a list with `for x in`.
+// control-flow/iteration.mc to walk a list with `for x in`;
+// nonnull_heap_buffers.mc for the proof idioms a heap pointer needs when it
+// crosses the stdlib's @nonnull contracts (list_from_array's raw-array
+// source is one of them).

@@ -343,7 +343,9 @@ def test_stdlib_memory_forwarders_warn_with_their_replacements(tmp_path):
         f'import "{lib_dir / "memory"}";\n'
         "fn main() -> int32 {\n"
         "    let a = alloc<int32>(2);\n"
+        "    if (a == null) return 1;\n"
         "    let b = alloc<int32>(2);\n"
+        "    if (b == null) return 1;\n"
         "    copy_bytes(a, b, 2);\n"
         "    copy_items(a, b, 2);\n"
         "    set_bytes(a, 0, 2);\n"
@@ -356,10 +358,10 @@ def test_stdlib_memory_forwarders_warn_with_their_replacements(tmp_path):
     compile_to_ir(main, (), warnings=warnings)
     # Attributed to the caller's file and lines, not libmc/memory.mc.
     assert [(w.message, w.line, w.source) for w in warnings] == [
-        ("'copy_bytes' is deprecated: use bytecopy instead", 5, str(main)),
-        ("'copy_items' is deprecated: use copy instead", 6, str(main)),
-        ("'set_bytes' is deprecated: use bytefill instead", 7, str(main)),
-        ("'set_items' is deprecated: use fill instead", 8, str(main)),
+        ("'copy_bytes' is deprecated: use bytecopy instead", 7, str(main)),
+        ("'copy_items' is deprecated: use copy instead", 8, str(main)),
+        ("'set_bytes' is deprecated: use bytefill instead", 9, str(main)),
+        ("'set_items' is deprecated: use fill instead", 10, str(main)),
     ]
 
 
@@ -376,7 +378,7 @@ def test_stdlib_compiles_clean_of_deprecation_warnings(tmp_path):
         "    dict_init(&d, 4);\n"
         '    dict_set(&d, "k", 1);\n'
         "    let digest: uint8[16];\n"
-        '    md5("abc" as uint8*, 3, &digest[0]);\n'
+        '    md5("abc", 3, &digest[0]);\n'  # a cast would strip the literal's non-null proof
         "    dict_destroy(&d);\n"
         "    return 0;\n"
         "}\n"

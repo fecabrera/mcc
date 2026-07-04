@@ -54,7 +54,8 @@ fn dealloc<T>(p: T*) {
  * Byte-copies n elements of type T from src to dst in a single memcpy.
  * The element size is computed from T, so callers count elements, not
  * bytes. dst and src are @noalias: the regions must not overlap, or the
- * behavior is undefined (use a manual loop if they might).
+ * behavior is undefined (use a manual loop if they might). Both are
+ * @nonnull: every call site must prove them non-null.
  *
  * @param dst: destination, with room for at least n elements; must not
  *             overlap src
@@ -64,7 +65,7 @@ fn dealloc<T>(p: T*) {
  * @return number of bytes copied (n * sizeof(T))
  */
 @inline
-fn bytecopy<T>(@noalias dst: T*, @noalias src: T*, n: uint64) -> uint64 {
+fn bytecopy<T>(@noalias @nonnull dst: T*, @noalias @nonnull src: T*, n: uint64) -> uint64 {
     let count = n * sizeof(T);
     memcpy(dst, src, count);
     return count;
@@ -72,14 +73,15 @@ fn bytecopy<T>(@noalias dst: T*, @noalias src: T*, n: uint64) -> uint64 {
 
 @deprecated("use bytecopy instead")
 @inline
-fn copy_bytes<T>(dst: T*, src: T*, n: uint64) {
+fn copy_bytes<T>(@nonnull dst: T*, @nonnull src: T*, n: uint64) {
     bytecopy(dst, src, n);
 }
 
 /**
  * Copies n elements of type T from src to dst one item at a time. dst and src
  * are @noalias: the regions must not overlap, or the behavior is undefined
- * (use a manual loop if they might).
+ * (use a manual loop if they might). Both are @nonnull: every call site must
+ * prove them non-null.
  *
  * @param dst: destination, with room for at least n elements; must not
  *             overlap src
@@ -89,7 +91,7 @@ fn copy_bytes<T>(dst: T*, src: T*, n: uint64) {
  * @return number of elements copied (n)
  */
 @inline
-fn copy<T>(@noalias dst: T*, @noalias src: T*, n: uint64) -> uint64 {
+fn copy<T>(@noalias @nonnull dst: T*, @noalias @nonnull src: T*, n: uint64) -> uint64 {
     for i in range(n) {
         dst[i] = src[i];
     }
@@ -98,7 +100,7 @@ fn copy<T>(@noalias dst: T*, @noalias src: T*, n: uint64) -> uint64 {
 
 @deprecated("use copy instead")
 @inline
-fn copy_items<T>(dst: T*, src: T*, n: uint64) {
+fn copy_items<T>(@nonnull dst: T*, @nonnull src: T*, n: uint64) {
     copy(dst, src, n);
 }
 
@@ -113,7 +115,7 @@ fn copy_items<T>(dst: T*, src: T*, n: uint64) {
  * @return number of bytes zeroed (n * sizeof(T))
  */
 @inline
-fn bytezero<T>(dst: T*, n: uint64) -> uint64 {
+fn bytezero<T>(@nonnull dst: T*, n: uint64) -> uint64 {
     return bytefill(dst, 0, n);
 }
 
@@ -128,7 +130,7 @@ fn bytezero<T>(dst: T*, n: uint64) -> uint64 {
  * @return number of elements zeroed (n)
  */
 @inline
-fn zero<T>(dst: T*, n: uint64) -> uint64 {
+fn zero<T>(@nonnull dst: T*, n: uint64) -> uint64 {
     return fill(dst, 0, n);
 }
 
@@ -144,7 +146,7 @@ fn zero<T>(dst: T*, n: uint64) -> uint64 {
  * @return number of bytes filled (n * sizeof(T))
  */
 @inline
-fn bytefill<T>(dst: T*, value: byte, n: uint64) -> uint64 {
+fn bytefill<T>(@nonnull dst: T*, value: byte, n: uint64) -> uint64 {
     let count = n * sizeof(T);
     memset(dst, value as int32, count);   // libc memset takes an int
     return count;
@@ -152,7 +154,7 @@ fn bytefill<T>(dst: T*, value: byte, n: uint64) -> uint64 {
 
 @deprecated("use bytefill instead")
 @inline
-fn set_bytes<T>(dst: T*, value: byte, n: uint64) {
+fn set_bytes<T>(@nonnull dst: T*, value: byte, n: uint64) {
     bytefill(dst, value, n);
 }
 
@@ -167,7 +169,7 @@ fn set_bytes<T>(dst: T*, value: byte, n: uint64) {
  * @return number of elements filled (n)
  */
 @inline
-fn fill<T>(dst: T*, value: T, n: uint64) -> uint64 {
+fn fill<T>(@nonnull dst: T*, value: T, n: uint64) -> uint64 {
     for i in range(n) {
         dst[i] = value;
     }
@@ -176,6 +178,6 @@ fn fill<T>(dst: T*, value: T, n: uint64) -> uint64 {
 
 @deprecated("use fill instead")
 @inline
-fn set_items<T>(dst: T*, value: T, n: uint64) {
+fn set_items<T>(@nonnull dst: T*, value: T, n: uint64) {
     fill(dst, value, n);
 }

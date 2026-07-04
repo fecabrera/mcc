@@ -8,7 +8,7 @@
  *
  * @return CRC-32 of the buffer's contents
  */
-fn crc32(data: uint8*, length: uint64) -> uint32 {
+fn crc32(@nonnull data: uint8*, length: uint64) -> uint32 {
     let crc: uint32 = 4294967295;  // 0xffffffff
 
     for i in range(length) {

@@ -96,6 +96,7 @@ Pointers and the builtin container/view types built on them.
 | [lists.mc](memory/lists.mc) | `list<T>`, a growable random-access sequence: `push`, `get` (mut out-param), `from_array`, `append`, `duplicate` |
 | [stacks.mc](memory/stacks.mc) | `stack<T>`, a growable LIFO: push and pop at the top |
 | [queues.mc](memory/queues.mc) | `queue<T>`, a growable FIFO ring buffer: push at the back, pop from the front |
+| [nonnull_heap_buffers.mc](memory/nonnull_heap_buffers.mc) | a heap buffer crossing the stdlib's @nonnull contracts (memory copy/fill family, hashing digests): one diverging null guard after `alloc` for the straight-line calls, the postfix `!` assertion inside loops where narrowed facts drop |
 
 ## systems/
 

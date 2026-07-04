@@ -98,12 +98,12 @@ fn md5_k(round: uint32) -> uint32 {
  * @param length: number of bytes to digest
  * @param digest: written with the 16-byte digest
  */
-fn md5(data: uint8*, length: uint64, digest: uint8*) {
+fn md5(@nonnull data: uint8*, length: uint64, @nonnull digest: uint8*) {
     // Pad to a multiple of 64 bytes: 0x80, zeros, then the bit length as a
     // little-endian uint64.
     let total = ((length + 8) / 64 + 1) * 64;
     let buf = alloc<uint8>(total);
-    bytecopy(buf, data, length);
+    bytecopy(buf!, data, length);   // allocation assumed to succeed
     buf[length] = 128;
     memset(&buf[length + 1], 0, total - length - 1);
     let bits = length * 8;

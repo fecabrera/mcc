@@ -50,4 +50,7 @@ fn main() -> int32 {
 // narrowing cannot see the invariant, the postfix `p!` assertion is the
 // escape hatch: see nonnull_assert.mc.
 // See also: nonnull.mc for @nonnull itself and the always-non-null sources;
-// nonnull_assert.mc for the `p!` escape hatch.
+// nonnull_assert.mc for the `p!` escape hatch;
+// memory/nonnull_heap_buffers.mc for both idioms working together against
+// the stdlib's @nonnull contracts (guard the straight line, assert in
+// loops).

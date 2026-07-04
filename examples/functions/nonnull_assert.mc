@@ -49,4 +49,6 @@ fn main() -> int32 {
 // See also: nonnull.mc for @nonnull parameters and the always-non-null proof
 // sources that need no assertion; nonnull_narrowing.mc for the null-check
 // guards that avoid the hatch in idiomatic code; memory/pointers.mc for heap
-// allocation and the pointer basics.
+// allocation and the pointer basics; memory/nonnull_heap_buffers.mc for the
+// assertion earning its keep inside loops, against the stdlib's @nonnull
+// contracts.

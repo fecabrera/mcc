@@ -801,3 +801,48 @@ def test_nonnull_and_noalias_round_trip_together():
         "fn blit(@noalias @nonnull dst: uint8*, "
         "@noalias @nonnull src: uint8*, n: uint64);" in out
     )
+
+
+# --------------------------------------------------- stdlib adoption (wave 1)
+
+
+def test_stdlib_rejects_unproven_heap_pointer():
+    # The memory copy/fill family's pointers are @nonnull: a raw alloc result
+    # carries no proof, so the call is a compile error, not a latent null
+    # dereference.
+    with pytest.raises(
+        LangError, match="cannot pass a possibly-null pointer as argument 1 "
+        "of 'bytecopy'"
+    ):
+        run(
+            """
+            import "memory";
+            fn main() -> int32 {
+                let src: int32[2];
+                src[0] = 1; src[1] = 2;
+                let dst = alloc<int32>(2);
+                bytecopy(dst, &src[0], 2);
+                return 0;
+            }
+            """
+        )
+
+
+def test_stdlib_accepts_guarded_heap_pointer():
+    # The migration story: one diverging null guard after the allocation
+    # narrows the pointer for every annotated stdlib call that follows.
+    assert run(
+        """
+        import "memory";
+        fn main() -> int32 {
+            let src: int32[2];
+            src[0] = 40; src[1] = 2;
+            let dst = alloc<int32>(2);
+            if (dst == null) return 1;
+            bytecopy(dst, &src[0], 2);
+            let got = dst[0] + dst[1];
+            dealloc(dst);
+            return got;
+        }
+        """
+    ) == 42
