@@ -779,7 +779,18 @@ already do).
           `setbuf`'s `buf`), and annotating `fwrite`'s `ptr` would force a
           `str.data!` hatch inside `std.mc`'s `writestr` (member
           expressions never prove), the highest downstream friction for
-          the lowest value
+          the lowest value. The annotations ship unconditionally, in the
+          source and in `.mci` stubs alike: no `-D`/`@if` gate (the
+          declared contract never varies per build; a gate would also
+          have to duplicate every declaration, since `@if` is
+          declaration-granular). Enforcement on externs is opt-in: by
+          default the only teeth are the unconditional literal-`null`
+          error, and the proof obligation rides the
+          [`-Wextern-nonnull`](#metaprogramming-and-builtins) class, so
+          ported C code never hits a null-proof wall and no ordering
+          between this wave and that class is forced; this repo opts in
+          by enabling the class under its existing `-Werror` CI, which
+          is what makes the wave enforceable at home
     - [ ] loop-body fact preservation — replace the shipped blanket rule
           (all narrowed facts drop at loop entry) with a pre-scan of the
           loop body that keeps the facts the loop provably cannot
@@ -983,6 +994,46 @@ already do).
           `-Wunchecked-dereference` (its wave-1 `@nonnull` adoption already
           cleared the loudest sites), which is what lets this repo's
           `-Werror` CI eventually add `-Wall`
+    - [ ] `-Wextern-nonnull` — the enforcement class for `@nonnull` on
+          `@extern` declarations, which is opt-in by design: by default an
+          unproven pointer reaching an annotated extern slot compiles
+          silently, so mechanically ported C code (which would otherwise
+          hit a null-proof error on every `strcpy`/`strlen`/`memcpy`
+          call) builds with no flag at all; strictness on the C boundary
+          is what a codebase reaches for, not what a port escapes from.
+          Enabling the class warns at each unproven site over the channel
+          (`[-Wextern-nonnull]` in the rendering), `-Wall` includes it,
+          and `-Werror` promotes it to the failure path, which is how
+          this repo opts in: CI and `test.sh` already run `-Werror`, so
+          adding the class there turns libc-call proof violations into
+          build failures at home while user ports stay unaffected (the
+          same dogfooding endgame as `-Wunchecked-dereference` above).
+          Default silent rather than warn-by-default, deliberately: the
+          no-unavoidable-noise principle above cuts both ways, and a
+          fresh port would drown in per-call warnings it never asked for;
+          discoverability rides `-Wall` and the flag-suffix convention
+          instead. Two pieces stay unconditional: passing a literal
+          `null` to an annotated slot is always a hard error (never
+          porting noise, it is equally broken C), and native mcc
+          `@nonnull` never joins this class (the callee body holds the
+          parameter as a non-null fact, so its caller proof is
+          load-bearing). The class never changes codegen, which forces
+          one redefinition of the shipped `@extern` allowance: the LLVM
+          `nonnull`/`dereferenceable` attributes are justified only by
+          unconditional caller proof, so `mark_nonnull` stops emitting
+          them on `@extern` declarations entirely (native functions keep
+          them; docs and any exact-error-string tests for extern
+          violations update with the implementation). A hard-strict
+          posture flag restoring the optimizer hint alongside error-level
+          enforcement stays possible later, only if demand appears. The
+          annotations themselves still ship unconditionally in source and
+          `.mci` stubs (the declared promise never varies per build), and
+          the rejected alternative stands recorded: a `-D`/`@if`
+          `SAFE_LIBC` gate would duplicate the declaration surface per
+          branch (`@if` is declaration-granular), flip the whole
+          program's libc contract on one define, and break `.mci`
+          identity (stubs re-emit `@nonnull`) plus the merge collapse of
+          matching `@extern` redeclarations
 - [x] `@removed(msg)` tombstones — the
       terminal state of the function-availability lifecycle, one step past
       [`@deprecated`](#metaprogramming-and-builtins) above: a function goes from
