@@ -59,10 +59,12 @@
 //
 // The consumer's `bump(n)` writes through to its own variable across the
 // object boundary: both sides derive the convention from the same signature.
-// One caution: a prototype is not a forward declaration. Prototyping `bump`
-// next to its definition below would fail with the compile error
-// `function 'bump' already defined`, which is why the shipping flow lives in
-// comments here: this file must keep the definitions.
+// A prototype is also a forward declaration: it may coexist with its
+// matching definition, checked against it and then discarded (see
+// functions/forward_declarations.mc). So the *functions* of a build that
+// imports interfaces.mci while also compiling interfaces.mc no longer
+// collide -- though the types the stub re-emits in full still do, so that
+// build isn't deliverable quite yet.
 // Docs: docs/language.md, "Bodyless fn prototypes" and "Interface files".
 
 @extern fn printf(fmt: char*, ...) -> int32;

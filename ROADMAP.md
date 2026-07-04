@@ -811,16 +811,31 @@ already do).
         [`@removed`](#metaprogramming-and-builtins) tombstone, which never
         instantiates. Interface stubs are the intended writer; implemented,
         see [Bodyless fn prototypes](docs/language.md#bodyless-fn-prototypes)
-  - [ ] forward declarations — a prototype plus its definition in one program
-        is a duplicate-definition error today, and declaration order never
+  - [x] forward declarations — a prototype plus its definition in one program
+        was a duplicate-definition error, and declaration order never
         needs one (signatures are declared before any body generates, so
-        names resolve regardless of definition order). Accepting a matching
-        pair — the prototype checked against the definition, then discarded —
-        would let a build that imports a module's `.mci` also compile that
-        module's `.mc` source without tripping the duplicate error. Must not
+        names resolve regardless of definition order). Accept a matching
+        pair, same-file or cross-file: the prototype is checked against the
+        definition, then discarded, and identical prototype-plus-prototype
+        collapses onto one declaration (like the existing `@extern`
+        redeclaration collapse), while a signature mismatch stays a
+        declaration-time error. This removes the function-level collisions
+        of a build that imports a module's `.mci` while also compiling its
+        `.mc` source, but does not deliver that build by itself: such a
+        build trips first on the module's duplicated structs and consts
+        (the declare pass's `already defined` errors), and its generic
+        templates (emitted verbatim into the `.mci`) silently join the
+        overload set and make every call ambiguous; those need the
+        [driver-level module dedup](#tooling-and-c-interop) pass. Must not
         weaken genuine duplicate detection or `@removed`'s
         one-tombstone-claims-the-name rule (a tombstone plus a live
-        definition stays a declaration-time error)
+        definition stays a declaration-time error). Planned
+        [function overloading](#functions-and-methods) rewrites this same
+        duplicate-detection block to be signature-aware, so write the
+        acceptance as one helper that work subsumes: the same name and
+        parameter list twice stays an error unless exactly one is a
+        prototype; implemented, see
+        [Bodyless fn prototypes](docs/language.md#bodyless-fn-prototypes)
 - [ ] Native variadic arguments — `fn f(args: slice<const any>)` (with
       `fn f(args...)` as sugar): a trailing `slice<const any>` parameter collects
       the call's extra arguments, so `f(x, a, b, c)` (after `f`'s fixed
@@ -1117,6 +1132,21 @@ already do).
         library, paired with the `.mci` interface so consumers can link
         against it. Depends on namespaced exported symbols (above) so the
         archive links without collisions
+    - [ ] driver-level module dedup — treat a same-directory, same-stem
+          `foo.mc`/`foo.mci` pair as one module with the `.mc` winning (the
+          same `.mc`-first priority `_import_candidates` applies to a bare
+          `import "foo"`), via a pre-pass over the resolved import graph so
+          load order can never let a first-loaded `.mci` suppress the
+          `.mc`'s bodies. This is what actually delivers a build where a
+          library's `.mci` and its `.mc` source coexist: it drops the
+          stub's structs, consts, generic templates, and tombstones
+          wholesale, with
+          [forward declarations](#functions-and-methods) covering the
+          function-prototype level. One deliberate carve-out: generated
+          `.mci`s re-emit `@removed` tombstones, so a tombstone plus an
+          identical-message tombstone must collapse (differing messages
+          stay an error), a documented amendment to the one-tombstone rule
+          scoped to this item, not to forward declarations
 - [ ] C header generation — emit a `.h` of the public surface (like
       `--emit-interface` does for `.mci`), so C code can call into an mcc
       object or library

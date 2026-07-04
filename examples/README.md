@@ -45,12 +45,14 @@ Branching, looping, compile-time selection, and the scope-based constructs
 
 ## functions/
 
-Defining and calling functions: void/recursion, the parameter modifiers
-(`const`, `mut`, `@noalias`, `@nonnull`), variadics, and function pointers.
+Defining and calling functions: void/recursion, forward declarations, the
+parameter modifiers (`const`, `mut`, `@noalias`, `@nonnull`), variadics, and
+function pointers.
 
 | Example | Shows |
 |---------|-------|
 | [functions.mc](functions/functions.mc) | void functions, any-order definitions, recursion, mutual recursion |
+| [forward_declarations.mc](functions/forward_declarations.mc) | bodyless `fn` prototypes as forward declarations: a header-style prototype block with the definitions below, identical prototypes collapsing onto one declaration, the strict signature-match error; never required for ordering, but lets an imported `.mci` stub coexist with the `.mc` source |
 | [const_params.mc](functions/const_params.mc) | `const` read-only parameters, structs passed by hidden reference (no copy), `const` on pointers vs values |
 | [mut_params.mc](functions/mut_params.mc) | `mut` write-through parameters: out-params with no pointer in the signature, re-lending, struct field projection, a generic `swap<T>` |
 | [mut_overloads.mc](functions/mut_overloads.mc) | generic overloads mixing `mut` and non-`mut` positions: a `mut` overload next to a pointer one, rvalues dropping `mut` candidates, writability judged against the chosen overload, single argument evaluation |

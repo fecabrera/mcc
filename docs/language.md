@@ -2191,10 +2191,32 @@ fn main() -> int32 {
 Every signature marker (`const`, `mut`, `@noalias`, `@nonnull`) means exactly
 what it does on a definition, and the prototype must match the definition's
 signature — the convention is derived from the signature on each side
-independently. A prototype is **not** a forward declaration: defining the
-same function in the same program is still a duplicate-definition error,
-and generic, `@inline`, `@asm`, and `@static` functions cannot be
+independently. Generic, `@inline`, `@asm`, and `@static` functions cannot be
 prototypes (their body or symbol cannot live elsewhere).
+
+A prototype is also a **forward declaration**: when a matching definition
+appears in the same program — same file or through an import — the prototype
+is checked against the definition and discarded, and the definition supplies
+the body. Identical prototypes collapse onto one declaration (like repeated
+`@extern` declarations), and a prototype arriving after its definition is
+discarded the same way. Matching is strict: the signature, the derived
+`const`-struct/`mut` hidden-reference positions, the `@noalias` and
+`@nonnull` markers, and the `@private` flag must all agree — parameter names
+may differ, and an `@inline` definition never pairs with a prototype (a
+prototype cannot promise a body that travels). A mismatch is an error at the
+second declaration, with a note citing the first:
+
+```
+mathlib.mc: error: line 12: definition of 'add' does not match its prototype
+mathlib.mci: note: line 3: previous declaration of 'add' is here
+```
+
+Only prototypes pair this way. A second *definition* of the same name stays a
+duplicate-definition error, and so does a prototype against an `@extern`
+declaration (a different calling convention), an
+[`@removed` tombstone](#removed-functions), or a generic template. When a
+pair carries [`@deprecated`](#deprecated-functions), the definition wins:
+its message — or its absence — replaces the prototype's.
 
 You rarely write one by hand: [interface files](#interface-files) emit
 prototypes for a library's concrete functions, and the matching object

@@ -51,3 +51,5 @@ fn is_odd(n: int32) -> bool {
     }
     return is_even(n - 1);
 }
+
+// See also: forward_declarations.mc (prototypes coexisting with definitions).

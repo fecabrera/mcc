@@ -309,6 +309,12 @@ class CodeGen:
         # @extern declarations refer to symbols defined elsewhere; identical
         # redeclarations across files collapse onto the first one.
         self.extern_decls: set[str] = set()
+        # The AST node behind each concrete (non-generic, non-@static,
+        # non-@extern) function in self.funcs. A later prototype or definition
+        # of the same name pairs against it (forward declarations): the entry's
+        # .proto flag says whether a bodyless prototype or a definition
+        # currently claims the name.
+        self.concrete_decls: dict[str, Func] = {}
         self.globals: dict[str, tuple[ir.GlobalVariable, LangType, bool]] = {}
         # @static globals are file-scoped storage, keyed by (source, name) so
         # other files may reuse the name -- like @static functions.
@@ -522,6 +528,13 @@ class CodeGen:
         """Indices of ``func``'s ``@nonnull`` parameters."""
         return frozenset(
             i for i, (name, _) in enumerate(func.params) if name in func.nonnull_params
+        )
+
+    @staticmethod
+    def noalias_indices(func: Func) -> frozenset[int]:
+        """Indices of ``func``'s ``@noalias`` parameters."""
+        return frozenset(
+            i for i, (name, _) in enumerate(func.params) if name in func.noalias_params
         )
 
     def shared_linkage(self, source: str | None) -> str:
@@ -790,6 +803,100 @@ class CodeGen:
         return frozenset(
             i for i, (name, _) in enumerate(func.params) if name in func.mut_params
         )
+
+    def can_pair_prototype(self, func: Func) -> bool:
+        """Whether ``func`` may pair with an earlier declaration of its name.
+
+        Forward declarations: a concrete function may be declared twice --
+        same file or cross-file -- when at least one of the pair is a bodyless
+        prototype (prototype+definition in either order, or two prototypes).
+        This is only the shape test that routes such a pair away from the
+        duplicate-definition error; whether the signatures actually match is
+        checked by :meth:`pair_prototype`. Never true across kinds: a name
+        held by an ``@extern``, a generic template, or an ``@removed``
+        tombstone has no :attr:`concrete_decls` entry, so pairing against it
+        stays a duplicate-definition error. Planned function overloading will
+        rewrite duplicate detection to be signature-aware and subsume this.
+
+        Args:
+            func: The incoming (not yet declared) function.
+
+        Returns:
+            ``True`` when the pair should be checked and paired.
+        """
+        prior = self.concrete_decls.get(func.name)
+        return (
+            prior is not None
+            and not func.static
+            and not func.type_params
+            and (func.proto or prior.proto)
+        )
+
+    def pair_prototype(self, func: Func):
+        """Check ``func`` against the declaration it pairs with, and absorb it.
+
+        The pair (see :meth:`can_pair_prototype`) must match exactly: same
+        resolved ``(ret, params, variadic)`` signature *and* the same derived
+        conventions -- hidden-reference, ``mut``, ``@nonnull``, and
+        ``@noalias`` positions -- plus the same ``@private`` and ``@inline``
+        flags (a prototype is never ``@inline``, so an ``@inline`` definition
+        cannot pair with one). Parameter names may differ.
+
+        On a match, an incoming prototype is simply discarded -- the earlier
+        declaration stands, including proto+proto collapse. An incoming
+        definition takes the name over: its body will generate into the
+        prototype's already-declared ``ir.Function``, so it re-keys
+        ``func_privacy`` to its own file (a module's ``@private`` helper must
+        stay callable from its ``.mc`` when the ``.mci`` prototype registered
+        first), applies :meth:`link_shared` for its own source (the prototype
+        skipped it -- linkage is a property of where the *definition* lives),
+        and its ``@deprecated`` state wins over the prototype's.
+
+        Args:
+            func: The incoming function; ``self.current_source`` must already
+                be its source (signatures may name private structs).
+
+        Raises:
+            LangError: When the signatures or conventions differ, with a note
+                citing the earlier declaration's site.
+        """
+        name = func.name
+        prior = self.concrete_decls[name]
+        ret = self.lang_type(func.ret_type, func.line)
+        params = [self.lang_type(t, func.line) for _, t in func.params]
+        if (
+            self.signatures[name] != (ret, params, func.variadic)
+            or self.hidden_ref[name] != self.hidden_ref_indices(func, params)
+            or self.mut_ref[name] != self.mut_indices(func)
+            or self.nonnull_ref[name] != self.nonnull_indices(func)
+            or self.noalias_indices(prior) != self.noalias_indices(func)
+            or prior.private != func.private
+            or prior.inline != func.inline
+        ):
+            if func.proto and prior.proto:
+                message = f"conflicting prototypes for {name!r}"
+            else:
+                message = f"definition of {name!r} does not match its prototype"
+            err = LangError(message, func.line, source=func.source)
+            err.notes.append(
+                Note(
+                    f"previous declaration of {name!r} is here",
+                    prior.line,
+                    prior.source,
+                )
+            )
+            raise err
+        if func.proto:
+            return  # checked against the standing declaration, then discarded
+        # The definition completes a prototype: the name's ir.Function already
+        # exists (identical signature), so body generation fills it in later.
+        self.concrete_decls[name] = func
+        self.func_privacy[name] = (func.private, func.source)
+        self.link_shared(self.funcs[name], func.source)
+        if func.deprecated_msg is not None:
+            self.deprecated_syms[name] = func.deprecated_msg
+        else:
+            self.deprecated_syms.pop(name, None)
 
     def lookup_enum(self, name: str) -> "EnumType | None":
         """Resolve an enum name, preferring a file-scoped ``@static`` one.
@@ -1771,7 +1878,10 @@ class CodeGen:
             key = (func.source, func.name)
             is_overloadable = func.type_params and not func.static
             if not is_overloadable:
-                if key in declared:
+                # A same-file redeclaration is allowed only as a pairable
+                # forward declaration (at least one of the two a prototype);
+                # the pair is checked in the concrete branch below.
+                if key in declared and not self.can_pair_prototype(func):
                     raise LangError(
                         f"function {func.name!r} already defined", func.line
                     )
@@ -1829,6 +1939,11 @@ class CodeGen:
                 self.used_symbols.add(base)
                 overloads.append(func)
                 continue
+            if self.can_pair_prototype(func):
+                # Forward declaration: check the pair, then absorb it -- the
+                # name's ir.Function (and signature entries) already stand.
+                self.pair_prototype(func)
+                continue
             if (
                 func.name in self.funcs
                 or func.name in self.templates
@@ -1836,6 +1951,7 @@ class CodeGen:
                 or func.name in self.removed
             ):
                 raise LangError(f"function {func.name!r} already defined", func.line)
+            self.concrete_decls[func.name] = func
             self.func_privacy[func.name] = (func.private, func.source)
             self.used_symbols.add(func.name)
             ret = self.lang_type(func.ret_type, func.line)

@@ -10,6 +10,27 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Forward declarations** — a bodyless `fn` prototype plus its matching
+  definition in one program is now accepted, same-file or cross-file: the
+  prototype is checked against the definition and discarded (the body
+  generates into the prototype's declaration), identical prototypes collapse
+  onto one declaration like repeated `@extern` declarations, and a prototype
+  arriving after its definition is discarded the same way. Matching is
+  strict — the signature plus the derived `const`-struct/`mut`
+  hidden-reference positions, the `@noalias`/`@nonnull` markers, and the
+  `@private` flag (parameter names may differ; an `@inline` definition never
+  pairs with a prototype) — and a mismatch is a new declaration-time error,
+  `definition of 'f' does not match its prototype`, with a note citing the
+  earlier declaration. `@deprecated` follows the definition: its message, or
+  its absence, wins over the prototype's. Cross-kind collisions are
+  unchanged: a second definition, an `@extern` declaration, an `@removed`
+  tombstone, or a generic template against a prototype stays a
+  duplicate-definition error. This removes the function-level collisions of
+  a build that imports a module's `.mci` while also compiling its `.mc`
+  source (the module's duplicated structs/consts and re-imported generic
+  templates still await the driver-level module dedup). See
+  [Bodyless fn prototypes](docs/language.md#bodyless-fn-prototypes) and
+  [forward_declarations.mc](examples/functions/forward_declarations.mc).
 - **Neovim editor support** — `editors/neovim/` is a runtime-path plugin
   for Neovim 0.10+ that reuses the Helix tree-sitter grammar (whose
   checked-in `src/parser.c` compiles with a single `cc` command, so

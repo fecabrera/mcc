@@ -408,11 +408,13 @@ def test_static_proto_is_rejected():
         Parser(tokenize("@static\nfn local() -> int32;")).parse_program()
 
 
-def test_proto_plus_definition_is_still_a_duplicate():
-    # A proto is not a forward declaration: defining the same function in the
-    # same program keeps the existing duplicate error.
-    with pytest.raises(LangError, match="function 'f' already defined"):
-        compile_ir("fn f() -> int32;\nfn f() -> int32 { return 1; }")
+def test_proto_plus_definition_pairs_as_a_forward_declaration():
+    # A proto plus a matching definition is a forward declaration: the proto
+    # is checked and discarded, the definition supplies the body (the full
+    # matrix -- mismatches, cross-file, @extern/@removed/generic collisions --
+    # lives in test_forward_decls.py).
+    out = compile_ir("fn f() -> int32;\nfn f() -> int32 { return 1; }")
+    assert 'define i32 @"f"' in out
 
 
 def test_function_value_of_mut_proto_is_rejected():
