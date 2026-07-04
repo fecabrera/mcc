@@ -55,7 +55,10 @@ newer; on older versions replace them with `comment-token = "//"`.)
 ## The grammar
 
 [tree-sitter-mcc/](tree-sitter-mcc/) is a standalone tree-sitter grammar that
-mirrors the compiler's parser (`mcc/parser.py`). The checked-in `src/parser.c`
+mirrors the compiler's parser (`mcc/parser.py`). The [Neovim
+support](../neovim/README.md) reuses it too, with its own query set under
+`editors/neovim/queries/mcc/` (Neovim capture names differ from Helix's — keep
+both in sync when the grammar changes). The checked-in `src/parser.c`
 is what Helix compiles; regenerate it after editing `grammar.js` with:
 
 ```bash

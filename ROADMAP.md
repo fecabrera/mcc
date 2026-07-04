@@ -105,7 +105,9 @@ its reference section in the [language reference](docs/language.md).
       writes a `.mci` stub (bodyless `fn` prototypes, keeping the mcc calling
       convention with `const`/`mut` markers, plus full types/consts/generics)
       to ship beside an object; a bare `import` resolves to `.mc` then `.mci`
-- [x] [Editor support](README.md#editor-support) — VS Code syntax highlighting
+- [x] [Editor support](README.md#editor-support) — VS Code syntax highlighting;
+      Helix and Neovim on a shared tree-sitter grammar (highlighting, comment
+      toggling, indents, folds, text objects)
 
 ## Planned
 

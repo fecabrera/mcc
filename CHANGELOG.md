@@ -10,6 +10,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Neovim editor support** — `editors/neovim/` is a runtime-path plugin
+  for Neovim 0.10+ that reuses the Helix tree-sitter grammar (whose
+  checked-in `src/parser.c` compiles with a single `cc` command, so
+  nvim-treesitter is optional): `.mc`/`.mci` filetype detection, syntax
+  highlighting through queries written against Neovim's capture
+  conventions, `gc` comment toggling, four-space indent defaults plus
+  nvim-treesitter indent queries, fold queries for
+  `vim.treesitter.foldexpr()`, and function/parameter text objects for
+  nvim-treesitter-textobjects. Install steps in `editors/neovim/README.md`.
 - **Flow-narrowing for `@nonnull`** — a plain `T*` local now narrows to
   non-null from a null check, so idiomatic guarded code needs no escape
   hatch: `if (p != null) { first(p); }` proves `p` inside the then branch

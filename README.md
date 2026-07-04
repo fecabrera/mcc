@@ -312,6 +312,12 @@ for syntax highlighting, comment toggling, auto-indent, and text objects. See it
 [README](editors/helix/README.md) for the install steps (add the language, copy
 the queries, `hx --grammar fetch && build`).
 
+[editors/neovim/](editors/neovim/) does the same for [Neovim](https://neovim.io)
+(0.10+), reusing the Helix tree-sitter grammar: filetype detection, syntax
+highlighting, comment toggling, folds, and text objects. See its
+[README](editors/neovim/README.md) for the install steps (put the directory on
+the runtime path, install the parser — with or without nvim-treesitter).
+
 ## Tests
 
 ```bash
