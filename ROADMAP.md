@@ -120,8 +120,13 @@ already do).
 ### Types and generics
 
 - [ ] `typeof(expr)` — use an expression's static type in a type position,
-      including in an alias: `type t = typeof(var);`. Also the checker behind
-      [`any`](#structs-arrays-and-data-layout)'s type discriminant
+      including in an alias: `type t = typeof(var);`. Its own hard problem
+      is typing an expression without emitting IR in the single-pass
+      compiler, so a v1 is restricted to emission-free forms like the
+      `typeof(var)` above. Shares the type-identity concept with
+      [`any`](#structs-arrays-and-data-layout)'s tag scheme but is not a
+      build dependency of it (`any`'s boxing site knows the source's static
+      type, and a `case type` arm names its type literally)
 - [ ] Generic type parameters — beyond the monomorphized basics:
   - [x] generics on functions and structs — implemented, see
         [Generics](docs/language.md#generics)
@@ -272,7 +277,11 @@ already do).
       **backward-incompatible** semantics change: nominal enums begin rejecting
       some code that compiles now (implicit enum/int and enum/enum mixing), so
       it needs a migration story: staged warnings, over the shipped
-      [warning subsystem](#metaprogramming-and-builtins), before errors. It is the
+      [warning subsystem](#metaprogramming-and-builtins), before errors. That
+      story also covers how an enum boxes into the planned
+      [`any`](#structs-arrays-and-data-layout): a transparent enum carries
+      its underlying type's tag, a nominal enum gets its own type-id,
+      silently changing which `case type` arm matches. It is the
       genuine prerequisite for both dependents nested below: the directional
       conversion safety that [enum member reuse](#types-and-generics) above
       suggests, and enum-aware `case` exhaustiveness (today `case` is pure
@@ -324,11 +333,63 @@ already do).
         pad bytes, member access by pointer cast). `extends` (either
         direction), member defaults, and flexible array members are rejected;
         implemented, see [Unions](docs/language.md#unions)
-  - [ ] `any` — a tagged union over the above: a union payload plus a
-        `typeof`-checked type discriminant, so the live member is recovered
+  - [ ] `any` — a tagged union over the above: a union-style payload plus a
+        compile-time type-id discriminant, so the live member is recovered
         safely (`case type`). The element type of the
-        [variadic](#functions-and-methods) pack's `slice<any>`. Depends on
-        unions (above) and [`typeof`](#types-and-generics)
+        [variadic](#functions-and-methods) pack's `slice<const any>`, and the
+        deepest remaining unblocker of the strings chain: `any`, then
+        [native variadics](#functions-and-methods), then
+        [formatted `{}` print](#strings-and-formatting), then
+        [string interpolation](#strings-and-formatting). Depends on unions
+        (above) and a compile-time type-id scheme;
+        [`typeof`](#types-and-generics) shares the type-identity concept but
+        is **not** a build dependency (the boxing site knows the source's
+        static type, and a `case type` arm names its type literally).
+        Settled design: `any` is a compiler-built interned `LangType` on the
+        `slice<T>` builtin pattern (a reserved-name resolution arm plus an
+        interned constructor), no source declaration, no `.mci`
+        implications. Layout is `{ tag: uint64; payload: 16 bytes, align 8 }`,
+        24 bytes, the payload sized so `slice<char>` fits by value (the
+        formatted-print chain passes strings as slices); the existing
+        dual-site layout invariant (types and generator agree) applies. The
+        tag is the 64-bit FNV-1a hash of the canonical mangled type name,
+        registry-free by design: a sequential whole-program registry would
+        break under the precompiled-stdlib direction (a prebuilt object's
+        boxed `any`s would carry the producer's ids), while hashes are
+        deterministic across compilations, fold to constants, and lower
+        `case type` onto the existing integer-equality `case` codegen. An
+        in-compile hash collision is detected and errored; a per-type
+        `linkonce_odr` descriptor pointer (RTTI-style) is the recorded
+        upgrade path if runtime type names are ever wanted. The v1 boxable
+        set is primitives, pointers (each pointer type its own tag), and
+        slices; structs and arrays are rejected (by value the payload is
+        unbounded, by pointer the lifetime goes implicit; `&s` is the
+        explicit escape). Values wrap implicitly at the coerce choke point,
+        an untyped literal anchoring via the adaptable-placeholder rule
+        (`5` boxes as `int32`, the same rule as call-site inference, needed
+        for `println("{}", 5)`); there is no unwrap outside `case type` in
+        v1, since with no exceptions in the language an unchecked `as` would
+        be either a tag-ignoring pun or a new trap mechanism. The
+        type-switch is `case type (a) { when int32 n: ... else: ... }`:
+        `type` stays a contextual keyword (it is not reserved, and `case`
+        expects `(` next, so the grammar has room), a binding is required,
+        no multi-type arms in type mode, and `else` is required (the `any`
+        universe is open); the scrutinee is an `any`, with `any*`
+        auto-dereferencing per the member-access precedent. The
+        `when T name:` arm is deliberately shaped so a future
+        payload-carrying-enum `when Variant(x):` reads as kin, and
+        `tuple<A, B, ...>` below stays the complementary non-erased product.
+        A transparent enum boxes under its underlying type's tag;
+        [nominal enums](#types-and-generics) give an enum its own tag, a
+        silent `case type` change folded into that item's migration story:
+    - [ ] global/`@static` `any` initializers — teach the const-initializer
+          path to box a constant; until then rejected with an explicit
+          compile error, the same shape as the global union initializer gap
+          below
+    - [ ] struct boxing — lift the v1 struct/array rejection once the
+          by-value-vs-by-pointer payload and lifetime questions are settled
+    - [ ] checked `as` unwrap — recover a value outside `case type`, once a
+          checked-failure mechanism exists to hang the tag mismatch on
   - [ ] global/`@static` union initializers — teach the const-initializer
         path to emit a union constant (zero-fill plus the one written member).
         Until then a global/`@static` union initializer is rejected with an
@@ -876,7 +937,8 @@ already do).
       universe makes the `else` required). This is the runtime, type-erased
       variadic model (printf / `{}`-placeholder formatting); a statically-typed
       `tuple<…>` variant, processed by compile-time iteration, is a possible
-      later path. Depends on any, slice, and typeof/typeid.
+      later path. Depends on any and slice; the compile-time type-ids ride
+      in with [`any`](#structs-arrays-and-data-layout), no `typeof` needed.
 - [ ] C variadics — the C-ABI `...`/`va_list` machinery, beyond forwarding:
   - [x] variadic declarations and `va_list` forwarding — implemented, see
         [Variadic functions](docs/language.md#variadic-functions)
