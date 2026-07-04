@@ -100,6 +100,7 @@ Pointers and the builtin container/view types built on them.
 | [lists.mc](memory/lists.mc) | `list<T>`, a growable random-access sequence: `push`, `get` (mut out-param), `from_array`, `append`, `duplicate` |
 | [stacks.mc](memory/stacks.mc) | `stack<T>`, a growable LIFO: push and pop at the top |
 | [queues.mc](memory/queues.mc) | `queue<T>`, a growable FIFO ring buffer: push at the back, pop from the front |
+| [intrusive_list.mc](memory/intrusive_list.mc) | the intrusive-container shape, `extends T` with a bare type parameter as the base: the payload embedded as the entry's layout prefix, its fields reached directly on the entry, the explicit `as` upcast handing the payload to list-unaware code |
 | [nonnull_heap_buffers.mc](memory/nonnull_heap_buffers.mc) | a heap buffer crossing the stdlib's @nonnull contracts (memory copy/fill family, hashing digests): one diverging null guard after `alloc` covers every later call, the loops that leave the buffer alone included |
 
 ## systems/

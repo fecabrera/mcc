@@ -67,3 +67,7 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// See also: memory/intrusive_list.mc for the intrusive twist on this list,
+// where the payload is embedded as the entry's layout prefix with `extends T`
+// instead of sitting behind a `value` field.

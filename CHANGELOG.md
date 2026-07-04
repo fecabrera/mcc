@@ -10,6 +10,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **A bare type parameter as an `extends` base** — the intrusive-container
+  shape, `struct linked_list_entry<T> extends T { next: linked_list_entry<T>*; }`,
+  is now a supported, documented, and pinned rule set. Each instantiation
+  embeds its payload struct's fields as the layout prefix and appends its
+  own, so the payload is reached directly on the entry (`e->value`, no
+  wrapper member, no indirection) and an entry pointer or value explicitly
+  upcasts to the payload (`cur as struct my*`) — field embedding, not a named
+  member, so the shipped `extends` upcasts, attribute inheritance
+  (`@packed`/`@align`/`@volatile`), and field defaults all apply per
+  instance. Struct-ness is checked per instantiation (`entry<int32>`:
+  `int32 is not a struct; cannot extend it`), and the union-base,
+  flexible-array-member-base, and field-collision rejections all carry the
+  `in instantiation of ...` backtrace note to the triggering request. Literal
+  caveat: type-argument inference walks only the extender's own fields, so a
+  literal naming base fields needs explicit type arguments. Distinct from the
+  planned `T extends base` *bound* (same keyword, different position; the two
+  will compose). See the bare-parameter paragraphs under
+  [Structs](docs/language.md#structs) and `examples/memory/intrusive_list.mc`.
+
 - **Generic type-parameter defaults** — a type parameter may declare a
   fallback type, on functions (`fn parse<T = int64>(s: uint8*) -> T`) and
   structs (`struct range<T = int64> { ... }`), used when a type argument is
@@ -151,6 +170,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Field defaults no longer drop through a bare-parameter base** — with
+  `struct item { value: int32 = 40; tag: int32; }`, a
+  `entry<struct item> { tag = 2 }` literal (and a bare
+  `let e: struct entry<struct item>;`) zero-filled `value` instead of
+  applying the base's default, because defaults were collected by walking
+  declarations by name and `extends T` has no base declaration to find.
+  Merged defaults are now resolved per instance at instantiation time, so
+  the documented "`extends` carries the base's defaults down" rule holds for
+  bare-parameter bases too; named-base behavior is unchanged. Relatedly, the
+  flexible-array-member-base and field-collision instantiation errors were
+  the only two `extends` rejections missing the `in instantiation of ...`
+  backtrace note; they now carry it like the rest.
 - **Editor grammar catch-up** — the Helix tree-sitter grammar now parses the
   syntax it had fallen behind on: the `@static_assert`/`@error`/`@warning`
   compile-time directives (standalone, `;`-terminated, full constant

@@ -191,7 +191,7 @@ already do).
           [interfaces](#functions-and-methods) dispatch; depends on
           interface declarations and the methods they are made of, so it
           lands after both
-- [ ] Struct extension of a type parameter — a bare type parameter in the
+- [x] Struct extension of a type parameter — a bare type parameter in the
       `extends` slot, `struct wrapper<T> extends T`, embedding `T`'s fields
       as the layout prefix per instantiation:
   - [x] concrete and generic bases — `struct point3 extends point` lays the
@@ -200,7 +200,7 @@ already do).
         its own parameters (`struct entry<K, V> extends pair<K, V>`),
         resolved with the instantiation's bindings in scope; implemented,
         see [Structs](docs/language.md#structs)
-  - [ ] a bare parameter as the base — the intrusive-container shape, an
+  - [x] a bare parameter as the base — the intrusive-container shape, an
         embedded/systems feature squarely in the language's dual
         apps/systems remit:
     ```c

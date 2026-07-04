@@ -1852,8 +1852,51 @@ struct pair<K, V>  { key: K; value: V; }
 struct entry<K, V> extends pair<K, V> { state: uint8; }   // key, value, state
 ```
 
-A struct extends a single base, named as a struct (optionally generic); a
-pointer, array, or function type is not a valid base.
+The base may also be a **bare type parameter** — the intrusive-container
+shape, where a generic struct embeds whatever payload it is instantiated
+with and appends its own fields after it:
+
+```c
+struct linked_list_entry<T> extends T { next: linked_list_entry<T>*; }
+struct linked_list<T>       { head: linked_list_entry<T>*; }
+```
+
+`linked_list_entry<mystruct>` lays out `mystruct`'s fields first and appends
+the link, so an entry pointer upcasts to `mystruct*` and the payload is
+reached with no indirection. Note `next` must be a **pointer**,
+`linked_list_entry<T>*` — the usual self-reference-through-a-pointer rule.
+The semantics is field **embedding** with prefix layout, not a named member:
+the payload's fields become the entry's own (`e->value`, not
+`e->payload.value`), so the explicit upcasts above apply unchanged, and the
+base's field defaults and `@packed`/`@align`/`@volatile` carry down exactly
+as for a named base — per instance, since each instantiation has its own
+base. See
+[examples/memory/intrusive_list.mc](../examples/memory/intrusive_list.mc)
+for a runnable intrusive list built on this shape.
+
+Because `T` is only known once bound, struct-ness is checked per
+instantiation: `linked_list_entry<int32>` fails with `int32 is not a struct;
+cannot extend it`, and a union base, a flexible-array-member base, or a
+collision between the payload's field names and the extender's fail the same
+way — each error carries an `in instantiation of ...` note tracing it to the
+triggering request. One caveat on literals: type-argument **inference**
+walks only the extender's own fields, so a literal that names base fields
+needs explicit type arguments — `linked_list_entry<mystruct> { value = 5 }`
+works, but `linked_list_entry { value = 5, next = null }` is an error, since
+`value` is nobody's field until `T` is bound. A bodyless extender
+(`struct branded<T> extends T;`) brands its payload per instantiation — each
+instance a distinct type with its payload's exact layout.
+
+This is distinct from the planned `T extends mystruct` **bound**: a bound
+constrains what a caller may bind `T` to, while this uses `T` as the base —
+same keyword, different position, no overlap — and the two will compose as
+`struct wrapper<T extends node> extends T`. The usual `extends` non-goals
+carry over: no method inheritance (a payload's methods will be reached
+through the upcast) and no constructor chaining.
+
+A struct extends a single base — named as a struct (optionally generic) or a
+bare type parameter that must be bound to a struct; a pointer, array, or
+function type is not a valid base.
 
 A struct's last field may be a **flexible array member** — a trailing
 `field: T[]` written with no size. It contributes **0** to `sizeof` and decays

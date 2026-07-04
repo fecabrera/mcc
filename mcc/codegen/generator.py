@@ -1491,6 +1491,24 @@ class CodeGen:
                 (fname, self.field_type(ftype, i == len(decl.fields) - 1, decl))
                 for i, (fname, ftype) in enumerate(decl.fields)
             )
+            if base_type is not None:
+                if base_type.fields and is_flexible_array(base_type.fields[-1][1]):
+                    raise LangError(
+                        f"cannot extend struct {base_type.name!r}: it ends in a "
+                        "flexible array member, which must stay the last field",
+                        decl.line,
+                        source=decl.source,
+                    )
+                inherited = {fname for fname, _ in base_type.fields}
+                for fname, _ in fields:
+                    if fname in inherited:
+                        raise LangError(
+                            f"field {fname!r} is already defined in base struct "
+                            f"{base_type.name!r}",
+                            decl.line,
+                            source=decl.source,
+                        )
+                fields = base_type.fields + fields  # base fields first: the prefix
         except LangError as err:
             # An error inside the template's base/fields belongs to the
             # template's file, not the requester's -- attribute it here, where
@@ -1508,24 +1526,6 @@ class CodeGen:
             self.resolving_bases.discard(mangled)
             self.type_bindings = outer
             self.current_source = outer_source
-        if base_type is not None:
-            if base_type.fields and is_flexible_array(base_type.fields[-1][1]):
-                raise LangError(
-                    f"cannot extend struct {base_type.name!r}: it ends in a "
-                    "flexible array member, which must stay the last field",
-                    decl.line,
-                    source=decl.source,
-                )
-            inherited = {fname for fname, _ in base_type.fields}
-            for fname, _ in fields:
-                if fname in inherited:
-                    raise LangError(
-                        f"field {fname!r} is already defined in base struct "
-                        f"{base_type.name!r}",
-                        decl.line,
-                        source=decl.source,
-                    )
-            fields = base_type.fields + fields  # base fields first: the prefix
         natural = (
             1 if packed else max((type_align(ftype) for _, ftype in fields), default=1)
         )
@@ -1541,6 +1541,16 @@ class CodeGen:
         object.__setattr__(
             struct_type, "fields", fields
         )  # frozen; fields excluded from eq
+        # Merge the base's field defaults into this instance's, resolved here
+        # because only the instantiation knows the base: a bare parameter as
+        # the base (`struct entry<T> extends T`) has no declaration to recurse
+        # into by name -- the base struct exists once T is bound. A derived
+        # default overrides a base one of the same name.
+        defaults = (
+            dict(getattr(base_type, "defaults", {})) if base_type is not None else {}
+        )
+        defaults.update(decl.defaults)
+        object.__setattr__(struct_type, "defaults", defaults)
         if decl.union:
             # A union's members all share the storage at offset 0. Body the
             # identified type as the most-aligned member plus explicit pad
@@ -2366,7 +2376,7 @@ class CodeGen:
         for fname, tv, line in items:
             self.store_struct_field(slot, struct_type, fname, tv, line, "field")
         # Fill any omitted field that declares a default; the rest keep the zero.
-        for fname, default_expr in self.struct_defaults(decl).items():
+        for fname, default_expr in self.struct_defaults(struct_type).items():
             if fname in seen:
                 continue
             self.store_struct_field(
@@ -2396,29 +2406,27 @@ class CodeGen:
         value = self.coerce(tv, ftype, line, f"{what} {fname!r}")
         self.builder.store(value.value, addr)
 
-    def struct_defaults(self, decl) -> dict:
-        """Collect a struct's default field values, including inherited ones.
+    def struct_defaults(self, struct_type) -> dict:
+        """Return a struct instance's default field values, including inherited.
 
         ``extends`` lays base fields first, so a derived struct's literal can
         rely on the base's defaults too; a derived default overrides a base one
-        of the same name.
+        of the same name. The merged map is resolved per instance in
+        :meth:`instantiate_struct` rather than by walking declarations here,
+        because a bare parameter as the base (``struct entry<T> extends T``)
+        has no base declaration to recurse into by name -- the base struct is
+        only known once ``T`` is bound.
 
         Args:
-            decl: The struct declaration, or ``None``.
+            struct_type: The resolved struct ``LangType``.
 
         Returns:
-            A ``{field name: default-value expression}`` map (empty when
-            ``decl`` is ``None``).
+            A ``{field name: default-value expression}`` map (empty for types
+            that carry no defaults, e.g. slices).
         """
-        if decl is None:
-            return {}
-        merged = {}
-        if decl.base is not None:
-            merged.update(self.struct_defaults(self.lookup_struct_decl(decl.base.name)))
-        merged.update(decl.defaults)
-        return merged
+        return getattr(struct_type, "defaults", {})
 
-    def init_struct_defaults(self, slot, struct_type, ref, line: int):
+    def init_struct_defaults(self, slot, struct_type):
         """Default-initialize a plainly-declared struct ``let s: struct T;``.
 
         When the struct declares any default field values (its own or inherited),
@@ -2429,10 +2437,8 @@ class CodeGen:
         Args:
             slot: The variable's alloca.
             struct_type: The resolved struct ``LangType``.
-            ref: The declared ``TypeRef`` (its name finds the declaration).
-            line: Source line for diagnostics.
         """
-        defaults = self.struct_defaults(self.lookup_struct_decl(ref.name))
+        defaults = self.struct_defaults(struct_type)
         if not defaults:
             return
         self.builder.store(ir.Constant(struct_type.ir, None), slot)  # zero first
@@ -2766,7 +2772,7 @@ class CodeGen:
                 # `let c = struct config { };`. Structs with no defaults keep the
                 # uninitialized behavior, as does every other type.
                 if is_struct(declared):
-                    self.init_struct_defaults(slot, declared, stmt.type_name, stmt.line)
+                    self.init_struct_defaults(slot, declared)
                 self.bind_local(stmt.name, slot, declared)
                 return
             if isinstance(stmt.value, ArrayLit):  # let xs: T[N] = [...]

@@ -5,6 +5,8 @@ of its own, so the base sits at offset 0 and a pointer to the derived struct
 is layout-compatible with a pointer to the base (an explicit `as` cast). The
 base's @packed/@align/@volatile are inherited. With no body of its own
 (`struct B extends A;`) the struct is a distinct same-layout specialization.
+The base may also be a bare type parameter (`struct entry<T> extends T`, the
+intrusive-container shape), resolved per instantiation.
 """
 
 import pytest
@@ -240,3 +242,284 @@ def test_generic_base_field_collision_rejected():
             "struct bad<K, V> extends pair<K, V> { key: K; }\n"
             "fn main() -> int32 { return sizeof(struct bad<int32, int32>) as int32; }\n"
         )
+
+
+# ------------------------------------------------ bare parameter as the base
+#
+# `struct entry<T> extends T` -- the intrusive-container shape. The bare
+# parameter resolves through the instantiation's bindings, so each instance
+# embeds its payload's fields as the layout prefix and appends its own;
+# struct-ness is checked per instantiation, with the failure traced to the
+# triggering request by an `in instantiation of ...` note.
+
+MY = "struct my { a: int32; b: int64; }\n"
+LLE = MY + "struct linked_list_entry<T> extends T { next: linked_list_entry<T>*; }\n"
+
+
+def notes_of(source: str) -> tuple[LangError, list]:
+    """Compile a failing source and return (error, [(note message, line)])."""
+    with pytest.raises(LangError) as excinfo:
+        compile_ir(source)
+    return excinfo.value, [(n.message, n.line) for n in excinfo.value.notes]
+
+
+def test_bare_param_payload_is_the_layout_prefix():
+    ir_text = compile_ir(
+        LLE +
+        "fn main() -> int32 {\n"
+        "    let e: struct linked_list_entry<struct my>;\n"
+        "    e.a = 1; e.next = null;\n"
+        "    return e.a;\n"
+        "}\n"
+    )
+    # Payload fields first, the link appended last.
+    assert (
+        '%"linked_list_entry<my>" = type {i32, i64, %"linked_list_entry<my>"*}'
+        in ir_text
+    )
+
+
+def test_bare_param_size_align_offset():
+    # my: a@0, b@8 -> 16 with align 8; the entry appends next@16 -> 24.
+    assert run(
+        LLE +
+        "fn main() -> int32 {\n"
+        "    if (sizeof(struct linked_list_entry<struct my>) != 24) { return 1; }\n"
+        "    if (alignof(struct linked_list_entry<struct my>) != 8) { return 2; }\n"
+        "    if (offsetof(struct linked_list_entry<struct my>, next) != 16) { return 3; }\n"
+        "    return 0;\n"
+        "}\n"
+    ) == 0
+
+
+def test_bare_param_pointer_upcast_reaches_payload():
+    assert run(
+        LLE +
+        "fn main() -> int32 {\n"
+        "    let e: struct linked_list_entry<struct my>;\n"
+        "    e.a = 7; e.b = 100; e.next = null;\n"
+        "    let payload = &e as struct my*;\n"
+        "    return payload->a + (payload->b as int32);\n"
+        "}\n"
+    ) == 107
+
+
+def test_bare_param_value_upcast_copies_payload():
+    assert run(
+        LLE +
+        "fn main() -> int32 {\n"
+        "    let e: struct linked_list_entry<struct my>;\n"
+        "    e.a = 2; e.b = 3; e.next = null;\n"
+        "    let v = e as struct my;\n"
+        "    return v.a + (v.b as int32);\n"
+        "}\n"
+    ) == 5
+
+
+def test_bare_param_upcast_inside_generic_function():
+    # `e as T*` upcasts to the bound parameter inside a generic body.
+    assert run(
+        "struct item { value: int32; }\n"
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn payload<T>(e: entry<T>*) -> T* { return e as T*; }\n"
+        "fn main() -> int32 {\n"
+        "    let e: struct entry<struct item>;\n"
+        "    e.value = 8; e.next = null;\n"
+        "    return payload(&e)->value;\n"
+        "}\n"
+    ) == 8
+
+
+def test_intrusive_list_end_to_end():
+    assert run(
+        'import "memory";\n'
+        "struct item { value: int32; }\n"
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "struct list<T> { head: entry<T>*; }\n"
+        "fn push(l: struct list<struct item>*, v: int32) {\n"
+        "    let e = alloc<struct entry<struct item>>(1);\n"
+        "    e->value = v;\n"
+        "    e->next = l->head;\n"
+        "    l->head = e;\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let l: struct list<struct item>;\n"
+        "    l.head = null;\n"
+        "    push(&l, 1); push(&l, 2); push(&l, 3);\n"
+        "    let sum: int32 = 0;\n"
+        "    let cur = l.head;\n"
+        "    while (cur != null) {\n"
+        "        sum += cur->value;\n"
+        "        cur = cur->next;\n"
+        "    }\n"
+        "    return sum;\n"
+        "}\n"
+    ) == 6
+
+
+def test_bare_param_non_struct_argument_rejected():
+    err, notes = notes_of(
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 { return sizeof(struct entry<int32>) as int32; }\n"
+    )
+    assert str(err) == "line 1: int32 is not a struct; cannot extend it"
+    assert notes == [("in instantiation of entry<int32>", 2)]
+
+
+def test_bare_param_pointer_argument_rejected():
+    err, notes = notes_of(
+        "struct my { a: int32; }\n"
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 { return sizeof(struct entry<struct my*>) as int32; }\n"
+    )
+    assert str(err) == "line 2: my* is not a struct; cannot extend it"
+    assert notes == [("in instantiation of entry<my*>", 3)]
+
+
+def test_bare_param_union_argument_rejected():
+    err, notes = notes_of(
+        "union u { i: int32; f: float64; }\n"
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 { return sizeof(struct entry<union u>) as int32; }\n"
+    )
+    assert str(err) == "line 2: a union cannot be extended, but 'entry' extends union u"
+    assert notes == [("in instantiation of entry<u>", 3)]
+
+
+def test_bare_param_fam_argument_rejected_with_note():
+    err, notes = notes_of(
+        "struct pkt { length: uint64; data: int32[]; }\n"
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 { return sizeof(struct entry<struct pkt>) as int32; }\n"
+    )
+    assert str(err) == (
+        "line 2: cannot extend struct 'pkt': it ends in a flexible array "
+        "member, which must stay the last field"
+    )
+    assert notes == [("in instantiation of entry<pkt>", 3)]
+
+
+def test_bare_param_field_collision_rejected_with_note():
+    err, notes = notes_of(
+        "struct payload { next: int32; }\n"
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 { return sizeof(struct entry<struct payload>) as int32; }\n"
+    )
+    assert str(err) == "line 2: field 'next' is already defined in base struct 'payload'"
+    assert notes == [("in instantiation of entry<payload>", 3)]
+
+
+def test_self_feeding_instance_collides_on_link():
+    # entry<entry<item>>'s base already carries `next`, so the outer collides.
+    err, notes = notes_of(
+        "struct item { value: int32; }\n"
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 { return sizeof(struct entry<struct entry<struct item>>) as int32; }\n"
+    )
+    assert str(err) == (
+        "line 2: field 'next' is already defined in base struct 'entry<item>'"
+    )
+    assert notes == [("in instantiation of entry<entry<item>>", 3)]
+
+
+def test_self_feeding_instance_fails_on_inner_non_struct():
+    # The inner argument fails first: it is resolved at the request site,
+    # so the note names the inner instance.
+    err, notes = notes_of(
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 { return sizeof(struct entry<struct entry<int32>>) as int32; }\n"
+    )
+    assert str(err) == "line 1: int32 is not a struct; cannot extend it"
+    assert notes == [("in instantiation of entry<int32>", 2)]
+
+
+def test_flattened_literal_with_explicit_type_args():
+    assert run(
+        "struct item { value: int32; tag: int32; }\n"
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 {\n"
+        "    let e = entry<struct item> { value = 5, tag = 2, next = null };\n"
+        "    return e.value + e.tag;\n"
+        "}\n"
+    ) == 7
+
+
+def test_literal_inference_cannot_see_base_fields():
+    # Inference walks only the extender's own fields; naming a base field
+    # without explicit type arguments is an error, not a deduction.
+    with pytest.raises(LangError, match="struct 'entry' has no field 'value'"):
+        compile_ir(
+            "struct item { value: int32; }\n"
+            "struct entry<T> extends T { next: entry<T>*; }\n"
+            "fn main() -> int32 {\n"
+            "    let e = entry { value = 5, next = null };\n"
+            "    return e.value;\n"
+            "}\n"
+        )
+
+
+ITEM_DEFAULTS = "struct item { value: int32 = 40; tag: int32; }\n"
+
+
+def test_base_defaults_flow_through_bare_param_literal():
+    # The payload's field defaults apply to the instance's literal, exactly
+    # as a named base's would.
+    assert run(
+        ITEM_DEFAULTS +
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 {\n"
+        "    let e = entry<struct item> { tag = 2 };\n"
+        "    return e.value + e.tag;\n"
+        "}\n"
+    ) == 42
+
+
+def test_base_defaults_flow_through_bare_param_bare_decl():
+    assert run(
+        ITEM_DEFAULTS +
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 {\n"
+        "    let e: struct entry<struct item>;\n"
+        "    return e.value + e.tag;\n"
+        "}\n"
+    ) == 40
+
+
+def test_bare_param_base_composes_with_type_param_default():
+    assert run(
+        "struct item { value: int32; }\n"
+        "struct entry<T = struct item> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 {\n"
+        "    let e: struct entry;\n"
+        "    e.value = 42; e.next = null;\n"
+        "    return e.value;\n"
+        "}\n"
+    ) == 42
+
+
+def test_bodyless_bare_param_brands_per_instantiation():
+    assert run(
+        "struct item { value: int32; }\n"
+        "struct branded<T> extends T;\n"
+        "fn main() -> int32 {\n"
+        "    let b: struct branded<struct item>;\n"
+        "    b.value = 33;\n"
+        "    let p = &b as struct item*;\n"
+        "    return p->value;\n"
+        "}\n"
+    ) == 33
+
+
+def test_packed_payload_packs_its_instance_only():
+    # entry<pp> inherits @packed (9 + 8 = 17); the sibling instance over a
+    # natural payload stays naturally laid out (8 + 8 = 16).
+    assert run(
+        "@packed struct pp { a: uint8; b: int64; }\n"
+        "struct norm { a: int64; }\n"
+        "struct entry<T> extends T { next: entry<T>*; }\n"
+        "fn main() -> int32 {\n"
+        "    if (sizeof(struct entry<struct pp>) != 17) { return 1; }\n"
+        "    if (sizeof(struct entry<struct norm>) != 16) { return 2; }\n"
+        "    return 0;\n"
+        "}\n"
+    ) == 0

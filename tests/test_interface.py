@@ -96,6 +96,28 @@ def test_enum_is_emitted_in_full():
     assert "enum Color: int32 { Red = 0, Blue = 7 }" in out
 
 
+def test_bare_param_extends_round_trips_through_mci(tmp_path):
+    # `extends T` survives the stub verbatim; re-importing re-registers the
+    # template, so a consumer instantiates it against its own payload struct.
+    lib = tmp_path / "lib.mc"
+    lib.write_text("struct entry<T> extends T { next: entry<T>*; }\n")
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    assert "struct entry<T> extends T { next: entry<T>*; }" in out.read_text()
+    lib.unlink()  # force the import to resolve through the stub
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\n'
+        "struct item { value: int32; }\n"
+        "fn main() -> int32 {\n"
+        "    let e: struct entry<struct item>;\n"
+        "    e.value = 21; e.next = null;\n"
+        "    return e.value;\n"
+        "}\n"
+    )
+    assert run_path(main) == 21
+
+
 def test_derived_enum_round_trips_through_mci(tmp_path):
     # The stub keeps the `: base` reference; re-importing it re-registers both
     # enums and recomputes the member merge, so an inherited member resolves
