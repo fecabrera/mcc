@@ -143,6 +143,50 @@ already do).
           [interfaces](#functions-and-methods) dispatch; depends on
           interface declarations and the methods they are made of, so it
           lands after both
+- [ ] Struct extension of a type parameter — a bare type parameter in the
+      `extends` slot, `struct wrapper<T> extends T`, embedding `T`'s fields
+      as the layout prefix per instantiation:
+  - [x] concrete and generic bases — `struct point3 extends point` lays the
+        base's fields out first, so a derived pointer or value upcasts to
+        the base, and a generic struct already extends a base built from
+        its own parameters (`struct entry<K, V> extends pair<K, V>`),
+        resolved with the instantiation's bindings in scope; implemented,
+        see [Structs](docs/language.md#structs)
+  - [ ] a bare parameter as the base — the intrusive-container shape, an
+        embedded/systems feature squarely in the language's dual
+        apps/systems remit:
+    ```c
+    struct linked_list_entry<T> extends T { next: linked_list_entry<T>*; }
+    struct linked_list<T> { head: linked_list_entry<T>*; }
+    ```
+    `linked_list_entry<mystruct>` embeds the payload's fields first and
+    appends the link, so an entry pointer upcasts to `mystruct*` and the
+    payload is reached with no indirection (note `next` must be a
+    **pointer**, `linked_list_entry<T>*`: the existing
+    self-reference-through-a-pointer rule for plain structs). The
+    semantics is field **embedding** with prefix layout, not a named
+    member, so the shipped upcast applies unchanged. Much of this already
+    falls out of the generic-base resolution above: `extends T` resolves
+    through the instantiation's bindings today, the layout, literal, and
+    upcast paths work, and a non-struct argument is already rejected per
+    instantiation (`int32 is not a struct; cannot extend it`). The
+    residual work is promoting an accidental capability to a supported
+    one: the language reference admits only a base "named as a struct"
+    (no bare-parameter form), nothing in the test suite pins the
+    behavior, and no example exists. So this ships as documentation of
+    the rule set, tests pinning layout, upcast, and the per-instantiation
+    rejections (a non-struct `T`; a union or flexible-array-member base,
+    both already invalid for `extends`; a field-name collision between
+    `T`'s fields and the extender's, which the shipped
+    [instantiation backtraces](#tooling-and-c-interop) trace to the
+    triggering instantiation), and the intrusive-list example. Distinct
+    from the planned `T extends mystruct` **bound** above: the bound
+    constrains what a caller may bind `T` to, while this uses `T` as the
+    base (same keyword, different positions, no grammar overlap; the two
+    compose as `struct wrapper<T extends node> extends T`). Non-goals
+    inherited from `extends`: no method inheritance (once
+    [methods](#functions-and-methods) land, `T`'s methods are reached
+    through the upcast) and no constructor chaining
 - [x] Enum member reuse — a derived enum inherits a base enum's members by
       naming it in the existing `:` slot:
       `enum x_status: x_error { SUCCESS = 0 }` copies `x_error`'s member table
@@ -352,6 +396,48 @@ already do).
         ambiguous), and the writability checks (`const`, `@volatile`,
         `@packed`) are judged against the chosen overload only; implemented,
         see [mut parameters](docs/language.md#mut-parameters)
+  - [ ] pointer decay into `const`/`mut` parameters — a `T*` argument in a
+        `const T` or `mut T` slot implicitly dereferences, so the callee sees
+        the pointee (read-only or writable) without the caller writing
+        `*var`: with `fn append(mut self: mystruct, const rhs: mystruct)`, a
+        heap `mystruct*` from `new<mystruct>()` and a stack value call it
+        identically. Mechanically cheap: a `const`-struct or `mut` parameter
+        already travels as a hidden reference, so decay forwards the pointer
+        value instead of forming `&lvalue`, which is also why an **rvalue**
+        `T*` may decay to `mut T` (the pointee is real storage even when the
+        pointer itself is a temporary), deliberately unlike the plain rule
+        that a `mut` argument must be an lvalue. A decay is a **two-sided
+        promise**, the point where the language's two marker kinds meet:
+        the caller's side is a value-supplier promise in the `@nonnull`
+        family (this pointer is non-null, so the reference formed from it
+        is real), and the callee's side is the bare-keyword receiver
+        contract (`const` will not write through it, `mut` writes through
+        it and nothing escapes). Four guardrails keep it
+        sound and explicit: (1) decay fires only into `const`/`mut` slots,
+        whose declaration announces the reference semantics; a plain
+        by-value `T` parameter still needs an explicit `*var`, keeping the
+        copy visible. (2) Exactly one level: `T*` decays to `const`/`mut T`,
+        a `T**` only to `const`/`mut T*`, never twice. (3) The pointer must
+        be **proven non-null** (a `@nonnull` parameter, a flow-narrowed
+        local, or a `p!` assertion, all via the shipped `@nonnull` machinery
+        below): `const`/`mut` references are never null by construction,
+        the invariant the `libmc` wave-1 adoption leans on, and decaying an
+        unproven pointer would smuggle a hidden null dereference into the
+        one parameter kind that promises there is none. An unproven heap
+        `T*` takes the usual one-line guard or hatch; a non-null `T!`
+        return from `new`, if the deferred first-class `T!` item happens,
+        would prove it at the source. (4) Under
+        [function overloading](#functions-and-methods), an exact pointer
+        match always beats a decayed one; decayed candidates are considered
+        only when no candidate matches the pointer type directly, so
+        `f(x: T*)` alongside `f(mut x: T)` stays unambiguous. A decayed
+        argument is a borrowed reference, never a transfer of ownership:
+        the planned constructor/destructor machinery never runs a
+        destructor on it. The method-call sugar's receiver auto-deref
+        (Methods / OOP below) becomes an instance of this rule, and it is
+        the mechanism that lets the `libmc` container-self migration to
+        `mut` receivers keep one call shape for stack containers and heap
+        `T*`s alike, even before method syntax lands
   - [ ] `for … in` protocol over `mut` — `_next` still takes its element slot
         as a raw pointer (`fn list_next<T>(it: …, out: T*) -> bool`) because
         the compiler emits the `_next(&it, &slot)` call itself; teaching that
@@ -381,6 +467,58 @@ already do).
         `self: <struct>*` receiver, and a `mut` return formed from `self` gives a
         memory-safe mutable accessor. See its receiver-kind note for the
         field-projection and vtable details
+- [ ] Function overloading — one name, several parameter lists, resolved at
+      the call site by arity and argument types:
+  - [x] generic overload sets — generic functions sharing a name form an
+        overload set dispatched per call: viability by parameter-pattern
+        match, then a specificity ranking (concrete types beat structured
+        patterns beat bare type parameters, with pointer depth counting), an
+        equal-rank tie a compile error naming the ambiguity, and sets mixing
+        `mut` resolved through the deferred lvalue/value machinery above;
+        `@deprecated` warns only when a deprecated overload wins, and
+        `@removed` replaces the whole set; implemented, see
+        [Generics](docs/language.md#generics) and
+        [mut parameters](docs/language.md#mut-parameters)
+  - [ ] concrete functions and methods — lift the generic-only gate so plain
+        definitions overload too, the constructor-flavored families being the
+        motivating case:
+    ```c
+    fn string_init(mut self: string)
+    fn string_init(mut self: string, const str: string)
+    fn string_init(mut self: string, const str: char*, n: uint64)
+    ```
+    Concrete candidates join the same overload set and the shipped
+    resolution order applies verbatim; a fully concrete signature is
+    maximally specific under the existing ranking, so a mixed
+    concrete/generic set resolves with the concrete overload beating a
+    generic on an exact match (today a generic may not even share a name
+    with a concrete function; that rejection lifts). Rules that keep it
+    C-simple: resolution is by arguments only, so two overloads may not
+    differ solely in return type (that stays a duplicate definition);
+    overloads differing only in integer width are **ambiguous** for an
+    untyped literal argument (`f(0)` between `f(x: int32)` and
+    `f(x: int64)` is an error; `0 as int64` or a typed variable
+    disambiguates, the same declared-not-guessed stance as generic
+    parameter defaults); and an overloaded name still cannot be taken as a
+    plain `fn(...)` value. Import merging's duplicate detection becomes
+    signature-aware: the same name with the same parameter list twice
+    stays an error, different lists merge into one set. The one piece of
+    new machinery is symbol naming: concrete overloads link across objects
+    by symbol, so an overloaded name needs **signature-derived** mangled
+    symbols, deterministic from the signature alone, so a `.mci`
+    [bodyless prototype](#functions-and-methods) (which carries only the
+    signature) names the same symbol its definition emitted, unlike the
+    declaration-order bases generic templates use (safe there because
+    templates travel as source and re-instantiate). A name with a single
+    definition keeps its plain, C-linkable symbol. Pairs with
+    [namespaced exported symbols](#tooling-and-c-interop), and
+    [C header generation](#tooling-and-c-interop) can only export the
+    plain-named form (an overload set cannot cross into C under one
+    name). `@extern`/`@symbol` functions cannot overload (their C symbol
+    is fixed) and `@static` stays non-overloadable initially. Methods key
+    on the receiver type plus name, so method and constructor overloads
+    compose directly: the [`new <struct>(...)`](#functions-and-methods)
+    sugar picks the constructor overload by its argument list
 - [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
       keyed to a struct, including `@private` methods and the special
       constructor/destructor below (the `for … in` protocol already dispatches
@@ -416,7 +554,10 @@ already do).
         scope, so a stack value cleans up after itself — RAII over the
         existing [`defer`](docs/language.md#defer) machinery. Naming is still
         open: `constructor`/`destructor` or `init`/`destroy` (both pairs on
-        the table for now; examples use the former)
+        the table for now; examples use the former). A struct wanting several
+        initialization signatures (empty / copy / from raw parts) declares
+        overloaded constructors, riding
+        [function overloading](#functions-and-methods) above
   - [ ] destructor — `fn <struct>::destructor(self: <struct>*)`, the cleanup
         counterpart: releases what the constructor acquired. Deferred
         automatically for a stack-constructed value (above); for a heap
@@ -428,7 +569,9 @@ already do).
         `var.method()` — the method's declared `self` kind dictates the receiver
         convention (`const`/`mut self` forms a hidden reference from the
         receiver's storage, by-value `self` copies), and a `point*` receiver
-        (e.g. from `new`) auto-derefs one level first. No ambiguity, since
+        (e.g. from `new`) auto-derefs one level first, an instance of the
+        pointer-decay rule above that inherits its proven-non-null
+        requirement. No ambiguity, since
         methods key on the struct type, not the pointer type: `ptr.method()` can
         only mean the method on the pointee. The one honest tradeoff: this splits
         method calls from field access — the language keeps C's `.`/`->`
@@ -439,6 +582,28 @@ already do).
     var->length2();   // pre-receiver-kinds: desugars to point::length2(var)
     var.length2();    // once receiver kinds land
     ```
+  - [ ] non-struct receivers — extend the `fn <type>::<method>` definition
+        form beyond structs to the builtin scalar types, so
+        `fn char::tolower(self: char) -> char` makes `'C'.tolower()` and
+        `c.tolower()` work (mcc-native ergonomics over the shipped
+        [libc ctype](docs/language.md#reaching-libc) bindings is the
+        motivating stdlib case). Dispatch keys on the receiver's static type
+        exactly as struct methods key on the struct, and import merging
+        rejects two files defining the same type/method pair as a duplicate
+        definition. The parser delta is accepting a type keyword (not just
+        an identifier) before `::` in the definition position; the
+        expression grammar is untouched (`Name::MEMBER` stays enum member
+        access). Depends on the receiver kinds above even more than the
+        struct form does: a scalar receiver is by-value `self: char` or
+        `const self: char`, because the `self: <struct>*` starting form has
+        no lvalue behind a literal receiver, and for the same reason a
+        `mut self` method needs the caller's own writable `char` and is
+        never callable on `'C'` (a value-returning `tolower` takes `self`
+        by value; a `mut self` variant is the in-place editor). A
+        transparent `type` alias shares the underlying type's methods
+        rather than opening a separate namespace; enum receivers wait for
+        [nominal enums](#types-and-generics), where a method name must not
+        collide with a member name (both spell `Name::x`)
   - [ ] `new <struct>(...)` sugar — desugars to a block that allocates with
         `new<<struct>>()`, runs the constructor (above), and emits the pointer
         (the constructor counterpart to the
@@ -720,6 +885,45 @@ already do).
         to a warning the way errors already carry it — for when the collapsed
         repeats hide which type is at fault. Print-time only either way: the
         collected list embedders read already keeps every emission
+  - [ ] opt-in warning flags — named, default-off warning classes over the
+        channel: today every collected warning prints unconditionally and
+        `-Werror` is the only dial. A producer tags its warnings with a
+        class name, the driver enables a class with a repeatable `-W<name>`,
+        and `-Wall` enables every opt-in class at once; an enabled class
+        names its flag in the rendering
+        (`file: warning: line N: msg [-W<name>]`, the discoverability
+        convention `[-Werror]` already established), and `-Werror` composes
+        unchanged, promoting exactly what printed. The author-placed
+        producers (`@warning`, `@deprecated`) stay unconditional — they are
+        explicit requests, not analyses — and opt-in classes are reserved
+        for analysis-derived diagnostics that can fire on legal,
+        C-idiomatic code. Filtering happens at print time, like the dedup
+        above (the collected list embedders read keeps every emission), and
+        a warning class never changes codegen:
+    - [ ] `-Wunchecked-dereference` — the first opt-in class and the
+          motivating one: warn on `*x`, `x->field`, and `x[i]` where `x` is
+          a nullable `T*` not **proven non-null** at that site, "proven"
+          being exactly the shipped `@nonnull` proof relation
+          ([Functions and methods](#functions-and-methods)): a `@nonnull`
+          parameter, a flow-narrowed local, an always-non-null source, or a
+          postfix `!` assertion — no new analysis, just the existing proof
+          query asked at every dereference site, reporting instead of
+          rejecting. Off by default deliberately: mcc pointers are
+          nullable-by-default like C's, so a default-on warning would greet
+          every ported C idiom with noise; `-Wall` includes it. Postfix `!`
+          doubles as the per-site suppressor, and narrowing's conservative
+          limits transfer as the warning's noise floor: member/index
+          pointers (`s.p`, `a[i]`) and globals never carry facts, so they
+          always take `!`, and
+          [loop-body fact preservation](#functions-and-methods) directly
+          lowers the false-positive rate wherever a guard precedes a loop.
+          [Pointer decay](#functions-and-methods) sites never warn (decay
+          already requires the proof), and the print-time dedup above keeps
+          a dereference inside a generic body to one report. The acceptance
+          test is dogfooding: `libmc` compiles warn-free under
+          `-Wunchecked-dereference` (its wave-1 `@nonnull` adoption already
+          cleared the loudest sites), which is what lets this repo's
+          `-Werror` CI eventually add `-Wall`
 - [x] `@removed(msg)` tombstones — the
       terminal state of the function-availability lifecycle, one step past
       [`@deprecated`](#metaprogramming-and-builtins) above: a function goes from
