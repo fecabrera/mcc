@@ -1144,13 +1144,27 @@ class CodeGen:
                 self.check_access(
                     decl.private, decl.source, f"struct {ref.name!r}", line
                 )
-            if len(ref.args) != len(decl.type_params):
+            # A shorter argument list is allowed only when the omitted tail is
+            # entirely defaulted (defaults are trailing, so the count check
+            # suffices); bare `range` with `<T = int64>` is range<int64>.
+            total = len(decl.type_params)
+            required = total - len(decl.type_param_defaults)
+            if not required <= len(ref.args) <= total:
+                expected = (
+                    f"between {required} and {total}"
+                    if decl.type_param_defaults
+                    else f"{total}"
+                )
                 raise LangError(
-                    f"struct {ref.name!r} expects {len(decl.type_params)} "
+                    f"struct {ref.name!r} expects {expected} "
                     f"type argument(s), got {len(ref.args)}",
                     line,
                 )
             args = tuple(self.lang_type(a, line) for a in ref.args)
+            if len(args) < total:
+                bindings = dict(zip(decl.type_params, args))
+                self.fill_default_bindings(decl, bindings, line)
+                args = tuple(bindings[t] for t in decl.type_params)
             base = self.instantiate_struct(decl, args, line)
         elif (enum := self.lookup_enum(ref.name)) is not None:
             if ref.args:
@@ -2456,10 +2470,12 @@ class CodeGen:
         constant carries no real type (just a default it would adapt to), so
         letting it anchor ``T`` would be the same forbidden guess as ``let a =
         0``. It still adapts later, in :meth:`store_struct_field`, once a typed
-        field or explicit type argument has fixed the parameter. ``null`` never
-        contributes either. A parameter left unbound is an error, just as the
+        field, explicit type argument, or declared default has fixed the
+        parameter. ``null`` never contributes either. A declared default
+        (``struct range<T = int64>``) fills a parameter the typed fields left
+        unbound; a parameter still unbound after that is an error, just as the
         untyped ``let`` is ambiguous -- resolve it with explicit type args, a
-        typed field value, or (eventually) a declared default.
+        typed field value, or a declared default.
 
         Args:
             decl: The generic struct's declaration.
@@ -2488,6 +2504,10 @@ class CodeGen:
                     patterns[fname], tv.type, decl.type_params,
                     bindings, True, context, fline,
                 )
+        # Declared defaults fill whatever the typed fields left unbound; an
+        # untyped field value then adapts to the filled type in
+        # store_struct_field, exactly as it would to an inferred one.
+        self.fill_default_bindings(decl, bindings, line)
         missing = [t for t in decl.type_params if t not in bindings]
         if missing:
             raise LangError(
@@ -6359,14 +6379,69 @@ class CodeGen:
             "parameter needs a variable, field, element, or dereference"
         )
 
+    def fill_default_bindings(self, decl, bindings: dict[str, LangType], line: int):
+        """Fill still-unbound type parameters from their declared defaults.
+
+        Resolves each unbound defaulted parameter's default ``TypeRef`` in the
+        *definition's* context: the defining file becomes the current source
+        (a default may name that file's ``@private`` types) and the bindings
+        accumulated so far are in scope, so ``<T, U = T*>`` resolves against
+        the already-bound ``T``. Parameters without a default stay unbound,
+        for the caller's existing cannot-infer diagnostics.
+
+        Args:
+            decl: The generic ``Func`` or ``StructDecl`` declaring the
+                defaults.
+            bindings: The ``{type parameter: type}`` map, updated in place.
+            line: Source line of the use site, for the backtrace note when a
+                default fails to resolve.
+
+        Raises:
+            LangError: When a default's type fails to resolve; the error is
+                attributed to the declaring file, with a note at the use site.
+        """
+        if not decl.type_param_defaults:
+            return
+        outer_bindings = self.type_bindings
+        outer_source = self.current_source
+        self.type_bindings = bindings
+        self.current_source = decl.source
+        tparam = None
+        try:
+            for tparam in decl.type_params:
+                default = decl.type_param_defaults.get(tparam)
+                if default is None or tparam in bindings:
+                    continue
+                bindings[tparam] = self.lang_type(default, decl.line)
+        except LangError as err:
+            # An error inside the default belongs to the declaring file; then
+            # a backtrace frame names the parameter, attributed to the use
+            # site (mirroring alias and instantiation frames).
+            if err.source is None:
+                err.source = decl.source
+            err.notes.append(
+                Note(
+                    f"in default for type parameter {tparam} of {decl.name}",
+                    line,
+                    outer_source,
+                )
+            )
+            raise
+        finally:
+            self.type_bindings = outer_bindings
+            self.current_source = outer_source
+
     def resolve_bindings(
         self, func: Func, expr: Call, arg_tvs: list[TypedValue], lenient: bool
     ) -> dict[str, LangType] | None:
         """Determine the type-parameter bindings for calling a generic function.
 
-        Inference takes typed values first, then untyped constants (whose
-        ``int32`` default should not win over a typed value bound to the same
-        parameter); ``null`` carries no type information and never participates.
+        Inference takes typed values first, then declared type-parameter
+        defaults for whatever is still unbound, then untyped constants (whose
+        ``int32`` default should not win over a typed value -- or a declared
+        default -- bound to the same parameter); ``null`` carries no type
+        information and never participates. Explicit type arguments may omit
+        a fully-defaulted tail, which fills from the defaults alone.
         Disagreement between typed arguments is a conflict unless the parameters
         were fixed explicitly (then plain coercion errors point at the bad
         argument).
@@ -6395,17 +6470,34 @@ class CodeGen:
             )
         bindings: dict[str, LangType] = {}
         if expr.type_args:
-            if len(expr.type_args) != len(func.type_params):
+            # A shorter list is allowed only when the omitted tail is entirely
+            # defaulted (defaults are trailing, so the count check suffices);
+            # the tail then fills from the defaults alone, never inference.
+            total = len(func.type_params)
+            required = total - len(func.type_param_defaults)
+            if not required <= len(expr.type_args) <= total:
                 if lenient:
                     return None
+                expected = (
+                    f"between {required} and {total}"
+                    if func.type_param_defaults
+                    else f"{total}"
+                )
                 raise LangError(
-                    f"{expr.name!r} expects {len(func.type_params)} type argument(s), "
+                    f"{expr.name!r} expects {expected} type argument(s), "
                     f"got {len(expr.type_args)}",
                     expr.line,
                 )
             for tparam, targ in zip(func.type_params, expr.type_args):
                 bindings[tparam] = self.lang_type(targ, expr.line)
         try:
+            if expr.type_args and len(expr.type_args) < len(func.type_params):
+                self.fill_default_bindings(func, bindings, expr.line)
+            # Typed values first (strict: two typed arguments must agree),
+            # then declared defaults for whatever is still unbound, then
+            # untyped constants -- which never override an existing binding,
+            # so a default beats an untyped literal's int32 leaning and the
+            # literal adapts to it.
             for adaptable_pass in (False, True):
                 strict = not adaptable_pass and not expr.type_args
                 for (_, ptype), tv in zip(func.params, arg_tvs):
@@ -6419,6 +6511,8 @@ class CodeGen:
                             f"call to {expr.name!r}",
                             expr.line,
                         )
+                if not adaptable_pass:
+                    self.fill_default_bindings(func, bindings, expr.line)
         except LangError:
             if lenient:
                 return None

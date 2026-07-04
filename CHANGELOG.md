@@ -10,6 +10,33 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Generic type-parameter defaults** — a type parameter may declare a
+  fallback type, on functions (`fn parse<T = int64>(s: uint8*) -> T`) and
+  structs (`struct range<T = int64> { ... }`), used when a type argument is
+  neither supplied nor inferred from a *typed* value. The priority order is
+  strict: explicit type argument > typed-value inference > declared default >
+  untyped-constant anchoring — so the fallback is declared at the definition,
+  never guessed from a bare literal at the use site, and `parse("42")` means
+  `parse<int64>`. (Corollary: adding a default to an existing function
+  retypes `f(0)`-style calls, whose literal previously anchored `int32` —
+  audit untyped-literal call sites when you add one. It can also make a
+  previously-nonviable overload viable; a resulting tie reports the usual
+  ambiguity error.) Defaults are trailing-only and may reference only
+  earlier parameters (`<T, U = T*>` works; `<T = T>` and
+  `<T = U, U = int32>` are parse errors). An explicit type-argument list may
+  omit a fully-defaulted tail (`g<int32>(1)` with `fn g<T, U = int8>`),
+  filling it from the defaults alone, and the arity error becomes a range
+  (`expects between 1 and 2 type argument(s)`) only when a default makes a
+  range legal. A defaulted generic struct's bare name is a complete written
+  type — `let r: range;`, `sizeof(range)`, and `extends range` all mean
+  `range<int64>` — and a struct literal with no typed field for a defaulted
+  parameter fills it from the default, the untyped fields adapting to it.
+  Defaulted and explicit spellings share one monomorphized instance, `.mci`
+  interface stubs round-trip defaults (including a default naming the
+  defining file's `@private` type, resolved against that file), and the
+  tree-sitter grammar highlights the `= type` clause. See
+  [type-parameter defaults](docs/language.md#type-parameter-defaults).
+
 - **Loop-body fact preservation and full proof plumbing for flow-narrowing**
   — narrowed non-null facts no longer all drop at loop entry. A pre-scan of
   the whole loop (condition and body, nested statements, `defer` bodies, and

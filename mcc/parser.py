@@ -98,6 +98,26 @@ def _unescape(raw: str) -> str:
     )
 
 
+def type_ref_names(ref: TypeRef) -> set[str]:
+    """Every base type name a ``TypeRef`` mentions, recursively.
+
+    Walks generic arguments and function-pointer parameter/return types.
+    Used to validate that a type-parameter default references only earlier
+    parameters.
+    """
+    names: set[str] = set()
+    if ref.params is not None:  # a fn(...) -> ret function-pointer type
+        for p in ref.params:
+            names |= type_ref_names(p)
+        if ref.ret is not None:
+            names |= type_ref_names(ref.ret)
+    else:
+        names.add(ref.name)
+        for a in ref.args:
+            names |= type_ref_names(a)
+    return names
+
+
 # Compound-assignment operators mapped to the base binary operator they apply:
 # `target op= value` means `target = target op value` (target evaluated once).
 COMPOUND_ASSIGN_OPS = {
@@ -804,19 +824,57 @@ class Parser:
             return
         self.expect(">")
 
-    def parse_type_params(self) -> list[str]:
-        """Parse an optional generic parameter list ``<A, B, ...>``.
+    def parse_type_params(self) -> tuple[list[str], dict[str, TypeRef]]:
+        """Parse an optional generic parameter list ``<A, B = type, ...>``.
+
+        A parameter may declare a default type (``<T = int64>``), used when a
+        type argument is neither supplied nor inferred from a *typed* value.
+        Defaults must be trailing (every parameter after a defaulted one must
+        also have a default) and a default may reference only type parameters
+        declared before it -- ``<T = T>`` and ``<T = U, U = int32>`` are both
+        errors, so a later parameter's name can never fall through to a
+        same-named global type.
 
         Returns:
-            The type-parameter names, or an empty list when absent.
+            The type-parameter names, and the ``{name: TypeRef}`` defaults.
+
+        Raises:
+            LangError: On a non-trailing default, or a default referencing the
+                parameter itself or a later parameter.
         """
-        type_params = []
+        type_params: list[str] = []
+        defaults: dict[str, TypeRef] = {}
+        lines: dict[str, int] = {}
         if self.accept("<"):
-            type_params.append(self.expect("IDENT").text)
-            while self.accept(","):
-                type_params.append(self.expect("IDENT").text)
+            while True:
+                tok = self.expect("IDENT")
+                type_params.append(tok.text)
+                lines[tok.text] = tok.line
+                if self.accept("="):
+                    defaults[tok.text] = self.parse_type_ref()
+                elif defaults:
+                    raise LangError(
+                        f"type parameter {tok.text!r} without a default cannot "
+                        "follow a defaulted one",
+                        tok.line,
+                    )
+                if not self.accept(","):
+                    break
             self.expect(">")
-        return type_params
+            for i, pname in enumerate(type_params):
+                ref = defaults.get(pname)
+                if ref is None:
+                    continue
+                # A default may name only *earlier* parameters: check its
+                # referenced names against this parameter and every later one.
+                bad = type_ref_names(ref) & set(type_params[i:])
+                if bad:
+                    raise LangError(
+                        f"default for type parameter {pname!r} references "
+                        f"{min(bad)!r}, which is not declared before it",
+                        lines[pname],
+                    )
+        return type_params, defaults
 
     def parse_struct(
         self,
@@ -850,7 +908,7 @@ class Parser:
         """
         line = self.expect("union" if union else "struct").line
         name = self.expect("IDENT").text
-        type_params = self.parse_type_params()
+        type_params, type_param_defaults = self.parse_type_params()
         base = None
         if self.cur.kind == "extends":
             if union:
@@ -893,6 +951,7 @@ class Parser:
             volatile=volatile,
             defaults=defaults,
             union=union,
+            type_param_defaults=type_param_defaults,
         )
 
     def parse_base_ref(self) -> TypeRef:
@@ -1008,7 +1067,7 @@ class Parser:
         """
         line = self.expect("fn").line
         name = self.expect("IDENT").text
-        type_params = self.parse_type_params()
+        type_params, type_param_defaults = self.parse_type_params()
         if extern and type_params:
             raise LangError("extern functions cannot be generic", line)
         self.expect("(")
@@ -1109,6 +1168,7 @@ class Parser:
                 nonnull_params=nonnull_params,
                 deprecated_msg=deprecated,
                 removed_msg=removed,
+                type_param_defaults=type_param_defaults,
             )
         if asm:
             # `@asm fn` is sugar for a function whose body is one @asm(...)
@@ -1157,6 +1217,7 @@ class Parser:
                 static=static,
                 inline=inline,
                 deprecated_msg=deprecated,
+                type_param_defaults=type_param_defaults,
             )
         if self.cur.kind == ";":
             # A bodyless prototype: a concrete mcc function defined in another
@@ -1202,6 +1263,7 @@ class Parser:
                 nonnull_params=nonnull_params,
                 deprecated_msg=deprecated,
                 removed_msg=removed,
+                type_param_defaults=type_param_defaults,
             )
         return Func(
             name,
@@ -1220,6 +1282,7 @@ class Parser:
             nonnull_params=nonnull_params,
             deprecated_msg=deprecated,
             removed_msg=removed,
+            type_param_defaults=type_param_defaults,
         )
 
     def parse_asm(self):

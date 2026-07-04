@@ -179,7 +179,19 @@ module.exports = grammar({
         ';',
       ),
 
-    type_parameters: ($) => seq('<', commaSep1(alias($.identifier, $.type_identifier)), '>'),
+    // A parameter may declare a default type: `<T = int64>`. Trailing-only
+    // and earlier-parameter references are compiler rules, not grammar rules.
+    type_parameters: ($) =>
+      seq(
+        '<',
+        commaSep1(
+          seq(
+            alias($.identifier, $.type_identifier),
+            optional(seq('=', field('default', $._type))),
+          ),
+        ),
+        '>',
+      ),
 
     function_definition: ($) =>
       seq(

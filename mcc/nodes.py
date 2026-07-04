@@ -162,6 +162,11 @@ class StructDecl:
             Unions ride on the struct machinery; ``base``, ``defaults``, and
             flexible array members are rejected for them.
         source: Defining file, stamped by the driver.
+        type_param_defaults: ``{type parameter: TypeRef}`` for parameters
+            declared ``<T = type>``. A defaulted parameter may be omitted from
+            a written type or left uninferred by a literal's typed fields; the
+            default fills it. Defaults are trailing-only and may reference only
+            earlier type parameters (both enforced at parse time).
     """
 
     name: str
@@ -177,6 +182,7 @@ class StructDecl:
     defaults: dict = field(default_factory=dict)
     union: bool = False
     source: str | None = None
+    type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 
@@ -283,6 +289,11 @@ class Func:
             function-value use) is a hard compile error carrying it. The
             signature is never resolved and a body, if any, is never
             generated.
+        type_param_defaults: ``{type parameter: TypeRef}`` for parameters
+            declared ``<T = type>``. The default fills a parameter that is
+            neither given explicitly nor inferred from a *typed* argument.
+            Defaults are trailing-only and may reference only earlier type
+            parameters (both enforced at parse time).
     """
 
     name: str
@@ -305,6 +316,7 @@ class Func:
     nonnull_params: set[str] = field(default_factory=set)
     deprecated_msg: str | None = None
     removed_msg: str | None = None
+    type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 

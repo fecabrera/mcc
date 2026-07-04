@@ -87,6 +87,7 @@ deprecated or removed functions.
 | [deprecated.mc](types/deprecated.mc) | the `@deprecated("msg")` function attribute: a renamed function kept as a still-callable forwarder, every call site (and fn-as-value use) warning with the migration message, the old-API calls behind a `-D`-gated `@if` branch, `-Werror` promotion |
 | [removed.mc](types/removed.mc) | the `@removed("msg")` tombstone, the lifecycle step after `@deprecated`: a bodiless declaration (the one bodiless generic allowed) turning every call into a hard compile error with the migration message, the erroring old-API call behind a `-D`-gated `@if` branch |
 | [generics.mc](types/generics.mc) | type inference, generic recursion, multiple type parameters |
+| [generic_defaults.mc](types/generic_defaults.mc) | `<T = int64>` type-parameter defaults: the priority order (explicit > typed inference > default > untyped anchoring), a `U = T*` default referencing an earlier parameter, bare `span` / `pair<int32>` omitting a defaulted tail, struct literals filling from the default |
 
 ## memory/
 

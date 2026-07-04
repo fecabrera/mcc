@@ -169,13 +169,17 @@ already do).
     match; carrying `const`/`mut` in the function-pointer type is the
     [`mut` item](#functions-and-methods)'s planned lift, which `cmp`
     then picks up transparently
-  - [ ] defaults — a declared fallback type parameter, on functions
+  - [x] [defaults](docs/language.md#type-parameter-defaults) — a declared
+        fallback type parameter, on functions
         (`fn myfunc<T = uint8*>(x: T) { ... }`) and structs
         (`struct range<T = int64> { ... }`), used when a type argument isn't
         supplied or inferable from a _typed_ value. The strongly-typed way to
         pick a default — declared at the definition, not guessed from an untyped
         literal at the use site (`let a = 0` and a no-anchor `struct range { … }`
-        should stay ambiguous errors, not silently become `int32`)
+        stay ambiguous errors, not silently `int32`). Trailing-only, earlier
+        parameters may be referenced (`<T, U = T*>`), a defaulted tail may be
+        omitted from an explicit type-argument list, and a bare defaulted
+        struct name is a complete written type
   - [ ] bounds — constrain a parameter with `fn myfunc<T extends mystruct>(x: T)`
         (a struct and its `extends` specializations) or
         `fn myfunc<T in (t1, t2, ...)>(x: T)` (an explicit set of types)

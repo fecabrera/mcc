@@ -459,6 +459,55 @@ fn hash<T>(key: T*) -> uint64 { return fnv1a(key); }
 Imported files can extend an overload set with new variants. Two equally
 specific viable variants make the call ambiguous — a compile error.
 
+### Type-parameter defaults
+
+A type parameter may declare a **default** — a fallback type used when a type
+argument is neither supplied nor inferred from a *typed* value. Both functions
+and structs take them:
+
+```c
+fn parse<T = int64>(s: uint8*) -> T { ... }
+struct range<T = int64> { start: T; stop: T; }
+
+let n = parse("42");        // T = int64, from the default
+let r: range;               // range<int64> — a bare generic name works
+let s: range<int16>;        // explicit argument still wins
+```
+
+The sources that can fix a parameter apply in a strict priority order:
+
+1. an **explicit type argument** (`parse<int16>("42")`),
+2. **inference from a typed value** (`sum(x, 1)` with `x: int64`),
+3. the **declared default**,
+4. **untyped-constant anchoring** (a bare literal's `int32` leaning), last.
+
+The default outranking untyped constants is the point: the fallback is
+declared at the definition, not guessed from a literal at the use site. It
+also means **adding a default retypes existing calls** — with
+`fn f<T>(x: T)`, the call `f(0)` anchors `T = int32`; declare
+`fn f<T = int64>(x: T)` and that same call becomes `f<int64>` with the
+literal adapting to it. Audit untyped-literal call sites when adding a
+default to an existing function. Adding a default can also make a
+previously-nonviable overload viable; if two variants then tie, the call
+reports the usual ambiguity error rather than silently picking one.
+
+Defaults are **trailing-only** — every parameter after a defaulted one must
+also have a default — and a default may reference only parameters declared
+*before* it (`<T, U = T*>` is fine; `<T = T>` and `<T = U, U = int32>` are
+parse errors). An explicit type-argument list may then omit a fully-defaulted
+tail: with `fn g<T, U = int8>(x: T)`, both `g<int32, int64>(1)` and
+`g<int32>(1)` are legal, and the omitted tail fills from the defaults alone,
+never from inference. Omitting a parameter with no default keeps the plain
+arity error. A defaulted instantiation and its explicit spelling are the same
+instance — `parse("42")` and `parse<int64>("42")` share one monomorphized
+function.
+
+For a generic struct, the default also makes the bare name a complete written
+type: `let r: range;`, `sizeof(range)`, and `extends range` all mean
+`range<int64>` above. A [struct literal](#structs) with no typed field for a
+defaulted parameter uses the default the same way — see the struct-literal
+inference rules.
+
 ### Instantiation backtraces
 
 Monomorphization means a type error can surface deep inside a template's body,
@@ -1684,8 +1733,12 @@ disagree are an error). An untyped constant doesn't anchor a parameter — a bar
 `pair { a = 0, b = "x" }` leaves `A` ambiguous, the same way `let a = 0`
 is, since the constant has no type of its own to deduce, only a default it would
 guess. It still _adapts_ to a parameter another field has already fixed. A
-parameter no typed field determines can't be inferred, so spell those cases out
-with explicit type arguments. A field whose own type is a struct takes a nested
+parameter no typed field determines falls back to its
+[declared default](#type-parameter-defaults) when it has one — with
+`struct range<T = int64>`, `range { start = 0, stop = 10 }` is
+`range<int64>` and the constants adapt to it. A parameter with neither a
+typed field nor a default can't be inferred, so spell those cases out with
+explicit type arguments. A field whose own type is a struct takes a nested
 literal.
 
 A field may declare a **default value** with `name: type = expr;`. When a struct

@@ -183,12 +183,19 @@ class InterfaceWriter:
             _collect_refs(decl.ret_type, names)
             if decl.type_params or decl.inline:  # the body travels
                 _collect_refs(decl.body, names)
+            # Type-parameter defaults are types too (and _collect_refs does
+            # not recurse dicts); the subtraction below strips a default's
+            # references to earlier parameters, e.g. the T in <T, U = T*>.
+            for t in decl.type_param_defaults.values():
+                _collect_refs(t, names)
             names -= set(decl.type_params)
         elif isinstance(decl, StructDecl):
             for _, t in decl.fields:
                 _collect_refs(t, names)
             if decl.base is not None:
                 _collect_refs(decl.base, names)
+            for t in decl.type_param_defaults.values():
+                _collect_refs(t, names)
             names -= set(decl.type_params)
         elif isinstance(decl, EnumDecl):
             if decl.underlying is not None:

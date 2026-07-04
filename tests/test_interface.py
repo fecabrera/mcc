@@ -215,6 +215,34 @@ def test_private_type_in_public_signature_is_included():
     assert "fn make() -> secret*;" in out
 
 
+def test_type_param_default_round_trips_verbatim():
+    src = "fn size<T = int64>(x: T) -> T { return x; }"
+    assert "fn size<T = int64>(x: T) -> T { return x; }" in iface(src)
+
+
+def test_type_param_default_pulls_its_type_into_the_closure(tmp_path):
+    # The default names a @private struct nothing else references: the closure
+    # must ship it, and the defaulted instantiation must work on the consumer's
+    # side of the .mci -- resolved against the defining file, where the
+    # private type is visible.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "@private struct hidden { v: int64; }\n"
+        "fn boxed<T = struct hidden>() -> int64 { return sizeof(T) as int64; }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    text = out.read_text()
+    assert "@private struct hidden { v: int64; }" in text
+    assert "fn boxed<T = struct hidden>() -> int64" in text
+    lib.unlink()  # force the import to resolve through the stub
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\nfn main() -> int32 { return boxed() as int32; }'
+    )
+    assert run_path(main) == 8
+
+
 # --------------------------------------------------------- ordering / misc
 
 def test_declarations_keep_source_order():

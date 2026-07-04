@@ -51,3 +51,5 @@ fn main() -> int32 {
 // for some T (say, calling max on a struct with no `>`), the error is followed
 // by "note: ... in instantiation of max<T>" lines tracing the chain back to
 // your call site. See "Instantiation backtraces" in docs/language.md.
+
+// See also: generic_defaults.mc for `<T = int64>` type-parameter defaults.
