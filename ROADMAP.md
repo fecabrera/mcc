@@ -548,16 +548,39 @@ already do).
     - [ ] `libc/` bindings, wave 2 — annotate the `@extern` libc surface
           (attribute-only there, like `@noalias` on the `restrict` family:
           the C side is never checked, only callers are), a separate change
-          set from wave 1 above
+          set from wave 1 above, roughly fifty parameters across four
+          modules. `libc/string.mc`: 36 parameters across the `str*`/`mem*`
+          externs, excluding `strtok`'s `str` (null continues a
+          tokenization) and `strxfrm`'s `dest` (null is allowed when
+          `count` is 0). `libc/stdlib.mc`: the `str` of
+          `atoi`/`atol`/`atoll`/`atof` and the `strto*` family (9),
+          excluding all five `endptr` parameters (documented "if
+          non-null"), `free`/`realloc`'s `ptr` (null is meaningful there),
+          and `system`'s `command` (`system(null)` probes shell
+          availability); `qsort`/`bsearch`'s function-pointer parameters
+          are skipped. `libc/math.mc`: `frexp`'s `exp`, `modf`'s `iptr`,
+          `remquo`'s `quo`, and `nan`'s `tagp` (4). `libc/time.mc`: the
+          pointer parameters of
+          `mktime`/`asctime`/`strftime`/`localtime`/`gmtime`/`ctime`,
+          excluding `time`'s `timer` (null is documented OK).
+          `libc/stdio.mc` is deferred indefinitely, not part of this wave:
+          it has real null-meaningful carve-outs (`freopen`'s `filename`,
+          `setbuf`'s `buf`), and annotating `fwrite`'s `ptr` would force a
+          `str.data!` hatch inside `std.mc`'s `writestr` (member
+          expressions never prove), the highest downstream friction for
+          the lowest value
     - [ ] loop-body fact preservation — replace the shipped blanket rule
           (all narrowed facts drop at loop entry) with a pre-scan of the
           loop body that keeps the facts the loop provably cannot
           invalidate, preserving the guard-then-loop idiom
           (`if (p == null) return; while (...) { use(p); }`) that the
           shipped `libmc` adoption above leans on. Folds in the remaining
-          condition-shape follow-ons: `and`/`or` threading
+          proof-plumbing follow-ons: `and`/`or` threading
           (`if (p != null and q != null)`), `while (p != null)` header
-          narrowing, and fact-seeding through `let q = p;`
+          narrowing, fact-seeding through `let q = p;`, and proof
+          threading through `as` casts (today a cast strips a string
+          literal's non-null proof: `md5("abc" as uint8*, n)` fails where
+          `md5("abc", n)` proves)
     - [ ] first-class `T!` type — non-null on return types, locals, struct
           fields, and function-pointer types, which needs a real distinct type
           rather than a per-binding fact (a larger blast radius). Optional and
