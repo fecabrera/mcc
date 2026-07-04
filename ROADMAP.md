@@ -125,6 +125,50 @@ already do).
 - [ ] Generic type parameters — beyond the monomorphized basics:
   - [x] generics on functions and structs — implemented, see
         [Generics](docs/language.md#generics)
+  - [ ] generic type aliases — a type-parameter list on a `type` declaration,
+        naming a family of existing types (a wider generic partially applied,
+        a comparator shape over any element):
+    ```c
+    type entry<T> = pair<char*, T>;
+    type cmp<T> = fn(T, T) -> bool;
+    ```
+    An alias stays **transparent**, so a generic alias is a type-level
+    function expanded at use: `entry<int32>` *is* `pair<char*, int32>`, the
+    two spellings share one struct instantiation (expansion happens in the
+    type resolver, before the instantiation cache is keyed), and the alias
+    mints no monomorphized artifact of its own. Everything downstream
+    follows from transparency: an alias instantiation works in the
+    `extends` slot (a concrete alias there already works today) and
+    composes with the [bare-parameter base](#types-and-generics) below,
+    serves as a generic bound, appears inside another generic's body
+    (`entry<U>` with `U` the outer parameter), and a method lookup under
+    [non-struct receivers](#functions-and-methods) sees the underlying
+    instantiation, not a separate namespace. The rules: arity is checked at
+    the use site (a bare `entry` or a wrong argument count is an error,
+    replacing today's blanket "type alias is not generic"); the target
+    resolves at the declaration site with **only the alias's own
+    parameters bound** (the use site resolves the arguments, then hands
+    over, extending the hygiene of the existing declaration-site source
+    switch), so an outer generic's same-named parameter never leaks into
+    the target; the name-based cyclic-alias rule stays, so a
+    self-referential generic alias (`type node<T> = pair<T, node<T>*>`)
+    remains an error (recursive types stay structs' job, via the
+    self-reference-through-a-pointer rule); and an unused parameter is
+    accepted, as on structs and functions, but is inert where a struct's
+    is not: transparency makes a phantom `m<bool>` and `m<char>` the same
+    type, where a struct's unused-parameter instantiations stay nominally
+    distinct. The `.mci` round-trip renders the parameter list and stops
+    counting the alias's own parameters as external references, mirroring
+    structs; import merging keeps rejecting duplicates by name. Parameter
+    defaults (the item below) and bounds extend naturally to alias
+    parameters when they land. One deliberate exclusion: a
+    convention-carrying comparator type (`fn(const T, const T) -> bool`)
+    is not this item's job. Today a const-scalar function's value type
+    erases the `const` and a const-struct function cannot be a function
+    value at all, so `const` in a written `fn(...)` type has nothing to
+    match; carrying `const`/`mut` in the function-pointer type is the
+    [`mut` item](#functions-and-methods)'s planned lift, which `cmp`
+    then picks up transparently
   - [ ] defaults — a declared fallback type parameter, on functions
         (`fn myfunc<T = uint8*>(x: T) { ... }`) and structs
         (`struct range<T = int64> { ... }`), used when a type argument isn't
