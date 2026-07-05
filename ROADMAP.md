@@ -735,7 +735,25 @@ already do).
     filters out the `mut` candidate; an lvalue keeps both, and a
     same-shape tie is ambiguous), so allowing it buys nothing and it
     stays a duplicate definition, which is also what keeps markers out of
-    the mangle below. Overloads differing only in integer width are
+    the mangle below. Parameter annotations follow the same rule:
+    `fn func(@nonnull a: T*)` beside `fn func(a: T*)` (or a `@noalias`
+    variant) is a duplicate definition too, on simpler grounds than the
+    `mut` argument needs: `@nonnull`/`@noalias` are caller promises
+    about the value supplied and `const`/`mut` are callee contracts, and
+    neither class is part of the call shape, so neither participates in
+    resolution or the mangle. Mechanically both already live outside the
+    stored parameter types (`const`/`mut` in name-sets on the function,
+    the annotations as index-set conventions, none of them in the
+    parameter `LangType`s), so attribute-only variants would spell the
+    identical mangled symbol and the parameter-typed duplicate check
+    makes them collide naturally, while per-signature prototype pairing
+    still catches convention drift within one signature. Cross-class
+    combinations resolve by the underlying types alone:
+    `fn func(@nonnull a: T*)` and `fn func(mut a: T)` are distinct
+    overloads because the parameter types differ (`T*` vs `T`), but
+    `fn func(@nonnull a: T*)` and `fn func(mut a: T*)` collide, the
+    type list being identical (`T*`) with only markers and annotations
+    differing. Overloads differing only in integer width are
     **ambiguous** for an untyped literal argument (`f(0)` between
     `f(x: int32)` and `f(x: int64)` is an error; `0 as int64` or a typed
     variable disambiguates, the same declared-not-guessed stance as
@@ -766,8 +784,9 @@ already do).
     generic instance symbols already use (`gen<int32>` proves that
     character class links through `.o` + `cc` today; no hashing needed).
     Parameter types only: nothing for the return (per the no-return-only
-    rule) and no markers (per the duplicate rule above), so the mangle is
-    deterministic from the signature alone and a `.mci`
+    rule) and no markers or annotations (per the widened duplicate rule
+    above), so the mangle is deterministic from the signature alone and
+    a `.mci`
     [bodyless prototype](#functions-and-methods) (which carries only the
     signature) names the same symbol its definition emitted, unlike the
     declaration-order bases generic templates use (safe under today's
@@ -784,13 +803,15 @@ already do).
     pairing rule, which is also what preserves the return-type-only
     duplicate error; a different-signature prototype simply joins the
     set, so "definition does not match its prototype" survives only for
-    same-parameter-list drift, and a stale `.mci` prototype with no
-    definition moves from a compile-time to a link-time error, except
-    that the same-module rule keeps an unmatched in-module prototype a
-    compile-time error (that check stays). Import merging's duplicate
-    detection becomes signature-aware the same way: the same name with
-    the same parameter list twice stays an error, different lists merge
-    into one set. Pairs with
+    same-parameter-list drift, and a prototype with no matching
+    definition stays what it already is, a link-time error
+    (prototype-only programs compile clean today, pinned by
+    `tests/test_forward_decls.py`, so there is no compile-time
+    unmatched-prototype check to preserve). The declare pass's
+    cross-file duplicate detection becomes signature-aware the same way
+    (`merge_imports` does no duplicate detection; it all lives in
+    codegen's declare pass): the same name with the same parameter list
+    twice stays an error, different lists merge into one set. Pairs with
     [namespaced exported symbols](#tooling-and-c-interop), and
     [C header generation](#tooling-and-c-interop) can only export the
     plain-named form (an overload set cannot cross into C under one
@@ -801,7 +822,38 @@ already do).
     constructor overload by its argument list); and whichever of this and
     [`mut` returns](#functions-and-methods) lands second adds return
     mutability to the prototype pair-match tuple, one line of
-    coordination
+    coordination. This lands **staged** (the receiver-migration
+    pattern: each stage is its own complete change set with its own
+    CHANGELOG entry, and this box ticks only when the last stage
+    lands). Stage 1, same-module overload sets with no `.mci`
+    involvement: a pre-grouping pass over the program's functions by
+    (source, name) so the plain-vs-mangled symbol choice is known
+    before the first member declares (the declare pass is single-pass
+    today; this grouping is the main structural change), declarations
+    and registry entries keyed by the mangle, the generic-only gate
+    lifted for same-source sets, `gen_call` routing sets through the
+    pre-evaluate path under the (is-concrete, specificity) tier with a
+    concrete winner skipping instantiation, an explicit rejection where
+    a function value would form (the cannot-be-taken-as-a-value rule
+    above), the non-overloadables enforced (the v1 list above, plus
+    functions taking a `va_list` parameter), and
+    string-literal-to-`slice` adaptation parity built into the
+    pre-evaluate path (`marshal_args` adapts literals today, the
+    generic-call path does not; without parity, making a previously
+    single function overloaded silently breaks its literal call sites,
+    exactly the hazard the string-flavored family in stage 3 would
+    hit). Stage 2, signature-aware pairing, `.mci` support, and mixed
+    sets: `concrete_decls` re-keyed per signature, `pair_prototype`
+    comparing per params-key (the pairing rules above), a
+    different-signature prototype joining the set, the `.mci` closure
+    force-pulling every same-name sibling of an included function (a
+    private unreferenced overload must not shrink the consumer's view
+    of the set size and flip the symbol choice back to plain, a link
+    failure otherwise), and mixed generic/concrete sets with
+    concrete-beats-generic on exact match. Stage 3, `libmc` adoption:
+    `string_init`/`string_from_array` collapse into the motivating
+    constructor family above, with the example and docs sweep. The
+    template-symbol sub-item below trails independently of all three.
     - [ ] order-independent template symbol bases — extend the same
           signature-derived mangling to generic templates, retiring a
           recorded hazard in the shipped scheme: template overload sets
