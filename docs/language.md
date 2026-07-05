@@ -478,6 +478,68 @@ for the escape hatch,
 and for the heap-buffer migration,
 [examples/memory/nonnull_heap_buffers.mc](../examples/memory/nonnull_heap_buffers.mc).
 
+### Function overloading
+
+Plain (concrete) functions sharing a name form an **overload set**: the call
+picks the member whose parameter list fits the arguments, so a
+constructor-flavored family reads as one operation:
+
+```c
+fn counter_init(mut self: counter)                          // zeroed
+fn counter_init(mut self: counter, start: int32)            // seeded
+fn counter_init(mut self: counter, start: int32, step: int32)
+```
+
+Resolution follows the same order as
+[generic overload sets](#generics) — viability by argument shape, then the
+most specific candidate — and **resolution is by arguments only**. The rules
+that keep it C-simple:
+
+- **Overloads must differ in parameter types.** Two overloads may not differ
+  solely in return type; that stays a duplicate definition. Nor solely in
+  `const`/`mut` markers on the same types (a same-type `mut`/non-`mut` pair
+  is uncallable under the resolution rules — an rvalue argument filters out
+  the `mut` candidate, and an lvalue keeps both in a same-shape tie — so
+  allowing it buys nothing), nor solely in `@nonnull`/`@noalias` annotations
+  (caller promises about the supplied value, not part of the call shape).
+  Each of these reports
+  `function 'f(int32)' already defined; overloads must differ in parameter
+  types`, naming the shared signature.
+- **Width-only differences are ambiguous for untyped literals.** With
+  `f(x: int32)` beside `f(x: int64)`, the call `f(0)` is a compile error —
+  the literal adapts to either width, and mcc declares rather than guesses.
+  `f(0 as int64)` or a typed variable disambiguates.
+- **One defining module.** All overloads of a name must be declared in one
+  file; the same name defined in two modules stays a collision error. This
+  keeps the symbol choice (below) a per-file fact.
+- **A single definition keeps its plain symbol.** Only a name with two or
+  more definitions mangles: each member then links by a signature-derived
+  symbol spelled from its parameter types (`f(int32, char*)`), the same
+  canonical spelling generic instances use. A lone function keeps its plain,
+  C-linkable symbol and the direct-call fast path — zero cost until a name
+  actually overloads. (The accepted cost on overloaded calls: they route
+  through the overload-resolution path, so a `const`-struct argument spills
+  to a temporary instead of sharing the caller's storage.)
+- **An overloaded name is not a function value.** `let g = f;` needs a
+  single address; with a set there is no one `f`.
+- **Non-overloadables:** `main` (JIT and `cc` resolve the plain symbol),
+  variadic functions (the viability filter matches arity exactly),
+  functions with a `va_list` parameter, `@extern`/`@symbol` functions
+  (their C symbol is fixed), and `@static` functions.
+
+String literals keep adapting when a function becomes overloaded: a literal
+(or a ternary of literals) still borrows to a `slice<char>` /
+`slice<const char>` parameter exactly as at a
+[non-overloaded call](#slices).
+
+Current restrictions, lifted by the next stage of this work: a concrete set
+may not share its name with a generic template (the collision error stands),
+[bodyless prototypes](#bodyless-fn-prototypes) cannot name an overloaded
+function, and `--emit-interface` rejects a module whose public surface
+contains an overload set (a `.mci` cannot express one yet).
+
+See [examples/functions/overloading.mc](../examples/functions/overloading.mc).
+
 ## Variadic functions
 
 A trailing `...` after at least one named parameter makes a function

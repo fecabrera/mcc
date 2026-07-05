@@ -101,3 +101,421 @@ def test_hash_lib_dispatches(tmp_path, capfd):
     )
     assert run_path(main) == 0
     assert capfd.readouterr().out == "1 1\n"
+
+
+# ---------------------------------------------------- concrete overload sets
+
+COUNTER = """
+struct counter { value: int32; step: int32; }
+
+fn counter_init(mut self: counter) {
+    self.value = 0;
+    self.step = 1;
+}
+
+fn counter_init(mut self: counter, start: int32) {
+    self.value = start;
+    self.step = 1;
+}
+
+fn counter_init(mut self: counter, start: int32, step: int32) {
+    self.value = start;
+    self.step = step;
+}
+"""
+
+
+def test_concrete_family_dispatches_by_arity():
+    # The constructor-flavored family from the roadmap: same name, picked by
+    # the argument list, writing through the mut receiver.
+    assert run(
+        COUNTER
+        + """
+        fn main() -> int32 {
+            let a: struct counter;
+            let b: struct counter;
+            let c: struct counter;
+            counter_init(a);
+            counter_init(b, 40);
+            counter_init(c, 1, 5);
+            return a.value + a.step + b.value + c.value + c.step;
+        }
+        """
+    ) == 47
+
+
+def test_concrete_dispatch_by_argument_type():
+    assert run(
+        """
+        fn tag(x: int32) -> int32 { return 1; }
+        fn tag(p: char*) -> int32 { return 2; }
+        fn main() -> int32 {
+            let n: int32 = 7;
+            let s = "hi";
+            return tag(n) * 10 + tag(s);
+        }
+        """
+    ) == 12
+
+
+def test_single_definition_keeps_plain_symbol():
+    # A name with one definition never mangles: plain, C-linkable symbol and
+    # the direct-call fast path.
+    out = compile_ir(
+        "fn add(a: int32, b: int32) -> int32 { return a + b; }\n"
+        "fn main() -> int32 { return add(1, 2); }"
+    )
+    assert 'define i32 @"add"(' in out
+    assert 'call i32 @"add"(' in out
+    assert "add(int32, int32)" not in out
+
+
+def test_set_members_take_mangled_symbols():
+    out = compile_ir(
+        "fn tag(x: int32) -> int32 { return 1; }\n"
+        "fn tag(p: char*) -> int32 { return 2; }\n"
+        "fn main() -> int32 {\n"
+        "    let s = \"x\";\n"
+        "    return tag(1) + tag(s);\n"
+        "}"
+    )
+    assert 'define i32 @"tag(int32)"(' in out
+    assert 'define i32 @"tag(char*)"(' in out
+    assert 'define i32 @"tag"(' not in out
+
+
+def test_width_only_overloads_ambiguous_for_untyped_literal():
+    # f(0) between int32 and int64 stays declared-not-guessed: the literal
+    # adapts to either width, so neither candidate is more specific.
+    with pytest.raises(LangError) as err:
+        compile_ir(
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(x: int64) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return f(0); }"
+        )
+    assert err.value.message == "call to 'f' is ambiguous between overloads"
+
+
+def test_width_ambiguity_resolved_by_cast_or_typed_variable():
+    assert run(
+        """
+        fn f(x: int32) -> int32 { return 1; }
+        fn f(x: int64) -> int32 { return 2; }
+        fn main() -> int32 {
+            let n: int64 = 0;
+            return f(0 as int64) * 10 + f(n) * 100 + f(0 as int32);
+        }
+        """
+    ) == 221
+
+
+def test_return_type_only_variant_is_a_duplicate():
+    with pytest.raises(LangError) as err:
+        compile_ir(
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(x: int32) -> int64 { return 2; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    assert err.value.message == (
+        "function 'f(int32)' already defined; overloads must differ in "
+        "parameter types"
+    )
+
+
+def test_marker_only_variant_is_a_duplicate():
+    # const/mut are callee contracts, not part of the call shape: a same-type
+    # mut/non-mut pair is uncallable under the resolution rules, so it stays
+    # a duplicate definition (and stays out of the mangle).
+    with pytest.raises(LangError) as err:
+        compile_ir(
+            "fn f(x: int32) -> int32 { return x; }\n"
+            "fn f(mut x: int32) -> int32 { x = 0; return x; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    assert err.value.message == (
+        "function 'f(int32)' already defined; overloads must differ in "
+        "parameter types"
+    )
+
+
+def test_annotation_only_variant_is_a_duplicate():
+    # @nonnull/@noalias are caller promises about the supplied value; they do
+    # not participate in resolution or the mangle.
+    for variant in ("@nonnull p: int32*", "@noalias p: int32*"):
+        with pytest.raises(LangError) as err:
+            compile_ir(
+                "fn f(p: int32*) -> int32 { return 0; }\n"
+                f"fn f({variant}) -> int32 {{ return 1; }}\n"
+                "fn main() -> int32 { return 0; }"
+            )
+        assert err.value.message == (
+            "function 'f(int32*)' already defined; overloads must differ in "
+            "parameter types"
+        )
+
+
+def test_main_cannot_be_overloaded():
+    with pytest.raises(LangError) as err:
+        compile_ir(
+            "fn main() -> int32 { return 0; }\n"
+            "fn main(code: int32) -> int32 { return code; }"
+        )
+    assert err.value.message == "function 'main' cannot be overloaded"
+
+
+def test_variadic_function_cannot_be_overloaded():
+    with pytest.raises(LangError) as err:
+        compile_ir(
+            "fn log(fmt: char*, ...) { }\n"
+            "fn log(fmt: char*, n: int32) { }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    assert err.value.message == "variadic function 'log' cannot be overloaded"
+
+
+def test_va_list_parameter_cannot_be_overloaded():
+    with pytest.raises(LangError) as err:
+        compile_ir(
+            "fn vlog(ap: va_list) { }\n"
+            "fn vlog(n: int32) { }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    assert err.value.message == (
+        "function 'vlog' cannot be overloaded: it takes a va_list parameter"
+    )
+
+
+def test_static_functions_cannot_be_overloaded():
+    with pytest.raises(LangError, match="function 'f' already defined"):
+        compile_ir(
+            "@static fn f(x: int32) -> int32 { return 1; }\n"
+            "@static fn f(p: char*) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_extern_cannot_join_an_overload_set():
+    # Either order: an @extern's C symbol is fixed, so it collides with a
+    # set rather than joining it.
+    with pytest.raises(LangError, match="function 'f' already defined"):
+        compile_ir(
+            "@extern fn f(x: int32) -> int32;\n"
+            "fn f(p: char*) -> int32 { return 1; }\n"
+            "fn f(p: char*, n: int32) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    with pytest.raises(LangError, match="function 'f' already defined"):
+        compile_ir(
+            "fn f(p: char*) -> int32 { return 1; }\n"
+            "fn f(p: char*, n: int32) -> int32 { return 2; }\n"
+            "@extern fn f(x: int32) -> int32;\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_tombstone_cannot_join_an_overload_set():
+    with pytest.raises(LangError, match="function 'f' already defined"):
+        compile_ir(
+            '@removed("gone") fn f() -> int32;\n'
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(p: char*) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    with pytest.raises(LangError, match="function 'f' already defined"):
+        compile_ir(
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(p: char*) -> int32 { return 2; }\n"
+            '@removed("gone") fn f() -> int32;\n'
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_generic_cannot_share_a_concrete_set_name():
+    # Mixed generic/concrete sets are stage 2; today the rejection stands in
+    # both declaration orders.
+    with pytest.raises(LangError, match="function 'f' already defined"):
+        compile_ir(
+            "fn f<T>(x: T) -> int32 { return 0; }\n"
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(p: char*) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    with pytest.raises(LangError, match="function 'f' already defined"):
+        compile_ir(
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(p: char*) -> int32 { return 2; }\n"
+            "fn f<T>(x: T) -> int32 { return 0; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_cross_module_same_name_still_collides(tmp_path):
+    # All overloads of a name must live in one defining module: the symbol
+    # choice (plain vs mangled) is a per-file fact.
+    (tmp_path / "a.mc").write_text("fn pick(x: int32) -> int32 { return 1; }")
+    (tmp_path / "b.mc").write_text("fn pick(p: char*) -> int32 { return 2; }")
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "a";\nimport "b";\nfn main() -> int32 { return 0; }\n'
+    )
+    with pytest.raises(LangError, match="function 'pick' already defined"):
+        run_path(main)
+
+
+def test_cross_module_set_and_single_collide_either_order(tmp_path):
+    (tmp_path / "family.mc").write_text(
+        "fn pick(x: int32) -> int32 { return 1; }\n"
+        "fn pick(p: char*) -> int32 { return 2; }\n"
+    )
+    (tmp_path / "lone.mc").write_text(
+        "fn pick(n: int64) -> int32 { return 3; }"
+    )
+    for imports in (
+        'import "family";\nimport "lone";\n',
+        'import "lone";\nimport "family";\n',
+    ):
+        main = tmp_path / "main.mc"
+        main.write_text(imports + "fn main() -> int32 { return 0; }\n")
+        with pytest.raises(LangError, match="function 'pick' already defined"):
+            run_path(main)
+
+
+def test_cross_module_sets_collide_too(tmp_path):
+    (tmp_path / "one.mc").write_text(
+        "fn pick(x: int32) -> int32 { return 1; }\n"
+        "fn pick(p: char*) -> int32 { return 2; }\n"
+    )
+    (tmp_path / "two.mc").write_text(
+        "fn pick(n: int64) -> int32 { return 3; }\n"
+        "fn pick(b: bool) -> int32 { return 4; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "one";\nimport "two";\nfn main() -> int32 { return 0; }\n'
+    )
+    with pytest.raises(LangError, match="function 'pick' already defined"):
+        run_path(main)
+
+
+def test_overloaded_name_is_not_a_function_value():
+    with pytest.raises(LangError) as err:
+        compile_ir(
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(p: char*) -> int32 { return 2; }\n"
+            "fn main() -> int32 { let g = f; return 0; }"
+        )
+    assert err.value.message == (
+        "'f' is overloaded; a function value needs a single function"
+    )
+
+
+def test_type_args_on_an_overloaded_concrete_name():
+    with pytest.raises(LangError, match="'f' is not a generic function"):
+        compile_ir(
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(p: char*) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return f<int32>(1); }"
+        )
+
+
+def test_no_overload_matches_concrete_set():
+    with pytest.raises(
+        LangError, match="no overload of 'f' matches argument types"
+    ):
+        compile_ir(
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(p: char*) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return f(1.5); }"
+        )
+
+
+def test_string_literal_adapts_through_overloaded_call():
+    # marshal_args parity: making a function overloaded must not break its
+    # literal call sites -- the literal still borrows to the slice parameter.
+    assert run(
+        """
+        fn describe(s: slice<const char>) -> int32 { return s.length as int32; }
+        fn describe(n: int32) -> int32 { return 0 - n; }
+        fn main() -> int32 {
+            return describe("hello") * 10 + describe(3);
+        }
+        """
+    ) == 47
+
+
+def test_literal_spills_for_const_slice_parameter_of_overload():
+    # A const slice parameter travels by hidden reference: on the overloaded
+    # path the borrowed literal view spills to a temporary first.
+    assert run(
+        """
+        fn describe(const s: slice<const char>) -> int32 {
+            return s.length as int32;
+        }
+        fn describe(n: int32) -> int32 { return 0 - n; }
+        fn main() -> int32 { return describe("hello") + describe(2); }
+        """
+    ) == 3
+
+
+def test_ternary_of_literals_adapts_through_overloaded_call():
+    # Both arms borrow in their own branch, so the merged value is already
+    # the expected slice carrying the chosen literal's own length.
+    assert run(
+        """
+        fn describe(s: slice<const char>) -> int32 { return s.length as int32; }
+        fn describe(n: int32) -> int32 { return 0 - n; }
+        fn main() -> int32 {
+            let flag = true;
+            return describe(flag ? "y" : "yes");
+        }
+        """
+    ) == 1
+
+
+def test_hidden_ref_sharing_unchanged_when_not_overloaded():
+    # A non-overloaded const-struct call still passes the caller's storage
+    # directly (the direct-call fast path, no spill).
+    out = compile_ir(
+        "struct point { x: int32; y: int32; }\n"
+        "fn total(const p: point) -> int32 { return p.x + p.y; }\n"
+        "fn main() -> int32 {\n"
+        "    let p = struct point { x = 3, y = 4 };\n"
+        "    return total(p);\n"
+        "}"
+    )
+    assert 'call i32 @"total"(%"point"* %"p")' in out
+
+
+def test_overloaded_const_struct_call_spills_to_a_temporary():
+    # The accepted stage-1 cost: an overloaded call routes through the
+    # pre-evaluate path, so a const-struct argument spills instead of
+    # sharing the caller's storage. Behavior stays correct.
+    src = (
+        "struct point { x: int32; y: int32; }\n"
+        "fn total(const p: point) -> int32 { return p.x + p.y; }\n"
+        "fn total(const p: point, scale: int32) -> int32 {\n"
+        "    return (p.x + p.y) * scale;\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let p = struct point { x = 3, y = 4 };\n"
+        "    return total(p) + total(p, 2);\n"
+        "}"
+    )
+    assert run(src) == 21
+    out = compile_ir(src)
+    assert 'call i32 @"total(point)"(' in out
+    assert 'call i32 @"total(point)"(%"point"* %"p")' not in out
+
+
+def test_prototype_for_an_overloaded_name_is_rejected():
+    with pytest.raises(LangError) as err:
+        compile_ir(
+            "fn f(x: int32) -> int32;\n"
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(p: char*) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    assert err.value.message == (
+        "cannot declare a prototype for overloaded function 'f' "
+        "(overload sets do not support prototypes yet)"
+    )

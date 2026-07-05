@@ -158,6 +158,20 @@ def test_extern_decl_is_redeclared_verbatim():
     assert "@extern fn puts(s: uint8*) -> int32;" in out
 
 
+def test_overloaded_fn_rejects_interface_emission():
+    # A concrete overload set would render as same-name prototypes, which
+    # the importer rejects; stage 2 of the overloading work lifts this.
+    with pytest.raises(LangError) as err:
+        iface(
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(p: char*) -> int32 { return 2; }"
+        )
+    assert err.value.message == (
+        "cannot emit an interface for overloaded function 'f' "
+        "(overload sets do not support interfaces yet)"
+    )
+
+
 # --------------------------------------------------------- dropped surface
 
 def test_private_fn_is_dropped():

@@ -10,6 +10,32 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Concrete function overloading (stage 1)** — plain definitions sharing a
+  name in one module now form an overload set, dispatched by the argument
+  list through the same viability + specificity order as generic overload
+  sets (with a new leading rank tier: a concrete candidate beats a generic
+  of equal pattern specificity), so a constructor-flavored
+  `counter_init(self)` / `counter_init(self, start)` family reads as one
+  operation. Resolution is by arguments only: variants differing solely in
+  return type, in `const`/`mut` markers, or in `@nonnull`/`@noalias`
+  annotations are duplicate definitions (`function 'f(int32)' already
+  defined; overloads must differ in parameter types`), and width-only
+  overloads are ambiguous for an untyped literal — `f(0)` between `int32`
+  and `int64` errors; a cast or typed variable disambiguates. A name with a
+  single definition keeps its plain, C-linkable symbol and the direct-call
+  fast path; only sets of two or more take signature-derived mangled
+  symbols (`f(int32, char*)`), and string literals (ternaries of literals
+  included) still adapt to `slice<char>` parameters when a function becomes
+  overloaded. `main`, variadic functions, functions with a `va_list`
+  parameter, `@extern`/`@symbol`, and `@static` functions cannot overload,
+  and an overloaded name cannot be taken as a function value. Stage-1
+  restrictions, lifted by the next stage: a concrete set may not share its
+  name with a generic template, prototypes cannot name an overloaded
+  function, and `--emit-interface` rejects a module whose public surface
+  contains a set. See
+  [Function overloading](docs/language.md#function-overloading) and
+  `examples/functions/overloading.mc`.
+
 - **Pointer decay into `const`/`mut` parameters** — a proven-non-null `T*`
   argument at a `const T` (struct) or `mut T` slot implicitly dereferences:
   the slot already travels as a hidden reference, so the pointer value is

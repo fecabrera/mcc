@@ -56,6 +56,7 @@ function pointers.
 | [const_params.mc](functions/const_params.mc) | `const` read-only parameters, structs passed by hidden reference (no copy), `const` on pointers vs values |
 | [mut_params.mc](functions/mut_params.mc) | `mut` write-through parameters: out-params with no pointer in the signature, re-lending, struct field projection, a generic `swap<T>` |
 | [mut_overloads.mc](functions/mut_overloads.mc) | generic overloads mixing `mut` and non-`mut` positions: a `mut` overload next to a pointer one, rvalues dropping `mut` candidates, writability judged against the chosen overload, single argument evaluation |
+| [overloading.mc](functions/overloading.mc) | concrete function overloading: a constructor-flavored `counter_init` family dispatched by arity and by argument type, a string literal still adapting to a `slice<const char>` member, the must-differ-in-parameter-types rule |
 | [pointer_decay.mc](functions/pointer_decay.mc) | a proven-non-null `T*` decaying into a `const`-struct or `mut` slot: one call shape for a stack value and a null-guarded heap pointer, rvalue `&x` decaying too, the narrowed fact surviving the call |
 | [noalias.mc](functions/noalias.mc) | `@noalias` pointer parameters (C's `restrict`): the unchecked no-overlap promise that lets the optimizer treat a copy's regions as disjoint |
 | [nonnull.mc](functions/nonnull.mc) | `@nonnull` pointer parameters: the checked "definitely non-null" refinement — call sites must prove the argument non-null, the callee skips the re-check |

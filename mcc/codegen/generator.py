@@ -347,6 +347,15 @@ class CodeGen:
         # .proto flag says whether a bodyless prototype or a definition
         # currently claims the name.
         self.concrete_decls: dict[str, Func] = {}
+        # Concrete overload sets: a name declared by two or more plain
+        # definitions in one module maps to its member Func nodes. Each
+        # member's ir.Function lives in self.funcs under a signature-derived
+        # mangled symbol (`f(int32, char*)`); overload_symbols maps the
+        # member back to it. A name with a single definition never appears
+        # here -- it keeps its plain, C-linkable symbol and the direct-call
+        # fast path.
+        self.overloads: dict[str, list[Func]] = {}
+        self.overload_symbols: dict[int, str] = {}  # id(Func) -> mangled symbol
         self.globals: dict[str, tuple[ir.GlobalVariable, LangType, bool]] = {}
         # @static globals are file-scoped storage, keyed by (source, name) so
         # other files may reuse the name -- like @static functions.
@@ -1837,8 +1846,9 @@ class CodeGen:
 
         Resolves compile-time ``@if`` (seeding the target facts and flattening
         live branches), then registers structs, folds consts, declares globals
-        and function signatures (handling ``@extern``, ``@static``, and generic
-        overload sets), and finally generates a body for every non-generic,
+        and function signatures (handling ``@extern``, ``@static``, generic
+        overload sets, and concrete overload sets under their mangled
+        symbols), and finally generates a body for every non-generic,
         non-extern function.
 
         Returns:
@@ -1991,6 +2001,24 @@ class CodeGen:
             self.globals[var.name] = (glob, var_type, var.volatile)
             self.global_privacy[var.name] = (var.private, var.source)
             self.used_symbols.add(var.name)
+        # Concrete overloading: pre-group plain definitions by (source, name)
+        # so the plain-vs-mangled symbol choice is known before the first
+        # member declares. A name with a single definition keeps its plain,
+        # C-linkable symbol; only same-module sets of two or more mangle.
+        # Prototypes, @extern, @static, generics, and tombstones never join
+        # a set (prototypes for overloaded names are not supported yet).
+        plain_defs: dict[tuple[str | None, str], int] = {}
+        for func in self.program.functions:
+            if (
+                func.removed_msg is None
+                and not func.extern
+                and not func.static
+                and not func.proto
+                and not func.type_params
+            ):
+                key = (func.source, func.name)
+                plain_defs[key] = plain_defs.get(key, 0) + 1
+        overload_keys = {key for key, count in plain_defs.items() if count > 1}
         declared: set[tuple[str | None, str]] = set()
         for func in self.program.functions:
             if func.removed_msg is not None:
@@ -2013,6 +2041,7 @@ class CodeGen:
                     )
                 if (
                     func.name in self.funcs
+                    or func.name in self.overloads
                     or func.name in self.globals
                     or func.name in self.removed
                     or key in declared
@@ -2037,6 +2066,7 @@ class CodeGen:
                 if (
                     func.name in self.funcs
                     or func.name in self.templates
+                    or func.name in self.overloads
                     or func.name in self.globals
                     or func.name in self.removed
                 ):
@@ -2061,7 +2091,18 @@ class CodeGen:
                     self.deprecated_syms[func.name] = func.deprecated_msg
                 continue
             key = (func.source, func.name)
-            is_overloadable = func.type_params and not func.static
+            if func.proto and key in overload_keys:
+                # Stage 2 re-keys prototype pairing per signature; until then
+                # a prototype cannot name a member of an overload set.
+                raise LangError(
+                    f"cannot declare a prototype for overloaded function "
+                    f"{func.name!r} (overload sets do not support prototypes yet)",
+                    func.line,
+                )
+            in_set = (
+                key in overload_keys and not func.static and not func.type_params
+            )
+            is_overloadable = bool(func.type_params or in_set) and not func.static
             if not is_overloadable:
                 # A same-file redeclaration is allowed only as a pairable
                 # forward declaration (at least one of the two a prototype);
@@ -2100,8 +2141,10 @@ class CodeGen:
                 continue
             if func.type_params:
                 # Generic: no code yet -- instances are stamped out per call.
-                # Several templates may share a name (an overload set).
-                if func.name in self.funcs:
+                # Several templates may share a name (an overload set), but
+                # not with a concrete function or concrete set (mixed
+                # generic/concrete sets are not supported yet).
+                if func.name in self.funcs or func.name in self.overloads:
                     raise LangError(
                         f"function {func.name!r} already defined", func.line
                     )
@@ -2124,6 +2167,71 @@ class CodeGen:
                 self.used_symbols.add(base)
                 overloads.append(func)
                 continue
+            if in_set:
+                # A member of a concrete overload set (two or more plain
+                # definitions of one name in one module). Members link by a
+                # signature-derived mangled symbol -- `f(int32, char*)`, the
+                # canonical str(LangType) of the parameter types only: the
+                # return type never distinguishes overloads, and const/mut
+                # markers and @nonnull/@noalias annotations live outside the
+                # parameter types, so attribute-only variants spell the same
+                # symbol and collide as duplicates below.
+                if func.name == "main":
+                    # JIT and cc both resolve the plain `main` symbol.
+                    raise LangError(
+                        "function 'main' cannot be overloaded", func.line
+                    )
+                if func.variadic:
+                    # The viability filter matches arity exactly; C-style
+                    # variadics revisit when native variadics land.
+                    raise LangError(
+                        f"variadic function {func.name!r} cannot be overloaded",
+                        func.line,
+                    )
+                prior = self.overloads.get(func.name)
+                if (
+                    func.name in self.funcs
+                    or func.name in self.templates
+                    or func.name in self.globals
+                    or func.name in self.removed
+                    or (prior is not None and prior[0].source != func.source)
+                ):
+                    raise LangError(
+                        f"function {func.name!r} already defined", func.line
+                    )
+                ret = self.lang_type(func.ret_type, func.line)
+                params = [self.lang_type(t, func.line) for _, t in func.params]
+                if any(is_valist(p) for p in params):
+                    # The pre-evaluate path cannot marshal a va_list (its
+                    # passed form is derived from storage, not a value).
+                    raise LangError(
+                        f"function {func.name!r} cannot be overloaded: it "
+                        "takes a va_list parameter",
+                        func.line,
+                    )
+                symbol = f"{func.name}({', '.join(str(p) for p in params)})"
+                if symbol in self.funcs:
+                    raise LangError(
+                        f"function {symbol!r} already defined; overloads "
+                        "must differ in parameter types",
+                        func.line,
+                    )
+                hidden = self.hidden_ref_indices(func, params)
+                fnty = ir.FunctionType(ret.ir, self.param_irs(params, hidden))
+                fn = ir.Function(self.module, fnty, name=symbol)
+                self.link_shared(fn, func.source)
+                self.mark_inline(fn, func)
+                self.mark_noalias(fn, func, params)
+                self.mark_nonnull(fn, func, params)
+                self.funcs[symbol] = fn
+                self.signatures[symbol] = (ret, params, False)
+                self.hidden_ref[symbol] = hidden
+                self.mut_ref[symbol] = self.mut_indices(func)
+                self.nonnull_ref[symbol] = self.nonnull_indices(func)
+                self.overloads.setdefault(func.name, []).append(func)
+                self.overload_symbols[id(func)] = symbol
+                self.used_symbols.add(symbol)
+                continue
             if self.can_pair_prototype(func):
                 # Forward declaration: check the pair, then absorb it -- the
                 # name's ir.Function (and signature entries) already stand.
@@ -2132,6 +2240,7 @@ class CodeGen:
             if (
                 func.name in self.funcs
                 or func.name in self.templates
+                or func.name in self.overloads
                 or func.name in self.globals
                 or func.name in self.removed
             ):
@@ -2191,7 +2300,10 @@ class CodeGen:
                 # LLVM declaration; the definition lives in another object.
                 # An @removed tombstone is skipped too: it was never declared,
                 # and a body the author kept around is dead.
-                symbol = self.static_funcs.get((func.source, func.name), func.name)
+                symbol = self.overload_symbols.get(
+                    id(func),
+                    self.static_funcs.get((func.source, func.name), func.name),
+                )
                 ret, params, _ = self.signatures[symbol]
                 self.gen_function(func, self.funcs[symbol], ret, params)
         return self.module
@@ -3974,6 +4086,7 @@ class CodeGen:
         key = (self.current_source, name)
         return (
             name in self.templates
+            or name in self.overloads
             or name in self.funcs
             or key in self.static_templates
             or key in self.static_funcs
@@ -5797,6 +5910,14 @@ class CodeGen:
         self.check_removed(expr.name, expr.line)
         if expr.name in self.templates:
             return self.gen_generic_call(expr, self.templates[expr.name])
+        if expr.name in self.overloads:
+            # A concrete overload set resolves like a generic one (viability,
+            # then specificity), through the same pre-evaluate path.
+            if expr.type_args:
+                raise LangError(
+                    f"{expr.name!r} is not a generic function", expr.line
+                )
+            return self.gen_generic_call(expr, self.overloads[expr.name])
         if expr.name not in self.funcs:
             raise LangError(
                 f"undefined function {expr.name!r} (missing import?)", expr.line
@@ -5922,6 +6043,12 @@ class CodeGen:
             # No file-scoped shadow: a removed name errors here too -- a
             # function value is a call site in waiting.
             self.check_removed(name, line)
+            if name in self.overloads:
+                raise LangError(
+                    f"{name!r} is overloaded; a function value needs a "
+                    "single function",
+                    line,
+                )
         if symbol is None and name in self.funcs:
             private, source = self.func_privacy.get(name, (False, None))
             self.check_access(private, source, f"function {name!r}", line)
@@ -6235,6 +6362,8 @@ class CodeGen:
         if func is not None:
             positions |= self.mut_indices(func)
         for overload in self.templates.get(name, ()):
+            positions |= self.mut_indices(overload)
+        for overload in self.overloads.get(name, ()):
             positions |= self.mut_indices(overload)
         key = (self.current_source, name)
         static_template = self.static_templates.get(key)
@@ -6746,7 +6875,7 @@ class CodeGen:
                 if unaddressed:
                     mut_failures.append(min(unaddressed))
                     continue
-                viable.append((self.specificity(func), func, bindings))
+                viable.append((self.rank(func), func, bindings))
             if not viable:
                 # Two-tier viability: decay readings enter resolution only
                 # when no candidate matched the pointer type directly, so
@@ -6785,8 +6914,14 @@ class CodeGen:
         # the chosen signature (all IR-free -- the address and its
         # const/volatile/alignment facts were recorded when it was formed).
         # Instantiation comes first: identifying a decayed position needs
-        # the resolved parameter types.
-        fn, ret, params = self.instantiate(func, bindings, expr.line)
+        # the resolved parameter types. A concrete winner has no instance to
+        # stamp out -- its mangled ir.Function was declared up front.
+        if func.type_params:
+            fn, ret, params = self.instantiate(func, bindings, expr.line)
+        else:
+            symbol = self.overload_symbols[id(func)]
+            fn = self.funcs[symbol]
+            ret, params, _ = self.signatures[symbol]
         mut_positions = self.mut_indices(func)
         decayed: set[int] = set()
         for i in sorted(mut_positions):
@@ -6838,6 +6973,18 @@ class CodeGen:
                 # loaded, once, when the argument was evaluated); a direct
                 # lend passes the caller's storage address.
                 args.append(tv.value if i in decayed else addrs[i][0])
+            elif self.str_literal_adapts(expr.args[i], p):
+                # String-literal-to-slice adaptation, in parity with
+                # marshal_args: the literal (or ternary of literals) borrows
+                # to the parameter's char slice view; a const slice parameter
+                # travels by hidden reference, so the view spills to a
+                # temporary first. (The char* the literal pre-evaluated to
+                # for inference goes unused.)
+                tv = self.gen_borrow_slice(expr.args[i], p, expr.line)
+                if i in hidden:
+                    args.append(self.spill_to_temp(tv, p, expr.line, context))
+                else:
+                    args.append(tv.value)
             elif i in hidden:
                 # The args are already lowered to values for binding
                 # inference; a const hidden-reference parameter takes a
@@ -6927,7 +7074,7 @@ class CodeGen:
                 ok = False
                 break
             if ok:
-                viable.append((self.specificity(func), func, bindings))
+                viable.append((self.rank(func), func, bindings))
         return viable
 
     def fill_default_bindings(self, decl, bindings: dict[str, LangType], line: int):
@@ -7159,12 +7306,65 @@ class CodeGen:
                 expr.line,
             )
         if lenient:
-            for (_, ptype), tv, actual in zip(func.params, arg_tvs, actuals):
-                if not self.shape_matches(
+            for (_, ptype), tv, actual, arg in zip(
+                func.params, arg_tvs, actuals, expr.args
+            ):
+                if self.shape_matches(
                     ptype, actual, tv.adaptable, func.type_params, expr.line
                 ):
-                    return None
+                    continue
+                if self.literal_adapts_to_pattern(
+                    arg, func, ptype, bindings, expr.line
+                ):
+                    # A string literal evaluated to a char* for inference,
+                    # but adapts to a char slice parameter at emission (the
+                    # marshal_args parity arm), so the candidate stays
+                    # viable.
+                    continue
+                return None
         return bindings
+
+    def literal_adapts_to_pattern(
+        self,
+        arg,
+        func: Func,
+        ptype: TypeRef,
+        bindings: dict[str, LangType],
+        line: int,
+    ) -> bool:
+        """Whether a string-literal argument adapts to a candidate's parameter.
+
+        The pre-evaluate path's parity with :meth:`marshal_args`' literal
+        handling: a string literal (or a ternary of literals) stays viable
+        against a parameter that resolves to a ``slice<char>`` (or
+        ``slice<const char>``) under the candidate's bindings, even though
+        the ``char*`` it evaluated to does not match the slice shape.
+        Emission then borrows the literal (see :meth:`gen_borrow_slice`).
+
+        Args:
+            arg: The raw argument expression.
+            func: The candidate function (its source scopes the resolution).
+            ptype: The parameter's ``TypeRef`` pattern.
+            bindings: The candidate's complete type-parameter bindings.
+            line: Source line for diagnostics.
+
+        Returns:
+            ``True`` when the argument adapts to the resolved parameter.
+        """
+        if not isinstance(arg, (StrLit, Ternary)):
+            return False
+        outer_bindings = self.type_bindings
+        outer_source = self.current_source
+        self.type_bindings = bindings
+        self.current_source = func.source
+        try:
+            resolved = self.lang_type(ptype, line)
+        except LangError:
+            return False
+        finally:
+            self.type_bindings = outer_bindings
+            self.current_source = outer_source
+        return self.str_literal_adapts(arg, resolved)
 
     def shape_matches(
         self,
@@ -7214,6 +7414,25 @@ class CodeGen:
         if adaptable and is_integer(resolved) and is_integer(peeled):
             return True
         return resolved == RAWPTR and is_pointer(peeled)
+
+    def rank(self, func: Func) -> tuple[bool, int]:
+        """An overload candidate's sort key: (is-concrete, specificity).
+
+        The leading tier makes "a fully concrete signature is maximally
+        specific" exactly true: without it, a generic whose effective
+        parameter list is all-concrete (its type parameter appearing only in
+        the return type, or filled by a declared default) would tie an
+        identical concrete overload under the pattern-specificity score.
+        Same-tier candidates fall back to :meth:`specificity`, and an equal
+        rank stays the ambiguity error.
+
+        Args:
+            func: The candidate function.
+
+        Returns:
+            The sort key, greater meaning preferred.
+        """
+        return (not func.type_params, self.specificity(func))
 
     def specificity(self, func: Func) -> int:
         """Rank an overload by how specific its parameter patterns are.

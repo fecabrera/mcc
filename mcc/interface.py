@@ -330,6 +330,25 @@ class InterfaceWriter:
             every reachable declaration in source order, separated by blank
             lines.
         """
+        # Concrete overload sets are not representable yet: their members
+        # would render as same-name prototypes, which the importer rejects
+        # (overload sets do not support prototypes until stage 2 of the
+        # overloading work re-keys pairing per signature).
+        for name, decls in self.by_name.items():
+            members = [
+                d
+                for d in decls
+                if isinstance(d, Func)
+                and not (d.extern or d.static or d.proto or d.type_params)
+                and d.removed_msg is None
+            ]
+            if len(members) > 1:
+                raise LangError(
+                    f"cannot emit an interface for overloaded function "
+                    f"{name!r} (overload sets do not support interfaces yet)",
+                    members[1].line,
+                    source=members[1].source,
+                )
         name = self.root.rsplit("/", 1)[-1] if self.root else "module"
         blocks = [
             f"// Interface generated from {name} by mcc -- do not edit.\n"

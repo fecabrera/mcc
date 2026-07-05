@@ -5,6 +5,7 @@ ir.Function); identical prototypes collapse; a signature mismatch is a
 declaration-time error. Genuine duplicates, @extern, @removed tombstones, and
 generic templates keep their duplicate-definition errors."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -152,7 +153,15 @@ def test_conflicting_protos_are_an_error():
 # ----------------------------------------- genuine duplicates stay errors
 
 def test_two_definitions_still_collide():
-    with pytest.raises(LangError, match="function 'f' already defined"):
+    # Same parameter list twice is a duplicate definition -- with concrete
+    # overloading the message now names the shared signature.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "function 'f()' already defined; overloads must differ in "
+            "parameter types"
+        ),
+    ):
         compile_ir("fn f() -> int32 { return 1; }\nfn f() -> int32 { return 2; }")
 
 

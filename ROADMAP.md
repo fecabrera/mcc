@@ -825,7 +825,9 @@ already do).
     coordination. This lands **staged** (the receiver-migration
     pattern: each stage is its own complete change set with its own
     CHANGELOG entry, and this box ticks only when the last stage
-    lands). Stage 1, same-module overload sets with no `.mci`
+    lands). Stage 1 (**shipped**, see
+    [Function overloading](docs/language.md#function-overloading)),
+    same-module overload sets with no `.mci`
     involvement: a pre-grouping pass over the program's functions by
     (source, name) so the plain-vs-mangled symbol choice is known
     before the first member declares (the declare pass is single-pass
@@ -836,13 +838,16 @@ already do).
     concrete winner skipping instantiation, an explicit rejection where
     a function value would form (the cannot-be-taken-as-a-value rule
     above), the non-overloadables enforced (the v1 list above, plus
-    functions taking a `va_list` parameter), and
+    functions taking a `va_list` parameter),
     string-literal-to-`slice` adaptation parity built into the
     pre-evaluate path (`marshal_args` adapts literals today, the
     generic-call path does not; without parity, making a previously
     single function overloaded silently breaks its literal call sites,
     exactly the hazard the string-flavored family in stage 3 would
-    hit). Stage 2, signature-aware pairing, `.mci` support, and mixed
+    hit), and -- so a stage-1 `--emit-interface` cannot write a stub the
+    importer rejects -- interface emission erroring on a module whose
+    public surface contains a set until the `.mci` support below
+    lands. Stage 2, signature-aware pairing, `.mci` support, and mixed
     sets: `concrete_decls` re-keyed per signature, `pair_prototype`
     comparing per params-key (the pairing rules above), a
     different-signature prototype joining the set, the `.mci` closure
