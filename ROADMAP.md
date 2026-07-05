@@ -569,7 +569,50 @@ already do).
         (Methods / OOP below) becomes an instance of this rule, and it is
         the mechanism that lets the `libmc` container-self migration to
         `mut` receivers keep one call shape for stack containers and heap
-        `T*`s alike, even before method syntax lands
+        `T*`s alike, even before method syntax lands (the migration is the
+        item nested below):
+    - [ ] `libmc` receiver migration — flip the standard library's struct
+          functions from raw pointer selves to receiver markers: read-only
+          accessors become `const self` (the
+          `get`/`at`/`peek`/`len`/`is_empty`/`eq` families), mutators become
+          `mut self`
+          (`init`/`from_*`/`destroy`/`reset`/`set`/`push`/`pop`/`append`/
+          `remove`/`grow`), across `list`, `string` (a transparent alias of
+          `list<char>`, so its `@inline` wrappers re-lend the same reference
+          into the `list_*` slots), `dict`, `set`, `stack`, and `queue`,
+          plus the companion struct pointers of the same APIs (`append`'s
+          source, `eq`'s right-hand side, and `duplicate`'s `src` become
+          `const`; `duplicate`'s `dst` and the `format_arg`/`format_args`
+          accumulator in `std` become `mut`). Strictly depends on the
+          pointer decay above: callers holding a heap `string*`/`list<T>*`
+          keep one call shape only because the pointer decays into the new
+          slots (an always-non-null `&s` keeps compiling unchanged; an
+          unproven `T*` from `new` takes the usual one-line guard or `p!`
+          hatch, the migration's only source-breaking surface), and the
+          selves go non-null by construction, closing the loop the
+          `@nonnull` wave-1 item deliberately left open. Excluded by
+          design: the iterator protocol keeps its pointer signatures.
+          `*_it` stores its receiver into the cursor it returns
+          (`iterator { obj = self, idx = 0 }`), and a `const`/`mut`
+          reference's defining contract is that its address cannot escape,
+          so `*_it` over a receiver marker is inexpressible, not merely
+          inconvenient; `*_next`'s receiver is the iterator, not the
+          container, with its call emitted by the compiler under the
+          `_it`/`_next` convention, so its `out: T*` half belongs to the
+          [`for … in` protocol over `mut`](#functions-and-methods) item
+          below and the `obj` pointer stored inside `iterator<T>` stays a
+          pointer regardless. The destroy family migrates whole, verified:
+          every `*_destroy` releases owned internals through `self`
+          (`dealloc(self->data)`, `dict`'s keys and entry array) and never
+          deallocates the receiver's own box, which remains the caller's
+          separate `dealloc(p)` on a pointer the caller still holds, so
+          nothing needs to stay pointer-taking or be split. The migration
+          doubles as the decay rule's acceptance test (the whole stdlib
+          plus its tests and examples compiling over decayed call sites
+          proves the rule covers real call patterns) and pre-positions
+          [Methods / OOP](#functions-and-methods): the receiver kinds land
+          as method sugar over already-correct `mut self`/`const self`
+          signatures
   - [ ] `for … in` protocol over `mut` — `_next` still takes its element slot
         as a raw pointer (`fn list_next<T>(it: …, out: T*) -> bool`) because
         the compiler emits the `_next(&it, &slot)` call itself; teaching that
