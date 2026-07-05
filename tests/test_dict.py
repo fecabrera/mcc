@@ -1,6 +1,52 @@
-"""lib/dict.mc: the owning, content-keyed string map."""
+"""lib/dict.mc: the owning, content-keyed string map, over mut/const receivers
+(stage 3 of the libmc receiver migration)."""
 
 from helpers import run, run_path
+
+
+def test_direct_receiver_with_growth():
+    # The post-migration idiom: a local dict passes directly, no `&`.
+    # Capacity 2 forces dict_grow (mut-to-mut re-lending inside dict_set).
+    assert run(
+        """
+        import "dict";
+        fn main() -> int32 {
+            let d: struct dict<int32>;
+            dict_init(d, 2);
+            dict_set(d, "one", 1);
+            dict_set(d, "two", 2);
+            dict_set(d, "three", 3);
+            dict_set(d, "two", 22);            // update in place, same length
+            let v: int32 = 0;
+            if (!dict_get(d, "two", v)) return 100;
+            if (v != 22) return 101;
+            if (d.length != 3) return 102;
+            if (d.capacity < 4) return 103;    // grew from 2
+            dict_remove(d, "one");
+            if (dict_get(d, "one", v)) return 104;
+            dict_destroy(d);
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_amp_call_sites_still_compile():
+    # Pre-migration `&x` call shapes keep working via pointer decay.
+    assert run(
+        """
+        import "dict";
+        fn main() -> int32 {
+            let d: struct dict<int32>;
+            dict_init(&d, 4);
+            dict_set(&d, "k", 7);
+            let v: int32 = 0;
+            let found = dict_get(&d, "k", v);
+            dict_destroy(&d);
+            return (found and v == 7) ? 0 : 1;
+        }
+        """
+    ) == 0
 
 
 def test_iteration_visits_all_entries():
@@ -11,6 +57,7 @@ def test_iteration_visits_all_entries():
         import "dict";
         fn main() -> int32 {
             let d = alloc<struct dict<uint64>>(1);
+            if (d == null) return 1;    // proves d for the receiver slots below
             dict_init(d, 8);
             dict_set(d, "a", 10);
             dict_set(d, "b", 20);
@@ -32,6 +79,7 @@ def test_for_in_iterates_dict():
         import "dict";
         fn main() -> int32 {
             let d = alloc<struct dict<uint64>>(1);
+            if (d == null) return 1;    // proves d for the receiver slots below
             dict_init(d, 8);
             dict_set(d, "a", 10);
             dict_set(d, "b", 20);
@@ -54,6 +102,7 @@ def test_lookup_by_content_not_address(tmp_path, capfd):
         import "libc/stdio";
         fn main() -> int32 {
             let d = alloc<struct dict<int32>>(1);
+            if (d == null) { return 1; }  // proves d for the receiver slots
             dict_init(d, 4);
             dict_set(d, "hello", 42);
             let v: int32 = 0;
@@ -84,6 +133,7 @@ def test_dict_owns_key_copies(tmp_path, capfd):
         import "libc/stdio";
         fn main() -> int32 {
             let d = alloc<struct dict<int32>>(1);
+            if (d == null) { return 1; }  // narrows d, loops keep it
             dict_init(d, 2);
 
             let scratch = alloc<char>(3);
@@ -93,7 +143,9 @@ def test_dict_owns_key_copies(tmp_path, capfd):
                 scratch[0] = (65 + i / 10) as char;
                 scratch[1] = (65 + i % 10) as char;
                 scratch[2] = 0;
-                dict_set(d, scratch, i * 7);    // heap key into @nonnull, in-loop
+                dict_set(d!, scratch, i * 7);   // heap key into @nonnull, in-loop;
+                                                // d at a mut receiver in a loop
+                                                // drops its narrowed fact, so !
                 i = i + 1;
             }
             scratch[0] = 90;  // clobber the caller's buffer
@@ -106,7 +158,7 @@ def test_dict_owns_key_copies(tmp_path, capfd):
                 scratch[0] = (65 + i / 10) as char;
                 scratch[1] = (65 + i % 10) as char;
                 scratch[2] = 0;
-                if (!dict_get(d, scratch, v))
+                if (!dict_get(d!, scratch, v))
                     errors = errors + 1;
                 else if (v != i * 7)
                     errors = errors + 1;
@@ -114,7 +166,7 @@ def test_dict_owns_key_copies(tmp_path, capfd):
             }
             printf("%d %llu %llu\\n", errors, d->length, d->capacity);
             dealloc(scratch);
-            dict_destroy(d);
+            dict_destroy(d!);               // the loops killed d's fact for good
             dealloc(d);
             return 0;
         }
@@ -135,6 +187,7 @@ def test_remove_and_tombstone_reuse(tmp_path, capfd):
         import "libc/stdio";
         fn main() -> int32 {
             let d = alloc<struct dict<int32>>(1);
+            if (d == null) { return 1; }  // proves d for the receiver slots
             dict_init(d, 8);
             dict_set(d, "alpha", 1);
             dict_set(d, "beta", 2);

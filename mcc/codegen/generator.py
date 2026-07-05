@@ -6653,11 +6653,24 @@ class CodeGen:
                 # type, never its pointee), so when such a position holds a
                 # pointer, prefer the decay reading when one exists --
                 # `mut x: T` with an rvalue `int32*` reads as T = int32.
+                # Likewise at any const/mut position whose pattern can only
+                # be a struct (`mut self: dict<V>`): the direct reading of a
+                # pointer argument can never instantiate to the pointer's
+                # own type, so only the decay reading is emittable -- even
+                # when a mismatched binding from another argument (an
+                # untyped literal's int32 leaning) let the direct pass
+                # "succeed".
+                mut_positions = self.mut_indices(func)
                 if any(
-                    i not in addrs
-                    and arg_tvs[i].type is not NULLT
+                    arg_tvs[i].type is not NULLT
                     and strip_const(arg_tvs[i].type).pointee is not None
-                    for i in self.mut_indices(func)
+                    and (
+                        (i in mut_positions and i not in addrs)
+                        or self.only_decay_pattern(
+                            func.params[i][1], func.type_params
+                        )
+                    )
+                    for i in self.decay_indices(func)
                 ):
                     decayed_bindings = self.resolve_bindings(
                         func, expr, arg_tvs, lenient=True, decay=True
@@ -6914,6 +6927,21 @@ class CodeGen:
         finally:
             self.type_bindings = outer_bindings
             self.current_source = outer_source
+
+    @staticmethod
+    def only_decay_pattern(pattern, type_params: list[str]) -> bool:
+        """Whether a pointer argument at this const/mut position can only decay.
+
+        True when the parameter pattern's direct reading is never a pointer
+        type: no stars, and not a bare type parameter (a bare ``T`` may bind
+        the pointer type itself -- ``mut x: T`` with an ``int32*`` lvalue
+        legitimately mutates the caller's pointer). ``struct dict<V>`` and
+        concrete struct/scalar patterns qualify; ``T`` and any ``...*``
+        pattern do not.
+        """
+        return pattern.stars == 0 and (
+            bool(pattern.args) or pattern.name not in type_params
+        )
 
     @staticmethod
     def decay_indices(func: Func) -> frozenset[int]:

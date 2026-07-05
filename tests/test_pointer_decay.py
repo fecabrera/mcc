@@ -342,6 +342,39 @@ def test_generic_rvalue_pointer_decays_into_mut():
     ) == 7
 
 
+def test_decay_binding_beats_untyped_literal_at_struct_receiver():
+    # A struct-shaped pattern (box<T>, no stars) can never instantiate to a
+    # pointer, so a pointer lvalue there binds T through the decay reading
+    # even when another argument -- an untyped literal leaning int32 --
+    # already gave the direct pass a "successful" (but unemittable) binding.
+    # The libmc stage-3 shape: dict_set(d, "k", 10) on a heap dict<uint64>*.
+    assert run(
+        BOX + "fn put<T>(mut b: struct box<T>, v: T) { b.value = v; }\n"
+        "fn main() -> int32 {\n"
+        "    let b = box { value = 0 as uint64 };\n"
+        "    let p = &b;\n"
+        "    put(p, 9);\n"  # 9 leans int32; T must come from box<uint64>
+        "    return b.value as int32;\n"
+        "}"
+    ) == 9
+
+
+def test_bare_mut_type_param_still_binds_the_pointer_itself():
+    # The counterweight: a bare `mut a: T` pattern with a pointer LVALUE
+    # keeps its direct reading (T = int32*), mutating the caller's pointer,
+    # not the pointee.
+    assert run(
+        "fn redirect<T>(mut a: T, b: T) { a = b; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 1;\n"
+        "    let y: int32 = 5;\n"
+        "    let p = &x;\n"
+        "    redirect(p, &y);\n"
+        "    return *p;\n"
+        "}"
+    ) == 5
+
+
 def test_generic_mixed_direct_lend_and_decay():
     # One mut position takes the caller's own lvalue, the other decays a
     # proven pointer, in the same call.

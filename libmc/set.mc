@@ -43,13 +43,13 @@ struct set<K, V> {
  * @param self:     set to initialise
  * @param capacity: initial slot count; must be > 0
  */
-fn set_init<K, V>(self: struct set<K, V>*, capacity: uint64) {
-    self->entries = alloc<struct set_entry<K, V>>(capacity);
-    self->length = 0;
-    self->capacity = capacity;
+fn set_init<K, V>(mut self: struct set<K, V>, capacity: uint64) {
+    self.entries = alloc<struct set_entry<K, V>>(capacity);
+    self.length = 0;
+    self.capacity = capacity;
 
     for i in range(capacity) {
-        self->entries[i].state = set_entry_state::EMPTY;
+        self.entries[i].state = set_entry_state::EMPTY;
     }
 }
 
@@ -58,12 +58,12 @@ fn set_init<K, V>(self: struct set<K, V>*, capacity: uint64) {
  *
  * @param self: set to destroy
  */
-fn set_destroy<K, V>(self: struct set<K, V>*) {
-    dealloc(self->entries);
+fn set_destroy<K, V>(mut self: struct set<K, V>) {
+    dealloc(self.entries);
 
-    self->entries = null;
-    self->length = 0;
-    self->capacity = 0;
+    self.entries = null;
+    self.length = 0;
+    self.capacity = 0;
 }
 
 /**
@@ -74,34 +74,34 @@ fn set_destroy<K, V>(self: struct set<K, V>*) {
  * @param key:   key to insert or update
  * @param value: value to associate with key
  */
-fn set_set<K, V>(self: struct set<K, V>*, key: K, value: V) {
-    if (self->length * 10 >= self->capacity * 7)
+fn set_set<K, V>(mut self: struct set<K, V>, key: K, value: V) {
+    if (self.length * 10 >= self.capacity * 7)
         set_grow(self);
 
-    let slot = hash(key) % self->capacity;
+    let slot = hash(key) % self.capacity;
     let tombstone_slot: uint64 = 0;
     let has_tombstone = false;
 
-    while (self->entries[slot].state != set_entry_state::EMPTY) {
-        if (self->entries[slot].state == set_entry_state::OCCUPIED) {
-            if (self->entries[slot].key == key) {
-                self->entries[slot].value = value;
+    while (self.entries[slot].state != set_entry_state::EMPTY) {
+        if (self.entries[slot].state == set_entry_state::OCCUPIED) {
+            if (self.entries[slot].key == key) {
+                self.entries[slot].value = value;
                 return;
             }
         } else if (!has_tombstone) {
             has_tombstone = true;
             tombstone_slot = slot;
         }
-        slot = (slot + 1) % self->capacity;
+        slot = (slot + 1) % self.capacity;
     }
 
     if (has_tombstone)
         slot = tombstone_slot;
 
-    self->entries[slot].key = key;
-    self->entries[slot].value = value;
-    self->entries[slot].state = set_entry_state::OCCUPIED;
-    self->length += 1;
+    self.entries[slot].key = key;
+    self.entries[slot].value = value;
+    self.entries[slot].state = set_entry_state::OCCUPIED;
+    self.length += 1;
 }
 
 /**
@@ -113,17 +113,17 @@ fn set_set<K, V>(self: struct set<K, V>*, key: K, value: V) {
  *
  * @return true if key was found, false otherwise
  */
-fn set_get<K, V>(self: struct set<K, V>*, key: K, mut out: V) -> bool {
-    let slot = hash(key) % self->capacity;
+fn set_get<K, V>(const self: struct set<K, V>, key: K, mut out: V) -> bool {
+    let slot = hash(key) % self.capacity;
 
-    while (self->entries[slot].state != set_entry_state::EMPTY) {
-        if (self->entries[slot].state == set_entry_state::OCCUPIED) {
-            if (self->entries[slot].key == key) {
-                out = self->entries[slot].value;
+    while (self.entries[slot].state != set_entry_state::EMPTY) {
+        if (self.entries[slot].state == set_entry_state::OCCUPIED) {
+            if (self.entries[slot].key == key) {
+                out = self.entries[slot].value;
                 return true;
             }
         }
-        slot = (slot + 1) % self->capacity;
+        slot = (slot + 1) % self.capacity;
     }
 
     return false;
@@ -135,19 +135,19 @@ fn set_get<K, V>(self: struct set<K, V>*, key: K, mut out: V) -> bool {
  * @param self: set to remove from
  * @param key:  key to remove
  */
-fn set_remove<K, V>(self: struct set<K, V>*, key: K) {
-    let slot = hash(key) % self->capacity;
+fn set_remove<K, V>(mut self: struct set<K, V>, key: K) {
+    let slot = hash(key) % self.capacity;
 
-    while (self->entries[slot].state != set_entry_state::EMPTY) {
-        if (self->entries[slot].state == set_entry_state::OCCUPIED) {
-            if (self->entries[slot].key == key) {
-                self->entries[slot].state = set_entry_state::TOMBSTONE;
-                self->length -= 1;
+    while (self.entries[slot].state != set_entry_state::EMPTY) {
+        if (self.entries[slot].state == set_entry_state::OCCUPIED) {
+            if (self.entries[slot].key == key) {
+                self.entries[slot].state = set_entry_state::TOMBSTONE;
+                self.length -= 1;
                 return;
             }
         }
         slot += 1;
-        slot %= self->capacity;
+        slot %= self.capacity;
     }
 }
 
@@ -158,9 +158,9 @@ fn set_remove<K, V>(self: struct set<K, V>*, key: K) {
  * @param self: set to grow
  */
 @private
-fn set_grow<K, V>(self: struct set<K, V>*) {
-    let old_capacity = self->capacity;
-    let old_entries = self->entries;
+fn set_grow<K, V>(mut self: struct set<K, V>) {
+    let old_capacity = self.capacity;
+    let old_entries = self.entries;
 
     let new_capacity: uint64 = old_capacity * 2;
     let new_entries = alloc<struct set_entry<K, V>>(new_capacity);
@@ -184,8 +184,8 @@ fn set_grow<K, V>(self: struct set<K, V>*) {
     }
 
     dealloc(old_entries);
-    self->entries = new_entries;
-    self->capacity = new_capacity;
+    self.entries = new_entries;
+    self.capacity = new_capacity;
 }
 
 /***************************************

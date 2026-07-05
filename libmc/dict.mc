@@ -79,13 +79,13 @@ fn str_clone(@nonnull s: char*) -> char* {
  * @param self:     dict to initialise
  * @param capacity: initial slot count; must be > 0
  */
-fn dict_init<V>(self: struct dict<V>*, capacity: uint64) {
-    self->entries = alloc<struct dict_entry<V>>(capacity);
-    self->length = 0;
-    self->capacity = capacity;
+fn dict_init<V>(mut self: struct dict<V>, capacity: uint64) {
+    self.entries = alloc<struct dict_entry<V>>(capacity);
+    self.length = 0;
+    self.capacity = capacity;
 
     for i in range(capacity) {
-        self->entries[i].state = dict_entry_state::EMPTY;
+        self.entries[i].state = dict_entry_state::EMPTY;
     }
 }
 
@@ -95,16 +95,16 @@ fn dict_init<V>(self: struct dict<V>*, capacity: uint64) {
  *
  * @param self: dict to destroy
  */
-fn dict_destroy<V>(self: struct dict<V>*) {
-    for i in range(self->capacity) {
-        if (self->entries[i].state == dict_entry_state::OCCUPIED)
-            dealloc(self->entries[i].key);
+fn dict_destroy<V>(mut self: struct dict<V>) {
+    for i in range(self.capacity) {
+        if (self.entries[i].state == dict_entry_state::OCCUPIED)
+            dealloc(self.entries[i].key);
     }
-    dealloc(self->entries);
+    dealloc(self.entries);
 
-    self->entries = null;
-    self->length = 0;
-    self->capacity = 0;
+    self.entries = null;
+    self.length = 0;
+    self.capacity = 0;
 }
 
 /**
@@ -116,35 +116,35 @@ fn dict_destroy<V>(self: struct dict<V>*) {
  * @param key:   string key; the caller keeps ownership
  * @param value: value to associate with key
  */
-fn dict_set<V>(self: struct dict<V>*, @nonnull key: char*, value: V) {
-    if (self->length * 10 >= self->capacity * 7)
+fn dict_set<V>(mut self: struct dict<V>, @nonnull key: char*, value: V) {
+    if (self.length * 10 >= self.capacity * 7)
         dict_grow(self);
 
-    let slot = hash(key) % self->capacity;
+    let slot = hash(key) % self.capacity;
     let tombstone_slot: uint64 = 0;
     let has_tombstone = false;
 
-    while (self->entries[slot].state != dict_entry_state::EMPTY) {
-        if (self->entries[slot].state == dict_entry_state::OCCUPIED) {
+    while (self.entries[slot].state != dict_entry_state::EMPTY) {
+        if (self.entries[slot].state == dict_entry_state::OCCUPIED) {
             // OCCUPIED slots always hold an owned key copy
-            if (str_eq(self->entries[slot].key!, key)) {
-                self->entries[slot].value = value;
+            if (str_eq(self.entries[slot].key!, key)) {
+                self.entries[slot].value = value;
                 return;
             }
         } else if (!has_tombstone) {
             has_tombstone = true;
             tombstone_slot = slot;
         }
-        slot = (slot + 1) % self->capacity;
+        slot = (slot + 1) % self.capacity;
     }
 
     if (has_tombstone)
         slot = tombstone_slot;
 
-    self->entries[slot].key = str_clone(key);
-    self->entries[slot].value = value;
-    self->entries[slot].state = dict_entry_state::OCCUPIED;
-    self->length += 1;
+    self.entries[slot].key = str_clone(key);
+    self.entries[slot].value = value;
+    self.entries[slot].state = dict_entry_state::OCCUPIED;
+    self.length += 1;
 }
 
 /**
@@ -157,18 +157,18 @@ fn dict_set<V>(self: struct dict<V>*, @nonnull key: char*, value: V) {
  *
  * @return true if key was found, false otherwise
  */
-fn dict_get<V>(self: struct dict<V>*, @nonnull key: char*, mut out: V) -> bool {
-    let slot = hash(key) % self->capacity;
+fn dict_get<V>(const self: struct dict<V>, @nonnull key: char*, mut out: V) -> bool {
+    let slot = hash(key) % self.capacity;
 
-    while (self->entries[slot].state != dict_entry_state::EMPTY) {
-        if (self->entries[slot].state == dict_entry_state::OCCUPIED) {
+    while (self.entries[slot].state != dict_entry_state::EMPTY) {
+        if (self.entries[slot].state == dict_entry_state::OCCUPIED) {
             // OCCUPIED slots always hold an owned key copy
-            if (str_eq(self->entries[slot].key!, key)) {
-                out = self->entries[slot].value;
+            if (str_eq(self.entries[slot].key!, key)) {
+                out = self.entries[slot].value;
                 return true;
             }
         }
-        slot = (slot + 1) % self->capacity;
+        slot = (slot + 1) % self.capacity;
     }
 
     return false;
@@ -181,21 +181,21 @@ fn dict_get<V>(self: struct dict<V>*, @nonnull key: char*, mut out: V) -> bool {
  * @param self: dict to remove from
  * @param key:  string key to remove
  */
-fn dict_remove<V>(self: struct dict<V>*, @nonnull key: char*) {
-    let slot = hash(key) % self->capacity;
+fn dict_remove<V>(mut self: struct dict<V>, @nonnull key: char*) {
+    let slot = hash(key) % self.capacity;
 
-    while (self->entries[slot].state != dict_entry_state::EMPTY) {
-        if (self->entries[slot].state == dict_entry_state::OCCUPIED) {
+    while (self.entries[slot].state != dict_entry_state::EMPTY) {
+        if (self.entries[slot].state == dict_entry_state::OCCUPIED) {
             // OCCUPIED slots always hold an owned key copy
-            if (str_eq(self->entries[slot].key!, key)) {
-                dealloc(self->entries[slot].key);
-                self->entries[slot].key = null;
-                self->entries[slot].state = dict_entry_state::TOMBSTONE;
-                self->length -= 1;
+            if (str_eq(self.entries[slot].key!, key)) {
+                dealloc(self.entries[slot].key);
+                self.entries[slot].key = null;
+                self.entries[slot].state = dict_entry_state::TOMBSTONE;
+                self.length -= 1;
                 return;
             }
         }
-        slot = (slot + 1) % self->capacity;
+        slot = (slot + 1) % self.capacity;
     }
 }
 
@@ -207,9 +207,9 @@ fn dict_remove<V>(self: struct dict<V>*, @nonnull key: char*) {
  * @param self: dict to grow
  */
 @private
-fn dict_grow<V>(self: struct dict<V>*) {
-    let old_capacity = self->capacity;
-    let old_entries = self->entries;
+fn dict_grow<V>(mut self: struct dict<V>) {
+    let old_capacity = self.capacity;
+    let old_entries = self.entries;
 
     let new_capacity: uint64 = old_capacity * 2;
     let new_entries = alloc<struct dict_entry<V>>(new_capacity);
@@ -233,8 +233,8 @@ fn dict_grow<V>(self: struct dict<V>*) {
     }
 
     dealloc(old_entries);
-    self->entries = new_entries;
-    self->capacity = new_capacity;
+    self.entries = new_entries;
+    self.capacity = new_capacity;
 }
 
 /***************************************

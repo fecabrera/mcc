@@ -34,13 +34,16 @@ fn main() -> int32 {
     // The same `for x in` walks any container. A set yields a `pair<K, V>` per
     // entry, in unspecified (hash-table) order; read its fields as x.key and
     // x.value. `pair` is a builtin struct, so no import is needed to name it.
+    // The set and dict functions take const/mut receivers, so a local passes
+    // directly: no & needed. (A set<K, V>* still works via pointer decay; see
+    // examples/functions/pointer_decay.mc.)
     let table: set<uint64, uint64>;
-    set_init(&table, 2);
-    defer set_destroy(&table);
+    set_init(table, 2);
+    defer set_destroy(table);
 
-    set_set(&table, 1, 10);
-    set_set(&table, 2, 11);
-    set_set(&table, 3, 12);
+    set_set(table, 1, 10);
+    set_set(table, 2, 11);
+    set_set(table, 3, 12);
 
     for x in &table {
         println("%llu: %llu", x.key, x.value);
@@ -49,11 +52,11 @@ fn main() -> int32 {
     // A dict iterates the same way: a string key and its value per entry. Each
     // x.key borrows the dict's own copy, valid until the dict changes.
     let cmds: dict<char*>;
-    dict_init(&cmds, 2);
-    defer dict_destroy(&cmds);
+    dict_init(cmds, 2);
+    defer dict_destroy(cmds);
 
-    dict_set(&cmds, "help", "show this help");
-    dict_set(&cmds, "quit", "exit the program");
+    dict_set(cmds, "help", "show this help");
+    dict_set(cmds, "quit", "exit the program");
 
     for x in &cmds {
         println("%s: %s", x.key, x.value);

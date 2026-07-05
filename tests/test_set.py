@@ -1,4 +1,6 @@
-"""lib/set.mc: the open-addressing hash table, checked against Python."""
+"""lib/set.mc: the open-addressing hash table, checked against Python; its
+self parameters are mut/const receivers (stage 3 of the libmc receiver
+migration)."""
 
 from pathlib import Path
 
@@ -17,6 +19,51 @@ def splitmix64(key: int) -> int:
     return key
 
 
+def test_direct_receiver_with_growth():
+    # The post-migration idiom: a local set passes directly, no `&`.
+    # Capacity 2 forces set_grow (mut-to-mut re-lending inside set_set).
+    assert run(
+        """
+        import "set";
+        fn main() -> int32 {
+            let s: struct set<uint64, uint64>;
+            set_init(s, 2);
+            set_set(s, 1, 10);
+            set_set(s, 2, 20);
+            set_set(s, 3, 30);
+            set_set(s, 2, 22);                 // update in place, same length
+            let v: uint64 = 0;
+            if (!set_get(s, 2, v)) return 100;
+            if (v != 22) return 101;
+            if (s.length != 3) return 102;
+            if (s.capacity < 4) return 103;    // grew from 2
+            set_remove(s, 1);
+            if (set_get(s, 1, v)) return 104;
+            set_destroy(s);
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_amp_call_sites_still_compile():
+    # Pre-migration `&x` call shapes keep working via pointer decay.
+    assert run(
+        """
+        import "set";
+        fn main() -> int32 {
+            let s: struct set<int32, int32>;
+            set_init(&s, 4);
+            set_set(&s, 5, 50);
+            let v: int32 = 0;
+            let found = set_get(&s, 5, v);
+            set_destroy(&s);
+            return (found and v == 50) ? 0 : 1;
+        }
+        """
+    ) == 0
+
+
 def test_iteration_visits_all_entries():
     # Drives set `next`, instantiating it -- which writes the entry to the out
     # pair via a `set_entry as pair` value upcast (see lib/set.mc).
@@ -26,6 +73,7 @@ def test_iteration_visits_all_entries():
         import "set";
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
+            if (s == null) return 1;    // proves s for the receiver slots below
             set_init(s, 8);
             set_set(s, 10, 100);
             set_set(s, 20, 200);
@@ -52,6 +100,7 @@ def test_for_in_iterates_set():
         import "set";
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
+            if (s == null) return 1;    // proves s for the receiver slots below
             set_init(s, 8);
             set_set(s, 10, 100);
             set_set(s, 20, 200);
@@ -90,21 +139,22 @@ def test_set_behaves_like_a_dict(tmp_path, capfd):
         import "libc/stdio";
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
+            if (s == null) { return 1; }   // narrows s, loops keep it
             set_init(s, 4);
 
             let i: uint64 = 0;
             while (i < 200) {
-                set_set(s, i * 7, i * 1000);   // insert (forces growth)
-                i = i + 1;
-            }
+                set_set(s!, i * 7, i * 1000);  // insert (forces growth); s at a
+                i = i + 1;                     // mut receiver in a loop drops
+            }                                  // its narrowed fact, so !
             i = 0;
             while (i < 100) {
-                set_set(s, i * 7, i * 2000);   // update
+                set_set(s!, i * 7, i * 2000);  // update
                 i = i + 1;
             }
             i = 0;
             while (i < 200) {
-                set_remove(s, i * 7);          // remove every third key
+                set_remove(s!, i * 7);         // remove every third key
                 i = i + 3;
             }
 
@@ -112,7 +162,7 @@ def test_set_behaves_like_a_dict(tmp_path, capfd):
             let value: uint64 = 0;
             i = 0;
             while (i < 200) {
-                let found = set_get(s, i * 7, value);
+                let found = set_get(s!, i * 7, value);
                 if (i % 3 == 0) {
                     if (found)
                         errors = errors + 1;
@@ -127,17 +177,17 @@ def test_set_behaves_like_a_dict(tmp_path, capfd):
                 }
                 i = i + 1;
             }
-            if (set_get(s, 999999, value))
+            if (set_get(s!, 999999, value))
                 errors = errors + 1;           // absent key must not be found
 
             i = 0;
             while (i < 200) {
-                set_set(s, i * 7, 42);         // re-insert into tombstones
+                set_set(s!, i * 7, 42);        // re-insert into tombstones
                 i = i + 3;
             }
 
             printf("%llu %llu %llu\\n", errors, s->length, s->capacity);
-            set_destroy(s);
+            set_destroy(s!);                   // the loops killed s's fact for good
             dealloc(s);
             return 0;
         }
@@ -159,6 +209,7 @@ def test_generic_keys_and_values(tmp_path, capfd):
         fn main() -> int32 {
             // int32 keys mapping to float64 values
             let prices = alloc<struct set<int32, float64>>(1);
+            if (prices == null) { return 1; }  // proves prices for the receivers
             set_init(prices, 8);
             set_set(prices, -5, 1.25);
             set_set(prices, 7, 2.5);
@@ -170,6 +221,7 @@ def test_generic_keys_and_values(tmp_path, capfd):
 
             // pointer keys (hashed via ptrtoint)
             let names = alloc<struct set<uint8*, int32>>(1);
+            if (names == null) { return 1; }   // proves names for the receivers
             set_init(names, 8);
             let hello: uint8* = "hello";   // a uint8* key, matching set<uint8*, _>
             set_set(names, hello, 42);
