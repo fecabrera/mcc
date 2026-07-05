@@ -528,7 +528,7 @@ already do).
         ambiguous), and the writability checks (`const`, `@volatile`,
         `@packed`) are judged against the chosen overload only; implemented,
         see [mut parameters](docs/language.md#mut-parameters)
-  - [ ] pointer decay into `const`/`mut` parameters — a `T*` argument in a
+  - [x] pointer decay into `const`/`mut` parameters — a `T*` argument in a
         `const T` or `mut T` slot implicitly dereferences, so the callee sees
         the pointee (read-only or writable) without the caller writing
         `*var`: with `fn append(mut self: mystruct, const rhs: mystruct)`, a
@@ -584,7 +584,8 @@ already do).
         the mechanism that lets the `libmc` container-self migration to
         `mut` receivers keep one call shape for stack containers and heap
         `T*`s alike, even before method syntax lands (the migration is the
-        item nested below):
+        item nested below); implemented, see
+        [pointer decay](docs/language.md#pointer-decay-into-constmut-parameters):
     - [ ] `libmc` receiver migration — flip the standard library's struct
           functions from raw pointer selves to receiver markers: read-only
           accessors become `const self` (the

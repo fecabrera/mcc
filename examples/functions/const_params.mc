@@ -51,5 +51,6 @@ fn main() -> int32 {
     return 0;
 }
 
-// See also: mut_params.mc (write-through, the dual of const), and the pointer
-// promises in noalias.mc (@noalias) and nonnull.mc (@nonnull).
+// See also: mut_params.mc (write-through, the dual of const), the pointer
+// promises in noalias.mc (@noalias) and nonnull.mc (@nonnull), and
+// pointer_decay.mc for a proven-non-null T* decaying into a const-struct slot.

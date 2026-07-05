@@ -6266,15 +6266,81 @@ class CodeGen:
                 line,
             )
 
+    def decays_to(self, arg_type: LangType, ptype: LangType, mut: bool) -> bool:
+        """Whether a pointer argument type may decay into a hidden-ref slot.
+
+        Pointer decay forwards a proven-non-null ``T*`` into a ``const T``
+        (struct) or ``mut T`` parameter -- the slot already travels as a
+        hidden reference, so the pointer value stands in for the usual
+        ``&lvalue``. Exactly one level: the pointee itself must be the
+        parameter's type (the pointee of a ``T**`` is ``T*``, so a double
+        pointer only decays into ``const``/``mut T*``, never twice). A
+        ``mut`` slot needs a mutable pointee -- the callee writes through
+        it -- while a ``const`` slot also accepts a pointer to a ``const``
+        pointee.
+
+        Args:
+            arg_type: The argument's type.
+            ptype: The (resolved) parameter type of the ``const``/``mut``
+                slot.
+            mut: ``True`` for a ``mut`` slot, ``False`` for a ``const`` one.
+
+        Returns:
+            ``True`` when the argument may decay into the slot.
+        """
+        if arg_type is NULLT:
+            return False
+        bare = strip_const(arg_type)
+        if bare.pointee is None:
+            return False
+        if mut:
+            return bare.pointee == ptype
+        return strip_const(bare.pointee) == strip_const(ptype)
+
+    def check_decay_arg(
+        self, arg_expr, arg_type: LangType, kind: str, ptype: LangType,
+        context: str, line: int,
+    ):
+        """Require proof that a pointer decaying into ``const``/``mut`` is non-null.
+
+        A decay is a two-sided promise: the callee's ``const``/``mut``
+        keyword promises reference discipline, and the caller must promise
+        the pointer is non-null -- the reference formed from it is never
+        null by construction. The proof is the shipped ``@nonnull``
+        machinery (:meth:`proves_nonnull`).
+
+        Args:
+            arg_expr: The argument expression.
+            arg_type: The argument's (pointer) type, for the message.
+            kind: ``"const"`` or ``"mut"``, the receiving slot's marker.
+            ptype: The parameter type the pointer decays into.
+            context: A label describing the site, for the error message.
+            line: Source line for diagnostics.
+
+        Raises:
+            LangError: When the pointer is not provably non-null.
+        """
+        if not self.proves_nonnull(arg_expr):
+            raise LangError(
+                f"cannot pass a possibly-null {arg_type} as {context}: "
+                f"decaying into a {kind} {ptype} parameter forms a reference, "
+                "which is never null (narrow with a null check or assert "
+                "with postfix '!')",
+                line,
+            )
+
     def hidden_ref_arg(
         self, arg_expr, ptype: LangType, line: int, context: str
     ) -> ir.Value:
         """Lower a hidden-reference (const struct) argument to a pointer.
 
         When the argument already has storage of the exact type, its address is
-        shared directly -- no copy, which is the point of the optimization. An
-        rvalue (or a type that still needs coercion, e.g. an ``extends`` upcast)
-        is materialized into a temporary whose address is passed instead.
+        shared directly -- no copy, which is the point of the optimization. A
+        proven-non-null pointer to the parameter's type *decays*: the pointer
+        value itself is forwarded as the hidden reference (see
+        :meth:`decays_to`). An rvalue (or a type that still needs coercion,
+        e.g. an ``extends`` upcast) is materialized into a temporary whose
+        address is passed instead.
 
         Args:
             arg_expr: The argument expression.
@@ -6286,52 +6352,30 @@ class CodeGen:
             A pointer to the argument's storage.
         """
         if self.is_addressable_form(arg_expr):
-            addr, t, _, _ = self.gen_addr(arg_expr, line)
+            addr, t, align, volatile = self.gen_addr(arg_expr, line)
             if t.ir is ptype.ir:
                 return addr
+            if self.decays_to(t, ptype, mut=False):
+                self.check_decay_arg(
+                    arg_expr, strip_const(t), "const", ptype, context, line
+                )
+                return self.gen_load(addr, align=align, volatile=volatile)
             tv = TypedValue(self.gen_load(addr), t)
         else:
             tv = self.gen_expr(arg_expr)
+            if self.decays_to(tv.type, ptype, mut=False):
+                self.check_decay_arg(
+                    arg_expr, tv.type, "const", ptype, context, line
+                )
+                return tv.value
         return self.spill_to_temp(tv, ptype, line, context)
-
-    def mut_ref_addr(
-        self, arg_expr, line: int, context: str
-    ) -> tuple[ir.Value, LangType]:
-        """Resolve a ``mut`` argument to the caller's own storage address.
-
-        Unlike :meth:`hidden_ref_arg`, a temporary is never acceptable -- the
-        callee's writes must land in the caller's variable -- so the argument
-        must be an addressable, writable lvalue, and the storage is shared
-        as-is.
-
-        Args:
-            arg_expr: The argument expression.
-            line: Source line for diagnostics.
-            context: A label for error messages (e.g. ``argument 1 of 'f'``).
-
-        Returns:
-            An ``(address, type)`` pair for the argument's storage.
-
-        Raises:
-            LangError: When the argument is not an lvalue, is read-only, is
-                ``@volatile``, or sits at an unguaranteed (packed) alignment.
-        """
-        if not self.is_addressable_form(arg_expr):
-            raise LangError(
-                f"{context} is not assignable; a mut parameter needs a "
-                "variable, field, element, or dereference",
-                line,
-            )
-        addr, t, align, volatile = self.gen_addr(arg_expr, line)
-        self.check_mut_storage(arg_expr, t, align, volatile, line)
-        return addr, t
 
     def check_mut_storage(
         self, arg_expr, t: LangType, align: int | None, volatile: bool, line: int
     ):
         """Check that already-addressed storage may be lent as a ``mut`` argument.
 
-        The legality half of :meth:`mut_ref_addr`, kept IR-free so a generic
+        The legality half of :meth:`mut_ref_arg`, kept IR-free so a generic
         call can defer it until after overload resolution: ``writes_const`` is
         syntactic, and the const/volatile/alignment facts are the flags
         :meth:`gen_addr` already returned when the address was formed.
@@ -6388,8 +6432,19 @@ class CodeGen:
     ) -> ir.Value:
         """Lower a ``mut`` argument to a pointer to the caller's storage.
 
-        The types must match exactly -- the callee writes through the pointer,
-        so no coercion (not even an adapting literal) is possible.
+        The argument must be the caller's own writable lvalue of exactly
+        ``ptype`` -- the callee writes through the pointer, so no coercion
+        (not even an adapting literal) is possible -- or a proven-non-null
+        pointer to ``ptype``, which *decays*: the pointer value itself is
+        forwarded (see :meth:`decays_to`). A decayed pointer may be an
+        rvalue (the pointee is real storage even when the pointer expression
+        is a temporary), and :meth:`check_mut_storage` does not apply to it:
+        the const/volatile/packed facts describe the pointer's own storage,
+        not the pointee's. The pointer is passed by value, so a
+        flow-narrowed non-null fact about it survives the call (contrast the
+        direct-lend invalidation in :meth:`check_mut_storage`). A string
+        literal never decays -- its bytes live in a constant global, which a
+        ``mut`` callee could write through.
 
         Args:
             arg_expr: The argument expression.
@@ -6398,16 +6453,37 @@ class CodeGen:
             context: A label for error messages.
 
         Returns:
-            A pointer to the argument's storage.
+            A pointer to the argument's storage (or the decayed pointer).
 
         Raises:
             LangError: When the argument is not a writable lvalue of exactly
-                ``ptype``.
+                ``ptype`` and not a provably non-null pointer to ``ptype``.
         """
-        addr, t = self.mut_ref_addr(arg_expr, line, context)
-        if t != ptype:
-            raise LangError(f"{context}: expected a {ptype} lvalue, got {t}", line)
-        return addr
+        if self.is_addressable_form(arg_expr):
+            addr, t, align, volatile = self.gen_addr(arg_expr, line)
+            if self.decays_to(t, ptype, mut=True):
+                self.check_decay_arg(
+                    arg_expr, strip_const(t), "mut", ptype, context, line
+                )
+                return self.gen_load(addr, align=align, volatile=volatile)
+            self.check_mut_storage(arg_expr, t, align, volatile, line)
+            if t != ptype:
+                raise LangError(
+                    f"{context}: expected a {ptype} lvalue, got {t}", line
+                )
+            return addr
+        if not isinstance(arg_expr, StrLit):
+            tv = self.gen_expr(arg_expr)
+            if self.decays_to(tv.type, ptype, mut=True):
+                self.check_decay_arg(
+                    arg_expr, tv.type, "mut", ptype, context, line
+                )
+                return tv.value
+        raise LangError(
+            f"{context} is not assignable; a mut parameter needs a "
+            "variable, field, element, or dereference",
+            line,
+        )
 
     def spill_to_temp(
         self, tv: TypedValue, ptype: LangType, line: int, context: str
@@ -6560,7 +6636,34 @@ class CodeGen:
                 arg_tvs.append(self.gen_expr(arg))
         if len(candidates) == 1:
             func = candidates[0]
-            bindings = self.resolve_bindings(func, expr, arg_tvs, lenient=False)
+            try:
+                bindings = self.resolve_bindings(func, expr, arg_tvs, lenient=False)
+            except LangError:
+                # Direct inference failed; a pointer argument at a const/mut
+                # slot may still bind through its pointee (the decay
+                # reading). Re-raise the direct error when it does not.
+                bindings = self.resolve_bindings(
+                    func, expr, arg_tvs, lenient=True, decay=True
+                )
+                if bindings is None:
+                    raise
+            else:
+                # A direct reading is never emittable at an unaddressed mut
+                # position (the parameter resolved to the argument's own
+                # type, never its pointee), so when such a position holds a
+                # pointer, prefer the decay reading when one exists --
+                # `mut x: T` with an rvalue `int32*` reads as T = int32.
+                if any(
+                    i not in addrs
+                    and arg_tvs[i].type is not NULLT
+                    and strip_const(arg_tvs[i].type).pointee is not None
+                    for i in self.mut_indices(func)
+                ):
+                    decayed_bindings = self.resolve_bindings(
+                        func, expr, arg_tvs, lenient=True, decay=True
+                    )
+                    if decayed_bindings is not None:
+                        bindings = decayed_bindings
         else:
             # Overload set: keep the viable candidates and pick the one with
             # the most specific parameter patterns (T* beats T, and so on).
@@ -6577,6 +6680,11 @@ class CodeGen:
                     mut_failures.append(min(unaddressed))
                     continue
                 viable.append((self.specificity(func), func, bindings))
+            if not viable:
+                # Two-tier viability: decay readings enter resolution only
+                # when no candidate matched the pointer type directly, so
+                # `f(x: T*)` beside `f(mut x: T)` stays unambiguous.
+                viable = self.decay_viable(candidates, expr, arg_tvs, addrs)
             if not viable:
                 if len(mut_failures) == 1:
                     # Exactly one candidate matched but for an rvalue in a
@@ -6609,13 +6717,44 @@ class CodeGen:
         # The winner is known: run the deferred mut legality checks against
         # the chosen signature (all IR-free -- the address and its
         # const/volatile/alignment facts were recorded when it was formed).
-        mut_positions = self.mut_indices(func)
-        for i in sorted(mut_positions):
-            if i not in addrs:
-                raise LangError(self.not_assignable(i, expr.name), expr.line)
-            _, t, align, volatile = addrs[i]
-            self.check_mut_storage(expr.args[i], t, align, volatile, expr.line)
+        # Instantiation comes first: identifying a decayed position needs
+        # the resolved parameter types.
         fn, ret, params = self.instantiate(func, bindings, expr.line)
+        mut_positions = self.mut_indices(func)
+        decayed: set[int] = set()
+        for i in sorted(mut_positions):
+            context = f"argument {i + 1} of {expr.name!r}"
+            p = params[i]
+            if i in addrs:
+                # The caller's storage address was formed before inference;
+                # the instantiated parameter type must match it exactly --
+                # unless the storage holds a pointer to it, which decays.
+                _, t, align, volatile = addrs[i]
+                if self.decays_to(t, p, mut=True):
+                    self.check_decay_arg(
+                        expr.args[i], strip_const(t), "mut", p, context, expr.line
+                    )
+                    decayed.add(i)
+                    continue
+                self.check_mut_storage(expr.args[i], t, align, volatile, expr.line)
+                if t != p:
+                    raise LangError(
+                        f"{context}: expected a {p} lvalue, got {t}", expr.line
+                    )
+                continue
+            # No address was formed (an rvalue): only a proven-non-null
+            # pointer to the parameter's type may decay in. A string
+            # literal's bytes live in a constant global, so it never does.
+            tv = arg_tvs[i]
+            if self.decays_to(tv.type, p, mut=True) and not isinstance(
+                expr.args[i], StrLit
+            ):
+                self.check_decay_arg(
+                    expr.args[i], tv.type, "mut", p, context, expr.line
+                )
+                decayed.add(i)
+                continue
+            raise LangError(self.not_assignable(i, expr.name), expr.line)
         # The proof is syntactic, so it runs on the argument expressions even
         # though they were already lowered to values for binding inference.
         for i in self.nonnull_indices(func):
@@ -6628,20 +6767,25 @@ class CodeGen:
         for i, (tv, p) in enumerate(zip(arg_tvs, params)):
             context = f"argument {i + 1} of {expr.name!r}"
             if i in mut_positions:
-                # The caller's storage address was formed before inference;
-                # the instantiated parameter type must match it exactly.
-                addr, t, _, _ = addrs[i]
-                if t != p:
-                    raise LangError(
-                        f"{context}: expected a {p} lvalue, got {t}", expr.line
-                    )
-                args.append(addr)
+                # A decayed pointer is forwarded by value (it was already
+                # loaded, once, when the argument was evaluated); a direct
+                # lend passes the caller's storage address.
+                args.append(tv.value if i in decayed else addrs[i][0])
             elif i in hidden:
-                # The args are already lowered to values for binding inference;
-                # a const hidden-reference parameter takes a pointer, so spill
-                # to a temporary (no shared-storage optimization on the
-                # generic path).
-                args.append(self.spill_to_temp(tv, p, expr.line, context))
+                # The args are already lowered to values for binding
+                # inference; a const hidden-reference parameter takes a
+                # pointer, so a proven-non-null pointer to the parameter's
+                # type decays -- forwarded as the hidden reference itself --
+                # and anything else spills to a temporary (no shared-storage
+                # optimization on the generic path).
+                if self.decays_to(tv.type, p, mut=False):
+                    self.check_decay_arg(
+                        expr.args[i], strip_const(tv.type), "const", p,
+                        context, expr.line,
+                    )
+                    args.append(tv.value)
+                else:
+                    args.append(self.spill_to_temp(tv, p, expr.line, context))
             else:
                 args.append(self.coerce(tv, p, expr.line, context).value)
         return TypedValue(self.builder.call(fn, args), ret)
@@ -6670,6 +6814,54 @@ class CodeGen:
             f"argument {position + 1} of {name!r} is not assignable; a mut "
             "parameter needs a variable, field, element, or dereference"
         )
+
+    def decay_viable(
+        self, candidates: list[Func], expr: Call, arg_tvs: list[TypedValue], addrs
+    ) -> list:
+        """Second-tier overload viability: pointer-decay readings.
+
+        Consulted only when no candidate matched the argument types directly,
+        so an exact pointer match always beats a decayed one. Each candidate
+        is re-resolved with pointer arguments at ``const``/``mut`` positions
+        unifying through their pointees; a candidate stays viable when every
+        ``mut`` position receives either the caller's storage of the exact
+        parameter type or a pointer that decays into it (string literals
+        excluded -- their bytes are a constant global).
+
+        Args:
+            candidates: The generic overload set.
+            expr: The ``Call`` node.
+            arg_tvs: The already-evaluated argument values.
+            addrs: The pre-formed ``{position: (addr, type, align, volatile)}``
+                map for maybe-``mut`` lvalue arguments.
+
+        Returns:
+            ``(specificity, func, bindings)`` entries for the viable decay
+            readings (possibly empty).
+        """
+        viable = []
+        for func in candidates:
+            bindings = self.resolve_bindings(
+                func, expr, arg_tvs, lenient=True, decay=True
+            )
+            if bindings is None:
+                continue
+            params = self.try_param_types(func, bindings)
+            if params is None:
+                continue
+            ok = True
+            for i in self.mut_indices(func):
+                if i in addrs and addrs[i][1] == params[i]:
+                    continue  # a direct lend of the caller's storage
+                if self.decays_to(
+                    arg_tvs[i].type, params[i], mut=True
+                ) and not isinstance(expr.args[i], StrLit):
+                    continue
+                ok = False
+                break
+            if ok:
+                viable.append((self.specificity(func), func, bindings))
+        return viable
 
     def fill_default_bindings(self, decl, bindings: dict[str, LangType], line: int):
         """Fill still-unbound type parameters from their declared defaults.
@@ -6723,8 +6915,57 @@ class CodeGen:
             self.type_bindings = outer_bindings
             self.current_source = outer_source
 
+    @staticmethod
+    def decay_indices(func: Func) -> frozenset[int]:
+        """Indices of ``func``'s parameters a pointer argument might decay into.
+
+        The ``const`` and ``mut`` positions: only those travel as hidden
+        references (a ``const`` scalar does not, but whether the resolved
+        type is a struct is not known until after inference, so eligibility
+        is judged post-resolution).
+        """
+        return frozenset(
+            i
+            for i, (name, _) in enumerate(func.params)
+            if name in func.mut_params or name in func.const_params
+        )
+
+    def try_param_types(
+        self, func: Func, bindings: dict[str, LangType]
+    ) -> "list[LangType] | None":
+        """Resolve a candidate's parameter types under trial bindings.
+
+        Used by the decay tier of overload resolution, where per-position
+        viability needs the concrete parameter types before any candidate is
+        instantiated.
+
+        Args:
+            func: The candidate generic function.
+            bindings: The complete trial ``{type parameter: type}`` map.
+
+        Returns:
+            The resolved parameter ``LangType``s, or ``None`` when a
+            parameter type fails to resolve under these bindings.
+        """
+        outer_bindings = self.type_bindings
+        outer_source = self.current_source
+        self.type_bindings = bindings
+        self.current_source = func.source
+        try:
+            return [self.lang_type(t, func.line) for _, t in func.params]
+        except LangError:
+            return None
+        finally:
+            self.type_bindings = outer_bindings
+            self.current_source = outer_source
+
     def resolve_bindings(
-        self, func: Func, expr: Call, arg_tvs: list[TypedValue], lenient: bool
+        self,
+        func: Func,
+        expr: Call,
+        arg_tvs: list[TypedValue],
+        lenient: bool,
+        decay: bool = False,
     ) -> dict[str, LangType] | None:
         """Determine the type-parameter bindings for calling a generic function.
 
@@ -6745,6 +6986,13 @@ class CodeGen:
             lenient: When ``True`` (an overload trial), any failure returns
                 ``None`` instead of raising, and argument shapes must match the
                 parameter patterns.
+            decay: When ``True``, a pointer argument at a ``const``/``mut``
+                position unifies through its **pointee** -- the decay
+                reading, tried only after the direct reading fails --
+                exactly one level down (``list<int32>*`` against
+                ``mut self: list<T>`` binds ``T = int32``; the pointee of a
+                ``T**`` is itself a pointer, so a double pointer never sheds
+                two levels).
 
         Returns:
             The ``{type parameter: type}`` bindings, or ``None`` when lenient and
@@ -6782,6 +7030,16 @@ class CodeGen:
                 )
             for tparam, targ in zip(func.type_params, expr.type_args):
                 bindings[tparam] = self.lang_type(targ, expr.line)
+        # The decay reading: at a const/mut position, a pointer argument's
+        # pointee stands in for its type, both for unification and for the
+        # lenient shape filter (the loaded pointer is what would be
+        # forwarded, so the pointee is what the parameter pattern sees).
+        actuals = [tv.type for tv in arg_tvs]
+        if decay:
+            for i in self.decay_indices(func):
+                bare = strip_const(actuals[i])
+                if actuals[i] is not NULLT and bare.pointee is not None:
+                    actuals[i] = bare.pointee
         try:
             if expr.type_args and len(expr.type_args) < len(func.type_params):
                 self.fill_default_bindings(func, bindings, expr.line)
@@ -6792,11 +7050,11 @@ class CodeGen:
             # literal adapts to it.
             for adaptable_pass in (False, True):
                 strict = not adaptable_pass and not expr.type_args
-                for (_, ptype), tv in zip(func.params, arg_tvs):
+                for (_, ptype), tv, actual in zip(func.params, arg_tvs, actuals):
                     if tv.adaptable == adaptable_pass and tv.type is not NULLT:
                         self.unify(
                             ptype,
-                            tv.type,
+                            actual,
                             func.type_params,
                             bindings,
                             strict,
@@ -6819,9 +7077,9 @@ class CodeGen:
                 expr.line,
             )
         if lenient:
-            for (_, ptype), tv in zip(func.params, arg_tvs):
+            for (_, ptype), tv, actual in zip(func.params, arg_tvs, actuals):
                 if not self.shape_matches(
-                    ptype, tv.type, tv.adaptable, func.type_params, expr.line
+                    ptype, actual, tv.adaptable, func.type_params, expr.line
                 ):
                     return None
         return bindings

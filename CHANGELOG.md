@@ -10,6 +10,31 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Pointer decay into `const`/`mut` parameters** — a proven-non-null `T*`
+  argument at a `const T` (struct) or `mut T` slot implicitly dereferences:
+  the slot already travels as a hidden reference, so the pointer value is
+  forwarded instead of forming `&lvalue`, and a heap `point*` calls
+  `fn shift(mut p: point, const by: point)` exactly like a stack value. A
+  decay is a two-sided promise: the callee's `const`/`mut` keyword supplies
+  the reference discipline, and the caller must prove the pointer non-null
+  through the `@nonnull` machinery (`&x`, a `@nonnull` parameter, a
+  null-check-narrowed local, or postfix `p!`) — an unproven pointer is a
+  compile error naming the guard and the hatch. An **rvalue** `T*` may decay
+  into `mut T` (the pointee is real storage even when the pointer expression
+  is a temporary), generic inference unifies through the pointee one level
+  down (`list<int32>*` at `mut self: list<T>` binds `T = int32`), and under
+  overloading decayed readings enter resolution only when no candidate
+  matches the pointer type directly, so `f(x: T*)` beside `f(mut x: T)`
+  stays unambiguous. Fenced: hidden-reference slots only (a `const` scalar
+  or plain by-value `T` still needs `*var`), exactly one level (`T**` only
+  reaches `const`/`mut T*`), string literals never decay into `mut`, and a
+  decayed argument is a borrowed reference, never a transfer of ownership.
+  The explicit `*p` spelling stays legal and proof-free. First stage of the
+  `libmc` receiver migration (the stdlib's signatures are unchanged in this
+  release). See
+  [Pointer decay](docs/language.md#pointer-decay-into-constmut-parameters)
+  and `examples/functions/pointer_decay.mc`.
+
 - **String-literal elements adapt to `slice<char>`** — the Stage 4 borrow-in
   now reaches array-element and `@static` positions:
   `let dirs: slice<char>[2] = ["bin", "usr/bin"];` works with no per-element

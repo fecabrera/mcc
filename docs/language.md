@@ -170,6 +170,98 @@ See [examples/functions/mut_params.mc](../examples/functions/mut_params.mc)
 and, for overloads mixing `mut`,
 [examples/functions/mut_overloads.mc](../examples/functions/mut_overloads.mc).
 
+### Pointer decay into const/mut parameters
+
+A `T*` argument at a `const T` (struct) or `mut T` slot implicitly
+dereferences — the pointer **decays** — so the callee sees the pointee,
+read-only or writable, without the caller writing `*var`. A stack value and a
+heap pointer then call the same function identically:
+
+```c
+import "memory";
+
+struct point { x: int32; y: int32; }
+
+fn shift(mut p: struct point, const by: struct point) {
+    p.x += by.x;
+    p.y += by.y;
+}
+
+fn main() -> int32 {
+    let a = point { x = 1, y = 2 };
+    let d = point { x = 10, y = 20 };
+    let hp = new<point>();      // point*, heap storage
+    if (hp == null) { return 1; }
+    *hp = a;
+    shift(a, &d);               // stack value and rvalue pointer
+    shift(hp, &d);              // heap pointer decays the same way
+    dealloc(hp);
+    return 0;
+}
+```
+
+Mechanically the feature is cheap: a `const` struct parameter and a `mut`
+parameter already travel as a hidden reference, so decay forwards the pointer
+value instead of forming `&lvalue`. That is also why an **rvalue** `T*` may
+decay into `mut T` — the pointee is real storage even when the pointer
+expression is a temporary (`shift(&a, ...)`, a call result, a `p!`) —
+deliberately unlike the plain rule that a `mut` argument must be an lvalue.
+
+A decay is a **two-sided promise**. The callee's side is the receiver
+contract already in the declaration: `const` will not write through the
+reference, `mut` writes through it and never lets it escape. The caller's
+side is a value-supplier promise in the `@nonnull` family: the pointer must
+be **provably non-null**, because a `const`/`mut` reference is never null by
+construction. The proof is the same machinery `@nonnull` uses — an `&x`, a
+`@nonnull` parameter, a local seeded or narrowed by a null check, or the
+postfix `p!` assertion:
+
+```c
+fn consume(p: struct point*, const by: struct point) {
+    if (p == null) { return; }
+    shift(p, by);               // narrowed: proven for this whole scope
+}
+```
+
+An unproven pointer at a decaying slot is a compile error naming the fix:
+
+```
+example.mc: error: line 3: cannot pass a possibly-null point* as argument 1
+of 'shift': decaying into a mut point parameter forms a reference, which is
+never null (narrow with a null check or assert with postfix '!')
+```
+
+The explicit spelling `shift(*p, ...)` also stays legal and needs no proof:
+the dereference is visible at the call site and carries the usual
+null-dereference responsibility, exactly as it did before decay existed.
+
+The rule is fenced in four ways:
+
+- **Hidden-reference slots only.** `const` struct parameters and `mut`
+  parameters of any type. A `const` scalar parameter is a by-value copy with
+  no reference behind it, and a plain by-value `T` parameter still needs an
+  explicit `*var` — the copy stays visible.
+- **Exactly one level.** `T*` decays to `const`/`mut T`; a `T**` decays only
+  to `const`/`mut T*` (its pointee is itself a pointer), never twice.
+- **Proven non-null**, as above. A string literal never decays into `mut` —
+  its bytes live in a constant global.
+- **An exact match beats a decayed one.** Under overloading, decayed
+  readings enter resolution only when no candidate matches the pointer type
+  directly, so `fn f(x: T*)` beside `fn f(mut x: T)` stays unambiguous.
+
+Generic inference participates: at a `const`/`mut` slot, unification also
+tries the argument's pointee against the parameter pattern, one level down,
+so a `list<int32>*` at `mut self: list<T>` binds `T = int32` (previously
+"cannot infer type parameter(s) T"). Facts about the *pointer's own storage*
+are irrelevant to the callee — a `const` or `@volatile` pointer variable
+decays fine (the load of the pointer itself honors them) — and because the
+pointer is passed **by value**, a flow-narrowed non-null fact survives the
+call, unlike lending the pointer variable itself as `mut`. A decayed
+argument is a borrowed reference, never a transfer of ownership.
+
+See
+[examples/functions/pointer_decay.mc](../examples/functions/pointer_decay.mc).
+
 ### @noalias parameters
 
 `@noalias` on a **pointer** parameter is mcc's `restrict`: a promise, kept by

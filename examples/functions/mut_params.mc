@@ -76,4 +76,5 @@ fn main() -> int32 {
 }
 
 // See also: const_params.mc (read-only, the dual of mut); mut_overloads.mc
-// for overloads of one generic name mixing mut and non-mut positions.
+// for overloads of one generic name mixing mut and non-mut positions;
+// pointer_decay.mc for a proven-non-null T* decaying into a mut slot.

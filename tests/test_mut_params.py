@@ -294,15 +294,33 @@ def test_rvalue_failing_one_mut_overload_is_not_assignable():
 
 
 def test_rvalue_failing_several_mut_overloads_is_no_match():
-    # Both candidates fit the shape but need an lvalue; with more than one
-    # such near-miss the general no-overload error is reported.
+    # Both candidates fit the shape but need an lvalue, and a struct rvalue
+    # is no pointer, so it cannot decay in either; with more than one such
+    # near-miss the general no-overload error is reported.
     message = "no overload of 'f' matches argument types"
     with pytest.raises(LangError, match=message):
         compile_ir(
+            "struct box<T> { value: T; }\n"
+            "fn make() -> struct box<int32> { return box { value = 1 as int32 }; }\n"
+            "fn f<T>(mut a: struct box<T>) {}\n"
             "fn f<T>(mut a: T) {}\n"
-            "fn f<T>(mut a: T*) {}\n"
-            "fn main() -> int32 { let x: int32 = 0; f(&x); return 0; }"
+            "fn main() -> int32 { f(make()); return 0; }"
         )
+
+
+def test_pointer_rvalue_decays_into_the_mut_overload():
+    # `&x` used to be a dead end for a mut overload set; with pointer decay
+    # the proven-non-null pointer decays into `mut a: T` (T = int32) once no
+    # candidate matches the pointer type directly.
+    assert run(
+        "fn f<T>(mut a: T) { a = 7 as T; }\n"
+        "fn f<T>(mut a: slice<T>) {}\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 0;\n"
+        "    f(&x);\n"
+        "    return x;\n"
+        "}"
+    ) == 7
 
 
 def test_const_lvalue_compiles_when_the_value_overload_wins():
