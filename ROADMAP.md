@@ -206,7 +206,14 @@ already do).
         base's fields out first, so a derived pointer or value upcasts to
         the base, and a generic struct already extends a base built from
         its own parameters (`struct entry<K, V> extends pair<K, V>`),
-        resolved with the instantiation's bindings in scope; implemented,
+        resolved with the instantiation's bindings in scope. Single base
+        by design, not omission: only one base can occupy offset 0, so
+        the prefix property that makes the upcast zero-cost is unique by
+        construction, and a second base would sit at an interior offset,
+        turning upcasts into pointer adjustments; `extends A, B` stays
+        rejected, additional state is composition via named fields, and
+        a type presenting as several things is the planned
+        [interfaces](#functions-and-methods) job; implemented,
         see [Structs](docs/language.md#structs)
   - [x] a bare parameter as the base — the intrusive-container shape, an
         embedded/systems feature squarely in the language's dual
@@ -770,7 +777,16 @@ already do).
     vtable is prefix-compatible with the base's (inherited methods keep
     their slot, an override replaces the entry, new methods append), so
     the polymorphic pointer upcast `C*` to `A*` stays zero-cost; single
-    inheritance only, which `extends` already is. No slicing, by
+    inheritance only, which `extends` already is, with multiple bases
+    rejected by design for the same offset-0 uniqueness plus the
+    vtable's own version of it: a second base means this-adjusting
+    thunks in every dispatch, upcasts that adjust instead of bitcast,
+    and diamond bases forcing duplicated sub-objects or C++-style
+    virtual inheritance (the pile-up every post-C++ language declined).
+    The Java-shaped split: state has one layout chain (one `extends`
+    base, additional state as named fields), contracts multiply freely
+    (a class implements any number of the interfaces below). No
+    slicing, by
     construction: a polymorphic type has reference semantics, so every
     implicit whole-value copy is rejected (by-value parameters, returns,
     fields, `let`/assignment from another value, and in particular the
@@ -835,7 +851,11 @@ already do).
         whether interfaces admit by-value receivers at all is undecided.
         Deliberately a separate item from the polymorphic structs above: an
         interface is a cross-hierarchy contract (any struct, plain or
-        polymorphic, can implement one) where the polymorphic lane is
+        polymorphic, can implement one, and any number of them: with
+        multiple inheritance rejected by design, this is how a type
+        presents as several things, the fat pointer's `data*` making
+        interior sub-object offsets a non-issue) where the polymorphic
+        lane is
         within-hierarchy, and implementing an interface leaves the
         struct itself untouched: the vtable lives in the fat pointer,
         not the object, so there is no hidden field, no layout change,
