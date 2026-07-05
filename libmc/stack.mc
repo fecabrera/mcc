@@ -12,10 +12,10 @@ struct stack<T> {
  * @param self:     stack to initialize
  * @param capacity: initial slot count
  */
-fn stack_init<T>(self: struct stack<T>*, capacity: uint64) {
-    self->data = alloc<T>(capacity);
-    self->top = 0;
-    self->capacity = capacity;
+fn stack_init<T>(mut self: struct stack<T>, capacity: uint64) {
+    self.data = alloc<T>(capacity);
+    self.top = 0;
+    self.capacity = capacity;
 }
 
 /**
@@ -23,12 +23,12 @@ fn stack_init<T>(self: struct stack<T>*, capacity: uint64) {
  *
  * @param self: stack to destroy
  */
-fn stack_destroy<T>(self: struct stack<T>*) {
-    dealloc(self->data);
+fn stack_destroy<T>(mut self: struct stack<T>) {
+    dealloc(self.data);
 
-    self->data = null;
-    self->top = 0;
-    self->capacity = 0;
+    self.data = null;
+    self.top = 0;
+    self.capacity = 0;
 }
 
 /**
@@ -37,37 +37,37 @@ fn stack_destroy<T>(self: struct stack<T>*) {
  * @param self:  stack to push onto
  * @param value: value to push
  */
-fn stack_push<T>(self: struct stack<T>*, value: T) {
-    if (self->top == self->capacity)
+fn stack_push<T>(mut self: struct stack<T>, value: T) {
+    if (self.top == self.capacity)
         stack_grow<T>(self);
 
-    self->data[self->top] = value;
-    self->top += 1;
+    self.data[self.top] = value;
+    self.top += 1;
 }
 
 /**
  * Removes and returns the top element. The caller must ensure the stack is
- * non-empty (self->top > 0); behavior is undefined on an empty stack.
+ * non-empty (self.top > 0); behavior is undefined on an empty stack.
  *
  * @param self: stack to pop from
  *
  * @return the popped value
  */
-fn stack_pop<T>(self: struct stack<T>*) -> T {
-    self->top -= 1;
-    return self->data[self->top];
+fn stack_pop<T>(mut self: struct stack<T>) -> T {
+    self.top -= 1;
+    return self.data[self.top];
 }
 
 /**
  * Returns the top element without removing it. The caller must ensure the
- * stack is non-empty (self->top > 0); behavior is undefined on an empty stack.
+ * stack is non-empty (self.top > 0); behavior is undefined on an empty stack.
  *
  * @param self: stack to peek at
  *
  * @return the top value
  */
-fn stack_peek<T>(self: struct stack<T>*) -> T {
-    return self->data[self->top - 1];
+fn stack_peek<T>(const self: struct stack<T>) -> T {
+    return self.data[self.top - 1];
 }
 
 /**
@@ -77,8 +77,8 @@ fn stack_peek<T>(self: struct stack<T>*) -> T {
  *
  * @return the live element count
  */
-fn stack_len<T>(self: struct stack<T>*) -> uint64 {
-    return self->top;
+fn stack_len<T>(const self: struct stack<T>) -> uint64 {
+    return self.top;
 }
 
 /**
@@ -88,8 +88,8 @@ fn stack_len<T>(self: struct stack<T>*) -> uint64 {
  *
  * @return true if the stack is empty, false otherwise
  */
-fn stack_is_empty<T>(self: struct stack<T>*) -> bool {
-    return self->top == 0;
+fn stack_is_empty<T>(const self: struct stack<T>) -> bool {
+    return self.top == 0;
 }
 
 /**
@@ -99,10 +99,10 @@ fn stack_is_empty<T>(self: struct stack<T>*) -> bool {
  * @param self: stack whose buffer to grow
  */
 @private
-fn stack_grow<T>(self: struct stack<T>*) {
-    let new_capacity: uint64 = self->capacity * 2;
+fn stack_grow<T>(mut self: struct stack<T>) {
+    let new_capacity: uint64 = self.capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;
-    self->data = resize(self->data, new_capacity);
-    self->capacity = new_capacity;
+    self.data = resize(self.data, new_capacity);
+    self.capacity = new_capacity;
 }

@@ -30,8 +30,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   reaches `const`/`mut T*`), string literals never decay into `mut`, and a
   decayed argument is a borrowed reference, never a transfer of ownership.
   The explicit `*p` spelling stays legal and proof-free. First stage of the
-  `libmc` receiver migration (the stdlib's signatures are unchanged in this
-  release). See
+  `libmc` receiver migration (stage 2 flips `stack` and `queue` in this
+  release; see Changed below). See
   [Pointer decay](docs/language.md#pointer-decay-into-constmut-parameters)
   and `examples/functions/pointer_decay.mc`.
 
@@ -217,6 +217,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **`libmc` receiver migration (stage 2 of 4): `stack` and `queue`** — the
+  two containers' `self` parameters flip from raw pointers
+  (`struct stack<T>*`, `struct queue<T>*`) to receiver markers: mutators
+  take `mut self` (the `init`/`destroy`/`push`/`pop` families and the
+  private `grow` helpers), read-only accessors take `const self`
+  (`stack_peek`/`stack_len`/`stack_is_empty`,
+  `queue_at`/`queue_peek`/`queue_len`/`queue_is_empty`). A local container
+  now passes directly with no `&` (`stack_push(s, 'a')`), and every
+  existing `&x` call site keeps compiling unchanged via pointer decay; a
+  heap `stack<T>*`/`queue<T>*` decays into the new slots after the usual
+  `@nonnull` proof (a one-line null guard or `p!`), so the selves are
+  non-null by construction. `dict` + `set`, then
+  `list` + `string` + `std`, follow in later stages. See
+  `examples/memory/stacks.mc` and `examples/memory/queues.mc`.
+
 - **The standard library's pointer contracts are now `@nonnull`-checked**
   (**breaking**) — the data, source, key, and destination pointer
   parameters of the stdlib annotate themselves `@nonnull`: the `memory`
@@ -230,8 +245,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   unaffected; **a heap buffer or heap-built key now needs a one-line null
   guard after the allocation** (`if (p == null) return 1;`) **or a `!`
   assertion** (inside loops, where narrowed facts drop). Container `self`
-  parameters deliberately stay plain `T*` for now, since they are slated
-  to become `mut`/`const` receivers, where non-null holds by construction.
+  parameters deliberately stayed plain `T*` in this pass, since they are
+  slated to become `mut`/`const` receivers, where non-null holds by
+  construction (`stack` and `queue` have since flipped; see the
+  receiver-migration entry above).
   Parameters for which null is meaningful also stay plain: `resize` (null
   allocates fresh) and `dealloc` (null is a no-op). The `libc/` bindings
   follow as a separate pass. See
