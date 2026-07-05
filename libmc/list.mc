@@ -29,7 +29,7 @@ fn list_init<T>(mut self: list<T>, capacity: uint64) {
  * @param src: elements to copy from -- any borrowed run, so a source list
  *             (`a as slice<T>`) or an array's borrow both work
  */
-fn list_duplicate<T>(mut dst: list<T>, const src: slice<T>) {
+fn list_init<T>(mut dst: list<T>, const src: slice<T>) {
     list_init(dst, src.length);
     list_append(dst, src);
 }
@@ -44,12 +44,9 @@ fn list_duplicate<T>(mut dst: list<T>, const src: slice<T>) {
  * @param arr:  source array to copy from
  * @param n:    number of elements to copy from arr
  */
-fn list_from_array<T>(mut self: list<T>, @nonnull arr: T*, n: uint64) {
+fn list_init<T>(mut self: list<T>, @nonnull arr: T*, n: uint64) {
     list_init(self, n);
-
-    for i in range(n) {
-        list_push(self, arr[i]);
-    }
+    list_append(self, arr, n);
 }
 
 /**
@@ -133,6 +130,20 @@ fn list_push<T>(mut self: list<T>, value: T) {
 fn list_append<T>(mut self: list<T>, const items: slice<T>) {
     for value in items {
         list_push(self, value);
+    }
+}
+
+/**
+ * Appends the first n elements of a raw array to the end of the list,
+ * growing it if needed.
+ *
+ * @param self:  list to append to
+ * @param items: source array to copy from
+ * @param n:     number of elements to append from items
+ **/
+fn list_append<T>(mut self: list<T>, @nonnull items: T*, n: uint64) {
+    for i in range(n) {
+        list_push(self, items[i]);
     }
 }
 

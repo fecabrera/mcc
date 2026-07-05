@@ -27,6 +27,17 @@ fn string_init(mut self: string) {
 }
 
 /**
+ * Prepares a string for use, reserving room for capacity bytes.
+ *
+ * @param self:     string to initialize
+ * @param capacity: initial number of bytes to reserve space for
+ */
+@inline
+fn string_init(mut self: string, capacity: uint64) {
+    list_init(self, capacity);
+}
+
+/**
  * Deep-copies src into a fresh string: initializes dst to src's length and
  * appends every byte, so the two share no storage afterward. dst must be
  * uninitialized (or already destroyed) -- duplicating into a live string leaks
@@ -36,8 +47,8 @@ fn string_init(mut self: string) {
  * @param src: bytes to copy from -- another string borrows in
  *             (`a as slice<char>`); a string literal adapts directly
  */
-fn string_duplicate(mut dst: string, const src: slice<char>) {
-    list_init(dst, src.length);
+fn string_init(mut dst: string, const src: slice<char>) {
+    string_init(dst, src.length);
     string_append(dst, src);
 }
 
@@ -50,9 +61,24 @@ fn string_duplicate(mut dst: string, const src: slice<char>) {
  * @param self: uninitialized string to build into
  * @param str:  NUL-terminated bytes to copy from
  */
-fn string_from_array(mut self: string, @nonnull str: char*) {
+fn string_init(mut self: string, @nonnull str: char*) {
     string_init(self);
-    string_append_array(self, str);
+    string_append(self, str);
+}
+
+/**
+ * Builds a string by copying the first n bytes of a raw char array:
+ * initializes self with capacity n and appends each byte, so the string owns
+ * a private copy and shares no storage with str. self must be uninitialized
+ * (or already destroyed) -- building into a live string leaks its buffer.
+ *
+ * @param self: uninitialized string to build into
+ * @param str:  source bytes to copy from
+ * @param n:    number of bytes to copy from str
+ */
+fn string_init(mut self: string, @nonnull str: char*, n: uint64) {
+    string_init(self, n);
+    string_append(self, str, n);
 }
 
 /**
@@ -128,15 +154,27 @@ fn string_append(mut self: string, const str: slice<char>) {
 }
 
 /**
+ * Appends the first n bytes of a raw char array to the end of the string,
+ * growing it if needed.
+ *
+ * @param self: string to append to
+ * @param str:  source bytes to append from
+ * @param n:    number of bytes to append from str
+ **/
+@inline
+fn string_append(mut self: string, @nonnull str: char*, n: uint64) {
+    list_append(self, str, n);
+}
+
+/**
  * Appends a NUL-terminated C string byte by byte, up to (not including) the
- * terminator: the char* counterpart of string_append, for C strings whose
- * length is not known up front.
+ * terminator: the overload for C strings whose length is not known up front.
  *
  * @param self: string to append to
  * @param str:  NUL-terminated bytes to append
  **/
 @inline
-fn string_append_array(mut self: string, @nonnull str: char*) {
+fn string_append(mut self: string, @nonnull str: char*) {
     let i: uint64 = 0;
     until (str[i] == '\0') {
         string_push(self, str[i]);

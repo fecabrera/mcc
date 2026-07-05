@@ -23,19 +23,20 @@ fn main() -> int32 {
     if (list_get(nums, 6, value))
         println("length %llu, nums[6] = %d", nums.length, value);
 
-    // list_from_array builds an owned list by copying a raw array. list_append
-    // and list_duplicate take their source as a const slice<T> -- any borrowed
-    // run -- so a source list borrows in with `as` (its slice prefix).
+    // list_init is overloaded on its source: a (T*, n) pair copies a raw
+    // array, and a const slice<T> copies any borrowed run -- so a source list
+    // borrows in with `as` (its slice prefix). list_append mirrors the same
+    // two overloads.
     let seed: int32[3];
     seed[0] = 100; seed[1] = 200; seed[2] = 300;
 
     let more: struct list<int32>;
-    list_from_array(more, &seed[0], 3);    // more = [100, 200, 300]
+    list_init(more, &seed[0], 3);          // more = [100, 200, 300]
     defer list_destroy(more);
     list_append(nums, more as slice<int32>);   // append the whole list onto nums
 
     let copy: struct list<int32>;
-    list_duplicate(copy, nums as slice<int32>);   // independent deep copy
+    list_init(copy, nums as slice<int32>);        // independent deep copy
     defer list_destroy(copy);
     println("after append: nums.length %llu, copy.length %llu",
             nums.length, copy.length);
@@ -46,5 +47,5 @@ fn main() -> int32 {
 // See also: stacks.mc and queues.mc for the other growable containers;
 // control-flow/iteration.mc to walk a list with `for x in`;
 // nonnull_heap_buffers.mc for the proof idioms a heap pointer needs when it
-// crosses the stdlib's @nonnull contracts (list_from_array's raw-array
-// source is one of them).
+// crosses the stdlib's @nonnull contracts (list_init's raw-array source is
+// one of them).

@@ -371,7 +371,7 @@ def test_list_append_concatenates(capfd):
     assert capfd.readouterr().out == "10 4\n"
 
 
-def test_list_duplicate_deep_copies(capfd):
+def test_list_init_from_slice_deep_copies(capfd):
     run(
         """
         import "list";
@@ -382,7 +382,7 @@ def test_list_duplicate_deep_copies(capfd):
             list_push(&a, 7);
             list_push(&a, 8);
             let b: struct list<int32>;
-            list_duplicate(&b, a as slice<int32>);  // independent copy
+            list_init(&b, a as slice<int32>);       // independent copy
             list_set(&a, 0, 99);                    // mutate the original
             let first: int32 = 0;
             list_get(&b, 0, first);                // copy is unaffected
@@ -396,7 +396,7 @@ def test_list_duplicate_deep_copies(capfd):
     assert capfd.readouterr().out == "7 2\n"
 
 
-def test_list_from_array_builds_a_private_copy(capfd):
+def test_list_init_from_array_builds_a_private_copy(capfd):
     run(
         """
         import "list";
@@ -405,7 +405,7 @@ def test_list_from_array_builds_a_private_copy(capfd):
             let raw: int32[3];
             raw[0] = 5; raw[1] = 6; raw[2] = 7;
             let xs: struct list<int32>;
-            list_from_array(&xs, &raw[0], 3);
+            list_init(&xs, &raw[0], 3);
             raw[0] = 0;                             // the list owns its own copy
             let sum: int32 = 0;
             for v in &xs { sum = sum + v; }

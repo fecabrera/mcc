@@ -76,9 +76,10 @@ def test_heap_pointer_decays_after_guard():
     ) == 21
 
 
-def test_from_array_and_duplicate_build_owned_copies():
-    # list_duplicate's src is a slice<T>, so it copies from any borrowed run --
-    # here an array's borrow -- not just from another list.
+def test_init_overloads_build_owned_copies():
+    # list_init's copying overloads take a raw (T*, n) run or a slice<T>, so
+    # they copy from any borrowed run -- here an array and its borrow -- not
+    # just from another list.
     assert run(
         """
         import "list";
@@ -87,10 +88,10 @@ def test_from_array_and_duplicate_build_owned_copies():
             seed[0] = 1; seed[1] = 2; seed[2] = 3;
 
             let a: struct list<int32>;
-            list_from_array(a, &seed[0], 3);
+            list_init(a, &seed[0], 3);
 
             let b: struct list<int32>;
-            list_duplicate(b, seed as slice<int32>);
+            list_init(b, seed as slice<int32>);
 
             seed[0] = 100;                  // neither list shares seed's storage
             let x: int32 = 0;
@@ -106,10 +107,10 @@ def test_from_array_and_duplicate_build_owned_copies():
     ) == 8
 
 
-def test_append_and_duplicate_through_const_source():
-    # list_append's items and list_duplicate's src are const slice<T> views: a
-    # source list borrows in with `as` (its slice prefix), and the for-in
-    # inside list_append walks the borrowed run.
+def test_append_and_init_copy_through_const_source():
+    # list_append's items and the slice overload of list_init's src are const
+    # slice<T> views: a source list borrows in with `as` (its slice prefix),
+    # and the for-in inside list_append walks the borrowed run.
     assert run(
         """
         import "list";
@@ -120,7 +121,7 @@ def test_append_and_duplicate_through_const_source():
             list_push(a, 2);
 
             let b: struct list<int32>;
-            list_duplicate(b, a as slice<int32>);   // deep copy: [1, 2]
+            list_init(b, a as slice<int32>);        // deep copy: [1, 2]
             list_push(b, 3);
             if (a.length != 2) return 100;  // a untouched by b's push
 

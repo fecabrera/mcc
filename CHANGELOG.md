@@ -281,6 +281,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **`libmc` copy/build functions collapse into overload sets** (**breaking**)
+  — the constructor- and append-flavored families adopt function overloading
+  (stage 3): `list_duplicate`/`list_from_array` fold into `list_init`
+  overloads (`list_init(b, a as slice<T>)` deep-copies a borrowed run,
+  `list_init(a, &raw[0], n)` copies a raw array),
+  `string_duplicate`/`string_from_array` fold into `string_init` overloads,
+  and `string_append_array` folds into `string_append`'s `char*` overload
+  (walks to the NUL terminator); the retired names are **removed**.
+  `string_init` also gains explicit-capacity and `(char*, n)` overloads,
+  `string_append` and `list_append` gain `(T*, n)` raw-run overloads, and
+  `hashing/splitmix64` splits into a `uint64` core plus a generic
+  converting wrapper — a mixed generic/concrete set. Resolution note: a
+  bare string literal selects the `slice<char>` overload (literal
+  adaptation beats `char*` decay), so `string_init(s, "hey")` copies 3
+  bytes with the NUL dropped; a `char*` variable selects the until-NUL
+  overload. See `examples/memory/lists.mc` and `libmc/README.md`.
+
 - **`list`/`string` sources become slices** (**breaking**) — `list_append`/
   `list_duplicate` and `string_append`/`string_duplicate`/`string_eq` take
   their source side as a `const slice<T>`/`slice<char>` view instead of a

@@ -708,7 +708,7 @@ already do).
         `@removed` replaces the whole set; implemented, see
         [Generics](docs/language.md#generics) and
         [mut parameters](docs/language.md#mut-parameters)
-  - [ ] concrete functions and methods — lift the generic-only gate so plain
+  - [x] concrete functions and methods — lift the generic-only gate so plain
         definitions overload too, the constructor-flavored families being the
         motivating case:
     ```c
@@ -857,7 +857,8 @@ already do).
     private unreferenced overload must not shrink the consumer's view
     of the set size and flip the symbol choice back to plain, a link
     failure otherwise), and mixed generic/concrete sets with
-    concrete-beats-generic on exact match. Stage 3, `libmc` adoption:
+    concrete-beats-generic on exact match. Stage 3 (**shipped**, see
+    `libmc/list.mc`/`libmc/string.mc`), `libmc` adoption:
     `string_init`/`string_from_array` collapse into the motivating
     constructor family above, with the example and docs sweep. The
     template-symbol sub-item below trails independently of all three.

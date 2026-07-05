@@ -453,7 +453,7 @@ destination pointer parameters of the stdlib declare their contracts with
 `@nonnull`: the `memory` copy/fill family (`bytecopy`, `copy`, `bytezero`,
 `zero`, `bytefill`, `fill`), the `hashing/` digests (`md5`, `crc32`,
 `murmur3`), `dict`'s string keys (`dict_set`/`dict_get`/`dict_remove`),
-and the raw-array sources of `list_from_array` and `string_from_array`.
+and the raw-array source overloads of `list_init` and `string_init`.
 Passing an unproven pointer to any of them is a compile error instead of
 a latent crash. A stack buffer (`&x`, an array) or a string literal is
 already a proof; a heap buffer needs a one-line diverging guard after the

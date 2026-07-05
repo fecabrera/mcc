@@ -8,12 +8,25 @@
  * @return hash of the buffer's contents
  */
 fn fnv1a<T>(key: T*) -> uint64 {
+    // should key be a `slice<T>` instead?
     let hash: uint64 = 14695981039346656037;
     let i: uint64 = 0;
-    while (key[i]) {
-        hash ^= key[i] as uint64;
-        hash *= 1099511628211;
+    while (key[i]) { // this would turn to `for k in key { ... }`
+        fnv1a_k(hash, key[i] as uint64);
         i += 1;
     }
     return hash;
+}
+
+/**
+ * Folds one element into a running FNV-1a hash: XORs the element in, then
+ * multiplies by the FNV prime. Internal; called by fnv1a once per element.
+ *
+ * @param hash: running hash, updated in the caller's storage
+ * @param k:    element to fold in
+ */
+@private
+fn fnv1a_k(mut hash: uint64, k: uint64) {
+    hash ^= k;
+    hash *= 1099511628211;
 }

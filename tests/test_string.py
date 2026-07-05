@@ -83,17 +83,19 @@ def test_string_append_concatenates(capfd):
     assert capfd.readouterr().out == "hi!? len=4\n"
 
 
-def test_string_append_array_copies_until_nul(capfd):
-    # string_append_array is the char* form of string_append: it walks a
-    # NUL-terminated C string byte by byte (no length known up front).
+def test_string_append_cstr_copies_until_nul(capfd):
+    # The char* overload of string_append walks a NUL-terminated C string
+    # byte by byte (no length known up front). A char* argument selects it;
+    # a bare literal would pick the slice<char> overload instead.
     run(
         """
         import "string";
         import "libc/stdio";
         fn main() -> int32 {
             let s: struct string;
-            string_from_array(s, "hey");
-            string_append_array(s, " you");
+            string_init(s, "hey");
+            let p: char* = " you";
+            string_append(s, p);
             for c in &s { printf("%c", c); }
             printf(" len=%llu\\n", s.length);
             string_destroy(s);
@@ -104,14 +106,15 @@ def test_string_append_array_copies_until_nul(capfd):
     assert capfd.readouterr().out == "hey you len=7\n"
 
 
-def test_string_from_array_copies_until_nul(capfd):
+def test_string_init_from_cstr_copies_until_nul(capfd):
     run(
         """
         import "string";
         import "libc/stdio";
         fn main() -> int32 {
             let s: struct string;
-            string_from_array(&s, "hello");   // copies bytes up to the NUL
+            let p: char* = "hello";
+            string_init(&s, p);   // char* overload: copies bytes up to the NUL
             for c in &s { printf("%c", c); }
             printf(" len=%llu\\n", s.length);
             string_destroy(&s);
@@ -149,19 +152,20 @@ def test_direct_receiver_through_the_alias(capfd):
     assert capfd.readouterr().out == "i len=2\nreset len=0\n"
 
 
-def test_string_eq_and_duplicate():
-    # string_eq and string_duplicate take their right-hand side as a
-    # slice<char>: a string borrows in with `as`, and a literal adapts
-    # directly (Stage 4), so string_eq(a, "hi") needs no ceremony.
+def test_string_eq_and_init_copy():
+    # string_eq and the slice<char> overload of string_init take their
+    # right-hand side as a slice<char>: a string borrows in with `as`, and a
+    # literal adapts directly (Stage 4), so string_eq(a, "hi") needs no
+    # ceremony.
     assert run(
         """
         import "string";
         fn main() -> int32 {
             let a: struct string;
-            string_from_array(a, "hi");
+            string_init(a, "hi");
             if (!string_eq(a, "hi")) return 4;   // a literal compares directly
             let b: struct string;
-            string_duplicate(b, a as slice<char>);
+            string_init(b, a as slice<char>);
             if (!string_eq(a, b as slice<char>)) return 1;  // equal after the deep copy
             string_push(b, '!');
             if (string_eq(a, b as slice<char>)) return 2;   // lengths differ now
@@ -175,15 +179,16 @@ def test_string_eq_and_duplicate():
     ) == 0
 
 
-def test_string_duplicate_from_literal_drops_the_nul():
-    # string_duplicate builds from any slice<char>, and a string literal
-    # adapts to that slot directly, dropping its trailing NUL.
+def test_string_init_from_literal_drops_the_nul():
+    # A bare literal resolves to the slice<char> overload of string_init
+    # (literal adaptation beats char* decay), so it drops its trailing NUL:
+    # length 3, not 4.
     assert run(
         """
         import "string";
         fn main() -> int32 {
             let s: struct string;
-            string_duplicate(s, "hey");
+            string_init(s, "hey");
             let n = s.length as int32;
             string_destroy(s);
             return n;
