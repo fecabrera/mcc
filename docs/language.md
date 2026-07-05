@@ -1454,6 +1454,15 @@ needs the arms to already be `uint8`, or an `as` cast. When the condition is
 itself constant the whole expression folds, so it may appear in a `const`
 initializer or an `@if` condition.
 
+One adaptation does reach through the ternary: when **every arm is a string
+literal**, the whole expression adapts to a `slice<char>`/`slice<const char>`
+expected from context (an argument, an annotated `let`, a `return`), exactly
+as a bare literal would ([Strings](#strings)). Each arm borrows in its own
+branch, so `flag ? "y" : "yes"` at a `slice<char>` parameter carries the
+chosen literal's own length. An explicit [borrow](#slices) distributes the
+same way — `(flag ? a : b) as slice<char>` borrows whichever owned array the
+condition picks, keeping its static length.
+
 ## Casts
 
 `expr as type` converts explicitly (there are no implicit conversions
@@ -2575,7 +2584,10 @@ element type is a char slice (`let dirs: slice<char>[2] = ["bin", "usr/bin"];`,
 including nested literals), or a `@static` initializer — the
 scalar `@static let g: slice<const char> = "hi";` and a `@static` array of
 slices both become constant `{pointer, length}` views into the string constants
-(safe: the pointee is a global constant, so there is no lifetime question). The
+(safe: the pointee is a global constant, so there is no lifetime question). A
+[ternary](#operators) whose arms are all string literals adapts as a whole —
+`writeln(flag ? "y" : "yes")` — each arm borrowing in its own branch (except in
+a `@static` initializer, which needs a single constant view). The
 borrow drops the NUL, and only *literals* adapt — a typed owned value still
 needs the explicit `as`.
 See [examples/types/strings.mc](../examples/types/strings.mc) and

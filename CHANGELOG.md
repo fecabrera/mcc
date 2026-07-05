@@ -51,6 +51,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   See [Strings](docs/language.md#strings) and
   `examples/types/string_tables.mc`.
 
+- **Ternaries of string literals adapt to `slice<char>`** — the Stage 4
+  borrow-in reaches through a conditional expression whose arms are all
+  string literals: `string_append(s, b ? "true" : "false")`,
+  `let s: slice<char> = flag ? "y" : "yes";`, and
+  `return flag ? "on" : "off";` all work with no per-arm `as`, nested
+  ternaries included. Each arm borrows its constant's bytes in its own branch
+  (NUL dropped), so the merged view carries the chosen literal's own length.
+  An explicit borrow distributes the same way: `(flag ? a : b) as slice<char>`
+  borrows whichever owned array the condition picks, keeping its static
+  length. Only literals adapt, as before — one typed arm makes the ternary a
+  plain `char*` — and a `@static` initializer stays literal-only (a runtime
+  branch has no constant view). See
+  [Operators](docs/language.md#operators) and `examples/types/strings.mc`.
+
 - **The `any` type and the `case type` type-switch (stage 1)** — `any` is a
   builtin 24-byte tagged box, `{ tag: uint64; payload: 16 bytes, align 8 }`,
   the safe counterpart to a union: the payload travels with a compile-time

@@ -47,6 +47,13 @@ fn main() -> int32 {
     }
     println("");
 
+    // The slice adaptation reaches through a ternary whose arms are all
+    // literals: each arm borrows in its own branch, so the merged view
+    // carries the chosen literal's own length.
+    let flag = true;
+    let answer: slice<char> = flag ? "y" : "yes";
+    println("answer.length %llu", answer.length);   // 1
+
     // A uint8[N], by contrast, is a raw byte buffer: its slice keeps every byte.
     // (Char literals adapt to uint8 here, since the values fit.)
     let raw: uint8[3] = ['a', 'b', 'c'];

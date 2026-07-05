@@ -2964,6 +2964,17 @@ class CodeGen:
                     self.builder.store(tv.value, slot)
                     self.bind_local(stmt.name, slot, declared)
                     return
+            if isinstance(stmt.value, Ternary) and stmt.type_name is not None:
+                declared = self.lang_type(stmt.type_name, stmt.line)
+                if self.str_literal_adapts(stmt.value, declared):
+                    # `let s: slice<char> = cond ? "a" : "b";`: every arm is a
+                    # string literal, so the ternary adapts arm by arm (Stage
+                    # 4), each arm borrowing its constant's bytes (NUL dropped).
+                    tv = self.gen_borrow_slice(stmt.value, declared, stmt.line)
+                    slot = self.builder.alloca(declared.ir, name=stmt.name)
+                    self.builder.store(tv.value, slot)
+                    self.bind_local(stmt.name, slot, declared)
+                    return
             tv = self.gen_expr(stmt.value)
             if stmt.type_name is not None:
                 declared = self.lang_type(stmt.type_name, stmt.line)
@@ -5028,14 +5039,23 @@ class CodeGen:
         literal still serves as a ``char*``/``uint8*`` for C. This is the
         implicit form of the Stage 1 ``"..." as slice<char>`` borrow.
 
+        A ternary adapts when both of its arms do (``cond ? "yes" : "no"``,
+        nested ternaries included): each arm borrows in its own branch, so the
+        merged value is already the expected slice.
+
         Args:
             expr: The argument/initializer expression.
             expected: The type the context expects.
 
         Returns:
-            ``True`` if ``expr`` is a string literal and ``expected`` is a
-            ``slice<char>`` or ``slice<const char>``.
+            ``True`` if ``expr`` is a string literal (or a ternary of adapting
+            arms) and ``expected`` is a ``slice<char>`` or ``slice<const
+            char>``.
         """
+        if isinstance(expr, Ternary):
+            return self.str_literal_adapts(expr.then, expected) and self.str_literal_adapts(
+                expr.otherwise, expected
+            )
         return (
             isinstance(expr, StrLit)
             and is_slice(expected)
@@ -5054,7 +5074,10 @@ class CodeGen:
         itself, and any struct that ``extends slice<T>`` (such as an owned
         ``list<T>``) borrows to its leading ``slice<T>`` -- the struct-prefix
         relationship, so no field name is assumed -- dropping the extra fields
-        (a list's ``capacity``).
+        (a list's ``capacity``). A ternary borrows arm by arm -- each arm
+        lowers in its own branch and the views merge in a phi -- so
+        ``flag ? "y" : "yes"`` is a ``slice<char>`` carrying the chosen
+        literal's own length.
 
         A mutable source may borrow to its read-only ``slice<const T>`` form
         (adding ``const`` is safe); a read-only source -- a ``const`` element or
@@ -5074,6 +5097,28 @@ class CodeGen:
                 shape), its element type does not match ``T``, or a read-only
                 source would borrow to a mutable slice.
         """
+        if isinstance(value_expr, Ternary):
+            # Borrowing distributes over a ternary: each arm borrows to the
+            # target in its own block (so a literal's static length survives),
+            # and the two views merge in a phi. Only the taken arm runs.
+            cond = self.gen_cond(value_expr.cond)
+            then_bb = self.builder.append_basic_block("borrow.then")
+            else_bb = self.builder.append_basic_block("borrow.else")
+            end_bb = self.builder.append_basic_block("borrow.end")
+            self.builder.cbranch(cond, then_bb, else_bb)
+            self.builder.position_at_end(then_bb)
+            then_tv = self.gen_borrow_slice(value_expr.then, target, line)
+            then_end = self.builder.block
+            self.builder.branch(end_bb)
+            self.builder.position_at_end(else_bb)
+            else_tv = self.gen_borrow_slice(value_expr.otherwise, target, line)
+            else_end = self.builder.block
+            self.builder.branch(end_bb)
+            self.builder.position_at_end(end_bb)
+            phi = self.builder.phi(target.ir)
+            phi.add_incoming(then_tv.value, then_end)
+            phi.add_incoming(else_tv.value, else_end)
+            return TypedValue(phi, target)
         element = target.fields[0][1].pointee
         # T[N] (or a string literal, a uint8[N]): take the first-element pointer
         # and the static length, which would otherwise decay away once the value
@@ -5348,7 +5393,7 @@ class CodeGen:
             # pointer to the shared bytes (the IR pointer is i8* either way).
             ptr = self.const_string(expr.value)
             return ptr if expected == CHARPTR else ptr.bitcast(expected.ir)
-        if self.str_literal_adapts(expr, expected):
+        if isinstance(expr, StrLit) and self.str_literal_adapts(expr, expected):
             # A slice<char>/slice<const char> initialized from a string
             # literal: the Stage 4 borrow-in in constant form -- a constant
             # {pointer, length} view into the shared NUL-terminated bytes,

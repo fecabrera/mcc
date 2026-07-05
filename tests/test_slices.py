@@ -505,6 +505,102 @@ def test_string_literal_adapts_to_const_slice_parameter():
     assert run(source) == 11
 
 
+# ------------------------------------ ternaries of string literals (Stage 4)
+
+
+def test_ternary_of_string_literals_adapts_at_argument():
+    # A ternary whose arms are both string literals adapts to a char slice the
+    # way a bare literal does: each arm borrows in its own branch, so the
+    # merged slice carries the chosen literal's own length.
+    source = """
+    fn count(s: slice<char>) -> int32 { return s.length as int32; }
+    fn main() -> int32 { return count(false ? "y" : "yes"); }   // 3
+    """
+    assert run(source) == 3
+
+
+def test_ternary_of_string_literals_adapts_to_const_slice_parameter():
+    # The hidden-reference spill applies to the merged view too.
+    source = """
+    fn count(const s: slice<const char>) -> int32 { return s.length as int32; }
+    fn main() -> int32 { return count(true ? "ab" : "c"); }   // 2
+    """
+    assert run(source) == 2
+
+
+def test_ternary_of_string_literals_adapts_in_let():
+    source = """
+    fn pick(flag: bool) -> int32 {
+        let s: slice<char> = flag ? "y" : "yes";
+        return s.length as int32;
+    }
+    fn main() -> int32 { return pick(true) * 10 + pick(false); }   // 13
+    """
+    assert run(source) == 13
+
+
+def test_ternary_of_string_literals_adapts_in_return():
+    source = """
+    fn label(flag: bool) -> slice<const char> { return flag ? "on" : "off"; }
+    fn main() -> int32 {
+        return (label(true).length * 10 + label(false).length) as int32;   // 23
+    }
+    """
+    assert run(source) == 23
+
+
+def test_nested_ternary_of_string_literals_adapts():
+    source = """
+    fn name(n: int32) -> int32 {
+        let s: slice<char> = n == 0 ? "zero" : n == 1 ? "one" : "many";
+        return s.length as int32;
+    }
+    fn main() -> int32 { return name(0) * 100 + name(1) * 10 + name(2); }   // 434
+    """
+    assert run(source) == 434
+
+
+def test_ternary_borrow_distributes_over_array_arms():
+    # An explicit borrow distributes the same way: each owned-array arm borrows
+    # in its own branch, keeping its static length.
+    source = """
+    fn main() -> int32 {
+        let a: char[3] = "hi";
+        let b: char[6] = "hello";
+        let flag = false;
+        let v = (flag ? a : b) as slice<char>;
+        return v.length as int32;   // 5
+    }
+    """
+    assert run(source) == 5
+
+
+def test_ternary_with_non_literal_arm_does_not_adapt():
+    # Only literals adapt: one typed arm makes the whole ternary a char*.
+    with pytest.raises(LangError, match="expected slice<const char>, got char\\*"):
+        compile_ir(
+            """
+            fn n(s: slice<const char>) -> int32 { return 0; }
+            fn main() -> int32 {
+                let owned = "hi";            // char[3]
+                return n(true ? owned : "hi");
+            }
+            """
+        )
+
+
+def test_unannotated_let_ternary_stays_char_pointer():
+    # Without a slice annotation there is no expected type: both literal arms
+    # decay and the ternary is a char*, as before.
+    source = """
+    fn main() -> int32 {
+        let s = true ? "a" : "bc";
+        return *s as int32;   // 'a' == 97
+    }
+    """
+    assert run(source) == 97
+
+
 # ------------------------------------ string-literal elements (Stage 4, nested)
 
 

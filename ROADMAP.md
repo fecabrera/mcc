@@ -444,6 +444,14 @@ already do).
         views, so a `@static` array of slices — and, as a bonus, the scalar
         `@static let g: slice<const char> = "hi";` — works too; implemented,
         see [Strings](docs/language.md#strings)
+  - [x] ternaries of string literals — the adaptation reaches through a
+        conditional expression whose arms are all string literals
+        (`string_append(s, b ? "true" : "false")`, nested ternaries included):
+        each arm borrows in its own branch, so the merged view carries the
+        chosen literal's own length. An explicit `as slice<char>` borrow
+        distributes over a ternary of owned arrays the same way. `@static`
+        stays literal-only (a runtime branch has no constant view);
+        implemented, see [Operators](docs/language.md#operators)
   - [ ] string-literal struct fields — the remaining position: a string
         literal in a struct-literal field whose type is a char slice
         (`struct cmd { name: slice<const char>; ... }` built from
