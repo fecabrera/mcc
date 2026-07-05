@@ -538,18 +538,31 @@ already do).
         value instead of forming `&lvalue`, which is also why an **rvalue**
         `T*` may decay to `mut T` (the pointee is real storage even when the
         pointer itself is a temporary), deliberately unlike the plain rule
-        that a `mut` argument must be an lvalue. A decay is a **two-sided
+        that a `mut` argument must be an lvalue. Generic inference
+        participates in decay: the example above is concrete, but every
+        `libmc` container function is generic, and today a pointer argument
+        at a generic `const`/`mut` slot fails inference outright
+        (`cannot infer type parameter(s) T`), so at such a slot unification
+        also tries the argument's **pointee** against the parameter
+        pattern, exactly one level down (`list<int32>*` against
+        `mut self: list<T>` binds `T = int32`); the one-level guardrail
+        below falls out naturally there, since the pointee of a `T**` is
+        itself a pointer. A decay is a **two-sided
         promise**, the point where the language's two marker kinds meet:
         the caller's side is a value-supplier promise in the `@nonnull`
         family (this pointer is non-null, so the reference formed from it
         is real), and the callee's side is the bare-keyword receiver
         contract (`const` will not write through it, `mut` writes through
         it and nothing escapes). Four guardrails keep it
-        sound and explicit: (1) decay fires only into `const`/`mut` slots,
-        whose declaration announces the reference semantics; a plain
-        by-value `T` parameter still needs an explicit `*var`, keeping the
-        copy visible. (2) Exactly one level: `T*` decays to `const`/`mut T`,
-        a `T**` only to `const`/`mut T*`, never twice. (3) The pointer must
+        sound and explicit: (1) decay fires only into **hidden-reference**
+        slots, meaning `const` struct parameters and `mut` parameters of
+        any type, whose declaration announces the reference semantics; a
+        `const` scalar parameter is a by-value copy with no hidden
+        reference behind it, so there is no pointer to forward and decay
+        does not apply, and a plain by-value `T` parameter still needs an
+        explicit `*var`, keeping the copy visible. (2) Exactly one level:
+        `T*` decays to `const`/`mut T`, a `T**` only to `const`/`mut T*`,
+        never twice. (3) The pointer must
         be **proven non-null** (a `@nonnull` parameter, a flow-narrowed
         local, or a `p!` assertion, all via the shipped `@nonnull` machinery
         below): `const`/`mut` references are never null by construction,
@@ -560,10 +573,11 @@ already do).
         return from `new`, if the deferred first-class `T!` item happens,
         would prove it at the source. (4) Under
         [function overloading](#functions-and-methods), an exact pointer
-        match always beats a decayed one; decayed candidates are considered
-        only when no candidate matches the pointer type directly, so
-        `f(x: T*)` alongside `f(mut x: T)` stays unambiguous. A decayed
-        argument is a borrowed reference, never a transfer of ownership:
+        match always beats a decayed one, and the mechanism is **two-tier
+        viability**, not a specificity tweak: decayed candidates enter
+        resolution only when no candidate matches the pointer type
+        directly, so `f(x: T*)` alongside `f(mut x: T)` stays unambiguous.
+        A decayed argument is a borrowed reference, never a transfer of ownership:
         the planned constructor/destructor machinery never runs a
         destructor on it. The method-call sugar's receiver auto-deref
         (Methods / OOP below) becomes an instance of this rule, and it is
@@ -583,7 +597,15 @@ already do).
           plus the companion struct pointers of the same APIs (`append`'s
           source, `eq`'s right-hand side, and `duplicate`'s `src` become
           `const`; `duplicate`'s `dst` and the `format_arg`/`format_args`
-          accumulator in `std` become `mut`). Strictly depends on the
+          accumulator in `std` become `mut`). The accessor families flip
+          to `const self` here and **stay read-only**: the mutable element
+          accessor the [`mut` returns](#functions-and-methods) item
+          sketches must form its return from a `mut`/pointer parameter,
+          and overloads differing only in markers are banned under
+          concrete overloading, so one name cannot serve both; mutable
+          access arrives as a separate refactor once `mut` returns land,
+          leaning on a new name (`list_ref`-style), and is explicitly not
+          part of this migration. Strictly depends on the
           pointer decay above: callers holding a heap `string*`/`list<T>*`
           keep one call shape only because the pointer decays into the new
           slots (an always-non-null `&s` keeps compiling unchanged; an
@@ -607,7 +629,22 @@ already do).
           deallocates the receiver's own box, which remains the caller's
           separate `dealloc(p)` on a pointer the caller still holds, so
           nothing needs to stay pointer-taking or be split. The migration
-          doubles as the decay rule's acceptance test (the whole stdlib
+          lands **staged**: each stage is its own complete change set with
+          its own CHANGELOG entry, and this box ticks only when the last
+          stage lands. The order is forced, not chosen: the pointer decay
+          above ships first as its own change set; then `stack` + `queue`
+          (every call site is `&x`-shaped, so decay proves them for free
+          and no guards appear); then `dict` + `set` (about thirteen
+          heap-pointer test call sites take guards); then
+          `list` + `string` + `std` as one unit, because the ten `@inline`
+          `string` wrappers re-lend `self` into the `list_*` slots (`&` of
+          a `mut` parameter is banned, so `string` cannot flip before
+          `list`) and `std`'s `format_arg`/`format_args` break the moment
+          `string` flips. A transitional both-signatures period is
+          impossible anyway: a forward declaration pairs with its
+          definition rather than overloading it, and concrete overloading
+          has not shipped. The migration doubles as the decay rule's
+          acceptance test (the whole stdlib
           plus its tests and examples compiling over decayed call sites
           proves the rule covers real call patterns) and pre-positions
           [Methods / OOP](#functions-and-methods): the receiver kinds land
@@ -622,15 +659,21 @@ already do).
         migrated). The `_it`/`_next` signatures are a compiler-checked
         convention, so this is a coordinated compiler + stdlib change
   - [ ] `mut` returns — a function that returns an lvalue:
-        `fn string_at(self: string*, i: uint64) -> mut char` makes
-        `string_at(&str, 0) = '/'` legal (as well as comparing it or copying it
-        out with `let c = string_at(&str, 0)`). A call returning `mut T` is a
+        `fn string_ref(mut self: string, i: uint64) -> mut char` makes
+        `string_ref(str, 0) = '/'` legal (as well as comparing it or copying it
+        out with `let c = string_ref(str, 0)`). A call returning `mut T` is a
         new assignable expression category. To keep the reference from dangling
         without a lifetime system, a `mut` return may only be **formed from a
         `mut`/pointer parameter or a global — never from a local or a by-value
-        parameter**; this conservative, checkable rule fits the `string_at`
+        parameter**; this conservative, checkable rule fits the `string_ref`
         case (the result derives from `self`) and preserves the non-escape
-        guarantee. The groundwork has shipped: generic overloads mixing `mut`
+        guarantee. The example is deliberately a **new name** beside the
+        `const self` accessors of the `libmc` receiver migration above:
+        a `mut` return cannot form from a `const` receiver, and overloads
+        differing only in markers are banned under concrete overloading,
+        so the migrated `get`/`at` families stay read-only and mutable
+        access ships as a separate `_ref`-style refactor once this lands.
+        The groundwork has shipped: generic overloads mixing `mut`
         (above) already defer the lvalue/value decision past overload
         resolution — the exact decision point an assignable call expression
         needs — and a `-> mut T` stub in a `.mci` is pure return-type
