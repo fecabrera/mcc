@@ -259,11 +259,12 @@ def test_list_lib(tmp_path, capfd):
         import \"libc/stdio\";
         fn main() -> int32 {
             let floats = alloc<struct list<float64>>(1);
+            if (floats == null) { return 1; }  // proves floats for the receivers
             list_init(floats, 1);
             let i: int32 = 0;
             while (i < 5) {
-                list_push(floats, i as float64 / 2.0);
-                i = i + 1;
+                list_push(floats!, i as float64 / 2.0);  // mut receiver in a loop
+                i = i + 1;                               // drops the fact, so !
             }
             let v: float64 = 0.0;
             list_get(floats, 3, v);

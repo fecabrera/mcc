@@ -8,12 +8,12 @@ import "list";
 
 fn main() -> int32 {
     let nums: struct list<int32>;
-    list_init(&nums, 4);
-    defer list_destroy(&nums);
+    list_init(nums, 4);                  // mut receiver: a local passes directly
+    defer list_destroy(nums);
 
     let i: int32 = 1;
     while (i <= 5) {
-        list_push(&nums, i * i);         // 1 4 9 16 25
+        list_push(nums, i * i);          // 1 4 9 16 25
         i += 1;
     }
 

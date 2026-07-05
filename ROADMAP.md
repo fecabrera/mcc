@@ -637,10 +637,12 @@ already do).
           (every call site is `&x`-shaped, so decay proves them for free
           and no guards appear); then `dict` + `set` (about thirteen
           heap-pointer test call sites take guards); then
-          `list` + `string` + `std` as one unit, because the ten `@inline`
+          `list` + `string` as one stage, because the ten `@inline`
           `string` wrappers re-lend `self` into the `list_*` slots (`&` of
           a `mut` parameter is banned, so `string` cannot flip before
-          `list`) and `std`'s `format_arg`/`format_args` break the moment
+          `list`); and finally `std`, whose `format_arg`/`format_args`
+          accumulator flips to `mut` together with the in-flight
+          variadic-format work, since those functions break the moment
           `string` flips. A transitional both-signatures period is
           impossible anyway: a forward declaration pairs with its
           definition rather than overloading it, and concrete overloading

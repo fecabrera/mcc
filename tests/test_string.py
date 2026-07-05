@@ -101,6 +101,96 @@ def test_string_from_array_copies_until_nul(capfd):
     assert capfd.readouterr().out == "hello len=5\n"
 
 
+def test_direct_receiver_through_the_alias(capfd):
+    # The post-migration idiom: a local string passes directly, no `&`. Every
+    # @inline wrapper re-lends its mut/const self into the list_* slots
+    # through the `type string = list<char>` alias.
+    run(
+        """
+        import "string";
+        import "libc/stdio";
+        fn main() -> int32 {
+            let s: struct string;
+            string_init(s);
+            string_push(s, 'h');
+            string_push(s, 'i');
+            string_set(s, 0, 'H');
+            let c: char;
+            string_get(s, 1, c);            // const self, mut out
+            printf("%c len=%llu\\n", c, s.length);
+            string_reset(s);
+            printf("reset len=%llu\\n", s.length);
+            string_destroy(s);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "i len=2\nreset len=0\n"
+
+
+def test_string_eq_and_duplicate():
+    # string_eq takes both sides const; string_duplicate is mut dst, const src.
+    assert run(
+        """
+        import "string";
+        fn main() -> int32 {
+            let a: struct string;
+            string_from_array(a, "hi");
+            let b: struct string;
+            string_duplicate(b, a);
+            if (!string_eq(a, b)) return 1;      // equal after the deep copy
+            string_push(b, '!');
+            if (string_eq(a, b)) return 2;       // lengths differ now
+            string_push(a, '?');                 // a = "hi?", b = "hi!"
+            if (string_eq(a, b)) return 3;       // same length, bytes differ
+            string_destroy(a);
+            string_destroy(b);
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_string_from_slice_drops_the_nul():
+    # A string literal borrows in as slice<char>, which drops the trailing NUL.
+    assert run(
+        """
+        import "string";
+        fn main() -> int32 {
+            let s: struct string;
+            string_from_slice(s, "hey" as slice<char>);
+            let n = s.length as int32;
+            string_destroy(s);
+            return n;
+        }
+        """
+    ) == 3
+
+
+def test_heap_string_pointer_decays_after_guard():
+    # A heap string* reaches the receiver slots through the usual @nonnull
+    # proof: one null guard after the allocation covers the later calls.
+    assert run(
+        """
+        import "string";
+        import "memory";
+        fn main() -> int32 {
+            let p = alloc<struct string>(1);
+            if (p == null) return 1;
+            string_init(p);
+            string_push(p, 'x');
+            string_push(p, 'y');
+            let c: char;
+            string_get(p, 1, c);
+            let n = p->length as int32;
+            string_destroy(p);
+            dealloc(p);
+            return n * 10 + ((c == 'y') ? 1 : 0);   // 21
+        }
+        """
+    ) == 21
+
+
 def test_for_in_non_struct_rejected():
     with pytest.raises(LangError, match="needs a struct iterable"):
         run("fn main() -> int32 { for x in 5 { } return 0; }")

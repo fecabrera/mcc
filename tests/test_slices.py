@@ -377,7 +377,7 @@ def test_generic_infers_through_const_slice_element():
     # consistent with another parameter that fixes T mutably (here via list<T>*).
     source = """
     import "list";
-    fn copy_first<T>(self: struct list<T>*, const arr: slice<const T>) {
+    fn copy_first<T>(@nonnull self: struct list<T>*, const arr: slice<const T>) {
         list_init(self, arr.length);
         for el in arr { list_push(self, el); }
     }

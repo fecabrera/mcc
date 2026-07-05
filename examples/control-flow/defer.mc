@@ -32,7 +32,7 @@ fn process(n: int32) -> int32 {
 // array itself once the loop is done.
 fn build_labels(n: uint64) {
     let labels: list<byte*>;
-    list_init(&labels, n);
+    list_init(labels, n);
     defer {
         let i: uint64 = 0;
         while (i < labels.length) {
@@ -40,7 +40,7 @@ fn build_labels(n: uint64) {
             println("  free %s", labels.data[i]);
             dealloc(labels.data[i]);
         }
-        list_destroy(&labels);              // runs after the loop, last of all
+        list_destroy(labels);               // runs after the loop, last of all
     }
 
     let i: uint64 = 0;
@@ -48,7 +48,7 @@ fn build_labels(n: uint64) {
         let label: byte* = alloc<byte>(2);
         label[0] = ('a' as byte) + (i as byte);   // raw byte buffer
         label[1] = 0;
-        list_push(&labels, label);
+        list_push(labels, label);
         i += 1;
     }
     println("built %llu labels", labels.length);

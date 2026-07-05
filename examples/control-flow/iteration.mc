@@ -9,14 +9,17 @@ import "dict";
 // `break` / `continue` work as in any loop.
 
 fn main() -> int32 {
-    // A growable list (libmc/list.mc) implements list_it / list_next.
+    // A growable list (libmc/list.mc) implements list_it / list_next. The
+    // container functions take const/mut receivers, so a local passes
+    // directly: no & needed. (A list<T>* still works via pointer decay; see
+    // examples/functions/pointer_decay.mc.)
     let nums: struct list<int32>;
-    list_init(&nums, 4);
-    defer list_destroy(&nums);
+    list_init(nums, 4);
+    defer list_destroy(nums);
 
     let i: int32 = 1;
     while (i <= 6) {
-        list_push(&nums, i * i);         // 1 4 9 16 25 36
+        list_push(nums, i * i);          // 1 4 9 16 25 36
         i += 1;
     }
 
@@ -34,9 +37,6 @@ fn main() -> int32 {
     // The same `for x in` walks any container. A set yields a `pair<K, V>` per
     // entry, in unspecified (hash-table) order; read its fields as x.key and
     // x.value. `pair` is a builtin struct, so no import is needed to name it.
-    // The set and dict functions take const/mut receivers, so a local passes
-    // directly: no & needed. (A set<K, V>* still works via pointer decay; see
-    // examples/functions/pointer_decay.mc.)
     let table: set<uint64, uint64>;
     set_init(table, 2);
     defer set_destroy(table);

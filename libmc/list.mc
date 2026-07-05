@@ -13,10 +13,10 @@ struct list<T> extends slice<T> {
  * @param self:     list to initialize
  * @param capacity: initial number of elements to reserve space for
  */
-fn list_init<T>(self: struct list<T>*, capacity: uint64) {
-    self->data = alloc<T>(capacity);
-    self->length = 0;
-    self->capacity = capacity;
+fn list_init<T>(mut self: struct list<T>, capacity: uint64) {
+    self.data = alloc<T>(capacity);
+    self.length = 0;
+    self.capacity = capacity;
 }
 
 /**
@@ -28,8 +28,8 @@ fn list_init<T>(self: struct list<T>*, capacity: uint64) {
  * @param dst: uninitialized list to copy src into
  * @param src: list to copy from
  */
-fn list_duplicate<T>(dst: struct list<T>*, src: struct list<T>*) {
-    list_init(dst, src->capacity);
+fn list_duplicate<T>(mut dst: struct list<T>, const src: struct list<T>) {
+    list_init(dst, src.capacity);
     list_append(dst, src);
 }
 
@@ -43,7 +43,7 @@ fn list_duplicate<T>(dst: struct list<T>*, src: struct list<T>*) {
  * @param arr:  source array to copy from
  * @param n:    number of elements to copy from arr
  */
-fn list_from_array<T>(self: struct list<T>*, @nonnull arr: T*, n: uint64) {
+fn list_from_array<T>(mut self: struct list<T>, @nonnull arr: T*, n: uint64) {
     list_init(self, n);
 
     for i in range(n) {
@@ -60,7 +60,7 @@ fn list_from_array<T>(self: struct list<T>*, @nonnull arr: T*, n: uint64) {
  * @param self: uninitialized list to build into
  * @param arr:  slice to copy from
  */
-fn list_from_slice<T>(self: struct list<T>*, const arr: slice<T>) {
+fn list_from_slice<T>(mut self: struct list<T>, const arr: slice<T>) {
     list_init(self, arr.length);
 
     for el in arr {
@@ -74,12 +74,12 @@ fn list_from_slice<T>(self: struct list<T>*, const arr: slice<T>) {
  *
  * @param self: list to destroy
  */
-fn list_destroy<T>(self: struct list<T>*) {
-    dealloc(self->data);
+fn list_destroy<T>(mut self: struct list<T>) {
+    dealloc(self.data);
 
-    self->data = null;
-    self->length = 0;
-    self->capacity = 0;
+    self.data = null;
+    self.length = 0;
+    self.capacity = 0;
 }
 
 /**
@@ -87,8 +87,8 @@ fn list_destroy<T>(self: struct list<T>*) {
  *
  * @param self: list to reset
  */
-fn list_reset<T>(self: struct list<T>*) {
-    self->length = 0;
+fn list_reset<T>(mut self: struct list<T>) {
+    self.length = 0;
 }
 
 /**
@@ -100,11 +100,11 @@ fn list_reset<T>(self: struct list<T>*) {
  *
  * @return true on success, false if index is out of bounds
  */
-fn list_get<T>(self: struct list<T>*, index: uint64, mut out: T) -> bool {
-    if (index >= self->length)
+fn list_get<T>(const self: struct list<T>, index: uint64, mut out: T) -> bool {
+    if (index >= self.length)
         return false;
 
-    out = self->data[index];
+    out = self.data[index];
     return true;
 }
 
@@ -117,11 +117,11 @@ fn list_get<T>(self: struct list<T>*, index: uint64, mut out: T) -> bool {
  *
  * @return true on success, false if index is out of bounds
  */
-fn list_set<T>(self: struct list<T>*, index: uint64, value: T) -> bool {
-    if (index >= self->length)
+fn list_set<T>(mut self: struct list<T>, index: uint64, value: T) -> bool {
+    if (index >= self.length)
         return false;
 
-    self->data[index] = value;
+    self.data[index] = value;
     return true;
 }
 
@@ -131,21 +131,21 @@ fn list_set<T>(self: struct list<T>*, index: uint64, value: T) -> bool {
  * @param self:  list to append to
  * @param value: value to append
  */
-fn list_push<T>(self: struct list<T>*, value: T) {
-    if (self->length == self->capacity)
+fn list_push<T>(mut self: struct list<T>, value: T) {
+    if (self.length == self.capacity)
         list_grow<T>(self);
 
-    self->data[self->length] = value;
-    self->length += 1;
+    self.data[self.length] = value;
+    self.length += 1;
 }
 
 /**
  * Appends another list to the end of the list, growing it if needed.
  *
  * @param self:  list to append to
- * @param value: list to append
+ * @param items: list to append
  **/
-fn list_append<T>(self: struct list<T>*, items: struct list<T>*) {
+fn list_append<T>(mut self: struct list<T>, const items: struct list<T>) {
     for value in items {
         list_push(self, value);
     }
@@ -158,12 +158,12 @@ fn list_append<T>(self: struct list<T>*, items: struct list<T>*) {
  * @param self: list to grow
  */
 @private
-fn list_grow<T>(self: struct list<T>*) {
-    let new_capacity: uint64 = self->capacity * 2;
+fn list_grow<T>(mut self: struct list<T>) {
+    let new_capacity: uint64 = self.capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;
-    self->data = resize(self->data, new_capacity);
-    self->capacity = new_capacity;
+    self.data = resize(self.data, new_capacity);
+    self.capacity = new_capacity;
 }
 
 /***************************************

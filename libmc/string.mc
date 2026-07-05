@@ -9,10 +9,10 @@ const DEFAULT_STRING_CAPACITY = 10;
 /**
  * A growable, heap-backed byte string.
  *
- * `string` is a specialization of `list<char>` (same fields and layout), so a
- * `struct string*` upcasts to a `struct list<char>*` and every operation
- * forwards to the matching `list_*` function. Each `string_*` wrapper is
- * `@inline`, so the indirection costs nothing once optimized.
+ * `string` is a specialization of `list<char>` (same fields and layout), so
+ * every operation re-lends its `mut`/`const` self receiver straight into the
+ * matching `list_*` function through the transparent alias. Each `string_*`
+ * wrapper is `@inline`, so the indirection costs nothing once optimized.
  */
 type string = list<char>;
 
@@ -22,7 +22,7 @@ type string = list<char>;
  * @param self: string to initialize
  */
 @inline
-fn string_init(self: struct string*) {
+fn string_init(mut self: struct string) {
     list_init(self, DEFAULT_STRING_CAPACITY);
 }
 
@@ -35,8 +35,8 @@ fn string_init(self: struct string*) {
  * @param dst: uninitialized string to copy src into
  * @param src: string to copy from
  */
-fn string_duplicate(dst: struct string*, src: struct string*) {
-    list_init(dst, src->capacity);
+fn string_duplicate(mut dst: struct string, const src: struct string) {
+    list_init(dst, src.capacity);
     string_append(dst, src);
 }
 
@@ -50,7 +50,7 @@ fn string_duplicate(dst: struct string*, src: struct string*) {
  * @param str:  source byte array to copy from
  * @param n:    number of bytes to copy from str
  */
-fn string_from_array(self: struct string*, @nonnull str: char*) {
+fn string_from_array(mut self: struct string, @nonnull str: char*) {
     string_init(self);
 
     let i: uint64 = 0;
@@ -70,7 +70,7 @@ fn string_from_array(self: struct string*, @nonnull str: char*) {
  * @param str:  byte slice to copy from
  */
 @inline
-fn string_from_slice(self: struct string*, const str: slice<char>) {
+fn string_from_slice(mut self: struct string, const str: slice<char>) {
     list_from_slice(self, str);
 }
 
@@ -81,7 +81,7 @@ fn string_from_slice(self: struct string*, const str: slice<char>) {
  * @param self: string to destroy
  */
 @inline
-fn string_destroy(self: struct string*) {
+fn string_destroy(mut self: struct string) {
     list_destroy(self);
 }
 
@@ -91,7 +91,7 @@ fn string_destroy(self: struct string*) {
  * @param self: string to reset
  */
 @inline
-fn string_reset(self: struct string*) {
+fn string_reset(mut self: struct string) {
     list_reset(self);
 }
 
@@ -105,7 +105,7 @@ fn string_reset(self: struct string*) {
  * @return true if index is in bounds, false otherwise
  */
 @inline
-fn string_get(self: struct string*, index: uint64, mut out: char) -> bool {
+fn string_get(const self: struct string, index: uint64, mut out: char) -> bool {
     return list_get(self, index, out);    // re-lends the mut reference
 }
 
@@ -119,7 +119,7 @@ fn string_get(self: struct string*, index: uint64, mut out: char) -> bool {
  * @return true if index is in bounds, false otherwise
  */
 @inline
-fn string_set(self: struct string*, index: uint64, value: char) -> bool {
+fn string_set(mut self: struct string, index: uint64, value: char) -> bool {
     return list_set(self, index, value);
 }
 
@@ -130,18 +130,18 @@ fn string_set(self: struct string*, index: uint64, value: char) -> bool {
  * @param value: byte to push
  */
 @inline
-fn string_push(self: struct string*, value: char) {
+fn string_push(mut self: struct string, value: char) {
     list_push(self, value);
 }
 
 /**
  * Appends another string to the end of the string, growing it if needed.
  *
- * @param self:  string to append to
- * @param value: string to append
+ * @param self: string to append to
+ * @param str:  string to append
  **/
 @inline
-fn string_append(self: struct string*, str: struct string*) {
+fn string_append(mut self: struct string, const str: struct string) {
     list_append(self, str);
 }
 
@@ -154,15 +154,15 @@ fn string_append(self: struct string*, str: struct string*) {
  *
  * @return true if both strings have the same length and bytes, false otherwise
  */
-fn string_eq(self: struct string*, str: struct string*) -> bool {
-    if (self->length != str->length)
+fn string_eq(const self: struct string, const str: struct string) -> bool {
+    if (self.length != str.length)
         return false;
-    
-    for i in range(self->length) {
-        if (self->data[i] != str->data[i])
+
+    for i in range(self.length) {
+        if (self.data[i] != str.data[i])
             return false;
     }
-    
+
     return true;
 }
 

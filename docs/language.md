@@ -458,12 +458,13 @@ Passing an unproven pointer to any of them is a compile error instead of
 a latent crash. A stack buffer (`&x`, an array) or a string literal is
 already a proof; a heap buffer needs a one-line diverging guard after the
 allocation (`if (p == null) return 1;`), which loops that do not touch
-the pointer preserve. Container `self` parameters deliberately stay
-plain `T*`: they are slated to become `mut`/`const` receivers, where
-non-null holds by construction, so they pick up the guarantee in that
-migration rather than through annotations. Parameters for which null is
-meaningful also stay plain: `resize` (null allocates fresh) and `dealloc`
-(null is a no-op). The `libc/` bindings follow as a separate pass
+the pointer preserve. Container `self` parameters are `mut`/`const`
+receivers, where non-null holds by construction, so they carry the
+guarantee without annotations; a heap `list<T>*` or `dict<V>*` reaches
+them through the same one-line guard, by
+[decaying](#pointer-decay-into-constmut-parameters) into the receiver
+slot. Parameters for which null is meaningful stay plain: `resize` (null
+allocates fresh) and `dealloc` (null is a no-op). The `libc/` bindings follow as a separate pass
 ([roadmap](../ROADMAP.md#planned)).
 
 See
@@ -1711,7 +1712,7 @@ let arr: int32[4];                 // a fixed array...
 let view = arr as slice<int32>;    // ...borrowed as { &arr[0], 4 }
 
 let nums: struct list<int32>;      // ...or an owned list<T>
-list_init(&nums, 8);
+list_init(nums, 8);
 let s = nums as slice<int32>;      // reads { data, length }, drops capacity
 ```
 
@@ -2377,7 +2378,7 @@ file (however it was imported) is a compile error naming the owning file:
  * Doubles the list's capacity. Internal; called by list_push.
  */
 @private
-fn list_grow<T>(self: struct list<T>*) { ... }
+fn list_grow<T>(mut self: struct list<T>) { ... }
 ```
 
 ```

@@ -55,5 +55,5 @@ fn main() -> int32 {
 // exact rules on when facts die; functions/nonnull_loops.mc for narrowed
 // facts crossing loops; functions/nonnull_assert.mc for the `!` assertion
 // where no guard fits; pointers.mc for alloc/dealloc; lists.mc for the
-// container APIs, whose self parameters stay plain T* until they become
-// mut/const receivers.
+// container APIs, whose mut/const self receivers accept a heap pointer
+// through the same one-line guard (see functions/pointer_decay.mc).

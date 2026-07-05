@@ -30,8 +30,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   reaches `const`/`mut T*`), string literals never decay into `mut`, and a
   decayed argument is a borrowed reference, never a transfer of ownership.
   The explicit `*p` spelling stays legal and proof-free. First stage of the
-  `libmc` receiver migration (stages 2 and 3 flip `stack`/`queue` and
-  `dict`/`set` in this release; see Changed below). See
+  `libmc` receiver migration (stages 2 through 4 flip `stack`/`queue`,
+  `dict`/`set`, and `list`/`string` in this release; see Changed below). See
   [Pointer decay](docs/language.md#pointer-decay-into-constmut-parameters)
   and `examples/functions/pointer_decay.mc`.
 
@@ -217,7 +217,38 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- **`libmc` receiver migration (stage 3 of 4): `dict` and `set`**
+- **`libmc` receiver migration (stage 4 of 5): `list` and `string`**
+  (**breaking**) — the workhorse container and its text alias flip their
+  `self` parameters from raw pointers (`struct list<T>*`, `struct string*`)
+  to receiver markers: mutators take `mut self`
+  (`init`/`from_array`/`from_slice`/`destroy`/`reset`/`set`/`push`/`append`
+  and the private `list_grow`), the read-only accessors take `const self`
+  (`list_get`/`string_get`, whose `mut out` parameters are unchanged, and
+  `string_eq`, both of whose sides are now `const`). The companion struct
+  pointers of the same APIs flip with them: `append`'s source and
+  `duplicate`'s `src` become `const`, `duplicate`'s `dst` becomes `mut`.
+  Every `@inline` `string_*` wrapper re-lends its receiver straight into
+  the `list_*` slots through the transparent `type string = list<char>`
+  alias, which is why the two flip as one stage (`&` of a `mut` parameter
+  is banned, so `string` could not flip before `list`). A local container
+  now passes directly with no `&` (`list_push(xs, 7)`), and every existing
+  `&x` call site keeps compiling unchanged via pointer decay; **a heap
+  `list<T>*`/`string*` now needs a one-line null guard after the
+  allocation** (`if (p == null) return 1;`) **or a `!` assertion** (inside
+  loops, where a bare pointer at a `mut` receiver drops its narrowed fact)
+  before it decays into the receiver slots — this stage's only
+  source-breaking surface. Excluded by design: `list_it`/`list_next` and
+  `string_it`/`string_next` keep their pointer signatures, as in the
+  earlier stages (`for … in` loops are emitted against the unchanged
+  protocol and need no edits). Landing the stage also repaired a
+  decayed-receiver diagnostic: when the decay reading is the only emittable one
+  and its inference genuinely conflicts (`list_push(&xs, 'a')` on a
+  `list<uint8>`), the error is the real `conflicting types` report again
+  instead of a misleading `not assignable`. Only `std` remains, in the
+  final stage (landing with the format work in flight). See
+  `examples/memory/lists.mc`.
+
+- **`libmc` receiver migration (stage 3 of 5): `dict` and `set`**
   (**breaking**) — the two hash containers' `self` parameters flip from raw
   pointers (`struct dict<V>*`, `struct set<K, V>*`) to receiver markers:
   mutators take `mut self` (the `init`/`destroy`/`set`/`remove` families
@@ -239,10 +270,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   a struct-shaped `const`/`mut` pattern (`mut self: struct dict<V>`) now
   binds the type parameters through its pointee even when an untyped
   literal argument leaned `int32` first, so `dict_set(d, "k", 10)` on a
-  heap `dict<uint64>*` infers `V = uint64`. `list` + `string` + `std`
-  follow in the final stage. See `examples/control-flow/iteration.mc`.
+  heap `dict<uint64>*` infers `V = uint64`. `list` + `string` have since
+  flipped (see the stage-4 entry above); only `std` remains, in the final
+  stage. See `examples/control-flow/iteration.mc`.
 
-- **`libmc` receiver migration (stage 2 of 4): `stack` and `queue`** — the
+- **`libmc` receiver migration (stage 2 of 5): `stack` and `queue`** — the
   two containers' `self` parameters flip from raw pointers
   (`struct stack<T>*`, `struct queue<T>*`) to receiver markers: mutators
   take `mut self` (the `init`/`destroy`/`push`/`pop` families and the
@@ -253,9 +285,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   existing `&x` call site keeps compiling unchanged via pointer decay; a
   heap `stack<T>*`/`queue<T>*` decays into the new slots after the usual
   `@nonnull` proof (a one-line null guard or `p!`), so the selves are
-  non-null by construction. `dict` + `set` have since flipped (see the
-  stage-3 entry above); only `list` + `string` + `std` remain, in the
-  final stage. See `examples/memory/stacks.mc` and
+  non-null by construction. `dict` + `set` and `list` + `string` have
+  since flipped (see the stage-3 and stage-4 entries above); only `std`
+  remains, in the final stage. See `examples/memory/stacks.mc` and
   `examples/memory/queues.mc`.
 
 - **The standard library's pointer contracts are now `@nonnull`-checked**
@@ -273,8 +305,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   assertion** (inside loops, where narrowed facts drop). Container `self`
   parameters deliberately stayed plain `T*` in this pass, since they are
   slated to become `mut`/`const` receivers, where non-null holds by
-  construction (`stack`, `queue`, `dict`, and `set` have since flipped;
-  see the receiver-migration entries above).
+  construction (every container has since flipped; see the
+  receiver-migration entries above).
   Parameters for which null is meaningful also stay plain: `resize` (null
   allocates fresh) and `dealloc` (null is a no-op). The `libc/` bindings
   follow as a separate pass. See

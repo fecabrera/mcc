@@ -75,6 +75,7 @@ def test_stdlib_internals_are_private(tmp_path):
         'import "list";\n'
         "fn main() -> int32 {\n"
         "    let a = alloc<struct list<int32>>(1);\n"
+        "    if (a == null) return 1;    // proves a for the receiver slots below\n"
         "    list_init(a, 1);\n"
         "    list_grow(a);\n"
         "    return 0;\n"

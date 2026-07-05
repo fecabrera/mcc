@@ -6677,6 +6677,15 @@ class CodeGen:
                     )
                     if decayed_bindings is not None:
                         bindings = decayed_bindings
+                    else:
+                        # The direct reading cannot be emitted at the
+                        # triggering position, so the decay reading's
+                        # failure is the call's real error (a genuine
+                        # conflict, not a missing address); re-resolve
+                        # strictly to raise it.
+                        self.resolve_bindings(
+                            func, expr, arg_tvs, lenient=False, decay=True
+                        )
         else:
             # Overload set: keep the viable candidates and pick the one with
             # the most specific parameter patterns (T* beats T, and so on).
