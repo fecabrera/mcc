@@ -1307,8 +1307,87 @@ already do).
       universe makes the `else` required). This is the runtime, type-erased
       variadic model (printf / `{}`-placeholder formatting); a statically-typed
       `tuple<…>` variant, processed by compile-time iteration, is a possible
-      later path. Depends on any and slice; the compile-time type-ids ride
-      in with [`any`](#structs-arrays-and-data-layout), no `typeof` needed.
+      later path. The foundations this once waited on are shipped:
+      [`any`](docs/language.md#the-any-type) landed with its tagged 24-byte
+      box, compile-time FNV-1a-64 type-ids (collision-checked, so no
+      `typeof` is needed), implicit boxing at
+      assignment/argument/return/store (structs and arrays reject with an
+      escape-hatch message), and `case type` with its mandatory `else`. The
+      callee side described above works end to end today, verified by
+      running programs (a `slice<const any>` parameter, `for a in args`,
+      indexing, `case type` dispatch), and the whole model is already
+      expressible with a manual `any[N]`, element stores boxing, and a
+      borrow at the call site; the remaining scope is caller-side
+      collection, the `args...` sugar, and the stdlib flip. Settled v1
+      rules, all type-shaped: the trailing `slice<const any>` parameter
+      type itself marks a collecting function, `args...` being pure sugar
+      for it, which makes `.mci` support free (the interface renderer
+      already emits the desugared parameter and the type is the marker on
+      re-import; function-pointer types carry no marker, so calls through
+      `fn(...)` values stay explicit-slice, documented). The pass-through
+      rule keeps the change purely additive: when the argument count
+      equals the parameter count and the final argument is already exactly
+      `slice<const any>` (or `slice<any>`, which coerces), it passes
+      through uncollected, and every possible call to such a function
+      today has exactly that shape; anything else at that position
+      collects (a single `any` becomes a one-element slice, a
+      `slice<int32>` boxes as one slice element), and zero extras
+      synthesize an empty `{ null, 0 }` slice. A collecting function is
+      non-overloadable in v1 and cannot share a generic name, extending
+      the shipped variadic-cannot-overload rule (a collecting candidate
+      would make arity-based viability ambiguous against the last-position
+      rule); the pre-evaluate path gets an explicit diagnostic, not a
+      confusing arity error. Boxes are entry allocas with function
+      lifetime, so `defer` bodies and loops are safe; the
+      callee-must-not-retain caveat is the same one every slice borrow
+      documents. The two real costs: collection parity across both
+      marshaling paths (`marshal_args` and the generic pre-evaluate path),
+      and the `{}`-grammar migration of every existing print caller. This
+      lands **staged** (the receiver-migration pattern: each stage is its
+      own complete change set with its own CHANGELOG entry, and this box
+      ticks only when the last stage lands). Stage 1, trailing collection
+      and the `args...` sugar: parser sugar (the parameter loop already
+      handles a `...` token for C variadics; `IDENT...` desugars to
+      `slice<const any>`); collection in `marshal_args` (the arity gate
+      learns `>=` for collecting callees; the lowering mirrors the shipped
+      literal-adaptation borrow: entry `[N x any]` alloca, box each extra,
+      form the slice, hidden-reference spill; plus the empty-slice
+      synthesis); the pass-through rule; the overload/generic ban with its
+      explicit diagnostic; `check_boxable`'s existing struct/array
+      rejections firing naturally at the collection site; and the full
+      sweep (tests for arity edges, pass-through, zero extras,
+      struct-extra rejection, `defer`/loop call sites, `.mci` round trip;
+      an `examples/functions/` example; docs; changelog). Stage 2, generic
+      and overload-set parity: collection through the pre-evaluate path
+      (its arity filter and viability arity error exclude collecting
+      candidates today), mirroring the literal-adaptation parity lesson
+      from [function overloading](#functions-and-methods)'s stage 1, and
+      lifting the stage-1 ban. Stage 3, the stdlib flip: fix the five
+      recorded bugs in the dormant `format_arg` WIP (the `char*` arm
+      appends the uninitialized `buf` instead of `s`, and the correct fix
+      needs a null guard, since a boxed `char*` can hold `null` while
+      `string_append`'s `char*` overload is `@nonnull`; the unconditional
+      trailing `buf` append; the unused `snprintf` length `l`, fixed by
+      the bounded `(char*, n)` append overload; `%llf` to `%f`; and the
+      silent excess-placeholder and trailing-brace edges get spec'd), flip
+      `print`/`println` to the slice signatures, and migrate every
+      printf-grammar caller to `{}` placeholders in the same change set
+      (279 `println` sites across 69 example files plus test assertions;
+      the migration is mechanical but cannot trail the flip, since a
+      printf string through the `{}` formatter prints its specifiers
+      literally). Two decisions defer to stage 3: whether `NATIVE_VARGS`
+      survives as a one-release migration toggle (a plain `-D` define
+      today, no target sets it, and the test helpers would need defines
+      threaded through) or the fact and its `@else` branches delete
+      outright at the flip (the audit leans delete: a half-flipped
+      ecosystem means two format grammars in every doc), and the final
+      `{}` grammar spec (`{x}`/`{X}` modifiers already work in the WIP).
+      Stage 3 is also the vehicle for the
+      [libmc receiver migration](#functions-and-methods)'s final `std`
+      stage, and the downstream
+      [formatted `{}` print](#strings-and-formatting) and
+      [string interpolation](#strings-and-formatting) items key off
+      stage 3, not stage 1.
 - [ ] C variadics — the C-ABI `...`/`va_list` machinery, beyond forwarding:
   - [x] variadic declarations and `va_list` forwarding — implemented, see
         [Variadic functions](docs/language.md#variadic-functions)
