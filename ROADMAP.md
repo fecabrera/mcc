@@ -192,7 +192,10 @@ already do).
           that `T` implements interface `I`: checked at each monomorphized
           instantiation (the concrete type must define every method `I`
           names), then calls dispatch statically — no fat pointer, no
-          vtable. The static counterpart of the dynamic
+          interface vtable (a [polymorphic struct](#functions-and-methods)
+          bound as `T` keeps its own embedded-vtable dispatch; "static"
+          here means no interface machinery is formed). The static
+          counterpart of the dynamic
           [interfaces](#functions-and-methods) dispatch; depends on
           interface declarations and the methods they are made of, so it
           lands after both
@@ -631,7 +634,10 @@ already do).
 - [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
       keyed to a struct, including `@private` methods and the special
       constructor/destructor below (the `for … in` protocol already dispatches
-      by struct name to pave the way):
+      by struct name to pave the way). On a plain `struct`, every method call
+      is a direct, statically-bound call; dynamic dispatch exists only behind
+      the explicit opt-in of the polymorphic lane below, so code that does not
+      opt in pays nothing:
   ```c
   struct point { x: int32; y: int32; }
   fn point::constructor(self: struct point*, x: int32, y: int32) { ... }
@@ -650,11 +656,13 @@ already do).
         pieces of design work this pulls in: (1) `mut self` must project a
         field to an lvalue (`self.x = ...`) and, in a constructor, never fire
         its rvalue "copy on read" on the still-uninitialized whole `self`;
-        (2) it must reconcile with the interface vtable — a `mut`-using function
-        is normally not expressible as a plain `fn(...)` value, but in the
-        `{ data*, vtable* }` fat pointer the receiver is already behind `data*`,
-        so the vtable slot's first param is a genuine `T*` under an ABI the
-        compiler controls internally. A `mut` return formed from `self` is then
+        (2) it must reconcile with both vtable ABIs below (the polymorphic
+        struct's embedded vtable and the interface fat pointer): a
+        `mut`-using function is normally not expressible as a plain
+        `fn(...)` value, but in either vtable the receiver is already behind
+        a pointer (the object pointer itself in a polymorphic call, `data*`
+        in the fat pointer), so the vtable slot's first param is a genuine
+        `T*` under an ABI the compiler controls internally. A `mut` return formed from `self` is then
         the natural spelling for a mutable accessor method
   - [ ] constructor — `fn <struct>::constructor(self: <struct>*, ...)`, the
         method that initializes a value: run by the `new <struct>(...)` sugar
@@ -670,7 +678,13 @@ already do).
   - [ ] destructor — `fn <struct>::destructor(self: <struct>*)`, the cleanup
         counterpart: releases what the constructor acquired. Deferred
         automatically for a stack-constructed value (above); for a heap
-        `new`, run explicitly before the memory is freed
+        `new`, run explicitly before the memory is freed. On a polymorphic
+        struct (the item below) the destructor occupies a reserved vtable
+        slot unconditionally, so destroying through a base pointer always
+        runs the dynamic type's destructor, never the static type's (the
+        C++ forgot-to-mark-it-`virtual` bug is not expressible), while the
+        implicitly-deferred destructor of a stack value devirtualizes (a
+        constructed value's dynamic type is exact)
   - [ ] method-call sugar — `var->method(...)` desugars to
         `point::method(var, ...)`, passing the receiver as `self` (so `var` is a
         `struct point*`). That `->` form is the pre-receiver-kinds starting
@@ -726,6 +740,89 @@ already do).
         emit tmp;
     };
     ```
+  - [ ] polymorphic structs — the opt-in dynamic-dispatch lane: a type
+        declared with a distinct declaration form (`class`, name tentative)
+        carries a hidden vtable pointer at offset 0 and dispatches every
+        method call through it, so the dynamic type's override always wins
+        (Java/Python method semantics), adopted so that C++'s object
+        slicing is unrepresentable rather than surprising. The canonical
+        acceptance test:
+    ```c
+    class A { ... }            fn A::f(const self: A) { println("A"); }
+    class B extends A { ... }  override fn B::f(const self: B) { println("B"); }
+    class C extends B { ... }  override fn C::f(const self: C) { println("C"); }
+    fn func(const a: A) { a.f(); }   // the receiver travels by reference
+    let c = C();  func(c);           // prints "C"; must never print "A"
+    ```
+    This program prints `C` or is rejected; no legal program observes `A`
+    here. The opt-in is a type-kind keyword like `struct`/`union`/`enum`,
+    declared and never inferred: defining methods on a plain `struct`
+    changes nothing (those calls stay direct), a per-method `virtual` is
+    ruled out because methods are defined apart from the struct, possibly
+    in another file, and a distant declaration must not change a type's
+    layout (which reads off the declaration in the single-pass compiler),
+    and an `@`-marker is ruled out by the annotation taxonomy (`@X` is a
+    value-supplier promise, where polymorphism is a different kind of
+    type: mandatory reference semantics and different conversion rules,
+    a type-kind fact rather than a per-value promise). Layout:
+    the vtable pointer at offset 0, then the base's fields as a prefix
+    (the shipped `extends` prefix rule shifted one slot down); the derived
+    vtable is prefix-compatible with the base's (inherited methods keep
+    their slot, an override replaces the entry, new methods append), so
+    the polymorphic pointer upcast `C*` to `A*` stays zero-cost; single
+    inheritance only, which `extends` already is. No slicing, by
+    construction: a polymorphic type has reference semantics, so every
+    implicit whole-value copy is rejected (by-value parameters, returns,
+    fields, `let`/assignment from another value, and in particular the
+    derived-to-base **value** upcast that plain structs keep), including
+    the `const`/`mut` reference forms' rvalue copy-on-read (a `const A`
+    may refer to a `C`, so that copy would itself be a slice) and a
+    generic instantiation that copies a `T` bound to a polymorphic type
+    (rejected per instantiation, traced by the shipped
+    [instantiation backtraces](#tooling-and-c-interop)). Polymorphic use
+    is `T*`, `const T`, or `mut T`; values are constructed in place, on
+    the stack (exact dynamic type, so those calls devirtualize) or on the
+    heap via `new`; an explicit user-written clone method is the copy
+    escape. Every construction path (constructor, literal, zero-init)
+    writes the vtable pointer before user code sees the value. Overriding
+    is marked: an override must match the base method's signature exactly
+    (covariance out of scope) and carry an explicit `override` marker
+    (spelling and position open; the example shows a prefix), with both
+    typo directions caught: the same name and signature without the
+    marker is an error (no silent shadowing), and a marker with no base
+    method to override is an error. Overload selection stays static: the
+    argument list picks the signature by static types (riding
+    [function overloading](#functions-and-methods) above) and only the
+    receiver's dynamic type picks the body, the Java rule. C
+    compatibility does not enter this design at all: `extends` is not a
+    C construct, so a straight-ported C program cannot contain it and no
+    port ever meets these rules; ABI compatibility constrains only the
+    C-shaped surface (plain structs, `@extern`, C headers), and a
+    feature C does not have owes C nothing. What remains are natural
+    boundaries, not costs paid: the constructs that describe C-shaped
+    memory simply do not admit a vtable-carrying object, so a
+    polymorphic type does not cross an `@extern` boundary, take
+    `@packed`, join a union, or appear in
+    [C header generation](#tooling-and-c-interop) output. The lane wall
+    (a plain struct cannot extend a polymorphic type, nor a polymorphic
+    type a plain struct) stands on semantics alone: in either direction
+    a copyable plain type would reach into a reference-semantics object,
+    since a plain struct embedding a polymorphic prefix puts a
+    vtable-carrying value in the freely-copying lane, and a polymorphic
+    type over a plain base would let any `base*` into the object copy
+    the base prefix out by value, rebuilding data slicing through the
+    plain lane's own legal copies; mechanically the vtable slot and the
+    plain field prefix also fight for offset 0; and the intrusive
+    `struct entry<T> extends T` depends on vtable-free prefix embedding,
+    so its instantiation over a polymorphic payload is rejected per
+    instantiation exactly as a non-struct `T` is today. Everything the
+    struct lane ships stays intact: layout, prefix embedding, zero-cost
+    value upcasts, unions, and value semantics throughout. Depends on
+    the receiver kinds above
+    (`const`/`mut self` are how a polymorphic receiver travels) and on
+    the parent item's method machinery; the destructor's reserved vtable
+    slot is noted on the destructor above, and the shared-vtable
+    reconciliation on the interfaces item below
   - [ ] interfaces — a named set of method signatures
         (`interface writer { fn write(self, buf: slice<const uint8>) -> int64; }`)
         that a struct satisfies by defining those methods, carried as a
@@ -735,7 +832,23 @@ already do).
         (above). Open question: dynamic dispatch can only carry **reference**
         receivers (`const`/`mut self`) — the receiver travels as `data*`, so a
         by-value (consuming) `self` cannot cross the vtable without a copy;
-        whether interfaces admit by-value receivers at all is undecided
+        whether interfaces admit by-value receivers at all is undecided.
+        Deliberately a separate item from the polymorphic structs above: an
+        interface is a cross-hierarchy contract (any struct, plain or
+        polymorphic, can implement one) where the polymorphic lane is
+        within-hierarchy, and implementing an interface leaves the
+        struct itself untouched: the vtable lives in the fat pointer,
+        not the object, so there is no hidden field, no layout change,
+        and value semantics are kept. The two share one vtable
+        machinery, whichever ships first
+        building it: the slot ABI (signature-to-slot mapping, receiver
+        behind a pointer per the receiver-kind note above) and the
+        table-emission path. And they compose soundly: when a polymorphic
+        struct is boxed into an interface, the fat pointer's entries
+        dispatch through the object's embedded vtable, so the dynamic
+        type's override wins across an interface call too (a `C*` upcast
+        to `A*` and boxed as a `writer` still calls `C::write`, never
+        `A::write`)
 - [x] `@noalias` parameters — C's `restrict`: mark a pointer parameter
       (`fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64)`) as
       not overlapping any other pointer the function can reach, mapping to
