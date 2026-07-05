@@ -217,6 +217,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **`list`/`string` sources become slices** (**breaking**) — `list_append`/
+  `list_duplicate` and `string_append`/`string_duplicate`/`string_eq` take
+  their source side as a `const slice<T>`/`slice<char>` view instead of a
+  companion container: any borrowed run works — a container borrows in with
+  `as` (its slice prefix: `list_append(a, b as slice<int32>)`), and a string
+  literal adapts directly, so `string_eq(s, "hi")` and
+  `string_append(s, ", world")` need no ceremony.
+  `list_from_slice`/`string_from_slice` fold into the now-slice-sourced
+  `list_duplicate`/`string_duplicate` and are **removed**;
+  `string_from_array` copies up to the NUL terminator, delegating to the new
+  `string_append_array` (append a NUL-terminated `char*`); and `duplicate`
+  reserves `src.length` instead of mirroring the source's capacity. See
+  `examples/memory/lists.mc` and `libmc/README.md`.
+
 - **`libmc` receiver migration (stage 4 of 5): `list` and `string`**
   (**breaking**) — the workhorse container and its text alias flip their
   `self` parameters from raw pointers (`struct list<T>*`, `struct string*`)

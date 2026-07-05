@@ -76,7 +76,9 @@ def test_heap_pointer_decays_after_guard():
     ) == 21
 
 
-def test_from_array_and_from_slice_build_owned_copies():
+def test_from_array_and_duplicate_build_owned_copies():
+    # list_duplicate's src is a slice<T>, so it copies from any borrowed run --
+    # here an array's borrow -- not just from another list.
     assert run(
         """
         import "list";
@@ -88,7 +90,7 @@ def test_from_array_and_from_slice_build_owned_copies():
             list_from_array(a, &seed[0], 3);
 
             let b: struct list<int32>;
-            list_from_slice(b, seed as slice<int32>);
+            list_duplicate(b, seed as slice<int32>);
 
             seed[0] = 100;                  // neither list shares seed's storage
             let x: int32 = 0;
@@ -105,8 +107,9 @@ def test_from_array_and_from_slice_build_owned_copies():
 
 
 def test_append_and_duplicate_through_const_source():
-    # list_append's source and list_duplicate's src are const receivers; the
-    # for-in inside list_append walks the borrowed source.
+    # list_append's items and list_duplicate's src are const slice<T> views: a
+    # source list borrows in with `as` (its slice prefix), and the for-in
+    # inside list_append walks the borrowed run.
     assert run(
         """
         import "list";
@@ -117,11 +120,11 @@ def test_append_and_duplicate_through_const_source():
             list_push(a, 2);
 
             let b: struct list<int32>;
-            list_duplicate(b, a);           // deep copy: [1, 2]
+            list_duplicate(b, a as slice<int32>);   // deep copy: [1, 2]
             list_push(b, 3);
             if (a.length != 2) return 100;  // a untouched by b's push
 
-            list_append(a, b);              // a becomes [1, 2, 1, 2, 3]
+            list_append(a, b as slice<int32>);      // a becomes [1, 2, 1, 2, 3]
             let last: int32 = 0;
             list_get(a, 4, last);
             let total = (a.length as int32) * 10 + last;   // 53

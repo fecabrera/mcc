@@ -71,7 +71,7 @@ def test_string_append_concatenates(capfd):
             string_init(&b);
             string_push(&b, '!');
             string_push(&b, '?');
-            string_append(&a, &b);          // a becomes "hi!?"
+            string_append(&a, b as slice<char>);   // a becomes "hi!?"
             for c in &a { printf("%c", c); }
             printf(" len=%llu\\n", a.length);
             string_destroy(&a);
@@ -81,6 +81,27 @@ def test_string_append_concatenates(capfd):
         """
     )
     assert capfd.readouterr().out == "hi!? len=4\n"
+
+
+def test_string_append_array_copies_until_nul(capfd):
+    # string_append_array is the char* form of string_append: it walks a
+    # NUL-terminated C string byte by byte (no length known up front).
+    run(
+        """
+        import "string";
+        import "libc/stdio";
+        fn main() -> int32 {
+            let s: struct string;
+            string_from_array(s, "hey");
+            string_append_array(s, " you");
+            for c in &s { printf("%c", c); }
+            printf(" len=%llu\\n", s.length);
+            string_destroy(s);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "hey you len=7\n"
 
 
 def test_string_from_array_copies_until_nul(capfd):
@@ -129,20 +150,23 @@ def test_direct_receiver_through_the_alias(capfd):
 
 
 def test_string_eq_and_duplicate():
-    # string_eq takes both sides const; string_duplicate is mut dst, const src.
+    # string_eq and string_duplicate take their right-hand side as a
+    # slice<char>: a string borrows in with `as`, and a literal adapts
+    # directly (Stage 4), so string_eq(a, "hi") needs no ceremony.
     assert run(
         """
         import "string";
         fn main() -> int32 {
             let a: struct string;
             string_from_array(a, "hi");
+            if (!string_eq(a, "hi")) return 4;   // a literal compares directly
             let b: struct string;
-            string_duplicate(b, a);
-            if (!string_eq(a, b)) return 1;      // equal after the deep copy
+            string_duplicate(b, a as slice<char>);
+            if (!string_eq(a, b as slice<char>)) return 1;  // equal after the deep copy
             string_push(b, '!');
-            if (string_eq(a, b)) return 2;       // lengths differ now
+            if (string_eq(a, b as slice<char>)) return 2;   // lengths differ now
             string_push(a, '?');                 // a = "hi?", b = "hi!"
-            if (string_eq(a, b)) return 3;       // same length, bytes differ
+            if (string_eq(a, b as slice<char>)) return 3;   // same length, bytes differ
             string_destroy(a);
             string_destroy(b);
             return 0;
@@ -151,14 +175,15 @@ def test_string_eq_and_duplicate():
     ) == 0
 
 
-def test_string_from_slice_drops_the_nul():
-    # A string literal borrows in as slice<char>, which drops the trailing NUL.
+def test_string_duplicate_from_literal_drops_the_nul():
+    # string_duplicate builds from any slice<char>, and a string literal
+    # adapts to that slot directly, dropping its trailing NUL.
     assert run(
         """
         import "string";
         fn main() -> int32 {
             let s: struct string;
-            string_from_slice(s, "hey" as slice<char>);
+            string_duplicate(s, "hey");
             let n = s.length as int32;
             string_destroy(s);
             return n;

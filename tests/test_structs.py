@@ -358,7 +358,7 @@ def test_list_append_concatenates(capfd):
             list_init(&b, 2);
             list_push(&b, 3);
             list_push(&b, 4);
-            list_append(&a, &b);                    // a becomes [1, 2, 3, 4]
+            list_append(&a, b as slice<int32>);     // a becomes [1, 2, 3, 4]
             let sum: int32 = 0;
             for v in &a { sum = sum + v; }
             printf("%d %llu\\n", sum, a.length);    // 10 4
@@ -382,7 +382,7 @@ def test_list_duplicate_deep_copies(capfd):
             list_push(&a, 7);
             list_push(&a, 8);
             let b: struct list<int32>;
-            list_duplicate(&b, &a);                 // independent copy
+            list_duplicate(&b, a as slice<int32>);  // independent copy
             list_set(&a, 0, 99);                    // mutate the original
             let first: int32 = 0;
             list_get(&b, 0, first);                // copy is unaffected

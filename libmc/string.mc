@@ -22,56 +22,37 @@ type string = list<char>;
  * @param self: string to initialize
  */
 @inline
-fn string_init(mut self: struct string) {
+fn string_init(mut self: string) {
     list_init(self, DEFAULT_STRING_CAPACITY);
 }
 
 /**
- * Deep-copies src into a fresh string: initializes dst with src's capacity and
- * appends every byte of src, so the two share no storage afterward. dst must be
+ * Deep-copies src into a fresh string: initializes dst to src's length and
+ * appends every byte, so the two share no storage afterward. dst must be
  * uninitialized (or already destroyed) -- duplicating into a live string leaks
  * its buffer.
  *
  * @param dst: uninitialized string to copy src into
- * @param src: string to copy from
+ * @param src: bytes to copy from -- another string borrows in
+ *             (`a as slice<char>`); a string literal adapts directly
  */
-fn string_duplicate(mut dst: struct string, const src: struct string) {
-    list_init(dst, src.capacity);
+fn string_duplicate(mut dst: string, const src: slice<char>) {
+    list_init(dst, src.length);
     string_append(dst, src);
 }
 
 /**
- * Builds a string from the first n bytes of a raw byte array: initializes self
- * with capacity n and appends each byte, so the string owns a private copy and
- * shares no storage with str. self must be uninitialized (or already destroyed)
- * -- building into a live string leaks its buffer.
+ * Builds a string by copying a NUL-terminated C string: initializes self and
+ * appends every byte up to (not including) the terminator, so the string owns
+ * a private copy and shares no storage with str. self must be uninitialized
+ * (or already destroyed) -- building into a live string leaks its buffer.
  *
  * @param self: uninitialized string to build into
- * @param str:  source byte array to copy from
- * @param n:    number of bytes to copy from str
+ * @param str:  NUL-terminated bytes to copy from
  */
-fn string_from_array(mut self: struct string, @nonnull str: char*) {
+fn string_from_array(mut self: string, @nonnull str: char*) {
     string_init(self);
-
-    let i: uint64 = 0;
-    until (str[i] == '\0') {
-        string_push(self, str[i]);
-        i += 1;
-    }
-}
-
-/**
- * Builds a string by copying a borrowed run of bytes: initializes self and
- * appends every byte of the slice, so the string owns a private copy. self must
- * be uninitialized (or already destroyed). A string literal borrows in directly
- * (`str as slice<char>`), which drops the literal's trailing NUL.
- *
- * @param self: uninitialized string to build into
- * @param str:  byte slice to copy from
- */
-@inline
-fn string_from_slice(mut self: struct string, const str: slice<char>) {
-    list_from_slice(self, str);
+    string_append_array(self, str);
 }
 
 /**
@@ -81,7 +62,7 @@ fn string_from_slice(mut self: struct string, const str: slice<char>) {
  * @param self: string to destroy
  */
 @inline
-fn string_destroy(mut self: struct string) {
+fn string_destroy(mut self: string) {
     list_destroy(self);
 }
 
@@ -91,7 +72,7 @@ fn string_destroy(mut self: struct string) {
  * @param self: string to reset
  */
 @inline
-fn string_reset(mut self: struct string) {
+fn string_reset(mut self: string) {
     list_reset(self);
 }
 
@@ -105,7 +86,7 @@ fn string_reset(mut self: struct string) {
  * @return true if index is in bounds, false otherwise
  */
 @inline
-fn string_get(const self: struct string, index: uint64, mut out: char) -> bool {
+fn string_get(const self: string, index: uint64, mut out: char) -> bool {
     return list_get(self, index, out);    // re-lends the mut reference
 }
 
@@ -119,7 +100,7 @@ fn string_get(const self: struct string, index: uint64, mut out: char) -> bool {
  * @return true if index is in bounds, false otherwise
  */
 @inline
-fn string_set(mut self: struct string, index: uint64, value: char) -> bool {
+fn string_set(mut self: string, index: uint64, value: char) -> bool {
     return list_set(self, index, value);
 }
 
@@ -130,31 +111,51 @@ fn string_set(mut self: struct string, index: uint64, value: char) -> bool {
  * @param value: byte to push
  */
 @inline
-fn string_push(mut self: struct string, value: char) {
+fn string_push(mut self: string, value: char) {
     list_push(self, value);
 }
 
 /**
- * Appends another string to the end of the string, growing it if needed.
+ * Appends a run of bytes to the end of the string, growing it if needed.
  *
  * @param self: string to append to
- * @param str:  string to append
+ * @param str:  bytes to append -- another string borrows in
+ *              (`b as slice<char>`); a string literal adapts directly
  **/
 @inline
-fn string_append(mut self: struct string, const str: struct string) {
+fn string_append(mut self: string, const str: slice<char>) {
     list_append(self, str);
 }
 
 /**
- * Compares two strings for byte-for-byte equality. Strings of different lengths
- * are never equal; empty strings compare equal.
+ * Appends a NUL-terminated C string byte by byte, up to (not including) the
+ * terminator: the char* counterpart of string_append, for C strings whose
+ * length is not known up front.
  *
- * @param self: first string
- * @param str:  second string
+ * @param self: string to append to
+ * @param str:  NUL-terminated bytes to append
+ **/
+@inline
+fn string_append_array(mut self: string, @nonnull str: char*) {
+    let i: uint64 = 0;
+    until (str[i] == '\0') {
+        string_push(self, str[i]);
+        i += 1;
+    }
+}
+
+/**
+ * Compares the string against a run of bytes for byte-for-byte equality.
+ * Different lengths are never equal; empty runs compare equal.
  *
- * @return true if both strings have the same length and bytes, false otherwise
+ * @param self: string to compare
+ * @param str:  bytes to compare against -- another string borrows in
+ *              (`b as slice<char>`); a literal adapts, so
+ *              `string_eq(s, "hi")` works directly
+ *
+ * @return true if both sides have the same length and bytes, false otherwise
  */
-fn string_eq(const self: struct string, const str: struct string) -> bool {
+fn string_eq(const self: string, const str: slice<char>) -> bool {
     if (self.length != str.length)
         return false;
 
@@ -180,7 +181,7 @@ fn string_eq(const self: struct string, const str: struct string) -> bool {
  * @return an iterator positioned at the first byte
  */
 @inline
-fn string_it(self: struct string*) -> struct iterator<struct string> {
+fn string_it(self: string*) -> struct iterator<string> {
     return list_it(self);
 }
 
@@ -194,6 +195,6 @@ fn string_it(self: struct string*) -> struct iterator<struct string> {
  * @return true if a byte was produced, false once iteration is complete
  */
 @inline
-fn string_next(it: struct iterator<struct string>*, out: char*) -> bool {
+fn string_next(it: struct iterator<string>*, out: char*) -> bool {
     return list_next(it, out);
 }

@@ -13,23 +13,24 @@ struct list<T> extends slice<T> {
  * @param self:     list to initialize
  * @param capacity: initial number of elements to reserve space for
  */
-fn list_init<T>(mut self: struct list<T>, capacity: uint64) {
+fn list_init<T>(mut self: list<T>, capacity: uint64) {
     self.data = alloc<T>(capacity);
     self.length = 0;
     self.capacity = capacity;
 }
 
 /**
- * Deep-copies src into a fresh list: initializes dst with src's capacity and
- * appends every element of src, so the two share no storage afterward. dst must
- * be uninitialized (or already destroyed) -- duplicating into a live list leaks
+ * Deep-copies src into a fresh list: initializes dst to src's length and
+ * appends every element, so the two share no storage afterward. dst must be
+ * uninitialized (or already destroyed) -- duplicating into a live list leaks
  * its buffer.
  *
  * @param dst: uninitialized list to copy src into
- * @param src: list to copy from
+ * @param src: elements to copy from -- any borrowed run, so a source list
+ *             (`a as slice<T>`) or an array's borrow both work
  */
-fn list_duplicate<T>(mut dst: struct list<T>, const src: struct list<T>) {
-    list_init(dst, src.capacity);
+fn list_duplicate<T>(mut dst: list<T>, const src: slice<T>) {
+    list_init(dst, src.length);
     list_append(dst, src);
 }
 
@@ -43,28 +44,11 @@ fn list_duplicate<T>(mut dst: struct list<T>, const src: struct list<T>) {
  * @param arr:  source array to copy from
  * @param n:    number of elements to copy from arr
  */
-fn list_from_array<T>(mut self: struct list<T>, @nonnull arr: T*, n: uint64) {
+fn list_from_array<T>(mut self: list<T>, @nonnull arr: T*, n: uint64) {
     list_init(self, n);
 
     for i in range(n) {
         list_push(self, arr[i]);
-    }
-}
-
-/**
- * Builds a list from a slice: initializes self with the slice's length and
- * appends every element, so the list owns a private copy and shares no storage
- * with the borrowed run. self must be uninitialized (or already destroyed) --
- * building into a live list leaks its buffer.
- *
- * @param self: uninitialized list to build into
- * @param arr:  slice to copy from
- */
-fn list_from_slice<T>(mut self: struct list<T>, const arr: slice<T>) {
-    list_init(self, arr.length);
-
-    for el in arr {
-        list_push(self, el);
     }
 }
 
@@ -74,7 +58,7 @@ fn list_from_slice<T>(mut self: struct list<T>, const arr: slice<T>) {
  *
  * @param self: list to destroy
  */
-fn list_destroy<T>(mut self: struct list<T>) {
+fn list_destroy<T>(mut self: list<T>) {
     dealloc(self.data);
 
     self.data = null;
@@ -87,7 +71,7 @@ fn list_destroy<T>(mut self: struct list<T>) {
  *
  * @param self: list to reset
  */
-fn list_reset<T>(mut self: struct list<T>) {
+fn list_reset<T>(mut self: list<T>) {
     self.length = 0;
 }
 
@@ -100,7 +84,7 @@ fn list_reset<T>(mut self: struct list<T>) {
  *
  * @return true on success, false if index is out of bounds
  */
-fn list_get<T>(const self: struct list<T>, index: uint64, mut out: T) -> bool {
+fn list_get<T>(const self: list<T>, index: uint64, mut out: T) -> bool {
     if (index >= self.length)
         return false;
 
@@ -117,7 +101,7 @@ fn list_get<T>(const self: struct list<T>, index: uint64, mut out: T) -> bool {
  *
  * @return true on success, false if index is out of bounds
  */
-fn list_set<T>(mut self: struct list<T>, index: uint64, value: T) -> bool {
+fn list_set<T>(mut self: list<T>, index: uint64, value: T) -> bool {
     if (index >= self.length)
         return false;
 
@@ -131,7 +115,7 @@ fn list_set<T>(mut self: struct list<T>, index: uint64, value: T) -> bool {
  * @param self:  list to append to
  * @param value: value to append
  */
-fn list_push<T>(mut self: struct list<T>, value: T) {
+fn list_push<T>(mut self: list<T>, value: T) {
     if (self.length == self.capacity)
         list_grow<T>(self);
 
@@ -140,12 +124,13 @@ fn list_push<T>(mut self: struct list<T>, value: T) {
 }
 
 /**
- * Appends another list to the end of the list, growing it if needed.
+ * Appends a run of elements to the end of the list, growing it if needed.
  *
  * @param self:  list to append to
- * @param items: list to append
+ * @param items: elements to append -- any borrowed run, so a source list
+ *               (`b as slice<T>`) or an array's borrow both work
  **/
-fn list_append<T>(mut self: struct list<T>, const items: struct list<T>) {
+fn list_append<T>(mut self: list<T>, const items: slice<T>) {
     for value in items {
         list_push(self, value);
     }
@@ -158,7 +143,7 @@ fn list_append<T>(mut self: struct list<T>, const items: struct list<T>) {
  * @param self: list to grow
  */
 @private
-fn list_grow<T>(mut self: struct list<T>) {
+fn list_grow<T>(mut self: list<T>) {
     let new_capacity: uint64 = self.capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;
@@ -179,7 +164,7 @@ fn list_grow<T>(mut self: struct list<T>) {
  *
  * @return an iterator positioned at the first element
  */
-fn list_it<T>(self: struct list<T>*) -> struct iterator<list<T>> {
+fn list_it<T>(self: list<T>*) -> struct iterator<list<T>> {
     return struct iterator { obj = self, idx = 0 };
 }
 
