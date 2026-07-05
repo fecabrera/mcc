@@ -20,6 +20,7 @@ from mcc.nodes import (
     Call,
     CallExpr,
     Case,
+    CaseType,
     Cast,
     CharLit,
     CompoundAssign,
@@ -1506,6 +1507,12 @@ class Parser:
             The parsed ``Case`` node.
         """
         line = self.expect("case").line
+        # `type` is a contextual keyword: the plain case grammar expects `(`
+        # right after `case`, so an identifier here can only start a
+        # type-switch (and `type` stays a valid name everywhere else).
+        if self.cur.kind == "IDENT" and self.cur.text == "type":
+            self.advance()
+            return self.parse_case_type(line)
         self.expect("(")
         subject = self.parse_expr()
         self.expect(")")
@@ -1528,6 +1535,59 @@ class Parser:
                 otherwise.append(self.parse_statement())
         self.expect("}")
         return Case(subject, arms, otherwise, line)
+
+    def parse_case_type(self, line: int):
+        """Parse a ``case type (a) { when int32 n: ... else: ... }`` type-switch.
+
+        Each ``when`` arm names exactly one type (no comma-separated lists in
+        type mode) and must bind a name -- the binding holds the recovered
+        value, typed as the arm's type and scoped to the arm. The ``else:``
+        arm is mandatory: the set of types an ``any`` can hold is open, so a
+        type-switch is never exhaustive without it.
+
+        Args:
+            line: The line of the ``case`` keyword, already consumed.
+
+        Returns:
+            The parsed ``CaseType`` node.
+
+        Raises:
+            LangError: When an arm lacks its binding name or the ``else:`` arm
+                is missing.
+        """
+        self.expect("(")
+        subject = self.parse_expr()
+        self.expect(")")
+        self.expect("{")
+        arms = []
+        while self.cur.kind == "when":
+            when_line = self.advance().line
+            type_ref = self.parse_type_ref()
+            if self.cur.kind != "IDENT":
+                raise LangError(
+                    "a case type arm needs a binding name, as in 'when int32 n:'",
+                    when_line,
+                )
+            name = self.advance().text
+            self.expect(":")
+            body = []
+            while self.cur.kind not in ("when", "else", "}"):
+                body.append(self.parse_statement())
+            arms.append((type_ref, name, body, when_line))
+        otherwise = None
+        if self.accept("else"):
+            self.expect(":")
+            otherwise = []
+            while self.cur.kind != "}":
+                otherwise.append(self.parse_statement())
+        self.expect("}")
+        if otherwise is None:
+            raise LangError(
+                "case type needs an else arm; the set of types an any can "
+                "hold is open",
+                line,
+            )
+        return CaseType(subject, arms, otherwise, line)
 
     # Expressions, by descending precedence level. `or` is loosest, then
     # `and`; both bind looser than comparisons, so `a > 0 or b < 0` needs no

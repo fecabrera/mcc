@@ -343,7 +343,7 @@ already do).
         pad bytes, member access by pointer cast). `extends` (either
         direction), member defaults, and flexible array members are rejected;
         implemented, see [Unions](docs/language.md#unions)
-  - [ ] `any` — a tagged union over the above: a union-style payload plus a
+  - [x] `any` — a tagged union over the above: a union-style payload plus a
         compile-time type-id discriminant, so the live member is recovered
         safely (`case type`). The element type of the
         [variadic](#functions-and-methods) pack's `slice<const any>`, and the
@@ -391,7 +391,10 @@ already do).
         `tuple<A, B, ...>` below stays the complementary non-erased product.
         A transparent enum boxes under its underlying type's tag;
         [nominal enums](#types-and-generics) give an enum its own tag, a
-        silent `case type` change folded into that item's migration story:
+        silent `case type` change folded into that item's migration story.
+        Implemented as settled, see
+        [The any type](docs/language.md#the-any-type); the nested items
+        below are the follow-ups:
     - [ ] global/`@static` `any` initializers — teach the const-initializer
           path to box a constant; until then rejected with an explicit
           compile error, the same shape as the global union initializer gap

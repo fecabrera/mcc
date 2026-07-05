@@ -25,6 +25,8 @@ from mcc.codegen.targets import (
 from mcc.codegen.types import (
     LangType,
     TypedValue,
+    fnv1a64,
+    is_any,
     is_array,
     is_flexible_array,
     is_function,
@@ -50,6 +52,8 @@ __all__ = [
     "eval_static_cond",
     "eval_static_value",
     "target_fact_values",
+    "fnv1a64",
+    "is_any",
     "is_array",
     "is_flexible_array",
     "is_function",

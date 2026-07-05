@@ -67,8 +67,8 @@ function pointers.
 ## types/
 
 The type system: aliases, arrays and strings, enums, structs (and their
-literals, `extends` bases, flexible array members), unions, and generics, plus
-the compile-time
+literals, `extends` bases, flexible array members), unions, the `any` box, and
+generics, plus the compile-time
 directives that check a build's invariants, its configuration, and its use of
 deprecated or removed functions.
 
@@ -85,6 +85,7 @@ deprecated or removed functions.
 | [generic_extends.mc](types/generic_extends.mc) | a generic struct extending a generic base built from its own parameters (`entry<K, V> extends cell<K, V>`), monomorphized together per instantiation; the per-instantiation upcast, and the literal caveat: inference sees only the extender's own fields, so base fields need explicit type args |
 | [flexible_array_members.mc](types/flexible_array_members.mc) | a trailing `field: T[]` flexible array member: adds 0 to `sizeof`, decays to a `T*` at the struct's tail, one allocation for header plus elements |
 | [unions.mc](types/unions.mc) | `union Name { ... }` members sharing one storage (all at offset 0): literals with one live member, cross-member byte reinterpretation (float bit patterns), generic unions |
+| [any.mc](types/any.mc) | the builtin `any` tagged box (24 bytes: tag + payload): implicit boxing at assignment/argument/return, the primitive/pointer/slice boxable set (each pointer type its own tag), recovery only via `case type` with its mandatory `else`, boxing `&s` as the struct escape hatch |
 | [static_assert.mc](types/static_assert.mc) | the top-level compile-time directives `@static_assert(cond, "msg")` and `@error("msg")`: guarding a struct's layout with `sizeof`/`offsetof`/`alignof`, `const`- and `Enum::Member`-based checks, and an `@error` guarded by a dead `@if` branch to reject a target |
 | [warnings.mc](types/warnings.mc) | `@warning("msg")`, `@error`'s non-fatal twin: `-D`-gated `@if` branches flagging a suspect build configuration without rejecting it, the collect-then-print warning channel, and the `-Werror` flag promoting warnings to a failed build |
 | [deprecated.mc](types/deprecated.mc) | the `@deprecated("msg")` function attribute: a renamed function kept as a still-callable forwarder, every call site (and fn-as-value use) warning with the migration message, the old-API calls behind a `-D`-gated `@if` branch, `-Werror` promotion |

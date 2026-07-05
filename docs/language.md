@@ -1146,6 +1146,11 @@ or `float64`.
 `case`; the no-fall-through semantics mean `break` is never needed to end
 an arm.
 
+`case type (a) { when int32 n: ... else: ... }` is the same statement shape
+switching on a **type** instead of a value: its subject is an
+[`any`](#the-any-type), each arm names one type and binds the recovered
+value, and `else:` is mandatory. See [The any type](#the-any-type).
+
 ## Defer
 
 `defer` schedules a statement (or a `{ }` block) to run when the enclosing
@@ -1244,6 +1249,7 @@ before its `return`.
 | `T*` (any type + `*`s)                                | pointer                                                           |
 | `T[N]` (fixed-size [array](#arrays))                  | `[N x T]`                                                         |
 | `slice<T>` (non-owning [view](#slices))               | `{ T*, i64 }`                                                     |
+| `any` (tagged [box](#the-any-type))                   | `{ i64, [2 x i64] }` (tag + 16-byte payload)                      |
 | `fn(A) -> R` ([function pointer](#function-pointers)) | `R (A)*`                                                          |
 | `void`                                                | `void` (return type only; `void*` is not allowed -- use `uint8*`) |
 
@@ -2008,6 +2014,82 @@ Like a by-value struct, a by-value union is not
 [C-ABI compatible](../README.md#c-abi-compatibility) across the C boundary
 yet; pass a pointer to it instead, as C interop code does anyway. See
 [examples/types/unions.mc](../examples/types/unions.mc).
+
+## The any type
+
+`any` is the safe counterpart to a union: a builtin **tagged box** that holds
+a value of any (boxable) type together with a compile-time id of that type,
+so the live value is recovered checked instead of punned. It is
+`{ tag: uint64; payload: 16 bytes, align 8 }` — 24 bytes, the payload sized
+so a slice fits by value — and needs no declaration or import.
+
+Values **box implicitly** wherever a typed slot expects an `any`: assignment,
+argument passing, `return`, and stores into fields or elements. There is no
+cast to write (and `x as any` is in fact rejected — boxing is implicit):
+
+```c
+fn describe(a: any) { ... }
+
+fn main() -> int32 {
+    let a: any = 5;        // boxes an int32 (untyped literals anchor at
+                           // their default, the same rule as inference)
+    a = 2.5;               // re-boxes: now a float64
+    describe("hi");        // a char* boxes; each pointer type has its own tag
+    return 0;
+}
+```
+
+The boxable set is **primitives, pointers, and slices**. Structs, unions, and
+arrays do not box — by value the payload would be unbounded, by pointer the
+lifetime would go implicit — so box a pointer explicitly instead (`&s`; for
+an array, `&xs[0]`): the compile error names the escape hatch. An `any` never
+boxes another `any` (`any` to `any` is a plain copy), and an
+[enum](#enums) member boxes under its underlying type's tag.
+
+The **only** way to recover the value is the `case type` type-switch — with
+no exceptions in the language, an unchecked `as` unwrap would be either a
+tag-ignoring pun or a new trap mechanism, so there is none (and the
+tag/payload fields are not readable):
+
+```c
+fn show(a: any) {
+    case type (a) {
+        when int32 n:       println("int %d", n);
+        when float64 f:     println("float %f", f);
+        when char* s:       println("string %s", s);
+        when slice<char> t: println("slice of %llu", t.length);
+        else:               println("something else");
+    }
+}
+```
+
+It rides the [`case`](#control-flow) statement's shape — the subject is
+evaluated once, arms run without fall-through — with the type-mode specifics:
+
+- Each arm names **one type** and **must bind a name**; the binding holds the
+  recovered value, typed as the arm's type and scoped to the arm. No
+  comma-separated type lists.
+- `else:` is **mandatory**: the set of types an `any` can hold is open, so a
+  type-switch is never exhaustive without it.
+- The subject must be an `any`; an `any*` subject auto-dereferences, like
+  member access through a pointer.
+- Two arms naming the same type are a compile error, as is an arm whose type
+  could never box (a struct arm, or `when any`).
+
+The tag is the 64-bit FNV-1a hash of the boxed type's canonical name,
+computed at compile time — no runtime registry, so tags are deterministic
+across separate compilations and `case type` lowers to the same
+integer-equality chain as a value `case`. A hash collision between two type
+names used in one compilation is astronomically unlikely, and detected: it
+fails the compile rather than corrupting a type-switch.
+
+An `any` is an ordinary 24-byte value otherwise: pass and return it by value,
+put it in struct fields and arrays (`any[N]`), point at it (`any*`), take
+`sizeof(any) == 24`, use it in `.mci` [interfaces](#interface-files). One gap,
+the same shape as the union one: a global/`@static` `any` **initializer** is
+not supported yet — assign at runtime instead (an uninitialized global `any`
+is zero-filled and matches only `else`). See
+[examples/types/any.mc](../examples/types/any.mc).
 
 ## Enums
 

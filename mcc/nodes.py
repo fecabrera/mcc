@@ -682,6 +682,30 @@ class Case:
 
 
 @dataclass
+class CaseType:
+    """A ``case type (a) { when int32 n: ... else: ... }`` type-switch.
+
+    Matches an ``any`` subject's tag against each arm's type; the matching
+    arm's binding holds the recovered value, scoped to that arm. ``type`` is a
+    contextual keyword (the plain ``case`` grammar expects ``(`` next), each
+    arm names exactly one type and must bind a name, and ``else`` is required
+    -- the set of types an ``any`` can hold is open.
+
+    Attributes:
+        subject: The matched expression; must be an ``any`` (an ``any*``
+            auto-dereferences).
+        arms: ``(TypeRef, binding name, body statements, line)`` per ``when``.
+        otherwise: The mandatory ``else:`` body.
+        line: Source line for diagnostics.
+    """
+
+    subject: object
+    arms: list
+    otherwise: list
+    line: int
+
+
+@dataclass
 class ExprStmt:
     """An expression evaluated for its side effects, e.g. a call.
 

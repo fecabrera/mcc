@@ -10,6 +10,34 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **The `any` type and the `case type` type-switch (stage 1)** — `any` is a
+  builtin 24-byte tagged box, `{ tag: uint64; payload: 16 bytes, align 8 }`,
+  the safe counterpart to a union: the payload travels with a compile-time
+  type id, so the live value is recovered checked instead of punned. Values
+  box **implicitly** wherever a typed slot expects an `any` (assignment,
+  argument passing, `return`, field/element stores); an untyped literal
+  anchors at its default placeholder (`5` boxes as `int32`, the call-site
+  inference rule), and a transparent enum boxes under its underlying type's
+  tag. The v1 boxable set is primitives, pointers (each pointer type its own
+  tag), and slices (`slice<char>` fits by value); structs, unions, and arrays
+  are rejected with the escape hatch named (`&value`; `&value[0]` for an
+  array), and an `any` never boxes another `any`. Recovery is only via
+  `case type (a) { when int32 n: ... else: ... }` — `type` stays a contextual
+  keyword, each arm names one type and must bind a name (scoped to the arm,
+  typed as the arm's type), `else:` is mandatory (the boxed universe is
+  open), duplicate and never-boxable arms are compile errors, and an `any*`
+  subject auto-dereferences. There is no `as` unwrap (and no `.tag`/
+  `.payload` access): with no exceptions in the language, an unchecked
+  unwrap would be a pun or a trap. Tags are the 64-bit FNV-1a hash of the
+  canonical type name — registry-free, deterministic across compilations,
+  folding to constants so `case type` lowers onto the integer-equality
+  `case` codegen; an in-compile hash collision is detected and fails the
+  compile. `any` works as a struct field, array element, behind pointers,
+  and in `.mci` interfaces; a global/`@static` `any` initializer is rejected
+  for now (assign at runtime), the same shape as the global union
+  initializer gap. See [The any type](docs/language.md#the-any-type) and
+  `examples/types/any.mc`.
+
 - **A bare type parameter as an `extends` base** — the intrusive-container
   shape, `struct linked_list_entry<T> extends T { next: linked_list_entry<T>*; }`,
   is now a supported, documented, and pinned rule set. Each instantiation

@@ -96,11 +96,16 @@ class TypedValue:
             integer literals, constant arithmetic on them, and ``null``); such
             values may still take on a compatible type, while everything else
             keeps its type unless explicitly cast.
+        decayed: The original fixed-size array type when this value is the
+            pointer an array decayed to (see :meth:`CodeGen.value_at`), else
+            ``None``. Boxing into an ``any`` consults it so a decayed array is
+            rejected by its array type instead of silently boxing the pointer.
     """
 
     value: ir.Value
     type: LangType
     adaptable: bool = False
+    decayed: "LangType | None" = None
 
 
 @dataclass
@@ -295,9 +300,27 @@ CHARPTR = pointer_to(CHAR)
 # The type of a bare `null`: a pointer that adapts to any pointer type.
 NULLT = LangType("null", RAWPTR.ir, signed=False, pointee=TYPES["uint8"])
 
+# `any` -- the builtin tagged box: `{ tag: uint64; payload: 16 bytes, align 8 }`,
+# 24 bytes total, the payload sized so a slice (2 words) fits by value. Realized
+# as a struct (so sizeof, by-value copies, and const-parameter hidden references
+# reuse the struct machinery) and interned as this single constant: only the
+# reserved-name resolution arm in `CodeGen.lang_type` hands it out, so identity
+# (`t is ANY`) is the marker. The tag is the FNV-1a hash of the boxed type's
+# canonical name (see :func:`fnv1a64`); the layout here and the GEP indices in
+# the generator's boxing/`case type` code are the two sites of the usual
+# dual-site layout invariant.
+_ANY_PAYLOAD = list_of(UINT64, 2)
+ANY = LangType(
+    "any",
+    ir.LiteralStructType([UINT64.ir, _ANY_PAYLOAD.ir]),
+    signed=False,
+)
+object.__setattr__(ANY, "fields", (("tag", UINT64), ("payload", _ANY_PAYLOAD)))
+object.__setattr__(ANY, "elem_indices", (0, 1))
+
 # Builtin type names that are not in TYPES (they are generic or platform-
 # resolved) but are still reserved, so a user struct cannot shadow them.
-RESERVED_TYPE_NAMES = frozenset({"slice", "va_list"})
+RESERVED_TYPE_NAMES = frozenset({"slice", "va_list", "any"})
 
 POINTER_SIZE = 8  # bytes; native codegen targets 64-bit platforms
 
@@ -422,6 +445,44 @@ def is_slice(lang_type: LangType) -> bool:
         ``True`` if the type is a ``slice<T>``.
     """
     return is_struct(lang_type) and lang_type.template == "slice"
+
+
+def is_any(lang_type: LangType) -> bool:
+    """Report whether a type is the builtin ``any`` box (or its ``const`` form).
+
+    Only the reserved-name resolution arm hands out the interned :data:`ANY`
+    constant, so identity is the marker; the ``const any`` form points back at
+    it through :attr:`LangType.mutable`.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type is ``any`` or ``const any``.
+    """
+    return lang_type is ANY or lang_type.mutable is ANY
+
+
+def fnv1a64(name: str) -> int:
+    """Hash a canonical type name to its 64-bit ``any`` tag (FNV-1a).
+
+    Registry-free by design: a sequential whole-program registry would break
+    under precompiled objects (a prebuilt ``.o``'s boxed ``any``\\ s would carry
+    the producer's ids), while the hash is deterministic across compilations,
+    folds to a constant, and lowers ``case type`` onto the integer-equality
+    ``case`` codegen. In-compile collisions are detected and errored (see
+    :meth:`CodeGen.any_tag`).
+
+    Args:
+        name: The canonical type name (its ``str(LangType)`` form).
+
+    Returns:
+        The 64-bit FNV-1a hash of the name's UTF-8 bytes.
+    """
+    tag = 0xCBF29CE484222325  # FNV-1a 64-bit offset basis
+    for byte in name.encode("utf-8"):
+        tag = ((tag ^ byte) * 0x100000001B3) % (1 << 64)  # FNV prime
+    return tag
 
 
 def is_valist(lang_type: LangType) -> bool:

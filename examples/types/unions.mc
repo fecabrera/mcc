@@ -50,3 +50,7 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// See also: any.mc for the builtin `any` box, the tagged counterpart to this
+// raw storage sharing: it remembers which type it holds and recovers it
+// safely through `case type`.

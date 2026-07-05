@@ -33,6 +33,7 @@ from mcc.nodes import (
     Call,
     CallExpr,
     Case,
+    CaseType,
     Cast,
     CharLit,
     CompoundAssign,
@@ -86,6 +87,7 @@ from mcc.codegen.targets import (
     target_fact_values,
 )
 from mcc.codegen.types import (
+    ANY,
     BOOL,
     CHAR,
     CHARPTR,
@@ -108,9 +110,11 @@ from mcc.codegen.types import (
     adaptable_int,
     const_of,
     field_offset,
+    fnv1a64,
     fold_int_arithmetic,
     fold_untyped_shift,
     function_type,
+    is_any,
     is_array,
     is_flexible_array,
     is_function,
@@ -356,6 +360,11 @@ class CodeGen:
         self.consts: dict[str, TypedValue] = {}
         self.const_privacy: dict[str, tuple[bool, str | None]] = {}
         self.type_bindings: dict[str, LangType] = {}  # active type-parameter bindings
+        # `any` tags handed out this compilation: tag -> canonical type name.
+        # The tag is a hash (see fnv1a64), so two distinct names colliding on
+        # one tag would corrupt every `case type`; recording each tag's name
+        # turns a collision into a compile error at the second type's site.
+        self.any_tags: dict[int, str] = {}
         # name -> (private, source file); for @private access checks
         self.func_privacy: dict[str, tuple[bool, str | None]] = {}
         # @deprecated("msg") on concrete functions: resolved symbol -> the
@@ -1128,6 +1137,10 @@ class CodeGen:
             if ref.args:
                 raise LangError("type 'va_list' is not generic", line)
             base = self.valist(line)
+        elif ref.name == "any":
+            if ref.args:
+                raise LangError("type 'any' is not generic", line)
+            base = ANY
         elif ref.name == "slice":
             if len(ref.args) != 1:
                 raise LangError(
@@ -1408,6 +1421,126 @@ class CodeGen:
         object.__setattr__(slice_t, "elem_indices", (0, 1))
         self.struct_types[mangled] = slice_t
         return slice_t
+
+    def any_tag(self, lang_type: LangType, line: int) -> int:
+        """Compute a boxable type's ``any`` tag, checking for hash collisions.
+
+        The tag is the FNV-1a hash of the type's canonical name (see
+        :func:`fnv1a64`); every boxing site and ``case type`` arm funnels
+        through here, so two distinct type names hashing to one tag within a
+        compilation are caught instead of corrupting the type-switch.
+
+        Args:
+            lang_type: The boxable type (already validated, ``const``
+                stripped).
+            line: Source line for diagnostics.
+
+        Returns:
+            The 64-bit tag as a Python integer.
+
+        Raises:
+            LangError: On an in-compile tag collision.
+        """
+        name = str(lang_type)
+        tag = fnv1a64(name)
+        known = self.any_tags.setdefault(tag, name)
+        if known != name:
+            raise LangError(
+                f"any type tags collide: {known!r} and {name!r} hash to the "
+                "same 64-bit id",
+                line,
+            )
+        return tag
+
+    def check_boxable(self, lang_type: LangType, line: int) -> LangType:
+        """Validate a type against the ``any`` boxable set.
+
+        The v1 set is primitives (the integers, ``bool``, ``char``,
+        ``float64``), pointers (each pointer type gets its own tag), and
+        slices. Structs, unions, and arrays are rejected -- by value the
+        payload is unbounded, by pointer the lifetime goes implicit, so
+        ``&value`` is the explicit escape. An ``any`` never boxes another
+        ``any`` (``any`` to ``any`` is a plain copy, not nesting).
+
+        Args:
+            lang_type: The candidate type (possibly ``const``-qualified).
+            line: Source line for diagnostics.
+
+        Returns:
+            The ``const``-stripped type to tag and box.
+
+        Raises:
+            LangError: When the type is outside the boxable set.
+        """
+        lang_type = strip_const(lang_type)
+        if lang_type is ANY:
+            raise LangError(
+                "cannot box an any in an any; an any never nests", line
+            )
+        if lang_type is NULLT:
+            raise LangError(
+                "cannot box a bare null in an any; give it a pointer type "
+                "first (e.g. null as uint8*)",
+                line,
+            )
+        if is_slice(lang_type) or is_pointer(lang_type):
+            return lang_type
+        if is_array(lang_type):
+            raise LangError(
+                f"cannot box a {lang_type} in an any; box a pointer to its "
+                "first element (&value[0]) instead",
+                line,
+            )
+        if is_struct(lang_type):
+            raise LangError(
+                f"cannot box a {lang_type} in an any; box a pointer to it "
+                "(&value) instead",
+                line,
+            )
+        if (
+            is_integer(lang_type)
+            or lang_type is BOOL
+            or lang_type is CHAR
+            or lang_type is FLOAT64
+        ):
+            return lang_type
+        raise LangError(f"cannot box a {lang_type} in an any", line)
+
+    def gen_box_any(self, tv: TypedValue, line: int) -> TypedValue:
+        """Box a value into a fresh ``any``: store the tag, then the payload.
+
+        The box is assembled in a stack slot -- zero-filled first, so the
+        payload bytes past the value are deterministic -- and loaded back as
+        the 24-byte ``any`` value. The payload slot is reinterpreted as the
+        source type by a pointer cast, the same move a union member store
+        makes. The GEP indices here and the layout in ``types.ANY`` are the
+        two sites of the dual-site layout invariant.
+
+        Args:
+            tv: The value to box (already validated via
+                :meth:`check_boxable`; an array must have been rejected
+                before it decayed).
+            line: Source line for diagnostics.
+
+        Returns:
+            The boxed ``any`` as a ``TypedValue``.
+        """
+        if tv.decayed is not None:
+            # The value is the pointer an array decayed to; reject by the
+            # array type, not the pointer it silently became.
+            self.check_boxable(tv.decayed, line)
+        boxed = self.check_boxable(tv.type, line)
+        tag = self.any_tag(boxed, line)
+        slot = self.entry_alloca(ANY.ir, "any.box")
+        self.builder.store(ir.Constant(ANY.ir, None), slot)  # zero-fill first
+        tag_ptr = self.builder.gep(slot, [I32_ZERO, I32_ZERO], inbounds=True)
+        self.builder.store(ir.Constant(UINT64.ir, tag), tag_ptr)
+        payload_ptr = self.builder.gep(
+            slot, [I32_ZERO, ir.Constant(ir.IntType(32), 1)], inbounds=True
+        )
+        typed_ptr = self.builder.bitcast(payload_ptr, boxed.ir.as_pointer())
+        self.builder.store(tv.value, typed_ptr)
+        return TypedValue(self.builder.load(slot), ANY)
 
     def instantiate_struct(
         self, decl: StructDecl, args: tuple[LangType, ...], line: int
@@ -2612,6 +2745,17 @@ class CodeGen:
             and expected.args[0] == const_of(tv.type.args[0])
         ):
             return TypedValue(tv.value, expected)
+        # An `any` target boxes the value implicitly, right here at the coerce
+        # choke point, so assignment, argument passing, return, and stores all
+        # box the same way. An adaptable literal was not captured by the
+        # integer branch above (`any` is not an integer type), so it anchors
+        # at its default placeholder type -- `5` boxes as int32, the same rule
+        # call-site inference uses. `any` to `any` already returned above.
+        if is_any(expected):
+            boxed = self.gen_box_any(tv, line)
+            if expected is ANY:
+                return boxed
+            return TypedValue(boxed.value, expected)  # the const any form
         raise LangError(f"{context}: expected {expected}, got {tv.type}", line)
 
     def widen_operand(
@@ -3032,6 +3176,8 @@ class CodeGen:
             # case counts as diverging (no trailing return/emit needed).
             if not reaches_end:
                 self.builder.unreachable()
+        elif isinstance(stmt, CaseType):
+            self.gen_case_type(stmt)
         elif isinstance(stmt, StoreDeref):
             ptr = self.gen_expr(stmt.ptr)
             if not is_pointer(ptr.type):
@@ -3083,6 +3229,90 @@ class CodeGen:
             self.gen_expr(stmt.expr)
         else:
             raise LangError(f"cannot compile statement {stmt!r}", stmt.line)
+
+    def gen_case_type(self, stmt: CaseType):
+        """Lower a ``case type`` type-switch over an ``any`` subject.
+
+        Rides on the same shape as the value ``case``: the subject's tag is
+        loaded once, each arm compares it against the arm type's constant tag
+        (an integer equality chain), and a matching arm loads the payload
+        reinterpreted as its type into a fresh binding scoped to the arm. An
+        ``any*`` subject auto-dereferences, per the member-access-through-
+        pointer precedent. The ``else:`` arm is guaranteed by the parser.
+
+        Args:
+            stmt: The ``CaseType`` node.
+
+        Raises:
+            LangError: When the subject is not an ``any`` (or ``any*``), an
+                arm's type can never be boxed, or two arms name the same type.
+        """
+        subject = self.gen_expr(stmt.subject)
+        if is_pointer(subject.type) and is_any(subject.type.pointee):
+            pointee = subject.type.pointee
+            subject = TypedValue(
+                self.gen_load(subject.value, volatile=pointee.volatile),
+                strip_const(pointee),
+            )
+        if not is_any(subject.type):
+            raise LangError(
+                f"case type needs an any (or any*), got {subject.type}",
+                stmt.line,
+            )
+        # Spill the box to a slot: the tag reads from index 0, and each arm
+        # reinterprets the payload at index 1 by a pointer cast (the same
+        # GEP indices as gen_box_any -- the dual-site layout invariant).
+        slot = self.entry_alloca(ANY.ir, "casetype.subject")
+        self.builder.store(subject.value, slot)
+        tag_ptr = self.builder.gep(slot, [I32_ZERO, I32_ZERO], inbounds=True)
+        tag = self.builder.load(tag_ptr, name="casetype.tag")
+        payload_ptr = self.builder.gep(
+            slot, [I32_ZERO, ir.Constant(ir.IntType(32), 1)], inbounds=True
+        )
+        end_bb = self.builder.append_basic_block("casetype.end")
+        reaches_end = False
+        seen: set[int] = set()
+        for type_ref, name, body, when_line in stmt.arms:
+            arm_type = strip_const(
+                self.check_boxable(self.lang_type(type_ref, when_line), when_line)
+            )
+            arm_tag = self.any_tag(arm_type, when_line)
+            if arm_tag in seen:
+                raise LangError(
+                    f"duplicate case type arm for {arm_type}", when_line
+                )
+            seen.add(arm_tag)
+            cond = self.builder.icmp_unsigned(
+                "==", tag, ir.Constant(UINT64.ir, arm_tag)
+            )
+            arm_bb = self.builder.append_basic_block("casetype.arm")
+            next_bb = self.builder.append_basic_block("casetype.next")
+            self.builder.cbranch(cond, arm_bb, next_bb)
+            self.builder.position_at_end(arm_bb)
+            # The binding is a fresh copy of the payload, reinterpreted as the
+            # arm's type and scoped to the arm (like a for-loop's variable).
+            typed_ptr = self.builder.bitcast(payload_ptr, arm_type.ir.as_pointer())
+            var_slot = self.entry_alloca(arm_type.ir, name)
+            self.builder.store(self.builder.load(typed_ptr), var_slot)
+            outer_locals, outer_names = dict(self.locals), self.scope_names
+            self.scope_names = set()
+            try:
+                self.bind_local(name, var_slot, arm_type)
+                self.gen_block(body)
+            finally:
+                self.locals, self.scope_names = outer_locals, outer_names
+            if not self.builder.block.is_terminated:
+                self.builder.branch(end_bb)
+                reaches_end = True
+            self.builder.position_at_end(next_bb)
+        self.gen_block(stmt.otherwise)  # the mandatory else arm
+        if not self.builder.block.is_terminated:
+            self.builder.branch(end_bb)
+            reaches_end = True
+        self.builder.position_at_end(end_bb)
+        # Every arm and the else diverged: the type-switch diverges too.
+        if not reaches_end:
+            self.builder.unreachable()
 
     def gen_compound_assign(self, stmt: CompoundAssign):
         """Lower ``target op= value`` to a load, an ``op``, and a store back.
@@ -4154,7 +4384,11 @@ class CodeGen:
         """
         if is_array(lang_type):
             first = self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
-            return TypedValue(first, pointer_to(lang_type.element))
+            # `decayed` remembers the array type, so a boxing site can reject
+            # the array by name instead of silently boxing the decayed pointer.
+            return TypedValue(
+                first, pointer_to(lang_type.element), decayed=lang_type
+            )
         return TypedValue(
             self.gen_load(addr, align=align, volatile=volatile, name=name),
             strip_const(lang_type),
@@ -4425,6 +4659,12 @@ class CodeGen:
             base_align, base_volatile = None, False
         else:
             base_addr, owner, base_align, base_volatile = self.gen_addr(base_expr, line)
+        if is_any(owner):
+            # The tag/payload layout is internal; reading it would be an
+            # unchecked unwrap, which v1 has none of outside `case type`.
+            raise LangError(
+                "an any has no fields; recover its value with case type", line
+            )
         index, ftype = self.struct_field(owner, fname, line)
         if is_union(owner):
             # Every union member lives at offset 0: address it by casting the
@@ -4667,6 +4907,21 @@ class CodeGen:
         src = tv.type
         if src == target:
             return TypedValue(tv.value, target)
+        # No unwrap outside `case type` in v1: with no checked-failure
+        # mechanism, an `as` on an any would be either a tag-ignoring pun or
+        # a new trap. Boxing needs no cast either -- it is implicit.
+        if is_any(src):
+            raise LangError(
+                f"cannot cast an any to {target}; recover its value with "
+                "case type",
+                expr.line,
+            )
+        if is_any(target):
+            raise LangError(
+                f"cannot cast {src} to any; boxing is implicit, assign or "
+                "pass the value directly",
+                expr.line,
+            )
         # A function value is a pointer underneath (LLVM `ret (args)*`), so it
         # casts like one: between pointer kinds, and to/from a 64-bit integer
         # address -- exactly as a function name converts to an address in C.
@@ -5051,6 +5306,15 @@ class CodeGen:
             raise LangError(
                 "a global union initializer is not supported yet; "
                 "assign the member at runtime instead",
+                line,
+            )
+        if is_any(expected):
+            # Boxing a constant needs the const-initializer path to build the
+            # tagged 24-byte aggregate; until then, the same shape as the
+            # global union initializer gap above.
+            raise LangError(
+                "a global any initializer is not supported yet; "
+                "assign the value at runtime instead",
                 line,
             )
         if isinstance(expr, ArrayLit):
