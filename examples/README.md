@@ -107,7 +107,8 @@ Pointers and the builtin container/view types built on them.
 | [slices.mc](memory/slices.mc) | the builtin `slice<T>` view: borrowing a `list<T>` or `T[N]` with `as`, `.length`, indexing, `for x in`, passing by value, writing through |
 | [lists.mc](memory/lists.mc) | `list<T>`, a growable random-access sequence: `push`, `get` (mut out-param), `from_array`, `append`, `duplicate` |
 | [stacks.mc](memory/stacks.mc) | `stack<T>`, a growable LIFO: push and pop at the top |
-| [queues.mc](memory/queues.mc) | `queue<T>`, a growable FIFO ring buffer: push at the back, pop from the front |
+| [queues.mc](memory/queues.mc) | `queue<T>`, a linked-list FIFO: push at the back, pop from the front, walk it with `for … in` |
+| [rings.mc](memory/rings.mc) | `ring<T>`, an array-backed FIFO ring buffer: slot reuse as the indices wrap, `ring_at` logical indexing, doubling that re-lays wrapped elements in order |
 | [intrusive_list.mc](memory/intrusive_list.mc) | the intrusive-container shape, `extends T` with a bare type parameter as the base: the payload embedded as the entry's layout prefix, its fields reached directly on the entry, the explicit `as` upcast handing the payload to list-unaware code |
 | [nonnull_heap_buffers.mc](memory/nonnull_heap_buffers.mc) | a heap buffer crossing the stdlib's @nonnull contracts (memory copy/fill family, hashing digests): one diverging null guard after `alloc` covers every later call, the loops that leave the buffer alone included |
 

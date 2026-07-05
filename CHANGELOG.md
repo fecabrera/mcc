@@ -281,6 +281,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **`queue<T>` becomes a linked list; the ring buffer moves to `ring<T>`**
+  (**breaking**) — `queue<T>` is now a singly-linked FIFO: push links a
+  node at the tail and pop unlinks the head, both O(1), one heap node per
+  queued value. `queue_init` loses its capacity parameter,
+  `queue_len`/`queue_at` leave the queue API, `queue_pop`/`queue_peek` on
+  an empty queue become undefined (guard with `queue_is_empty`), and the
+  queue gains `queue_it`/`queue_next` iteration (`for v in &q`, front to
+  back, non-consuming). The former array-backed implementation lives on
+  unchanged in spirit as `ring<T>` (`import "ring";`):
+  `ring_init(capacity)`/`ring_destroy`,
+  `ring_push`/`ring_pop`/`ring_peek`/`ring_at`, `ring_len`/`ring_is_empty`,
+  doubling when full and re-laying wrapped elements in logical order. See
+  `examples/memory/queues.mc`, `examples/memory/rings.mc`, and
+  `libmc/README.md`.
+
 - **`libmc` copy/build functions collapse into overload sets** (**breaking**)
   — the constructor- and append-flavored families adopt function overloading
   (stage 3): `list_duplicate`/`list_from_array` fold into `list_init`

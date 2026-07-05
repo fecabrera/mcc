@@ -1,24 +1,25 @@
-"""libmc/queue.mc: the growable FIFO ring buffer, over mut/const receivers
-(stage 2 of the libmc receiver migration)."""
+"""libmc/queue.mc: the linked-list FIFO queue, over mut/const receivers.
+
+Enqueue links a node at the tail, dequeue unlinks the head, both O(1); the
+ring-buffer implementation this queue replaced lives on as libmc/ring.mc
+(see test_ring.py).
+"""
 
 from helpers import run
 
 
 def test_fifo_with_direct_receiver():
     # The post-migration idiom: a local queue passes directly, no `&`.
-    # Capacity 1 forces queue_grow (mut-to-mut re-lending inside queue_push).
     assert run(
         """
         import "queue";
         fn main() -> int32 {
             let q: struct queue<int32>;
-            queue_init(q, 1);
+            queue_init(q);
             queue_push(q, 1);
             queue_push(q, 2);
             queue_push(q, 3);
-            if (queue_len(q) != 3) return 100;
             if (queue_peek(q) != 1) return 101;
-            if (queue_at(q, 2) != 3) return 102;
             let first = queue_pop(q);          // FIFO: oldest first
             let second = queue_pop(q);
             if (queue_is_empty(q)) return 103; // one element left
@@ -29,29 +30,47 @@ def test_fifo_with_direct_receiver():
     ) == 12
 
 
-def test_ring_wraps_around_head():
-    # Pops move head forward, so later pushes reuse freed slots; queue_at
-    # (const self) reads through the wrap without disturbing the ring.
+def test_first_push_links_head():
+    # Regression: the first push into an empty queue must link head, or the
+    # queue reports empty forever. Also drains back to empty and reuses the
+    # queue, so tail relinks after a full drain.
     assert run(
         """
         import "queue";
         fn main() -> int32 {
             let q: struct queue<int32>;
-            queue_init(q, 4);
+            queue_init(q);
+            queue_push(q, 7);
+            if (queue_is_empty(q)) return 100;   // head was linked
+            if (queue_pop(q) != 7) return 101;
+            if (!queue_is_empty(q)) return 102;  // drained: head and tail reset
+            queue_push(q, 8);                    // relinks after the drain
+            if (queue_peek(q) != 8) return 103;
+            queue_destroy(q);
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_for_in_yields_fifo_order():
+    # queue_it/queue_next walk from the front (oldest) to the back (newest).
+    assert run(
+        """
+        import "queue";
+        fn main() -> int32 {
+            let q: struct queue<int32>;
+            queue_init(q);
             queue_push(q, 1);
             queue_push(q, 2);
             queue_push(q, 3);
-            queue_pop(q);
-            queue_pop(q);          // head = 2, length = 1
-            queue_push(q, 4);
-            queue_push(q, 5);      // physically wraps to slots 0 and 1
-            if (queue_len(q) != 3) return 100;
-            let sum = queue_at(q, 0) + queue_at(q, 1) + queue_at(q, 2);
+            let sum: int32 = 0;
+            for v in &q { sum = sum * 10 + v; }
             queue_destroy(q);
-            return sum;             // 3 + 4 + 5
+            return sum;             // 123 in FIFO order
         }
         """
-    ) == 12
+    ) == 123
 
 
 def test_amp_call_sites_still_compile():
@@ -61,13 +80,12 @@ def test_amp_call_sites_still_compile():
         import "queue";
         fn main() -> int32 {
             let q: struct queue<char>;
-            queue_init(&q, 2);
+            queue_init(&q);
             queue_push(&q, 'a');
             queue_push(&q, 'b');
             let front = queue_peek(&q);
-            let n = queue_len(&q) as int32;
             queue_destroy(&q);
-            return (front == 'a' and n == 2) ? 0 : 1;
+            return (front == 'a' and queue_is_empty(&q)) ? 0 : 1;
         }
         """
     ) == 0

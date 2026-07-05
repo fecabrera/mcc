@@ -1,27 +1,35 @@
 import "std";
 import "queue";
 
-// queue<T> -- a growable FIFO ring buffer: push at the back, pop from the front
-// (libmc/queue.mc). The ring reuses freed slots, doubling only when it fills.
+// queue<T> -- a linked-list FIFO: push links a node at the back, pop unlinks
+// the front, both O(1), one heap node per queued value (libmc/queue.mc).
+// The array-backed FIFO this replaced lives on as ring<T> (libmc/ring.mc).
 
 fn main() -> int32 {
     // The queue functions take const/mut receivers, so a local queue passes
     // directly: no & needed. (A queue<T>* still works via pointer decay; see
     // examples/functions/pointer_decay.mc.)
     let q: struct queue<int32>;
-    queue_init(q, 2);
+    queue_init(q);
     defer queue_destroy(q);
 
     let i: int32 = 1;
     while (i <= 5) {
-        queue_push(q, i);                  // grows past the initial capacity of 2
+        queue_push(q, i);
         i += 1;
     }
 
-    println("len %llu, front %d", queue_len(q), queue_peek(q));
+    println("front %d", queue_peek(q));
+
+    // for-in walks front to back (oldest to newest) without consuming.
+    print("queue (walk):  ");
+    for v in &q {
+        print("%d ", v);                   // 1 2 3 4 5
+    }
+    println("");
 
     // Popping returns the oldest element first.
-    print("queue (FIFO): ");
+    print("queue (FIFO):  ");
     until (queue_is_empty(q)) {
         print("%d ", queue_pop(q));        // 1 2 3 4 5
     }
