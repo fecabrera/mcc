@@ -134,10 +134,14 @@ def test_inline_definition_cannot_pair_with_a_proto():
 
 
 def test_proto_arriving_after_definition_must_match_too():
+    # Same parameter list, drifting return type: pairing is per signature,
+    # so same-params drift is what the mismatch error still means. (A proto
+    # with a *different* parameter list joins the overload set instead --
+    # see the overload-set prototype tests below.)
     with pytest.raises(LangError) as err:
         compile_ir(
             "fn f(a: int32) -> int32 { return a; }\n"
-            "fn f(a: int64) -> int32;"
+            "fn f(a: int32) -> int64;"
         )
     assert err.value.message == "definition of 'f' does not match its prototype"
     assert err.value.line == 2  # reported at the prototype, note at the definition
@@ -145,8 +149,9 @@ def test_proto_arriving_after_definition_must_match_too():
 
 
 def test_conflicting_protos_are_an_error():
+    # Two prototypes of one signature must agree beyond the parameter list.
     with pytest.raises(LangError) as err:
-        compile_ir("fn f(a: int32) -> int32;\nfn f(a: int64) -> int32;")
+        compile_ir("fn f(a: int32) -> int32;\nfn f(a: int32) -> int64;")
     assert err.value.message == "conflicting prototypes for 'f'"
 
 
@@ -182,10 +187,84 @@ def test_proto_never_pairs_with_a_tombstone():
 
 
 def test_proto_never_pairs_with_a_generic_template():
-    with pytest.raises(LangError, match="function 'f' already defined"):
-        compile_ir("fn f<T>(x: T) -> T { return x; }\nfn f(x: int32) -> int32;")
-    with pytest.raises(LangError, match="function 'f' already defined"):
-        compile_ir("fn f(x: int32) -> int32;\nfn f<T>(x: T) -> T { return x; }")
+    # A same-module proto beside a generic template forms a MIXED overload
+    # set (it does not pair -- there is no signature to check against a
+    # template), so the proto keeps its own declaration. Cross-kind pairing
+    # stays impossible: a cross-module template still collides.
+    out = compile_ir(
+        "fn f<T>(x: T) -> T { return x; }\nfn f(x: int32) -> int32;"
+    )
+    assert 'declare i32 @"f"' in out
+    out = compile_ir(
+        "fn f(x: int32) -> int32;\nfn f<T>(x: T) -> T { return x; }"
+    )
+    assert 'declare i32 @"f"' in out
+
+
+# ------------------------------------- prototypes inside an overload set
+
+def test_different_signature_proto_joins_the_set():
+    # Pairing is per signature: a prototype with a new parameter list is
+    # simply another member, declared under its mangled symbol. Both orders.
+    out = compile_ir(
+        "fn f(x: int32) -> int32;\n"
+        "fn f(p: char*) -> int32 { return 2; }\n"
+        "fn main() -> int32 { return 0; }"
+    )
+    assert 'declare i32 @"f(int32)"' in out
+    assert 'define i32 @"f(char*)"' in out
+    out = compile_ir(
+        "fn f(p: char*) -> int32 { return 2; }\n"
+        "fn f(x: int32) -> int32;\n"
+        "fn main() -> int32 { return 0; }"
+    )
+    assert 'declare i32 @"f(int32)"' in out
+
+
+def test_proto_and_definition_pair_inside_a_set():
+    # A same-signature proto+definition inside a set is one member -- in
+    # either order -- and the call dispatches to the body.
+    for src in (
+        "fn f(x: int32) -> int32;\n"
+        "fn f(x: int32) -> int32 { return 1; }\n"
+        "fn f(p: char*) -> int32 { return 2; }\n"
+        "fn main() -> int32 { return f(7) * 10 + f(\"x\"); }",
+        "fn f(x: int32) -> int32 { return 1; }\n"
+        "fn f(x: int32) -> int32;\n"
+        "fn f(p: char*) -> int32 { return 2; }\n"
+        "fn main() -> int32 { return f(7) * 10 + f(\"x\"); }",
+    ):
+        assert run(src) == 12
+        out = compile_ir(src)
+        # One ir.Function per member: the pair collapsed onto the mangled
+        # symbol, and the definition's body filled it in.
+        assert out.count('i32 @"f(int32)"(') >= 1
+        assert 'define i32 @"f(int32)"' in out
+
+
+def test_set_member_pair_still_checks_return_drift():
+    # Same parameter list, drifting return type: the per-signature pair
+    # keeps every shipped rule, return-type-only drift included.
+    with pytest.raises(LangError) as err:
+        compile_ir(
+            "fn f(x: int32) -> int32;\n"
+            "fn f(x: int32) -> int64 { return 0; }\n"
+            "fn f(p: char*) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    assert err.value.message == "definition of 'f' does not match its prototype"
+
+
+def test_prototype_only_set_compiles_clean():
+    # An unmatched prototype stays what it already is -- a link-time error
+    # -- for set members exactly as for a single prototype.
+    out = compile_ir(
+        "fn f(x: int32) -> int32;\n"
+        "fn f(p: char*) -> int32;\n"
+        "fn main() -> int32 { return 0; }"
+    )
+    assert 'declare i32 @"f(int32)"' in out
+    assert 'declare i32 @"f(char*)"' in out
 
 
 # ------------------------------------------------------------- @deprecated

@@ -1,5 +1,7 @@
 """Generic overload sets: same name, dispatch by parameter pattern."""
 
+import re
+
 import pytest
 
 from mcc.errors import LangError
@@ -330,21 +332,158 @@ def test_tombstone_cannot_join_an_overload_set():
         )
 
 
-def test_generic_cannot_share_a_concrete_set_name():
-    # Mixed generic/concrete sets are stage 2; today the rejection stands in
-    # both declaration orders.
-    with pytest.raises(LangError, match="function 'f' already defined"):
+def test_mixed_set_concrete_beats_generic_on_exact_match():
+    # A generic template and concrete definitions share one name in one
+    # module: on an exact match the concrete tier wins (rank leads with
+    # is-concrete), in both declaration orders.
+    for src in (
+        "fn f<T>(x: T) -> int32 { return 0; }\n"
+        "fn f(x: int32) -> int32 { return 1; }\n"
+        "fn f(p: char*) -> int32 { return 2; }\n"
+        "fn main() -> int32 { return f(9); }",
+        "fn f(x: int32) -> int32 { return 1; }\n"
+        "fn f(p: char*) -> int32 { return 2; }\n"
+        "fn f<T>(x: T) -> int32 { return 0; }\n"
+        "fn main() -> int32 { return f(9); }",
+    ):
+        assert run(src) == 1
+
+
+def test_mixed_set_generic_wins_on_non_exact_match():
+    # No concrete member fits a bool argument, so the template instantiates.
+    assert run(
+        "fn f<T>(x: T) -> int32 { return 100; }\n"
+        "fn f(x: int32) -> int32 { return 1; }\n"
+        "fn f(p: char*) -> int32 { return 2; }\n"
+        "fn main() -> int32 { return f(true); }"
+    ) == 100
+
+
+def test_mixed_set_with_single_concrete_keeps_plain_symbol():
+    # The symbol choice counts concrete signatures alone: one concrete
+    # member beside a template keeps its plain, C-linkable symbol, and the
+    # call still dispatches through the set.
+    src = (
+        "fn f<T>(x: T) -> int32 { return 100; }\n"
+        "fn f(x: int32) -> int32 { return 1; }\n"
+        "fn main() -> int32 { return f(9) + f(true); }"
+    )
+    assert run(src) == 101
+    out = compile_ir(src)
+    assert 'define i32 @"f"(i32' in out
+
+
+def test_mixed_set_explicit_type_args_select_the_generic():
+    # f<...>(...) resolves among the generic candidates; the concrete member
+    # is not viable under explicit type arguments.
+    assert run(
+        "fn f<T>(x: T) -> int32 { return 100; }\n"
+        "fn f(x: int32) -> int32 { return 1; }\n"
+        "fn main() -> int32 { return f<int32>(9); }"
+    ) == 100
+
+
+def test_mixed_set_same_shape_tie_is_ambiguous():
+    # A generic whose effective parameter list ties a concrete one loses to
+    # the concrete tier on an exact match -- but two candidates in the SAME
+    # tier with equal specificity stay the ambiguity error.
+    with pytest.raises(
+        LangError, match="call to 'f' is ambiguous between overloads"
+    ):
         compile_ir(
-            "fn f<T>(x: T) -> int32 { return 0; }\n"
             "fn f(x: int32) -> int32 { return 1; }\n"
-            "fn f(p: char*) -> int32 { return 2; }\n"
+            "fn f(x: int64) -> int32 { return 2; }\n"
+            "fn f<T>(x: T) -> int32 { return 0; }\n"
+            "fn main() -> int32 { return f(0); }"
+        )
+
+
+def test_mixed_set_cannot_span_modules(tmp_path):
+    # All overloads of a name -- generic members included -- live in one
+    # defining module, in either import order.
+    (tmp_path / "gen.mc").write_text("fn pick<T>(x: T) -> int32 { return 0; }")
+    (tmp_path / "conc.mc").write_text(
+        "fn pick(x: int32) -> int32 { return 1; }"
+    )
+    for imports in (
+        'import "gen";\nimport "conc";\n',
+        'import "conc";\nimport "gen";\n',
+    ):
+        main = tmp_path / "main.mc"
+        main.write_text(imports + "fn main() -> int32 { return 0; }\n")
+        with pytest.raises(LangError, match="function 'pick' already defined"):
+            run_path(main)
+
+
+def test_main_cannot_join_a_mixed_set():
+    for src in (
+        "fn main() -> int32 { return 0; }\nfn main<T>(x: T) -> int32 { return 1; }",
+        "fn main<T>(x: T) -> int32 { return 1; }\nfn main() -> int32 { return 0; }",
+    ):
+        with pytest.raises(
+            LangError, match="function 'main' cannot be overloaded"
+        ):
+            compile_ir(src)
+
+
+def test_va_list_concrete_cannot_join_a_mixed_set():
+    msg = "function 'vlog' cannot be overloaded: it takes a va_list parameter"
+    for src in (
+        "fn vlog(ap: va_list) { }\n"
+        "fn vlog<T>(x: T) { }\n"
+        "fn main() -> int32 { return 0; }",
+        "fn vlog<T>(x: T) { }\n"
+        "fn vlog(ap: va_list) { }\n"
+        "fn main() -> int32 { return 0; }",
+    ):
+        with pytest.raises(LangError, match=re.escape(msg)):
+            compile_ir(src)
+
+
+def test_duplicate_signature_inside_a_set_is_still_a_duplicate():
+    # Two definitions of one signature inside a genuine set (a third,
+    # distinct signature makes it one) still collide on the shared mangle.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "function 'f(int32)' already defined; overloads must differ in "
+            "parameter types"
+        ),
+    ):
+        compile_ir(
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "fn f(x: int32) -> int64 { return 2; }\n"
+            "fn f(p: char*) -> int32 { return 3; }\n"
             "fn main() -> int32 { return 0; }"
         )
+
+
+def test_generic_still_collides_with_an_extern():
+    # An @extern's C symbol is fixed; it never joins a set, mixed included.
     with pytest.raises(LangError, match="function 'f' already defined"):
         compile_ir(
-            "fn f(x: int32) -> int32 { return 1; }\n"
-            "fn f(p: char*) -> int32 { return 2; }\n"
+            "@extern fn f(x: int32) -> int32;\n"
             "fn f<T>(x: T) -> int32 { return 0; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_variadic_concrete_cannot_join_a_mixed_set():
+    # The non-overloadables hold whichever side declares first.
+    with pytest.raises(
+        LangError, match="variadic function 'f' cannot be overloaded"
+    ):
+        compile_ir(
+            "fn f(fmt: char*, ...) -> int32 { return 0; }\n"
+            "fn f<T>(x: T) -> int32 { return 1; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    with pytest.raises(
+        LangError, match="variadic function 'f' cannot be overloaded"
+    ):
+        compile_ir(
+            "fn f<T>(x: T) -> int32 { return 1; }\n"
+            "fn f(fmt: char*, ...) -> int32 { return 0; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -507,15 +646,12 @@ def test_overloaded_const_struct_call_spills_to_a_temporary():
     assert 'call i32 @"total(point)"(%"point"* %"p")' not in out
 
 
-def test_prototype_for_an_overloaded_name_is_rejected():
-    with pytest.raises(LangError) as err:
-        compile_ir(
-            "fn f(x: int32) -> int32;\n"
-            "fn f(x: int32) -> int32 { return 1; }\n"
-            "fn f(p: char*) -> int32 { return 2; }\n"
-            "fn main() -> int32 { return 0; }"
-        )
-    assert err.value.message == (
-        "cannot declare a prototype for overloaded function 'f' "
-        "(overload sets do not support prototypes yet)"
-    )
+def test_prototype_pairs_with_its_set_member():
+    # Stage 2: a prototype names its member by signature and pairs with the
+    # matching definition; the set dispatches as usual.
+    assert run(
+        "fn f(x: int32) -> int32;\n"
+        "fn f(x: int32) -> int32 { return 1; }\n"
+        "fn f(p: char*) -> int32 { return 2; }\n"
+        "fn main() -> int32 { return f(0) * 10 + f(\"x\"); }"
+    ) == 12

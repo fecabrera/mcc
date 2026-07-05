@@ -6,7 +6,8 @@ import "std";
 // constructor-flavored family: one `init` name, several ways to seed it.
 // Builds on functions.mc and mut_params.mc (what `mut self` means);
 // generic overload sets, which resolve in the same order, are covered in
-// mut_overloads.mc.
+// mut_overloads.mc, and a set mixing concrete members with a generic
+// template in mixed_overloads.mc.
 
 struct counter {
     value: int32;
@@ -79,6 +80,6 @@ fn main() -> int32 {
 // has no single address to take).
 
 // See also: mut_overloads.mc (generic overload sets and the resolution
-// order), mut_params.mc (mut parameters), types/structs.mc (struct types,
-// covered later in the tour). Full rules: docs/language.md, "Function
-// overloading".
+// order), mixed_overloads.mc (a generic template joining a concrete set),
+// mut_params.mc (mut parameters), types/structs.mc (struct types, covered
+// later in the tour). Full rules: docs/language.md, "Function overloading".

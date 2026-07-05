@@ -509,9 +509,13 @@ that keep it C-simple:
   `f(x: int32)` beside `f(x: int64)`, the call `f(0)` is a compile error —
   the literal adapts to either width, and mcc declares rather than guesses.
   `f(0 as int64)` or a typed variable disambiguates.
-- **One defining module.** All overloads of a name must be declared in one
-  file; the same name defined in two modules stays a collision error. This
-  keeps the symbol choice (below) a per-file fact.
+- **One defining module.** All overloads of a name — generic members of a
+  mixed set included — must be declared in one file; the same name defined
+  in two modules stays a collision error. This keeps the symbol choice
+  (below) a per-file fact. A module's generated `.mci` interface counts as
+  that module: importing the stub alongside the module's own source pairs
+  prototype with definition member by member, but a consumer file cannot
+  extend an imported set with a new signature.
 - **A single definition keeps its plain symbol.** Only a name with two or
   more definitions mangles: each member then links by a signature-derived
   symbol spelled from its parameter types (`f(int32, char*)`), the same
@@ -532,11 +536,37 @@ String literals keep adapting when a function becomes overloaded: a literal
 `slice<const char>` parameter exactly as at a
 [non-overloaded call](#slices).
 
-Current restrictions, lifted by the next stage of this work: a concrete set
-may not share its name with a generic template (the collision error stands),
-[bodyless prototypes](#bodyless-fn-prototypes) cannot name an overloaded
-function, and `--emit-interface` rejects a module whose public surface
-contains an overload set (a `.mci` cannot express one yet).
+**Mixed generic/concrete sets.** A generic template may share its name with
+concrete functions from the same module; the candidates join one set and
+resolve under a leading (is-concrete, specificity) rank: a concrete overload
+beats a generic on an exact match — including a generic whose *effective*
+parameter list ties the concrete one — and the generic covers everything
+else. Explicit type arguments (`f<int32>(...)`) select among the generic
+candidates only. Two same-tier candidates of equal specificity stay the
+ambiguity error, which is also the enforced collision rule between the
+classes (a generic whose substituted parameter list duplicates a concrete
+one is not statically detectable in general). The concrete side of a mixed
+set keeps the concrete rules: `main`, variadic, and `va_list`-taking
+functions cannot join, whichever side declares first. The symbol choice
+counts concrete signatures alone, so one concrete member beside a template
+still keeps its plain, C-linkable symbol.
+
+**Prototypes pair per signature.** A
+[bodyless prototype](#bodyless-fn-prototypes) names the member with its
+parameter list: a same-signature prototype/definition pair keeps every
+shipped pairing rule (return-type or convention drift on the same parameter
+list is still `definition of 'f' does not match its prototype`), while a
+prototype with a *different* parameter list simply joins the overload set as
+its own member. A prototype with no matching definition stays what it
+already is — a link-time error.
+
+**Interfaces.** `--emit-interface` renders an overload set as same-name
+prototypes, and the whole set always travels: an included function pulls in
+every same-name sibling, even an unreferenced `@private` overload (kept
+`@private` in the stub) and the generic members of a mixed set. The importer
+re-derives each member's symbol — plain for a single concrete signature,
+mangled `f(int32)` for a set — from the stub, so it matches the symbols the
+defining object emitted.
 
 See [examples/functions/overloading.mc](../examples/functions/overloading.mc).
 
@@ -2428,7 +2458,11 @@ The stub is the public surface plus its **transitive closure**: a `@private`
 helper a shipped body or signature reaches is pulled in too — a `@private`
 generic called by a public generic travels as source — but keeps its `@private`
 marker, so it stays private to the `.mci` (the consumer uses the public API
-that needs it without being able to name it). Unreachable `@private`/`@static`
+that needs it without being able to name it). An
+[overload set](#function-overloading) always travels whole: an included
+function pulls in every same-name sibling, even an unreferenced `@private`
+overload, because the importer derives the plain-vs-mangled symbol choice
+from the set size the stub shows it. Unreachable `@private`/`@static`
 declarations are dropped, the original `import` lines are preserved (a
 dependency's own `.mci` is imported in turn), and `@if` is already resolved, so
 each interface matches the target it was generated for.
@@ -2576,11 +2610,16 @@ prototypes (their body or symbol cannot live elsewhere).
 A prototype is also a **forward declaration**: when a matching definition
 appears in the same program — same file or through an import — the prototype
 is checked against the definition and discarded, and the definition supplies
-the body. Identical prototypes collapse onto one declaration (like repeated
+the body. Pairing is **per signature**: the parameter list selects the
+declaration a prototype pairs with, so under
+[function overloading](#function-overloading) a prototype with a different
+parameter list is not a mismatch — it joins the name's overload set as its
+own member. Identical prototypes collapse onto one declaration (like repeated
 `@extern` declarations), and a prototype arriving after its definition is
-discarded the same way. Matching is strict: the signature, the derived
-`const`-struct/`mut` hidden-reference positions, the `@noalias` and
-`@nonnull` markers, and the `@private` flag must all agree — parameter names
+discarded the same way. Matching within one signature is strict: the return
+type, the derived `const`-struct/`mut` hidden-reference positions, the
+`@noalias` and `@nonnull` markers, and the `@private` flag must all agree —
+parameter names
 may differ, and an `@inline` definition never pairs with a prototype (a
 prototype cannot promise a body that travels). A mismatch is an error at the
 second declaration, with a note citing the first:
@@ -2590,12 +2629,15 @@ mathlib.mc: error: line 12: definition of 'add' does not match its prototype
 mathlib.mci: note: line 3: previous declaration of 'add' is here
 ```
 
-Only prototypes pair this way. A second *definition* of the same name stays a
-duplicate-definition error, and so does a prototype against an `@extern`
-declaration (a different calling convention), an
-[`@removed` tombstone](#removed-functions), or a generic template. When a
-pair carries [`@deprecated`](#deprecated-functions), the definition wins:
-its message — or its absence — replaces the prototype's.
+Only prototypes pair this way. A second *definition* of the same signature
+stays a duplicate-definition error, and so does a prototype against an
+`@extern` declaration (a different calling convention) or an
+[`@removed` tombstone](#removed-functions). A prototype never pairs with a
+generic template either — beside a same-module template it is a
+[mixed-set](#function-overloading) member of its own; a cross-module
+template stays a collision. When a pair carries
+[`@deprecated`](#deprecated-functions), the definition wins: its message —
+or its absence — replaces the prototype's.
 
 You rarely write one by hand: [interface files](#interface-files) emit
 prototypes for a library's concrete functions, and the matching object

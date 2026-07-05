@@ -342,16 +342,19 @@ class CodeGen:
         # redeclarations across files collapse onto the first one.
         self.extern_decls: set[str] = set()
         # The AST node behind each concrete (non-generic, non-@static,
-        # non-@extern) function in self.funcs. A later prototype or definition
-        # of the same name pairs against it (forward declarations): the entry's
+        # non-@extern) function in self.funcs, keyed by name and then by the
+        # signature's params-key -- the canonical `str(LangType)` join over
+        # the parameter types, the mangled symbol's interior. A later
+        # prototype or definition pairs against the entry with its own
+        # params-key (forward declarations, per signature): the entry's
         # .proto flag says whether a bodyless prototype or a definition
-        # currently claims the name.
-        self.concrete_decls: dict[str, Func] = {}
-        # Concrete overload sets: a name declared by two or more plain
-        # definitions in one module maps to its member Func nodes. Each
+        # currently claims that signature.
+        self.concrete_decls: dict[str, dict[str, Func]] = {}
+        # Concrete overload sets: a name declared with two or more distinct
+        # parameter lists in one module maps to its member Func nodes. Each
         # member's ir.Function lives in self.funcs under a signature-derived
         # mangled symbol (`f(int32, char*)`); overload_symbols maps the
-        # member back to it. A name with a single definition never appears
+        # member back to it. A name with a single signature never appears
         # here -- it keeps its plain, C-linkable symbol and the direct-call
         # fast path.
         self.overloads: dict[str, list[Func]] = {}
@@ -850,27 +853,34 @@ class CodeGen:
             i for i, (name, _) in enumerate(func.params) if name in func.mut_params
         )
 
-    def can_pair_prototype(self, func: Func) -> bool:
-        """Whether ``func`` may pair with an earlier declaration of its name.
+    def can_pair_prototype(self, func: Func, params_key: str | None) -> bool:
+        """Whether ``func`` may pair with an earlier declaration of its
+        signature.
 
         Forward declarations: a concrete function may be declared twice --
         same file or cross-file -- when at least one of the pair is a bodyless
         prototype (prototype+definition in either order, or two prototypes).
-        This is only the shape test that routes such a pair away from the
-        duplicate-definition error; whether the signatures actually match is
+        Pairing is **per signature**: the params-key selects the earlier
+        declaration, so a prototype with a different parameter list never
+        pairs -- it joins the name's overload set instead. This is only the
+        shape test that routes such a pair away from the duplicate-definition
+        error; whether the rest of the declaration actually matches is
         checked by :meth:`pair_prototype`. Never true across kinds: a name
         held by an ``@extern``, a generic template, or an ``@removed``
         tombstone has no :attr:`concrete_decls` entry, so pairing against it
-        stays a duplicate-definition error. Planned function overloading will
-        rewrite duplicate detection to be signature-aware and subsume this.
+        stays a duplicate-definition error.
 
         Args:
             func: The incoming (not yet declared) function.
+            params_key: The resolved params-key of ``func``'s signature
+                (``None`` for a generic or ``@static`` function).
 
         Returns:
             ``True`` when the pair should be checked and paired.
         """
-        prior = self.concrete_decls.get(func.name)
+        if params_key is None:
+            return False
+        prior = self.concrete_decls.get(func.name, {}).get(params_key)
         return (
             prior is not None
             and not func.static
@@ -878,43 +888,51 @@ class CodeGen:
             and (func.proto or prior.proto)
         )
 
-    def pair_prototype(self, func: Func):
+    def pair_prototype(self, func: Func, params_key: str, ret, params):
         """Check ``func`` against the declaration it pairs with, and absorb it.
 
-        The pair (see :meth:`can_pair_prototype`) must match exactly: same
-        resolved ``(ret, params, variadic)`` signature *and* the same derived
-        conventions -- hidden-reference, ``mut``, ``@nonnull``, and
-        ``@noalias`` positions -- plus the same ``@private`` and ``@inline``
-        flags (a prototype is never ``@inline``, so an ``@inline`` definition
-        cannot pair with one). Parameter names may differ.
+        The pair (see :meth:`can_pair_prototype`) shares a params-key by
+        construction; the rest must match exactly: same return type (which
+        preserves the return-type-only drift error -- overloads may not
+        differ solely in return type) *and* the same derived conventions --
+        hidden-reference, ``mut``, ``@nonnull``, and ``@noalias`` positions
+        -- plus the same ``@private`` and ``@inline`` flags (a prototype is
+        never ``@inline``, so an ``@inline`` definition cannot pair with
+        one). Parameter names may differ.
 
         On a match, an incoming prototype is simply discarded -- the earlier
         declaration stands, including proto+proto collapse. An incoming
-        definition takes the name over: its body will generate into the
-        prototype's already-declared ``ir.Function``, so it re-keys
-        ``func_privacy`` to its own file (a module's ``@private`` helper must
-        stay callable from its ``.mc`` when the ``.mci`` prototype registered
-        first), applies :meth:`link_shared` for its own source (the prototype
-        skipped it -- linkage is a property of where the *definition* lives),
-        and its ``@deprecated`` state wins over the prototype's.
+        definition takes the signature over: its body will generate into the
+        prototype's already-declared ``ir.Function`` and it applies
+        :meth:`link_shared` for its own source (the prototype skipped it --
+        linkage is a property of where the *definition* lives). For a plain
+        (non-set) name it also re-keys ``func_privacy`` to its own file (a
+        module's ``@private`` helper must stay callable from its ``.mc``
+        when the ``.mci`` prototype registered first) and its ``@deprecated``
+        state wins over the prototype's; a set member replaces the prototype
+        in :attr:`overloads`, so resolution sees the definition's flags.
 
         Args:
             func: The incoming function; ``self.current_source`` must already
                 be its source (signatures may name private structs).
+            params_key: The shared signature's params-key.
+            ret: ``func``'s resolved return type.
+            params: ``func``'s resolved parameter types.
 
         Raises:
-            LangError: When the signatures or conventions differ, with a note
-                citing the earlier declaration's site.
+            LangError: When the return type or conventions differ, with a
+                note citing the earlier declaration's site.
         """
         name = func.name
-        prior = self.concrete_decls[name]
-        ret = self.lang_type(func.ret_type, func.line)
-        params = [self.lang_type(t, func.line) for _, t in func.params]
+        prior = self.concrete_decls[name][params_key]
+        # A set member's registry entries live under its mangled symbol; a
+        # plain function's under its name.
+        symbol = self.overload_symbols.get(id(prior), name)
         if (
-            self.signatures[name] != (ret, params, func.variadic)
-            or self.hidden_ref[name] != self.hidden_ref_indices(func, params)
-            or self.mut_ref[name] != self.mut_indices(func)
-            or self.nonnull_ref[name] != self.nonnull_indices(func)
+            self.signatures[symbol] != (ret, params, func.variadic)
+            or self.hidden_ref[symbol] != self.hidden_ref_indices(func, params)
+            or self.mut_ref[symbol] != self.mut_indices(func)
+            or self.nonnull_ref[symbol] != self.nonnull_indices(func)
             or self.noalias_indices(prior) != self.noalias_indices(func)
             or prior.private != func.private
             or prior.inline != func.inline
@@ -934,15 +952,61 @@ class CodeGen:
             raise err
         if func.proto:
             return  # checked against the standing declaration, then discarded
-        # The definition completes a prototype: the name's ir.Function already
-        # exists (identical signature), so body generation fills it in later.
-        self.concrete_decls[name] = func
+        # The definition completes a prototype: the signature's ir.Function
+        # already exists (identical signature), so body generation fills it
+        # in later.
+        self.concrete_decls[name][params_key] = func
+        self.link_shared(self.funcs[symbol], func.source)
+        if id(prior) in self.overload_symbols:
+            # A set member: resolution iterates self.overloads and emission
+            # keys off overload_symbols, so the definition stands in for the
+            # discarded prototype in both.
+            members = self.overloads[name]
+            members[members.index(prior)] = func
+            self.overload_symbols[id(func)] = symbol
+            return
         self.func_privacy[name] = (func.private, func.source)
-        self.link_shared(self.funcs[name], func.source)
         if func.deprecated_msg is not None:
             self.deprecated_syms[name] = func.deprecated_msg
         else:
             self.deprecated_syms.pop(name, None)
+
+    def check_mixed_set(self, func: Func, members: dict[str, Func]):
+        """Validate a generic template joining a concrete name (a mixed set).
+
+        A template may share its name with a concrete function or concrete
+        set only from its own module (all overloads of a name live in one
+        defining module), and only when the concrete side is overloadable at
+        all -- ``main``, a variadic function, and a ``va_list``-taking
+        function never join a set, whichever side declares first.
+
+        Args:
+            func: The incoming generic template.
+            members: The name's concrete declarations, by params-key.
+
+        Raises:
+            LangError: On a cross-module mix or a non-overloadable concrete
+                side.
+        """
+        if func.name == "main":
+            raise LangError("function 'main' cannot be overloaded", func.line)
+        if next(iter(members.values())).source != func.source:
+            raise LangError(
+                f"function {func.name!r} already defined", func.line
+            )
+        for member in members.values():
+            if member.variadic:
+                raise LangError(
+                    f"variadic function {func.name!r} cannot be overloaded",
+                    func.line,
+                )
+            symbol = self.overload_symbols.get(id(member), member.name)
+            if any(is_valist(p) for p in self.signatures[symbol][1]):
+                raise LangError(
+                    f"function {func.name!r} cannot be overloaded: it "
+                    "takes a va_list parameter",
+                    func.line,
+                )
 
     def lookup_enum(self, name: str) -> "EnumType | None":
         """Resolve an enum name, preferring a file-scoped ``@static`` one.
@@ -2001,24 +2065,36 @@ class CodeGen:
             self.globals[var.name] = (glob, var_type, var.volatile)
             self.global_privacy[var.name] = (var.private, var.source)
             self.used_symbols.add(var.name)
-        # Concrete overloading: pre-group plain definitions by (source, name)
+        # Concrete overloading: pre-group plain declarations by (source, name)
         # so the plain-vs-mangled symbol choice is known before the first
-        # member declares. A name with a single definition keeps its plain,
-        # C-linkable symbol; only same-module sets of two or more mangle.
-        # Prototypes, @extern, @static, generics, and tombstones never join
-        # a set (prototypes for overloaded names are not supported yet).
-        plain_defs: dict[tuple[str | None, str], int] = {}
+        # member declares. Prototypes count -- a .mci stub's prototypes must
+        # derive the same symbols the defining object emitted -- but a set
+        # forms only when the declarations spell two or more DISTINCT
+        # parameter lists: a same-signature prototype+definition pair is one
+        # member (the classic forward declaration keeps its plain symbol).
+        # A name with a single signature keeps its plain, C-linkable symbol;
+        # only same-module sets of two or more mangle. @extern, @static,
+        # generics, and tombstones never join the concrete grouping.
+        plain_decls: dict[tuple[str | None, str], list[Func]] = {}
         for func in self.program.functions:
             if (
                 func.removed_msg is None
                 and not func.extern
                 and not func.static
-                and not func.proto
                 and not func.type_params
             ):
-                key = (func.source, func.name)
-                plain_defs[key] = plain_defs.get(key, 0) + 1
-        overload_keys = {key for key, count in plain_defs.items() if count > 1}
+                plain_decls.setdefault((func.source, func.name), []).append(func)
+        overload_keys: set[tuple[str | None, str]] = set()
+        for key, decls in plain_decls.items():
+            if len(decls) < 2:
+                continue
+            self.current_source = key[0]  # signatures may name private structs
+            sigs = {
+                tuple(str(self.lang_type(t, f.line)) for _, t in f.params)
+                for f in decls
+            }
+            if len(sigs) > 1:
+                overload_keys.add(key)
         declared: set[tuple[str | None, str]] = set()
         for func in self.program.functions:
             if func.removed_msg is not None:
@@ -2091,28 +2167,48 @@ class CodeGen:
                     self.deprecated_syms[func.name] = func.deprecated_msg
                 continue
             key = (func.source, func.name)
-            if func.proto and key in overload_keys:
-                # Stage 2 re-keys prototype pairing per signature; until then
-                # a prototype cannot name a member of an overload set.
-                raise LangError(
-                    f"cannot declare a prototype for overloaded function "
-                    f"{func.name!r} (overload sets do not support prototypes yet)",
-                    func.line,
-                )
+            self.current_source = func.source  # signatures may name private structs
             in_set = (
                 key in overload_keys and not func.static and not func.type_params
             )
             is_overloadable = bool(func.type_params or in_set) and not func.static
+            # The resolved parameter list doubles as the pairing key and the
+            # mangled symbol's interior (generic and @static functions have
+            # neither -- their parameters may name type parameters).
+            params = params_key = None
+            if not func.static and not func.type_params:
+                params = [self.lang_type(t, func.line) for _, t in func.params]
+                params_key = ", ".join(str(p) for p in params)
             if not is_overloadable:
                 # A same-file redeclaration is allowed only as a pairable
                 # forward declaration (at least one of the two a prototype);
                 # the pair is checked in the concrete branch below.
-                if key in declared and not self.can_pair_prototype(func):
+                if key in declared and not self.can_pair_prototype(
+                    func, params_key
+                ):
+                    prior = self.concrete_decls.get(func.name, {}).get(
+                        params_key
+                    )
+                    if (
+                        prior is not None
+                        and not func.proto
+                        and not prior.proto
+                        and prior.source == func.source
+                    ):
+                        # Two definitions of one signature: return-type-only,
+                        # marker-only, and annotation-only variants all spell
+                        # the same parameter list, so the message names the
+                        # shared signature.
+                        raise LangError(
+                            f"function '{func.name}({params_key})' already "
+                            "defined; overloads must differ in parameter "
+                            "types",
+                            func.line,
+                        )
                     raise LangError(
                         f"function {func.name!r} already defined", func.line
                     )
                 declared.add(key)
-            self.current_source = func.source  # signatures may name private structs
             if func.static:
                 self.symbol_bases[key] = self.static_base(func.name, func.source)
                 if func.type_params:
@@ -2141,10 +2237,17 @@ class CodeGen:
                 continue
             if func.type_params:
                 # Generic: no code yet -- instances are stamped out per call.
-                # Several templates may share a name (an overload set), but
-                # not with a concrete function or concrete set (mixed
-                # generic/concrete sets are not supported yet).
-                if func.name in self.funcs or func.name in self.overloads:
+                # Several templates may share a name (an overload set), and a
+                # template may join a concrete function or concrete set from
+                # its own module (a mixed set: concrete candidates beat a
+                # generic on an exact match via the rank tier). Cross-module
+                # joining stays an error -- all overloads of a name live in
+                # one defining module -- as does sharing a name with an
+                # @extern (its C symbol is fixed).
+                members = self.concrete_decls.get(func.name)
+                if members:
+                    self.check_mixed_set(func, members)
+                elif func.name in self.funcs or func.name in self.overloads:
                     raise LangError(
                         f"function {func.name!r} already defined", func.line
                     )
@@ -2168,14 +2271,15 @@ class CodeGen:
                 overloads.append(func)
                 continue
             if in_set:
-                # A member of a concrete overload set (two or more plain
-                # definitions of one name in one module). Members link by a
-                # signature-derived mangled symbol -- `f(int32, char*)`, the
-                # canonical str(LangType) of the parameter types only: the
-                # return type never distinguishes overloads, and const/mut
-                # markers and @nonnull/@noalias annotations live outside the
-                # parameter types, so attribute-only variants spell the same
-                # symbol and collide as duplicates below.
+                # A member of a concrete overload set (two or more distinct
+                # parameter lists on one name in one module, prototypes
+                # included). Members link by a signature-derived mangled
+                # symbol -- `f(int32, char*)`, the canonical str(LangType) of
+                # the parameter types only: the return type never
+                # distinguishes overloads, and const/mut markers and
+                # @nonnull/@noalias annotations live outside the parameter
+                # types, so attribute-only variants spell the same symbol and
+                # collide as duplicates below.
                 if func.name == "main":
                     # JIT and cc both resolve the plain `main` symbol.
                     raise LangError(
@@ -2188,19 +2292,38 @@ class CodeGen:
                         f"variadic function {func.name!r} cannot be overloaded",
                         func.line,
                     )
+                ret = self.lang_type(func.ret_type, func.line)
+                member = self.concrete_decls.get(func.name, {}).get(params_key)
+                if (
+                    member is not None
+                    and id(member) in self.overload_symbols
+                    and self.can_pair_prototype(func, params_key)
+                ):
+                    # Per-signature forward declaration inside the set: the
+                    # params-key selected the pair -- cross-source too, which
+                    # is how a defining module's .mc completes its own .mci
+                    # stub's prototypes member by member. A plain-symbol
+                    # function from another module never pairs here (a set
+                    # cannot extend a foreign single); it falls through to
+                    # the collision error below.
+                    self.pair_prototype(func, params_key, ret, params)
+                    continue
                 prior = self.overloads.get(func.name)
+                templates = self.templates.get(func.name)
                 if (
                     func.name in self.funcs
-                    or func.name in self.templates
                     or func.name in self.globals
                     or func.name in self.removed
+                    # All overloads of a name live in one defining module
+                    # (its .mci counts as that module): a new signature from
+                    # another file cannot extend the set...
                     or (prior is not None and prior[0].source != func.source)
+                    # ...and a mixed generic/concrete set is same-module too.
+                    or (templates is not None and templates[0].source != func.source)
                 ):
                     raise LangError(
                         f"function {func.name!r} already defined", func.line
                     )
-                ret = self.lang_type(func.ret_type, func.line)
-                params = [self.lang_type(t, func.line) for _, t in func.params]
                 if any(is_valist(p) for p in params):
                     # The pre-evaluate path cannot marshal a va_list (its
                     # passed form is derived from storage, not a value).
@@ -2209,7 +2332,7 @@ class CodeGen:
                         "takes a va_list parameter",
                         func.line,
                     )
-                symbol = f"{func.name}({', '.join(str(p) for p in params)})"
+                symbol = f"{func.name}({params_key})"
                 if symbol in self.funcs:
                     raise LangError(
                         f"function {symbol!r} already defined; overloads "
@@ -2219,7 +2342,11 @@ class CodeGen:
                 hidden = self.hidden_ref_indices(func, params)
                 fnty = ir.FunctionType(ret.ir, self.param_irs(params, hidden))
                 fn = ir.Function(self.module, fnty, name=symbol)
-                self.link_shared(fn, func.source)
+                if not func.proto:
+                    # A prototype emits an LLVM declaration (no body);
+                    # linkonce_odr is only legal on definitions, so it keeps
+                    # external linkage.
+                    self.link_shared(fn, func.source)
                 self.mark_inline(fn, func)
                 self.mark_noalias(fn, func, params)
                 self.mark_nonnull(fn, func, params)
@@ -2230,26 +2357,52 @@ class CodeGen:
                 self.nonnull_ref[symbol] = self.nonnull_indices(func)
                 self.overloads.setdefault(func.name, []).append(func)
                 self.overload_symbols[id(func)] = symbol
+                self.concrete_decls.setdefault(func.name, {})[params_key] = func
                 self.used_symbols.add(symbol)
                 continue
-            if self.can_pair_prototype(func):
+            if self.can_pair_prototype(func, params_key):
                 # Forward declaration: check the pair, then absorb it -- the
-                # name's ir.Function (and signature entries) already stand.
-                self.pair_prototype(func)
+                # signature's ir.Function (and registry entries) already stand.
+                ret = self.lang_type(func.ret_type, func.line)
+                self.pair_prototype(func, params_key, ret, params)
                 continue
             if (
                 func.name in self.funcs
-                or func.name in self.templates
                 or func.name in self.overloads
                 or func.name in self.globals
                 or func.name in self.removed
             ):
                 raise LangError(f"function {func.name!r} already defined", func.line)
-            self.concrete_decls[func.name] = func
+            templates = self.templates.get(func.name)
+            if templates is not None:
+                # A single concrete declaration joining same-module generic
+                # templates forms a mixed set; it keeps its plain symbol (the
+                # symbol choice counts concrete signatures alone), and calls
+                # route through overload resolution. The concrete side must
+                # still be overloadable at all.
+                if templates[0].source != func.source:
+                    raise LangError(
+                        f"function {func.name!r} already defined", func.line
+                    )
+                if func.name == "main":
+                    raise LangError(
+                        "function 'main' cannot be overloaded", func.line
+                    )
+                if func.variadic:
+                    raise LangError(
+                        f"variadic function {func.name!r} cannot be overloaded",
+                        func.line,
+                    )
+                if any(is_valist(p) for p in params):
+                    raise LangError(
+                        f"function {func.name!r} cannot be overloaded: it "
+                        "takes a va_list parameter",
+                        func.line,
+                    )
+            self.concrete_decls.setdefault(func.name, {})[params_key] = func
             self.func_privacy[func.name] = (func.private, func.source)
             self.used_symbols.add(func.name)
             ret = self.lang_type(func.ret_type, func.line)
-            params = [self.lang_type(t, func.line) for _, t in func.params]
             hidden = self.hidden_ref_indices(func, params)
             fnty = ir.FunctionType(
                 ret.ir, self.param_irs(params, hidden), var_arg=func.variadic
@@ -5908,16 +6061,25 @@ class CodeGen:
         # (A variable, const, or file-scoped @static legitimately shadows a
         # global function name -- all checked above.)
         self.check_removed(expr.name, expr.line)
-        if expr.name in self.templates:
-            return self.gen_generic_call(expr, self.templates[expr.name])
-        if expr.name in self.overloads:
-            # A concrete overload set resolves like a generic one (viability,
-            # then specificity), through the same pre-evaluate path.
-            if expr.type_args:
+        generic = self.templates.get(expr.name)
+        if generic is not None or expr.name in self.overloads:
+            # An overload set -- generic, concrete, or mixed -- resolves in
+            # one order (viability, then the (is-concrete, specificity)
+            # rank) through the same pre-evaluate path. A mixed set's
+            # concrete side is either the mangled set or a single plain
+            # function sharing the name (same module, by construction).
+            candidates = list(generic) if generic is not None else []
+            if expr.name in self.overloads:
+                candidates += self.overloads[expr.name]
+            elif generic is not None:
+                candidates += self.concrete_decls.get(expr.name, {}).values()
+            if expr.type_args and generic is None:
+                # Explicit type arguments select among the generic
+                # candidates; a purely concrete set has none.
                 raise LangError(
                     f"{expr.name!r} is not a generic function", expr.line
                 )
-            return self.gen_generic_call(expr, self.overloads[expr.name])
+            return self.gen_generic_call(expr, candidates)
         if expr.name not in self.funcs:
             raise LangError(
                 f"undefined function {expr.name!r} (missing import?)", expr.line
@@ -6358,12 +6520,11 @@ class CodeGen:
             The union of ``mut`` parameter indices (possibly empty).
         """
         positions: set[int] = set()
-        func = self.concrete_decls.get(name)
-        if func is not None:
-            positions |= self.mut_indices(func)
+        # concrete_decls covers every plain declaration -- overload-set
+        # members included -- keyed per signature.
+        for member in self.concrete_decls.get(name, {}).values():
+            positions |= self.mut_indices(member)
         for overload in self.templates.get(name, ()):
-            positions |= self.mut_indices(overload)
-        for overload in self.overloads.get(name, ()):
             positions |= self.mut_indices(overload)
         key = (self.current_source, name)
         static_template = self.static_templates.get(key)
@@ -6919,7 +7080,9 @@ class CodeGen:
         if func.type_params:
             fn, ret, params = self.instantiate(func, bindings, expr.line)
         else:
-            symbol = self.overload_symbols[id(func)]
+            # A mangled set member, or a mixed set's single plain concrete
+            # (which kept its plain symbol).
+            symbol = self.overload_symbols.get(id(func), func.name)
             fn = self.funcs[symbol]
             ret, params, _ = self.signatures[symbol]
         mut_positions = self.mut_indices(func)

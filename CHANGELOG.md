@@ -10,6 +10,30 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Concrete function overloading (stage 2)** — overload sets now work with
+  prototypes, interfaces, and generics, lifting all three stage-1
+  restrictions. Prototype pairing is per signature: a bodyless prototype
+  names the member with its parameter list, a same-signature
+  prototype/definition pair keeps every shipped pairing rule (return-type
+  or convention drift on one parameter list is still `definition of 'f'
+  does not match its prototype`), and a different-signature prototype
+  simply joins the set as its own member (an unmatched one stays a
+  link-time error). `--emit-interface` renders a set as same-name
+  prototypes and force-pulls every same-name sibling into the stub — an
+  unreferenced `@private` overload included — so the importer derives the
+  same plain-vs-mangled symbols the defining object emitted; the `.mci`
+  counts as the defining module, pairing member by member with the
+  module's own source. Mixed generic/concrete sets: a template may share
+  its name with concrete functions from its own module, resolving under
+  the (is-concrete, specificity) rank — a concrete overload beats a
+  generic on an exact match, the generic covers the rest, explicit type
+  arguments select among the generic candidates, and same-tier ties stay
+  the ambiguity error. The whole set — generic members included — lives in
+  one defining module, and the non-overloadables (`main`, variadics,
+  `va_list` parameters) hold whichever side declares first. `libmc`
+  adoption is stage 3. See
+  [Function overloading](docs/language.md#function-overloading).
+
 - **Concrete function overloading (stage 1)** — plain definitions sharing a
   name in one module now form an overload set, dispatched by the argument
   list through the same viability + specificity order as generic overload

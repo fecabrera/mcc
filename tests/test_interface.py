@@ -10,7 +10,12 @@ are dropped, and imports are preserved.
 import pytest
 
 from mcc.codegen import CodeGen
-from mcc.driver import _import_candidates, emit_interface, load_program
+from mcc.driver import (
+    _import_candidates,
+    compile_to_ir,
+    emit_interface,
+    load_program,
+)
 from mcc.errors import LangError
 from mcc.interface import render_interface
 from mcc.lexer import tokenize
@@ -158,18 +163,167 @@ def test_extern_decl_is_redeclared_verbatim():
     assert "@extern fn puts(s: uint8*) -> int32;" in out
 
 
-def test_overloaded_fn_rejects_interface_emission():
-    # A concrete overload set would render as same-name prototypes, which
-    # the importer rejects; stage 2 of the overloading work lifts this.
-    with pytest.raises(LangError) as err:
-        iface(
-            "fn f(x: int32) -> int32 { return 1; }\n"
-            "fn f(p: char*) -> int32 { return 2; }"
-        )
-    assert err.value.message == (
-        "cannot emit an interface for overloaded function 'f' "
-        "(overload sets do not support interfaces yet)"
+def test_overloaded_fns_become_sibling_prototypes():
+    # A concrete overload set renders as same-name prototypes; the importer
+    # re-derives the set (and with it the mangled symbols) from their count.
+    out = iface(
+        "fn f(x: int32) -> int32 { return 1; }\n"
+        "fn f(p: char*) -> int32 { return 2; }"
     )
+    assert "fn f(x: int32) -> int32;" in out
+    assert "fn f(p: char*) -> int32;" in out
+
+
+def test_private_overload_sibling_is_force_pulled():
+    # An unreferenced @private overload must not shrink the consumer's view
+    # of the set: one prototype would derive the plain symbol while the
+    # defining object emitted mangled members -- a link failure. The sibling
+    # travels, keeping its @private marker.
+    out = iface(
+        "fn f(x: int32) -> int32 { return 1; }\n"
+        "@private\nfn f(p: char*) -> int32 { return 2; }"
+    )
+    assert "fn f(x: int32) -> int32;" in out
+    assert "@private fn f(p: char*) -> int32;" in out
+
+
+def test_mixed_set_stub_carries_the_generic_sibling():
+    # A mixed set's generic member travels verbatim beside the concrete
+    # prototype, so the consumer sees the same dispatch the definer had.
+    out = iface(
+        "fn f<T>(x: T) -> int32 { return 0; }\n"
+        "fn f(x: int32) -> int32 { return 1; }"
+    )
+    assert "fn f<T>(x: T) -> int32 { return 0; }" in out
+    assert "fn f(x: int32) -> int32;" in out
+
+
+# ------------------------------------------------- overload set round trips
+
+def test_overload_set_round_trips_through_mci(tmp_path):
+    # The stub's prototypes carry the whole set, so the consumer derives the
+    # same mangled symbols the defining object emitted.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "fn pick(x: int32) -> int32 { return 1; }\n"
+        "fn pick(p: char*) -> int32 { return 2; }\n"
+    )
+    definer = str(compile_to_ir(lib))
+    assert 'define i32 @"pick(int32)"' in definer
+    assert 'define i32 @"pick(char*)"' in definer
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    lib.unlink()  # force the import to resolve through the stub
+    consumer = tmp_path / "consumer.mc"
+    consumer.write_text(
+        'import "lib";\nfn main() -> int32 { return pick(1); }\n'
+    )
+    ir = str(compile_to_ir(consumer))
+    assert 'declare i32 @"pick(int32)"' in ir
+    assert 'declare i32 @"pick(char*)"' in ir
+    assert 'call i32 @"pick(int32)"' in ir
+
+
+def test_mci_set_prototypes_pair_with_definitions(tmp_path):
+    # The .mci counts as the defining module: importing the stub alongside
+    # the module's own source pairs each prototype with its definition by
+    # signature, and both members stay callable -- in either import order.
+    (tmp_path / "api.mci").write_text(
+        "fn pick(x: int32) -> int32;\nfn pick(p: char*) -> int32;\n"
+    )
+    (tmp_path / "impl.mc").write_text(
+        "fn pick(x: int32) -> int32 { return 1; }\n"
+        "fn pick(p: char*) -> int32 { return 2; }\n"
+    )
+    for imports in (
+        'import "api";\nimport "impl";\n',
+        'import "impl";\nimport "api";\n',
+    ):
+        main = tmp_path / "main.mc"
+        main.write_text(
+            imports + 'fn main() -> int32 { return pick(3) * 10 + pick("s"); }\n'
+        )
+        assert run_path(main) == 12
+
+
+def test_root_definition_completes_an_mci_set_member(tmp_path):
+    # A consumer may supply the DEFINITION for an existing member (the
+    # same-signature pair), just as it can for a single prototype; only a
+    # new signature is a cross-module extension.
+    (tmp_path / "api.mci").write_text(
+        "fn pick(x: int32) -> int32;\nfn pick(p: char*) -> int32;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "api";\n'
+        "fn pick(x: int32) -> int32 { return 5; }\n"
+        "fn main() -> int32 { return pick(1); }\n"
+    )
+    assert run_path(main) == 5
+
+
+def test_consumer_cannot_extend_an_mci_set(tmp_path):
+    # Cross-module extension: a new signature from the consumer's file would
+    # change the set size the defining object was compiled with.
+    (tmp_path / "api.mci").write_text(
+        "fn pick(x: int32) -> int32;\nfn pick(p: char*) -> int32;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "api";\n'
+        "fn pick(b: bool) -> int32 { return 3; }\n"
+        "fn main() -> int32 { return 0; }\n"
+    )
+    with pytest.raises(LangError, match="function 'pick' already defined"):
+        run_path(main)
+
+
+def test_private_sibling_keeps_consumer_symbols_mangled(tmp_path):
+    # The audit's link-failure scenario: a public pick(int32) plus an
+    # UNREFERENCED @private pick(char*). Without the force-pull the stub
+    # would show one prototype and the consumer would call plain `pick` --
+    # a symbol the defining object (set size 2) never emitted.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "fn pick(x: int32) -> int32 { return 1; }\n"
+        "@private\nfn pick(p: char*) -> int32 { return 2; }\n"
+    )
+    definer = str(compile_to_ir(lib))
+    assert 'define i32 @"pick(int32)"' in definer
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    assert "@private fn pick(p: char*) -> int32;" in out.read_text()
+    lib.unlink()
+    consumer = tmp_path / "consumer.mc"
+    consumer.write_text(
+        'import "lib";\nfn main() -> int32 { return pick(1); }\n'
+    )
+    ir = str(compile_to_ir(consumer))
+    assert 'call i32 @"pick(int32)"' in ir
+    assert 'declare i32 @"pick"(' not in ir
+
+
+def test_mixed_set_round_trips_through_mci(tmp_path):
+    # The generic member re-instantiates from the stub; the lone concrete
+    # member keeps its plain symbol on both sides of the interface.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "fn f<T>(x: T) -> int32 { return 100; }\n"
+        "fn f(x: int32) -> int32 { return 1; }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    lib.unlink()
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\nfn main() -> int32 { return f(true); }\n'
+    )
+    assert run_path(main) == 100  # generic wins the non-exact match
+    main.write_text(
+        'import "lib";\nfn main() -> int32 { return f(9); }\n'
+    )
+    ir = str(compile_to_ir(main))
+    assert 'declare i32 @"f"(i32' in ir  # concrete member, plain symbol
 
 
 # --------------------------------------------------------- dropped surface

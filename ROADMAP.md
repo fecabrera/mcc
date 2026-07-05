@@ -847,7 +847,9 @@ already do).
     hit), and -- so a stage-1 `--emit-interface` cannot write a stub the
     importer rejects -- interface emission erroring on a module whose
     public surface contains a set until the `.mci` support below
-    lands. Stage 2, signature-aware pairing, `.mci` support, and mixed
+    lands. Stage 2 (**shipped**, see
+    [Function overloading](docs/language.md#function-overloading)),
+    signature-aware pairing, `.mci` support, and mixed
     sets: `concrete_decls` re-keyed per signature, `pair_prototype`
     comparing per params-key (the pairing rules above), a
     different-signature prototype joining the set, the `.mci` closure

@@ -24,6 +24,10 @@ fn celsius_to_fahrenheit(c: float64) -> float64;
 // arriving from an imported .mci do not collide either.
 fn clamp(v: int32, lo: int32, hi: int32) -> int32;
 
+// A prototype pairs with a definition per SIGNATURE: one with a different
+// parameter list is not a mismatch, it declares another member of the
+// name's overload set (see overloading.mc) and needs its own definition.
+
 fn main() -> int32 {
     println("clamp(17, 0, 10) = %d", clamp(17, 0, 10));
     println("100 C = %f F", celsius_to_fahrenheit(100.0));

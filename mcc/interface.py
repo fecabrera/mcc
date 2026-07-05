@@ -18,6 +18,12 @@ Unreachable ``@private``/``@static`` declarations are dropped, the original
 ``import`` lines are preserved (a dependency's interface is pulled in
 transitively), and ``@if`` is already resolved before generation, so each
 interface reflects the target it was compiled for.
+
+Overload sets travel whole: an included function force-pulls every same-name
+function sibling -- even an unreferenced ``@private`` overload -- because the
+importer derives each member's symbol (plain for a single signature, mangled
+``f(int32)`` for a set) from the set size the stub shows it, and that choice
+must match the symbols the defining object emitted.
 """
 
 from __future__ import annotations
@@ -218,6 +224,15 @@ class InterfaceWriter:
         declaration, then pulls in whatever their signatures and shipped bodies
         reference -- including ``@private``/``@static`` helpers -- transitively.
 
+        An included function force-pulls every same-name function sibling
+        (its whole overload set, generic members included): the importer
+        derives the plain-vs-mangled symbol choice from the set size it sees,
+        so an unreferenced ``@private`` overload left out of the stub would
+        shrink the consumer's view of the set and flip the symbol choice --
+        a link failure against the object the definer actually emitted.
+        (``@static`` siblings stay out: they are file-local shadows, not set
+        members.)
+
         Returns:
             The reachable declarations, in source order.
         """
@@ -232,6 +247,12 @@ class InterfaceWriter:
             if id(decl) in included:
                 continue
             included[id(decl)] = decl
+            if isinstance(decl, Func):
+                work.extend(
+                    sib
+                    for sib in self.by_name.get(decl.name, ())
+                    if isinstance(sib, Func) and not sib.static
+                )
             for name in self._decl_refs(decl):
                 work.extend(self.by_name.get(name, ()))
         return sorted(
@@ -330,25 +351,6 @@ class InterfaceWriter:
             every reachable declaration in source order, separated by blank
             lines.
         """
-        # Concrete overload sets are not representable yet: their members
-        # would render as same-name prototypes, which the importer rejects
-        # (overload sets do not support prototypes until stage 2 of the
-        # overloading work re-keys pairing per signature).
-        for name, decls in self.by_name.items():
-            members = [
-                d
-                for d in decls
-                if isinstance(d, Func)
-                and not (d.extern or d.static or d.proto or d.type_params)
-                and d.removed_msg is None
-            ]
-            if len(members) > 1:
-                raise LangError(
-                    f"cannot emit an interface for overloaded function "
-                    f"{name!r} (overload sets do not support interfaces yet)",
-                    members[1].line,
-                    source=members[1].source,
-                )
         name = self.root.rsplit("/", 1)[-1] if self.root else "module"
         blocks = [
             f"// Interface generated from {name} by mcc -- do not edit.\n"

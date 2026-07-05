@@ -69,4 +69,6 @@ fn main() -> int32 {
 
 // See also: mut_params.mc for mut itself; const_params.mc for the read-only
 // dual; types/generics.mc for generic functions and overload basics;
-// overloading.mc for concrete (non-generic) overload sets.
+// overloading.mc for concrete (non-generic) overload sets;
+// mixed_overloads.mc for a generic template sharing a name with concrete
+// members.
