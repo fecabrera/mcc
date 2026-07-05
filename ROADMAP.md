@@ -607,37 +607,104 @@ already do).
     fn string_init(mut self: string, const str: char*, n: uint64)
     ```
     Concrete candidates join the same overload set and the shipped
-    resolution order applies verbatim; a fully concrete signature is
-    maximally specific under the existing ranking, so a mixed
-    concrete/generic set resolves with the concrete overload beating a
-    generic on an exact match (today a generic may not even share a name
-    with a concrete function; that rejection lifts). Rules that keep it
-    C-simple: resolution is by arguments only, so two overloads may not
-    differ solely in return type (that stays a duplicate definition);
-    overloads differing only in integer width are **ambiguous** for an
-    untyped literal argument (`f(0)` between `f(x: int32)` and
-    `f(x: int64)` is an error; `0 as int64` or a typed variable
-    disambiguates, the same declared-not-guessed stance as generic
-    parameter defaults); and an overloaded name still cannot be taken as a
-    plain `fn(...)` value. Import merging's duplicate detection becomes
-    signature-aware: the same name with the same parameter list twice
-    stays an error, different lists merge into one set. The one piece of
-    new machinery is symbol naming: concrete overloads link across objects
-    by symbol, so an overloaded name needs **signature-derived** mangled
-    symbols, deterministic from the signature alone, so a `.mci`
+    resolution order applies verbatim, plus one new rank tier: candidates
+    sort on (is-concrete, specificity), which makes "a fully concrete
+    signature is maximally specific" exactly true (without the tier, a
+    generic whose *effective* parameter list is all-concrete, its type
+    parameter appearing only in the return type or filled by a shipped
+    [declared default](docs/language.md#type-parameter-defaults), would
+    tie an identical concrete overload under the shipped ranking). A
+    mixed concrete/generic set then resolves with the concrete overload
+    beating a generic on an exact match (today a generic may not even
+    share a name with a concrete function; that rejection lifts). Rules
+    that keep it C-simple: resolution is by arguments only, so two
+    overloads may not differ solely in return type (that stays a
+    duplicate definition), and not solely in `const`/`mut` markers on the
+    same types either, since a same-type `mut`/non-`mut` pair is
+    uncallable under the shipped resolution rules (an rvalue argument
+    filters out the `mut` candidate; an lvalue keeps both, and a
+    same-shape tie is ambiguous), so allowing it buys nothing and it
+    stays a duplicate definition, which is also what keeps markers out of
+    the mangle below. Overloads differing only in integer width are
+    **ambiguous** for an untyped literal argument (`f(0)` between
+    `f(x: int32)` and `f(x: int64)` is an error; `0 as int64` or a typed
+    variable disambiguates, the same declared-not-guessed stance as
+    generic parameter defaults); the shipped viability/ranking machinery
+    already produces exactly this error today (verified live on a
+    width-only pair), so that rule ships as tests and docs, not new
+    machinery. An overloaded name still cannot be taken as a plain
+    `fn(...)` value, and the v1 non-overloadables: variadic functions
+    (the arity filter is exact-length; C-style variadics revisit when
+    [native variadics](#functions-and-methods) land), `main` (JIT and
+    `cc` both resolve the plain symbol), `@extern`/`@symbol` functions
+    (their C symbol is fixed), and `@static`. The overload-set scope
+    decision that keeps separate compilation correct: all overloads of a
+    concrete name must be declared in **one defining module** (its `.mci`
+    counts as that module). "A single definition keeps its plain symbol"
+    makes plain-vs-mangled depend on set size, and set size is
+    context-dependent across builds: module A's lone `f(int32)` exports
+    plain `f`, so a consumer importing A's `.mci` and adding `f(int64)`
+    would mangle both members and call `f(int32)`, a symbol A's object
+    never emitted (a link failure). Same-module scoping makes the symbol
+    choice a per-file fact, stable and derivable from the `.mci` alone;
+    the `string_init` family above satisfies it naturally, and
+    cross-module set extension is deferred until a use case appears. The
+    one piece of new machinery is symbol naming: concrete overloads link
+    across objects by symbol, so an overloaded name takes a
+    **signature-derived** mangled symbol spelled `name(int32, char*)`
+    from the canonical `str(LangType)`, the exact canonicalization
+    generic instance symbols already use (`gen<int32>` proves that
+    character class links through `.o` + `cc` today; no hashing needed).
+    Parameter types only: nothing for the return (per the no-return-only
+    rule) and no markers (per the duplicate rule above), so the mangle is
+    deterministic from the signature alone and a `.mci`
     [bodyless prototype](#functions-and-methods) (which carries only the
     signature) names the same symbol its definition emitted, unlike the
-    declaration-order bases generic templates use (safe there because
-    templates travel as source and re-instantiate). A name with a single
-    definition keeps its plain, C-linkable symbol. Pairs with
+    declaration-order bases generic templates use (safe under today's
+    whole-program compilation because templates travel as source and
+    re-instantiate; the sub-item below records the separate-compilation
+    hazard). A name with a single definition keeps its plain, C-linkable
+    symbol and the direct-call fast path untouched; the accepted v1 cost
+    lands only on overloaded calls, which route through the pre-evaluate
+    path, so a `const`-struct hidden-reference argument spills to a
+    temporary instead of sharing the caller's storage (zero regression
+    for non-overloaded code). Prototype pairing becomes per-signature
+    (the seam in `can_pair_prototype`/`pair_prototype` was built for
+    this): a same-signature prototype/definition pair keeps every shipped
+    pairing rule, which is also what preserves the return-type-only
+    duplicate error; a different-signature prototype simply joins the
+    set, so "definition does not match its prototype" survives only for
+    same-parameter-list drift, and a stale `.mci` prototype with no
+    definition moves from a compile-time to a link-time error, except
+    that the same-module rule keeps an unmatched in-module prototype a
+    compile-time error (that check stays). Import merging's duplicate
+    detection becomes signature-aware the same way: the same name with
+    the same parameter list twice stays an error, different lists merge
+    into one set. Pairs with
     [namespaced exported symbols](#tooling-and-c-interop), and
     [C header generation](#tooling-and-c-interop) can only export the
     plain-named form (an overload set cannot cross into C under one
-    name). `@extern`/`@symbol` functions cannot overload (their C symbol
-    is fixed) and `@static` stays non-overloadable initially. Methods key
-    on the receiver type plus name, so method and constructor overloads
-    compose directly: the [`new <struct>(...)`](#functions-and-methods)
-    sugar picks the constructor overload by its argument list
+    name). Sequencing: this ships before Methods / OOP below, since
+    methods key on the receiver type plus name and the class lane rides
+    constructor overloads on exactly this machinery (the
+    [`new <struct>(...)`](#functions-and-methods) sugar picks the
+    constructor overload by its argument list); and whichever of this and
+    [`mut` returns](#functions-and-methods) lands second adds return
+    mutability to the prototype pair-match tuple, one line of
+    coordination
+    - [ ] order-independent template symbol bases — extend the same
+          signature-derived mangling to generic templates, retiring a
+          recorded hazard in the shipped scheme: template overload sets
+          take declaration-order symbol bases (`name`, `name#1`, ...), so
+          two separately compiled objects that merged the same templates
+          in different orders can emit *different templates'* instances
+          under one `linkonce_odr` symbol, a silent wrong-merge that
+          whole-program compilation currently hides and the
+          [Library output](#tooling-and-c-interop) precompiled-stdlib
+          direction will expose. The dependency runs one way: the
+          signature-derived mangling above is the eventual fix, so this
+          lands with or after the concrete-overloading work, and a
+          precompiled library containing generic code waits on it
 - [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
       keyed to a struct, including `@private` methods and the special
       constructor/destructor below (the `for … in` protocol already dispatches
