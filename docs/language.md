@@ -2477,9 +2477,16 @@ literal can also be borrowed directly — `"hi" as slice<char>` — since it car
 its array type, and it **adapts** to a `slice<char>`/`slice<const char>` from
 context with no `as` at all (the way an untyped constant takes its type): at a
 function argument (including a `const`-by-reference slice parameter, so
-`writeln("hi")` works), a `let` slot, or a `return`. The borrow drops the NUL,
-and only *literals* adapt — a typed owned value still needs the explicit `as`.
-See [examples/types/strings.mc](../examples/types/strings.mc).
+`writeln("hi")` works), a `let` slot, a `return`, an **array element** whose
+element type is a char slice (`let dirs: slice<char>[2] = ["bin", "usr/bin"];`,
+including nested literals), or a `@static` initializer — the
+scalar `@static let g: slice<const char> = "hi";` and a `@static` array of
+slices both become constant `{pointer, length}` views into the string constants
+(safe: the pointee is a global constant, so there is no lifetime question). The
+borrow drops the NUL, and only *literals* adapt — a typed owned value still
+needs the explicit `as`.
+See [examples/types/strings.mc](../examples/types/strings.mc) and
+[examples/types/string_tables.mc](../examples/types/string_tables.mc).
 
 A character literal in single quotes is a `char` — the byte value of a single
 character, using the same escapes (`'a'`, `'\n'`, `'\0'`, `'\''`, `'\\'`). Like

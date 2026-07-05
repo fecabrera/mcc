@@ -503,3 +503,117 @@ def test_string_literal_adapts_to_const_slice_parameter():
     fn main() -> int32 { return shout("hello world"); }   // 11
     """
     assert run(source) == 11
+
+
+# ------------------------------------ string-literal elements (Stage 4, nested)
+
+
+def test_string_literal_elements_adapt_in_array_literal():
+    # Each string-literal element of an array of slices adapts without an `as`,
+    # borrowing its string constant's bytes with the NUL dropped.
+    source = """
+    fn main() -> int32 {
+        let dirs: slice<char>[2] = ["bin", "usr/bin"];
+        if (dirs[0].length != 3) { return 1; }   // NUL dropped
+        if (dirs[1].length != 7) { return 2; }
+        if (dirs[0][0] != 'b') { return 3; }
+        if (dirs[1][3] != '/') { return 4; }
+        return 0;
+    }
+    """
+    assert run(source) == 0
+
+
+def test_string_literal_elements_adapt_to_const_char_slice_elements():
+    source = """
+    fn main() -> int32 {
+        let names: slice<const char>[3] = ["a", "bb", "ccc"];
+        return (names[0].length + names[1].length + names[2].length) as int32;
+    }
+    """
+    assert run(source) == 6
+
+
+def test_string_literal_elements_adapt_in_nested_array():
+    # The element adaptation reaches through the nested-literal recursion.
+    source = """
+    fn main() -> int32 {
+        let grid: slice<const char>[2][2] = [["a", "bb"], ["ccc", "dddd"]];
+        return (grid[0][1].length * 10 + grid[1][1].length) as int32;   // 24
+    }
+    """
+    assert run(source) == 24
+
+
+def test_string_literal_elements_mix_with_explicit_borrow():
+    # A literal element adapts; an explicit `as` element keeps working beside it.
+    source = """
+    fn main() -> int32 {
+        let both: slice<char>[2] = ["x" as slice<char>, "yz"];
+        return (both[0].length * 10 + both[1].length) as int32;   // 12
+    }
+    """
+    assert run(source) == 12
+
+
+def test_static_array_of_slices_from_string_literals():
+    # A @static array of slices: each element becomes a constant {pointer,
+    # length} view into its string global -- safe, the pointee is a constant.
+    source = """
+    @static let tags: slice<const char>[3] = ["a", "bb", "ccc"];
+    fn main() -> int32 {
+        if (tags[2].length != 3) { return 1; }
+        if (tags[1][0] != 'b') { return 2; }
+        return 0;
+    }
+    """
+    assert run(source) == 0
+
+
+def test_static_scalar_slice_from_string_literal():
+    # The scalar form falls out of the same constant-initializer arm.
+    source = """
+    @static let greeting: slice<const char> = "hello";
+    fn main() -> int32 { return greeting.length as int32; }   // 5, not 6
+    """
+    assert run(source) == 5
+
+
+def test_static_slice_initializer_is_a_constant_struct():
+    # The @static initializer is a true constant: a getelementptr into the
+    # string global plus the i64 byte length (NUL dropped), no runtime code.
+    ir_text = compile_ir(
+        """
+        @static let tag: slice<const char> = "abc";
+        fn main() -> int32 { return tag.length as int32; }
+        """
+    )
+    assert "getelementptr ([4 x i8], [4 x i8]* @\".str.0\", i32 0, i32 0), i64 3" in ir_text
+
+
+def test_typed_element_still_needs_explicit_borrow():
+    # Only literals adapt in element position too; a typed char array element
+    # still converts with `as`.
+    with pytest.raises(LangError, match="array element: expected slice<char>, got char\\*"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let owned = "hi";                    // char[3]
+                let xs: slice<char>[1] = [owned];    // no implicit borrow
+                return 0;
+            }
+            """
+        )
+
+
+def test_string_literal_element_does_not_adapt_to_uint8_slice():
+    # A string literal is char[N]: it does not adapt to a byte-slice element.
+    with pytest.raises(LangError, match="array element: expected slice<const uint8>"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let xs: slice<const uint8>[1] = ["hi"];
+                return 0;
+            }
+            """
+        )

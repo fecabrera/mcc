@@ -5277,6 +5277,14 @@ class CodeGen:
             )
             if is_array(arr_type.element):
                 self.store_list_literal(slot, element, arr_type.element, line)
+            elif self.str_literal_adapts(element, arr_type.element):
+                # A string-literal element adapts to a slice<char> element
+                # (Stage 4 borrow-in) the way it does in a top-level slot:
+                # each element borrows its string constant's bytes, NUL
+                # dropped, so `let dirs: slice<char>[2] = ["bin", "usr/bin"];`
+                # needs no per-element `as`.
+                tv = self.gen_borrow_slice(element, arr_type.element, line)
+                self.gen_store(tv.value, slot)
             else:
                 tv = self.coerce(
                     self.gen_expr(element), arr_type.element, line, "array element"
@@ -5340,6 +5348,20 @@ class CodeGen:
             # pointer to the shared bytes (the IR pointer is i8* either way).
             ptr = self.const_string(expr.value)
             return ptr if expected == CHARPTR else ptr.bitcast(expected.ir)
+        if self.str_literal_adapts(expr, expected):
+            # A slice<char>/slice<const char> initialized from a string
+            # literal: the Stage 4 borrow-in in constant form -- a constant
+            # {pointer, length} view into the shared NUL-terminated bytes,
+            # with the NUL dropped from the length (the text, as at runtime).
+            # The pointee is a true constant global, so the view is safe even
+            # for a global: no backing-storage or lifetime question. Reached
+            # per element through the ArrayLit recursion above, this also
+            # covers a @static array of slices.
+            length = len(self.string_data(expr.value)) - 1
+            return ir.Constant(
+                expected.ir,
+                [self.const_string(expr.value), ir.Constant(UINT64.ir, length)],
+            )
         if isinstance(expr, StrLit) and is_array(expected):
             # A char[N]/uint8[N] initialized from a string literal: the bytes
             # inline, zero-filled past the string (an oversize buffer).

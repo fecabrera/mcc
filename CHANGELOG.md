@@ -10,6 +10,22 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **String-literal elements adapt to `slice<char>`** — the Stage 4 borrow-in
+  now reaches array-element and `@static` positions:
+  `let dirs: slice<char>[2] = ["bin", "usr/bin"];` works with no per-element
+  `as`, each element borrowing its string constant's bytes with the NUL
+  dropped (`"bin"` → length 3), nested array literals included, and literal
+  elements mix freely with explicit-`as` ones. A `@static` initializer takes
+  the constant form — a constant `{pointer, length}` view into the string
+  global, no runtime code — so a `@static` array of slices works, and so does
+  the scalar `@static let g: slice<const char> = "hi";` (previously rejected).
+  Safe even for globals: the pointee is a global constant, so there is no
+  backing-storage or lifetime question. The adaptation rules are unchanged
+  otherwise: only *literals* adapt (a typed value in element position still
+  needs `as`), and a string literal still does not adapt to a `slice<uint8>`.
+  See [Strings](docs/language.md#strings) and
+  `examples/types/string_tables.mc`.
+
 - **The `any` type and the `case type` type-switch (stage 1)** — `any` is a
   builtin 24-byte tagged box, `{ tag: uint64; payload: 16 bytes, align 8 }`,
   the safe counterpart to a union: the payload travels with a compile-time

@@ -427,22 +427,32 @@ already do).
       every slot to `any` would collapse into a fixed-length `slice<any>`. Also
       the door to a statically-typed variadic later (no erasure), if wanted
 - [ ] Literal adaptation to `slice<T>` — a literal in a slice-typed slot
-      borrows from context, the compiler materializing the backing storage:
+      borrows from context, the compiler materializing the backing storage.
+      (Known gap, family-wide: plain **assignment** to an existing slice
+      variable — `s = "hi";` — is not an adaptation position even in the
+      shipped string-literal form; the positions are argument / `let` /
+      `return` / array element / `@static`):
   - [x] string literals — `"hi"` adapts to a `slice<char>`/`slice<const char>`
         expected by a `let` or a parameter (NUL dropped), borrowing the string
         constant's bytes; implemented, see [Slices](docs/language.md#slices)
-  - [ ] string-literal elements — reach the adaptation into nested/element
-        positions, so `let dirs: slice<char>[2] = ["bin", "usr/bin"];` (an
-        owned array *of slices* whose elements are string literals) works,
-        replacing today's explicit `as` per element
-        (`["bin" as slice<char>, ...]`). The adaptation fires only at
-        top-level slots today, so the array-element path
-        (`store_list_literal`'s plain `coerce`) rejects it with
-        `array element: expected slice<char>, got char*`. The most tractable
-        of this family: each element borrows from a **global string
-        constant** (its `data` points at a `.str` global), so there is no
-        backing-storage or lifetime question — safe even for a `@static`/global
-        array of slices, unlike the array-literals case below
+  - [x] string-literal elements — the adaptation reaches nested/element
+        positions: `let dirs: slice<char>[2] = ["bin", "usr/bin"];` (an owned
+        array *of slices* whose elements are string literals) works with no
+        per-element `as`, nested literals included, each element borrowing
+        its **global string constant** (no backing-storage or lifetime
+        question). The `@static` route emits constant `{pointer, length}`
+        views, so a `@static` array of slices — and, as a bonus, the scalar
+        `@static let g: slice<const char> = "hi";` — works too; implemented,
+        see [Strings](docs/language.md#strings)
+  - [ ] string-literal struct fields — the remaining position: a string
+        literal in a struct-literal field whose type is a char slice
+        (`struct cmd { name: slice<const char>; ... }` built from
+        `{ name: "ls", ... }`). Blocked on evaluation order: `gen_struct_lit`
+        evaluates every field expression *before* field types are resolved
+        (discarding the AST node the adaptation gate needs), and generic
+        struct literals infer their type arguments **from** those evaluated
+        field types — the very evaluation the gate would have to precede. Needs
+        a deferred-evaluation restructure of the struct-literal path first
   - [ ] array literals — the generalization: `let dirs: slice<char*> = ["/bin"];`
         (or `["/bin", "/usr/bin"]` passed to a `slice<T>` parameter)
         materializes a hidden fixed-size backing array in the enclosing scope

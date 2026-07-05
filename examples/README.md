@@ -77,6 +77,7 @@ deprecated or removed functions.
 | [type_aliases.mc](types/type_aliases.mc) | `type <name> = <type>;` transparent aliases for builtins, pointers, function pointers, and structs; `type` as an identifier |
 | [arrays.mc](types/arrays.mc) | fixed-size `T[N]` arrays (`N` a constant expression), indexing, `sizeof`, pointer decay, multi-dim, a `@static` buffer |
 | [strings.mc](types/strings.mc) | string literals as `char[N]` text arrays (NUL counted): owned vs `char*`, inferred/oversize sizes, decay, mutation, `len`, indexing, borrowing as `slice<char>`; contrast with a raw `uint8[N]` byte buffer |
+| [string_tables.mc](types/string_tables.mc) | string-literal elements adapting to `slice<char>` / `slice<const char>` with no per-element `as`: a local lookup table, a `@static` table and scalar as constant `{pointer, length}` views, NUL-free lengths, runtime indexing |
 | [enums.mc](types/enums.mc) | `enum Name: T { M = v, ... }`, `Enum::Member`, the enum name as a type, custom underlying types (uint64 flags, string members), members referencing earlier ones |
 | [derived_enums.mc](types/derived_enums.mc) | `enum b: a` member reuse: the derived enum copies the base's members and adopts its underlying type (pointers too), inherited members fold equal and are referenceable by new ones, transitive chains; compile-time only, no new type checking |
 | [structs.mc](types/structs.mc) | structs, generic structs, `->` / `.`, `null`, struct literals, a hand-built linked list |

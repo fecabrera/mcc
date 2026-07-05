@@ -55,3 +55,6 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// See also: string_tables.mc (string literals adapting to slice elements in
+// array literals and @static initializers), memory/slices.mc.
