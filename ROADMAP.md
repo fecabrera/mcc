@@ -403,6 +403,50 @@ already do).
           by-value-vs-by-pointer payload and lifetime questions are settled
     - [ ] checked `as` unwrap — recover a value outside `case type`, once a
           checked-failure mechanism exists to hang the tag mismatch on
+    - [ ] generic pointer arm in `case type` — `when T* ptr:` matches any
+          boxed pointer type, the pointer fallback after concrete pointer
+          arms (in the stdlib formatter,
+          `when T* ptr: l = snprintf(buf, MAX_BUF_LEN, "%p", ptr);` after
+          `when char* s:`; that fallback lands with the
+          [native variadics](#functions-and-methods) item's stage 3). The
+          lowering family is the one the
+          [`case type` over interfaces](#functions-and-methods) sub-item
+          records: a set-membership test over the compile-time FNV-1a
+          tags of every pointer type that boxes into `any` anywhere in
+          the whole program, statically known, no runtime registry. It
+          is a true generic arm: each matching tag branches to the arm
+          body monomorphized with `T` bound to that tag's pointee type
+          (the monomorphize-everything stance, one instantiation per
+          matching tag, the whole-program tag set bounding the
+          duplication), so genuinely generic bodies work
+          (`when T* p: h = fnv1a(p);`), while an address-only body like
+          the `%p` one never uses `T` and its identical instantiations
+          collapse. The arm is a real generic context, which is the
+          strongest argument for per-tag monomorphization over an
+          erased, address-only binding: `when T* ptr: handle(ptr);`
+          dispatching into a generic `handle<T>(p: T*)` (or an overload
+          set) compiles per tag like any generic call, with generic
+          dispatch, overload resolution, and the shipped
+          concrete-beats-generic ranking all applying inside the arm,
+          and a boxed pointer type for which no viable instantiation or
+          overload of the called function exists is a **compile-time
+          error** at the `case type` site naming the offending type,
+          not a runtime gap; the closed whole-program tag set is
+          exactly what makes this statically checkable, every
+          instantiation the arm can ever take being enumerated and
+          type-checked at compile time. A `T*` arm overlaps concrete
+          pointer arms, so it rides the same first-match-wins
+          textual-order rule the
+          interface arm establishes (`when char* s:` stays ahead of the
+          fallback), the unreachable-later-arm diagnostic applying the
+          same way; the mandatory `else` is unchanged, since a `T*` arm
+          widens over pointers only and non-pointer tags still need
+          arms or `else`. Unlike the interface arm this depends only on
+          the shipped `any`/`case type` machinery above, which is why
+          it lives here and not under interfaces. Open question,
+          deferred: whether a fully generic `when T v:` arm falls out
+          of the same machinery or is rejected as redundant with a
+          binding `else`
   - [ ] global/`@static` union initializers — teach the const-initializer
         path to emit a union constant (zero-fill plus the one written member).
         Until then a global/`@static` union initializer is rejected with an
