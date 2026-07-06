@@ -4,6 +4,7 @@ import re
 
 import pytest
 
+from mcc.driver import compile_to_ir
 from mcc.errors import LangError
 from helpers import compile_ir, run, run_path
 
@@ -64,11 +65,14 @@ def test_no_matching_overload():
 
 
 def test_ambiguous_overloads():
+    # Two pattern-distinct variants with equal specificity tie at the call.
+    # (Same-pattern pairs no longer get this far: they are declare-time
+    # duplicates, tested below.)
     with pytest.raises(LangError, match="ambiguous"):
         compile_ir(
-            "fn f<T>(x: T) -> int32 { return 1; }\n"
-            "fn f<T>(x: T) -> int32 { return 2; }\n"
-            "fn main() -> int32 { return f(5 as int32); }"
+            "fn f<T>(x: T, y: int32) -> int32 { return 1; }\n"
+            "fn f<T>(x: int32, y: T) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return f(5 as int32, 6 as int32); }"
         )
 
 
@@ -103,6 +107,162 @@ def test_hash_lib_dispatches(tmp_path, capfd):
     )
     assert run_path(main) == 0
     assert capfd.readouterr().out == "1 1\n"
+
+
+# ------------------- template symbol bases (order-independent, per-pattern)
+
+
+def test_template_base_and_instance_spellings():
+    # Every template takes a signature-derived base -- name, type parameters
+    # alpha-renamed to positional $i placeholders, parameter patterns -- and
+    # an instance appends its bindings. Lone templates included: an imported
+    # file may extend the set, so the spelling never depends on set size.
+    out = compile_ir(
+        VARIANTS
+        + """
+        fn main() -> int32 {
+            let v: int64 = 5;
+            return describe(v) * 10 + describe(&v);
+        }
+        """
+    )
+    assert 'define i32 @"describe<$0>($0)<int64>"(' in out
+    assert 'define i32 @"describe<$0>($0*)<int64>"(' in out
+
+
+def test_lone_template_takes_a_pattern_base():
+    out = compile_ir(
+        "fn id<T>(x: T) -> T { return x; }\n"
+        "fn main() -> int32 { return id<int32>(7); }"
+    )
+    assert 'define i32 @"id<$0>($0)<int32>"(' in out
+    assert 'define i32 @"id<int32>"(' not in out
+
+
+def test_fn_type_pattern_substitutes_in_the_template_base():
+    # Substitution reaches inside fn(...) -> ... parameter types.
+    out = compile_ir(
+        "fn apply<T>(f: fn(T) -> T, x: T) -> T { return f(x); }\n"
+        "fn inc(x: int32) -> int32 { return x + 1; }\n"
+        "fn main() -> int32 { return apply(inc, 41) - 42; }"
+    )
+    assert 'define i32 @"apply<$0>(fn($0) -> $0, $0)<int32>"(' in out
+
+
+def test_mut_marker_is_part_of_the_template_base():
+    # A same-shape mut/by-value template pair is a genuine overload (an
+    # rvalue filters out the mut candidate), so the marker must keep their
+    # symbols apart -- unlike concrete sets, where marker-only variants are
+    # uncallable duplicates.
+    out = compile_ir(
+        "fn bump<T>(mut a: T) { a = a + (1 as T); }\n"
+        "fn main() -> int32 { let x: int32 = 1; bump(x); return x - 2; }"
+    )
+    assert 'define void @"bump<$0>(mut $0)<int32>"(' in out
+
+
+def test_defaulted_type_param_is_part_of_the_template_base():
+    out = compile_ir(
+        "fn size<T = int64>(x: T) -> int64 { return sizeof(T) as int64; }\n"
+        "fn main() -> int32 { return (size(0) - 8) as int32; }"
+    )
+    assert 'define i64 @"size<$0 = int64>($0)<int64>"(' in out
+
+
+def test_alpha_variant_template_is_a_duplicate():
+    # Type parameters alpha-rename in the base, so a renamed copy spells the
+    # same pattern -- every call would be ambiguous, so it collides at
+    # declaration instead.
+    with pytest.raises(LangError) as err:
+        compile_ir(
+            "fn f<T>(x: T) -> int32 { return 1; }\n"
+            "fn f<U>(x: U) -> int32 { return 2; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    assert err.value.message == (
+        "function 'f<$0>($0)' already defined; overloads must differ in "
+        "parameter patterns"
+    )
+
+
+def test_return_type_only_template_variant_is_a_duplicate():
+    with pytest.raises(LangError) as err:
+        compile_ir(
+            "fn f<T>(x: T) -> int32 { return 1; }\n"
+            "fn f<T>(x: T) -> int64 { return 2; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+    assert err.value.message == (
+        "function 'f<$0>($0)' already defined; overloads must differ in "
+        "parameter patterns"
+    )
+
+
+def test_same_pattern_templates_collide_across_modules(tmp_path):
+    # Extending an imported set is legal, but a same-pattern extension is a
+    # duplicate in either import order: the pair could only ever produce
+    # ambiguous calls (and, separately compiled, one merged symbol).
+    (tmp_path / "one.mc").write_text("fn f<T>(x: T) -> int32 { return 1; }")
+    (tmp_path / "two.mc").write_text("fn f<U>(x: U) -> int32 { return 2; }")
+    for imports in (
+        'import "one";\nimport "two";\n',
+        'import "two";\nimport "one";\n',
+    ):
+        main = tmp_path / "main.mc"
+        main.write_text(imports + "fn main() -> int32 { return 0; }\n")
+        with pytest.raises(
+            LangError,
+            match=re.escape(
+                "function 'f<$0>($0)' already defined; overloads must "
+                "differ in parameter patterns"
+            ),
+        ):
+            run_path(main)
+
+
+def test_type_param_arity_distinguishes_templates():
+    # f<$0>($0) and f<$0, $1>($0) are distinct patterns; explicit type
+    # arguments dispatch to each.
+    assert run(
+        "fn f<T>(x: T) -> int32 { return 1; }\n"
+        "fn f<T, U>(x: T) -> int32 { return sizeof(U) as int32; }\n"
+        "fn main() -> int32 { return f<int32>(0) * 10 + f<int32, int64>(0); }"
+    ) == 18
+
+
+def test_default_spelling_distinguishes_templates():
+    # A defaulted parameter spells `$i = <default>` in the base, so the
+    # defaulted variant coexists with the undefaulted one -- and is the only
+    # viable candidate when the second type argument is omitted.
+    assert run(
+        "fn f<T, U>(x: T) -> int32 { return 1; }\n"
+        "fn f<T, U = int32>(x: T) -> int32 { return 2; }\n"
+        "fn main() -> int32 { return f(0 as int64) - 2; }"
+    ) == 0
+
+
+def test_instance_symbols_are_import_order_independent(tmp_path):
+    # The recorded hazard behind the pattern bases: with declaration-order
+    # bases (name, name#1, ...) two objects that merged one set in different
+    # import orders emitted *different templates'* instances under one
+    # linkonce_odr symbol. The base is now a fact of the declaration alone.
+    (tmp_path / "m1.mc").write_text("fn g<T>(x: T) -> int32 { return 1; }")
+    (tmp_path / "m2.mc").write_text("fn g<T>(x: T*) -> int32 { return 2; }")
+    symbol = 'define linkonce_odr i32 @"g<$0>($0*)<int32>"('
+    for name, imports in (
+        ("a.mc", 'import "m1";\nimport "m2";\n'),
+        ("b.mc", 'import "m2";\nimport "m1";\n'),
+    ):
+        main = tmp_path / name
+        main.write_text(
+            imports
+            + "fn main() -> int32 {\n"
+            "    let b: int32 = 2;\n"
+            "    return g(&b) - 2;\n"
+            "}\n"
+        )
+        assert symbol in str(compile_to_ir(main))
+        assert run_path(main) == 0
 
 
 # ---------------------------------------------------- concrete overload sets

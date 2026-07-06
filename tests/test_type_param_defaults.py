@@ -157,7 +157,7 @@ def test_default_and_explicit_spellings_share_one_instance():
         }
     """
     ir = compile_ir(src)
-    assert ir.count('define i64 @"size<int64>"') == 1
+    assert ir.count('define i64 @"size<$0 = int64>($0)<int64>"') == 1
 
 
 def test_default_can_make_an_overload_ambiguous():

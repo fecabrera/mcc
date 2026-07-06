@@ -32,7 +32,7 @@ def test_imported_generic_instance_is_linkonce(tmp_path):
         "    return 0;\n"
         "}\n",
     )
-    assert "linkonce_odr" in defining_line(ir_text, "alloc<uint8>")
+    assert "linkonce_odr" in defining_line(ir_text, "alloc<$0>(uint64)<uint8>")
 
 
 def test_imported_non_generic_function_is_linkonce(tmp_path):

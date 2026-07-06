@@ -43,7 +43,7 @@ def test_inline_generic_instance_gets_alwaysinline():
         "@inline fn id<T>(x: T) -> T { return x; }\n"
         "fn main() -> int32 { return id<int32>(7); }\n"
     )
-    assert "alwaysinline" in define_line(ir_text, "id<int32>")
+    assert "alwaysinline" in define_line(ir_text, "id<$0>($0)<int32>")
 
 
 def test_inline_call_is_folded_when_optimizing():

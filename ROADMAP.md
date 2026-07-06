@@ -906,19 +906,26 @@ already do).
     `string_init`/`string_from_array` collapse into the motivating
     constructor family above, with the example and docs sweep. The
     template-symbol sub-item below trails independently of all three.
-    - [ ] order-independent template symbol bases — extend the same
-          signature-derived mangling to generic templates, retiring a
-          recorded hazard in the shipped scheme: template overload sets
-          take declaration-order symbol bases (`name`, `name#1`, ...), so
-          two separately compiled objects that merged the same templates
-          in different orders can emit *different templates'* instances
-          under one `linkonce_odr` symbol, a silent wrong-merge that
-          whole-program compilation currently hides and the
+    - [x] order-independent template symbol bases (**shipped**, see
+          [Template symbols](docs/language.md#template-symbols)) — the
+          signature-derived mangling extended to generic templates,
+          retiring the recorded hazard in the shipped scheme: template
+          overload sets took declaration-order symbol bases (`name`,
+          `name#1`, ...), so two separately compiled objects that merged
+          the same templates in different orders could emit *different
+          templates'* instances under one `linkonce_odr` symbol, a silent
+          wrong-merge that whole-program compilation hid and the
           [Library output](#tooling-and-c-interop) precompiled-stdlib
-          direction will expose. The dependency runs one way: the
-          signature-derived mangling above is the eventual fix, so this
-          lands with or after the concrete-overloading work, and a
-          precompiled library containing generic code waits on it
+          direction would have exposed. Every template now takes a base
+          spelled from its declaration alone — type parameters
+          alpha-renamed to positional `$i` placeholders, defaults and
+          `mut` markers included, `const` and the return type out —
+          which also makes same-pattern template pairs (alpha-renamed
+          copies, return-type-only variants: ambiguous at every call) a
+          declare-time duplicate error, across modules too. Remaining
+          recorded edge, out of scope here: `@static` template bases keep
+          the `name.filestem` scheme, whose `.N` disambiguating counter
+          is still minted in declaration order
 - [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
       keyed to a struct, including `@private` methods and the special
       constructor/destructor below (the `for … in` protocol already dispatches

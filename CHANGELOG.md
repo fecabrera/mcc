@@ -75,6 +75,29 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   [Opt-in warning classes](docs/language.md#opt-in-warning-classes) and
   [examples/types/unchecked_dereference.mc](examples/types/unchecked_dereference.mc).
 
+### Changed
+
+- **Order-independent template symbol bases** — generic templates now link
+  their instances by a signature-derived base spelled from the declaration
+  alone: type parameters alpha-rename to positional `$i` placeholders (a
+  defaulted parameter spells `$i = <default>`) and the parameter patterns
+  follow — `hash<$0>($0*)`, with instances appending bindings,
+  `hash<$0>($0*)<char>`. This retires the recorded wrong-merge hazard of
+  the declaration-order bases (`name`, `name#1`, ...), under which two
+  separately compiled objects that merged one overload set in different
+  import orders could emit *different templates'* instances under one
+  `linkonce_odr` symbol. A `mut` parameter keeps its marker in the pattern
+  (a same-shape `mut`/by-value pair is a genuine, resolvable overload);
+  `const` markers and the return type stay out. Mild tightening: two
+  templates of one name spelling the same base — alpha-renamed copies and
+  return-type-only variants, previously declarable but ambiguous at every
+  call — are now rejected at declaration
+  (`function 'f<$0>($0)' already defined; overloads must differ in
+  parameter patterns`), across modules too. Diagnostics are untouched:
+  instantiation backtrace notes keep the source-level `hash<char>`
+  spelling, never the mangled symbol. See
+  [Template symbols](docs/language.md#template-symbols).
+
 ## [0.6.1] - 2026-07-06
 
 ### Added

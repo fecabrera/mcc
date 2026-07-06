@@ -572,10 +572,12 @@ that keep it C-simple:
   extend an imported set with a new signature.
 - **A single definition keeps its plain symbol.** Only a name with two or
   more definitions mangles: each member then links by a signature-derived
-  symbol spelled from its parameter types (`f(int32, char*)`), the same
-  canonical spelling generic instances use. A lone function keeps its plain,
-  C-linkable symbol and the direct-call fast path — zero cost until a name
-  actually overloads. (The accepted cost on overloaded calls: they route
+  symbol spelled from its parameter types (`f(int32, char*)`). Generic
+  templates mangle the same way, by parameter *pattern*: every template
+  takes a base spelled from its declaration (`f<$0>($0*)`) and an instance
+  appends its bindings — see [Template symbols](#template-symbols). A lone
+  concrete function keeps its plain, C-linkable symbol and the direct-call
+  fast path — zero cost until a name actually overloads. (The accepted cost on overloaded calls: they route
   through the overload-resolution path, so a `const`-struct argument spills
   to a temporary instead of sharing the caller's storage.)
 - **An overloaded name is not a function value.** `let g = f;` needs a
@@ -815,8 +817,37 @@ fn hash<T>(key: T) -> uint64 { return splitmix64(key); }
 fn hash<T>(key: T*) -> uint64 { return fnv1a(key); }
 ```
 
-Imported files can extend an overload set with new variants. Two equally
-specific viable variants make the call ambiguous — a compile error.
+Imported files can extend an overload set with new variants — new
+*patterns*, that is: a same-pattern template (an alpha-renamed copy or a
+return-type-only variant of an existing member) is a duplicate definition
+wherever it is declared, same module or another (see
+[Template symbols](#template-symbols) below). Two equally specific viable
+variants make the call ambiguous — a compile error.
+
+### Template symbols
+
+Every generic template links its instances by a signature-derived symbol
+base spelled from the declaration alone: the name, the type parameters
+alpha-renamed to positional `$i` placeholders in declaration order (a
+defaulted parameter spells `$i = <default>`), and the parameter patterns —
+`alloc<$0>(uint64)`, `hash<$0>($0*)`, `parse<$0 = int64>(uint8*)`. An
+instance appends its bindings: `hash<$0>($0*)<char>`. Because the base
+depends on nothing but the declaration — not on how many templates share
+the name or the order imports merged them — separately compiled objects
+always emit a given instance under the same `linkonce_odr` symbol and the
+linker merges the copies correctly.
+
+A `mut` parameter keeps its marker in the pattern (`bump<$0>(mut $0)`): a
+same-shape `mut`/by-value template pair is a genuine overload — an rvalue
+argument filters out the `mut` candidate. `const` markers and the return
+type never distinguish template overloads, so two templates of one name
+spelling the same base — alpha-renamed copies (`f<T>(x: T)` beside
+`f<U>(x: U)`) and return-type-only variants, every call to which would be
+ambiguous — are rejected at declaration:
+`function 'f<$0>($0)' already defined; overloads must differ in parameter
+patterns`. Diagnostics keep the source-level spelling: an
+[instantiation backtrace](#instantiation-backtraces) note reads
+`in instantiation of hash<char>`, never the mangled symbol.
 
 ### Type-parameter defaults
 

@@ -188,8 +188,8 @@ def test_generic_monomorphization_and_caching():
         }
         """
     )
-    assert ir_text.count('define i8 @"sum<uint8>"') == 1
-    assert ir_text.count('define i64 @"sum<int64>"') == 1
+    assert ir_text.count('define i8 @"sum<$0>($0, $0)<uint8>"') == 1
+    assert ir_text.count('define i64 @"sum<$0>($0, $0)<int64>"') == 1
 
 
 def test_uninstantiated_template_emits_nothing():

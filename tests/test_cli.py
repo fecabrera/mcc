@@ -34,6 +34,28 @@ def test_native_build_and_run(tmp_path):
     assert out.returncode == 0
 
 
+def test_native_build_links_template_pattern_symbols(tmp_path):
+    # A multi-template set's instances link by pattern-derived symbols
+    # (`g<$0>($0*)<int32>`): `$`, parentheses, and spaces must survive `cc`
+    # on the host object format, mut-marker spellings included.
+    src = tmp_path / "gen.mc"
+    src.write_text(
+        "fn g<T>(x: T) -> int32 { return 1; }\n"
+        "fn g<T>(x: T*) -> int32 { return 2; }\n"
+        "fn bump<T>(mut a: T) { a = a + (1 as T); }\n"
+        "fn main() -> int32 {\n"
+        "    let v: int32 = 5;\n"
+        "    bump(v);\n"
+        "    return g(v) * 10 + g(&v) - 12;\n"
+        "}\n"
+    )
+    exe = tmp_path / "gen"
+    result = mcc(src, "-o", exe)
+    assert result.returncode == 0, result.stderr
+    out = subprocess.run([exe], capture_output=True, text=True)
+    assert out.returncode == 0
+
+
 def test_native_build_links_libm(tmp_path):
     # math.h functions require libm; the driver links -lm.
     src = tmp_path / "trig.mc"

@@ -791,6 +791,65 @@ class CodeGen:
         self.used_symbols.add(candidate)
         return candidate
 
+    def template_base(self, func: Func) -> str:
+        """Spell a generic template's order-independent symbol base.
+
+        The base is derived from the declaration alone --
+        ``name<$0, $1>(patterns)`` -- with the type parameters alpha-renamed
+        to positional ``$i`` placeholders in declaration order, so two
+        objects that merged one overload set in different import orders spell
+        identical instance symbols (declaration-order bases could hand
+        *different templates'* instances one ``linkonce_odr`` symbol, a
+        silent wrong merge). Every template takes a pattern base, even alone
+        in its set: imported files may extend the set, so a lone template in
+        one file can have unseen siblings in another.
+
+        A defaulted parameter spells ``$i = <default>`` with the default
+        rendered through the same substitution (defaults may reference
+        earlier parameters). Patterns are the source spelling of each value
+        parameter's type; a ``mut`` parameter keeps its marker (``mut $0``)
+        because a same-shape mut/by-value template pair is a genuine,
+        resolvable overload -- an rvalue argument filters out the mut
+        candidate -- unlike the concrete case, where the pair is uncallable
+        and banned. ``const`` markers and the return type never distinguish
+        template overloads (the concrete mangle's rules), so neither
+        appears -- two templates of one name spelling one base are
+        duplicates, caught at declaration.
+
+        Args:
+            func: The generic function template.
+
+        Returns:
+            The mangle base, e.g. ``alloc<$0>(uint64)`` or ``hash<$0>($0*)``.
+        """
+        index = {t: f"${i}" for i, t in enumerate(func.type_params)}
+
+        def subst(ref: TypeRef) -> TypeRef:
+            return dataclasses_replace(
+                ref,
+                name=index.get(ref.name, ref.name),
+                args=[subst(a) for a in ref.args],
+                params=(
+                    [subst(p) for p in ref.params]
+                    if ref.params is not None
+                    else None
+                ),
+                ret=subst(ref.ret) if ref.ret is not None else None,
+            )
+
+        head = []
+        for tparam in func.type_params:
+            default = func.type_param_defaults.get(tparam)
+            if default is None:
+                head.append(index[tparam])
+            else:
+                head.append(f"{index[tparam]} = {subst(default)}")
+        patterns = ", ".join(
+            ("mut " if pname in func.mut_params else "") + str(subst(ptype))
+            for pname, ptype in func.params
+        )
+        return f"{func.name}<{', '.join(head)}>({patterns})"
+
     def valist(self, line: int) -> LangType:
         """Return the platform's ``va_list`` type, built once per target.
 
@@ -2574,15 +2633,26 @@ class CodeGen:
                         "live: a tombstone replaces the whole overload set",
                         func.line,
                     )
+                # Every template links by a signature-derived base (instances
+                # append their bindings), so the spelling is a fact of the
+                # declaration alone: separately compiled objects that merged
+                # one set in different import orders emit identical instance
+                # symbols. Two templates spelling one base (alpha-variants
+                # and return-type-only pairs -- type parameters rename to
+                # positional placeholders) could never be told apart at a
+                # call, so they collide here, across modules included.
+                base = self.template_base(func)
                 overloads = self.templates.setdefault(func.name, [])
-                if overloads:
-                    base = f"{func.name}#{len(overloads)}"
-                    while base in self.used_symbols:
-                        base += "'"
-                else:
-                    base = func.name
+                if any(
+                    self.template_bases[id(prior)] == base
+                    for prior in overloads
+                ):
+                    raise LangError(
+                        f"function '{base}' already defined; overloads must "
+                        "differ in parameter patterns",
+                        func.line,
+                    )
                 self.template_bases[id(func)] = base
-                self.used_symbols.add(base)
                 overloads.append(func)
                 continue
             if in_set:
@@ -8355,7 +8425,8 @@ class CodeGen:
         base = self.template_bases.get(id(func)) or self.symbol_bases.get(
             (func.source, func.name), func.name
         )
-        mangled = f"{base}<{', '.join(str(bindings[t]) for t in func.type_params)}>"
+        bindings_str = ", ".join(str(bindings[t]) for t in func.type_params)
+        mangled = f"{base}<{bindings_str}>"
         outer_bindings = self.type_bindings
         outer_source = self.current_source
         saved = (
@@ -8411,11 +8482,18 @@ class CodeGen:
             # the instance being generated (the top level otherwise blames the
             # root module for a line in an imported library). Then record the
             # instantiation frame against the requesting file; unwinding
-            # appends nested frames innermost first.
+            # appends nested frames innermost first. The note names the
+            # source-level template (name plus bindings), not the linker
+            # symbol: the mangle base spells alpha-renamed parameter
+            # patterns, which would read as noise in a diagnostic.
             if err.source is None:
                 err.source = self.current_source
             err.notes.append(
-                Note(f"in instantiation of {mangled}", line, outer_source)
+                Note(
+                    f"in instantiation of {func.name}<{bindings_str}>",
+                    line,
+                    outer_source,
+                )
             )
             raise
         finally:
