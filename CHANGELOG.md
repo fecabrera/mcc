@@ -8,6 +8,31 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in warning classes and `-Wunchecked-dereference`** — the warning
+  channel gains named, **default-off** classes: a repeatable `-W<name>`
+  flag enables one, `-Wall` enables them all, and an unknown name is a
+  hard error (`mcc: error: unknown warning class 'name'`). An enabled
+  class names its flag in each warning it prints
+  (`msg [-W<name>]`), and `-Werror` composes unchanged, promoting exactly
+  what printed — an enabled class as `msg [-Werror=<name>]`, while a
+  disabled class neither prints nor fails the build; the unconditional
+  producers (`@warning`, `@deprecated`) keep their plain `[-Werror]` tail
+  byte-identical. Filtering is print-time only: the collected list
+  embedders read keeps every emission, now tagged with its class, and a
+  warning class never changes codegen. The first class,
+  `unchecked-dereference`, warns on `*p`, `p->field`, and `p[i]` (reads,
+  writes, and compound assignments alike) where the pointer is not proven
+  non-null by the `@nonnull` proof relation — a `@nonnull` parameter, a
+  flow-narrowed local or field projection, an always-non-null source, a
+  decayed array, or the postfix `!` assertion, which doubles as the
+  per-site suppressor; slice indexing never warns. Off by default
+  deliberately (mcc pointers are nullable-by-default like C's); the
+  `libmc` container internals have not yet been swept clean under it. See
+  [Opt-in warning classes](docs/language.md#opt-in-warning-classes) and
+  [examples/types/unchecked_dereference.mc](examples/types/unchecked_dereference.mc).
+
 ## [0.6.1] - 2026-07-06
 
 ### Added

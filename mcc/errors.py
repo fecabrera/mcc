@@ -2,6 +2,15 @@
 
 from dataclasses import dataclass
 
+# Every opt-in warning class the compiler can tag a warning with. The driver
+# validates each `-W<name>` flag against this set (and expands `-Wall` to all
+# of it); producers assert their tag is in it, so a typo fails tests instead
+# of silently minting an unenableable class. Two names are reserved by never
+# being registered: "error" (`-Werror` is its own flag) and "all" (`-Wall`
+# expands here). A class name may not start with "no-", keeping the
+# `-Wno-<name>` spelling claimable for per-class disabling later.
+WARNING_CLASSES = frozenset({"unchecked-dereference"})
+
 
 @dataclass
 class Note:
@@ -10,6 +19,9 @@ class Note:
     Rendered by the driver as ``file: note: line N: message`` after the
     primary error line -- e.g. the ``in instantiation of ...`` frames that
     trace how the compiler reached an error inside a monomorphized body.
+    Also the record type of the warning channel
+    (:attr:`~mcc.codegen.CodeGen.warnings`), where ``wclass`` may tag the
+    entry with its opt-in warning class.
 
     Attributes:
         message: Human-readable description (e.g. ``in instantiation of
@@ -17,11 +29,15 @@ class Note:
         line: The 1-based line number the note refers to.
         source: Path of the file the line belongs to, or ``None`` when the
             line comes from a program parsed directly from a string.
+        wclass: The opt-in warning class the entry belongs to (a member of
+            :data:`WARNING_CLASSES`), or ``None`` for notes and for
+            unconditional warnings, which always print.
     """
 
     message: str
     line: int
     source: str | None = None
+    wclass: str | None = None
 
 
 class LangError(Exception):

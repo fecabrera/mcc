@@ -676,6 +676,107 @@ def test_werror_without_warnings_is_a_no_op(tmp_path):
     assert result.stderr == ""
 
 
+# ------------------------------------------- opt-in warning classes (-W)
+
+DEREF_SRC = (
+    "fn first(p: int32*) -> int32 {\n"
+    "    return *p;\n"
+    "}\n"
+    "fn main() -> int32 {\n"
+    "    let x: int32 = 7;\n"
+    "    return first(&x) - 7;\n"
+    "}\n"
+)
+DEREF_WARNING = ("dereference of a possibly-null pointer (narrow it with a "
+                 "null check or assert with postfix '!')")
+
+
+def test_warning_class_is_off_by_default(tmp_path):
+    src = tmp_path / "deref.mc"
+    src.write_text(DEREF_SRC)
+    result = mcc(src, "--emit-llvm")
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
+def test_wflag_enables_the_class_and_names_it(tmp_path):
+    src = tmp_path / "deref.mc"
+    src.write_text(DEREF_SRC)
+    result = mcc(src, "-Wunchecked-dereference", "--emit-llvm")
+    assert result.returncode == 0  # a warning, not an error: IR still emits
+    assert result.stderr == (
+        f"{src}: warning: line 2: {DEREF_WARNING} [-Wunchecked-dereference]\n")
+    assert 'define i32 @"main"()' in result.stdout
+
+
+def test_wall_enables_every_class(tmp_path):
+    src = tmp_path / "deref.mc"
+    src.write_text(DEREF_SRC)
+    result = mcc(src, "-Wall", "--emit-llvm")
+    assert result.returncode == 0
+    assert result.stderr == (
+        f"{src}: warning: line 2: {DEREF_WARNING} [-Wunchecked-dereference]\n")
+
+
+def test_werror_promotes_an_enabled_class_and_names_it(tmp_path):
+    src = tmp_path / "deref.mc"
+    src.write_text(DEREF_SRC)
+    exe = tmp_path / "deref"
+    result = mcc(src, "-Wunchecked-dereference", "-Werror", "-o", exe)
+    assert result.returncode == 1
+    assert result.stderr == (
+        f"{src}: error: line 2: {DEREF_WARNING} [-Werror=unchecked-dereference]\n")
+    assert not exe.exists()  # promoted failure produces no executable
+    assert not exe.with_suffix(".o").exists()
+
+
+def test_werror_alone_ignores_a_disabled_class(tmp_path):
+    # The CI shape: -Werror with no -W flags. Promotion covers exactly what
+    # printed, so the default-off class neither prints nor fails the build.
+    src = tmp_path / "deref.mc"
+    src.write_text(DEREF_SRC)
+    exe = tmp_path / "deref"
+    result = mcc(src, "-Werror", "-o", exe)
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert exe.exists()
+
+
+def test_unknown_warning_class_is_an_error(tmp_path):
+    src = tmp_path / "deref.mc"
+    src.write_text(DEREF_SRC)
+    result = mcc(src, "-Wbogus", "--emit-llvm")
+    assert result.returncode == 1
+    assert result.stderr == "mcc: error: unknown warning class 'bogus'\n"
+    assert result.stdout == ""  # rejected before any compilation
+
+
+def test_unconditional_warnings_keep_their_plain_werror_tail(tmp_path):
+    # An enabled class and an @warning under one -Werror build: the class
+    # names itself, the unconditional producer's tail stays byte-identical.
+    src = tmp_path / "both.mc"
+    src.write_text('@warning("engage bespoke mode");\n' + DEREF_SRC)
+    result = mcc(src, "-Wall", "-Werror", "--emit-llvm")
+    assert result.returncode == 1
+    assert f"{src}: error: line 1: engage bespoke mode [-Werror]\n" in result.stderr
+    assert (f"{src}: error: line 3: {DEREF_WARNING} "
+            "[-Werror=unchecked-dereference]\n") in result.stderr
+
+
+def test_emit_interface_honors_warning_classes(tmp_path):
+    src = tmp_path / "deref.mc"
+    src.write_text(DEREF_SRC)
+    result = mcc(src, "--emit-interface", "-Wunchecked-dereference")
+    assert result.returncode == 0
+    assert result.stderr == (
+        f"{src}: warning: line 2: {DEREF_WARNING} [-Wunchecked-dereference]\n")
+    assert (tmp_path / "deref.mci").exists()
+    (tmp_path / "deref.mci").unlink()
+    result = mcc(src, "--emit-interface", "-Wall", "-Werror")
+    assert result.returncode == 1  # promoted: no stub is written
+    assert not (tmp_path / "deref.mci").exists()
+
+
 # ------------------------------------------------------------- @deprecated
 
 DEPRECATED_SRC = (

@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from mcc.codegen import CodeGen
-from mcc.driver import compile_to_ir
-from mcc.errors import LangError, Note
+from mcc.driver import _report_warnings, compile_to_ir, parse_wflags
+from mcc.errors import WARNING_CLASSES, LangError, Note
 from helpers import parse, run
 
 
@@ -285,7 +285,9 @@ def test_for_in_over_a_deprecated_protocol_warns_for_it_and_next():
     }
     """
     cg = generate(src)
-    assert [(w.message, w.line) for w in cg.warnings] == [
+    # The iterator bodies' unproven derefs also collect (tagged with the
+    # opt-in unchecked-dereference class); this test is about deprecation.
+    assert [(w.message, w.line) for w in cg.warnings if w.wclass is None] == [
         ("'counter_it' is deprecated: iterate the replacement type", 21),
         ("'counter_next' is deprecated: iterate the replacement type", 21),
     ]
@@ -385,4 +387,275 @@ def test_stdlib_compiles_clean_of_deprecation_warnings(tmp_path):
     )
     warnings = []
     compile_to_ir(main, (lib_dir,), warnings=warnings)
-    assert warnings == []
+    # Filter to the unconditional channel: libmc's containers still collect
+    # opt-in unchecked-dereference emissions (the libmc sweep is a recorded
+    # follow-up; the class is default-off, so nothing prints without -W).
+    assert [w for w in warnings if w.wclass is None] == []
+
+
+# ------------------------------------------- opt-in warning classes (wclass)
+
+DEREF_MSG = ("dereference of a possibly-null pointer (narrow it with a null "
+             "check or assert with postfix '!')")
+UNCHECKED = "unchecked-dereference"
+
+
+def class_warnings(source: str) -> list[tuple[str, int]]:
+    """The unchecked-dereference emissions of a source, as (message, line)."""
+    return [(w.message, w.line)
+            for w in generate(source).warnings if w.wclass == UNCHECKED]
+
+
+def test_warn_tags_the_note_with_its_class():
+    cg = CodeGen(parse("fn main() -> int32 { return 0; }"), "test")
+    cg.current_source = "somewhere.mc"
+    cg.warn("tagged", 3, wclass=UNCHECKED)
+    assert cg.warnings == [Note("tagged", 3, "somewhere.mc", UNCHECKED)]
+
+
+def test_warn_defaults_to_the_unconditional_channel():
+    cg = CodeGen(parse("fn main() -> int32 { return 0; }"), "test")
+    cg.warn("plain", 3)
+    assert cg.warnings == [Note("plain", 3, None, None)]
+
+
+def test_warn_rejects_an_unregistered_class():
+    # A producer typo mints no silently-unenableable class; it fails here.
+    cg = CodeGen(parse("fn main() -> int32 { return 0; }"), "test")
+    with pytest.raises(AssertionError, match="unregistered warning class 'tpyo'"):
+        cg.warn("oops", 1, wclass="tpyo")
+
+
+def test_reserved_names_are_never_registered_classes():
+    # "error" (-Werror) and "all" (-Wall) are claimed by the driver; "no-"
+    # keeps the -Wno-<name> spelling available for per-class disabling later.
+    assert "error" not in WARNING_CLASSES
+    assert "all" not in WARNING_CLASSES
+    assert not any(name.startswith("no-") for name in WARNING_CLASSES)
+
+
+# --- -Wunchecked-dereference: unproven dereference sites collect ---
+
+def test_unproven_load_deref_warns():
+    src = """
+    fn first(p: int32*) -> int32 { return *p; }
+    fn main() -> int32 { let x: int32 = 1; return first(&x); }
+    """
+    assert class_warnings(src) == [(DEREF_MSG, 2)]
+
+
+def test_unproven_store_target_deref_warns():
+    src = """
+    fn set(p: int32*) { *p = 1; }
+    fn main() -> int32 { let x: int32 = 0; set(&x); return x - 1; }
+    """
+    assert class_warnings(src) == [(DEREF_MSG, 2)]
+
+
+def test_unproven_compound_store_target_deref_warns():
+    src = """
+    fn bump(p: int32*) { *p += 1; }
+    fn main() -> int32 { let x: int32 = 0; bump(&x); return x - 1; }
+    """
+    assert class_warnings(src) == [(DEREF_MSG, 2)]
+
+
+def test_unproven_arrow_warns():
+    src = """
+    struct point { x: int32; }
+    fn read(p: struct point*) -> int32 { return p->x; }
+    fn main() -> int32 { let pt: struct point; pt.x = 3; return read(&pt); }
+    """
+    assert class_warnings(src) == [(DEREF_MSG, 3)]
+
+
+def test_unproven_index_warns():
+    src = """
+    fn second(p: int32*) -> int32 { return p[1]; }
+    fn main() -> int32 { let a: int32[2]; a[1] = 9; return second(&a[0]); }
+    """
+    # One report for the parameter indexing; a[...] on the array never warns.
+    assert class_warnings(src) == [(DEREF_MSG, 2)]
+
+
+def test_class_collects_even_though_it_is_off_by_default(tmp_path):
+    # Collection is unconditional -- codegen never sees -W flags -- so the
+    # embedder-facing out-list keeps the tagged emission; only printing is
+    # gated (see the _report_warnings tests below).
+    path = tmp_path / "w.mc"
+    path.write_text("fn first(p: int32*) -> int32 { return *p; }\n"
+                    "fn main() -> int32 { let x: int32 = 1; return first(&x); }\n")
+    warnings = []
+    compile_to_ir(path, (), warnings=warnings)
+    assert [(w.message, w.line, w.wclass) for w in warnings] == [
+        (DEREF_MSG, 1, UNCHECKED),
+    ]
+
+
+def test_generic_body_collects_per_instantiation():
+    # The raw list keeps every emission; collapsing repeats of one site is
+    # the driver's print-time dedup, not the channel's.
+    src = """
+    fn first<T>(p: T*) -> T { return *p; }
+    fn main() -> int32 {
+        let x: int32 = 1;
+        let y: int64 = 2;
+        return first(&x) + first(&y) as int32 - 3;
+    }
+    """
+    assert class_warnings(src) == [(DEREF_MSG, 2), (DEREF_MSG, 2)]
+
+
+# --- ...and every proven site stays silent ---
+
+def test_nonnull_param_deref_does_not_warn():
+    src = """
+    fn first(@nonnull p: int32*) -> int32 { return *p; }
+    fn main() -> int32 { let x: int32 = 1; return first(&x); }
+    """
+    assert class_warnings(src) == []
+
+
+def test_narrowed_local_deref_does_not_warn():
+    src = """
+    fn first(p: int32*) -> int32 {
+        if (p != null) { return *p; }
+        return 0;
+    }
+    fn main() -> int32 { let x: int32 = 1; return first(&x); }
+    """
+    assert class_warnings(src) == []
+
+
+def test_narrowed_projection_deref_does_not_warn():
+    src = """
+    struct buf { data: int32*; }
+    fn head(@nonnull b: struct buf*) -> int32 {
+        if (b->data != null) { return *b->data; }
+        return 0;
+    }
+    fn main() -> int32 {
+        let x: int32 = 5;
+        let b: struct buf;
+        b.data = &x;
+        return head(&b) - 5;
+    }
+    """
+    assert class_warnings(src) == []
+
+
+def test_postfix_assert_silences_the_site():
+    src = """
+    fn first(p: int32*) -> int32 { return *p!; }
+    fn main() -> int32 { let x: int32 = 1; return first(&x); }
+    """
+    assert class_warnings(src) == []
+
+
+def test_let_seeded_local_deref_does_not_warn():
+    src = """
+    fn main() -> int32 {
+        let x: int32 = 2;
+        let p = &x;
+        return *p - 2;
+    }
+    """
+    assert class_warnings(src) == []
+
+
+def test_array_indexing_never_warns():
+    src = """
+    fn main() -> int32 {
+        let a: int32[4];
+        a[0] = 1;
+        return a[0] - 1;
+    }
+    """
+    assert class_warnings(src) == []
+
+
+def test_slice_indexing_never_warns():
+    # A slice indexes through its data field -- the borrow's invariant, not a
+    # user-visible pointer dereference.
+    src = """
+    fn main() -> int32 {
+        let a: int32[4];
+        a[2] = 6;
+        let s = a as slice<int32>;
+        return s[2] - 6;
+    }
+    """
+    assert class_warnings(src) == []
+
+
+# --- the driver's print-time gate: parse_wflags and _report_warnings ---
+
+def test_parse_wflags_accepts_registered_names():
+    assert parse_wflags(["unchecked-dereference"]) == frozenset({UNCHECKED})
+
+
+def test_parse_wflags_all_expands_to_the_registry():
+    assert parse_wflags(["all"]) == WARNING_CLASSES
+
+
+def test_parse_wflags_rejects_unknown_names():
+    with pytest.raises(ValueError, match="unknown warning class 'bogus'"):
+        parse_wflags(["bogus"])
+
+
+def test_parse_wflags_defaults_to_nothing_enabled():
+    assert parse_wflags([]) == frozenset()
+
+
+def test_report_skips_a_disabled_class(capsys):
+    notes = [Note("m", 1, "w.mc", UNCHECKED)]
+    assert _report_warnings(notes, Path("w.mc"), False) is False
+    assert capsys.readouterr().err == ""
+
+
+def test_report_promotion_is_post_filter(capsys):
+    # -Werror promotes exactly what printed: a disabled class never fails
+    # the build (this is what keeps CI's bare -Werror safe).
+    notes = [Note("m", 1, "w.mc", UNCHECKED)]
+    assert _report_warnings(notes, Path("w.mc"), True) is False
+    assert capsys.readouterr().err == ""
+
+
+def test_report_names_the_flag_of_an_enabled_class(capsys):
+    notes = [Note("m", 1, "w.mc", UNCHECKED)]
+    enabled = frozenset({UNCHECKED})
+    assert _report_warnings(notes, Path("w.mc"), False, enabled) is False
+    assert capsys.readouterr().err == (
+        "w.mc: warning: line 1: m [-Wunchecked-dereference]\n")
+
+
+def test_report_werror_names_the_class_it_promotes(capsys):
+    notes = [Note("m", 1, "w.mc", UNCHECKED)]
+    enabled = frozenset({UNCHECKED})
+    assert _report_warnings(notes, Path("w.mc"), True, enabled) is True
+    assert capsys.readouterr().err == (
+        "w.mc: error: line 1: m [-Werror=unchecked-dereference]\n")
+
+
+def test_report_unconditional_werror_tail_is_unchanged(capsys):
+    # Untagged producers keep the plain [-Werror] marker byte-identical.
+    notes = [Note("m", 1, "w.mc")]
+    assert _report_warnings(notes, Path("w.mc"), True) is True
+    assert capsys.readouterr().err == "w.mc: error: line 1: m [-Werror]\n"
+
+
+def test_report_filters_before_deduplicating(capsys):
+    # A skipped (disabled-class) warning must not consume the dedup key of
+    # an identical unconditional one.
+    notes = [Note("m", 1, "w.mc", UNCHECKED), Note("m", 1, "w.mc")]
+    assert _report_warnings(notes, Path("w.mc"), False) is False
+    assert capsys.readouterr().err == "w.mc: warning: line 1: m\n"
+
+
+def test_report_dedups_within_an_enabled_class(capsys):
+    # Per-instantiation re-emissions of one site still print once.
+    notes = [Note("m", 2, "w.mc", UNCHECKED), Note("m", 2, "w.mc", UNCHECKED)]
+    enabled = frozenset({UNCHECKED})
+    assert _report_warnings(notes, Path("w.mc"), False, enabled) is False
+    assert capsys.readouterr().err == (
+        "w.mc: warning: line 2: m [-Wunchecked-dereference]\n")

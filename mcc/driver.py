@@ -19,7 +19,7 @@ from mcc.codegen import (
     compute_target_facts,
     eval_static_cond,
 )
-from mcc.errors import LangError, Note
+from mcc.errors import WARNING_CLASSES, LangError, Note
 from mcc.lexer import tokenize
 from mcc.nodes import Conditional, Import, Program
 from mcc.parser import Parser
@@ -500,6 +500,34 @@ def parse_defines(items: list[str]) -> dict[str, int]:
     return defines
 
 
+def parse_wflags(items: list[str]) -> frozenset[str]:
+    """Resolve ``-W NAME`` options into the set of enabled warning classes.
+
+    ``all`` enables every registered opt-in class at once; any other name must
+    be a registered class. (``error`` never reaches here -- ``-Werror`` is its
+    own argparse option and exact-matches first.)
+
+    Args:
+        items: The raw ``-W`` argument strings.
+
+    Returns:
+        The enabled class names, a subset of
+        :data:`~mcc.errors.WARNING_CLASSES`.
+
+    Raises:
+        ValueError: On a name that is not a registered warning class.
+    """
+    enabled: set[str] = set()
+    for name in items:
+        if name == "all":
+            enabled |= WARNING_CLASSES
+        elif name in WARNING_CLASSES:
+            enabled.add(name)
+        else:
+            raise ValueError(f"unknown warning class {name!r}")
+    return frozenset(enabled)
+
+
 def _format_diagnostic(where: Path, severity: str, line: int, message: str) -> str:
     """Render one diagnostic line as ``{where}: {severity}: line N: {message}``.
 
@@ -562,48 +590,63 @@ def _report_lang_error(err: LangError, fallback: Path) -> None:
                                  note.message), file=sys.stderr)
 
 
-def _report_warnings(warnings: list[Note], fallback: Path, werror: bool) -> bool:
+def _report_warnings(warnings: list[Note], fallback: Path, werror: bool,
+                     enabled: frozenset[str] = frozenset()) -> bool:
     """Print collected warnings to stderr; return whether the build must fail.
 
     Each warning renders as ``file: warning: line N: message``, in emission
-    order, with the same cwd-relative path treatment as errors. Repeats of one
-    ``(file, line, message)`` triple print once: a call site inside a generic
-    body re-emits its deprecation warning per instantiation, and the reader
-    needs the offending line reported once, not once per type. (The dedup is
-    print-time only -- the collected list keeps every emission.) Under
-    ``-Werror`` every warning is instead promoted to
-    ``file: error: line N: message [-Werror]`` and the build fails after all
-    of them have printed (collect-all-then-fail).
+    order, with the same cwd-relative path treatment as errors. A warning
+    tagged with an opt-in class is skipped unless its class is enabled;
+    an enabled-class warning names its flag in the rendering
+    (``message [-W<name>]``). Repeats of one ``(file, line, message)`` triple
+    print once: a call site inside a generic body re-emits its warning per
+    instantiation, and the reader needs the offending line reported once, not
+    once per type. (Both the filter and the dedup are print-time only -- the
+    collected list keeps every emission.) Under ``-Werror`` every warning
+    that would have printed is instead promoted to
+    ``file: error: line N: message [-Werror]`` (an enabled class renders
+    ``[-Werror=<name>]``) and the build fails after all of them have printed
+    (collect-all-then-fail) -- promotion covers exactly what printed, so a
+    disabled class never fails a ``-Werror`` build.
 
     Args:
         warnings: The warnings collected during a successful generation.
         fallback: The file blamed when a warning carries no source of its own
             (the entry source file).
         werror: Whether ``-Werror`` promotes the warnings to errors.
+        enabled: The opt-in warning classes turned on by ``-W`` flags.
 
     Returns:
         ``True`` when ``werror`` promoted at least one warning, so the caller
         must take the failure exit path without writing any outputs.
     """
     seen: set[tuple[str | None, int, str]] = set()
+    printed = False
     for warning in warnings:
+        if warning.wclass is not None and warning.wclass not in enabled:
+            continue
         key = (warning.source, warning.line, warning.message)
         if key in seen:
             continue
         seen.add(key)
         if werror:
+            tail = f"[-Werror={warning.wclass}]" if warning.wclass else "[-Werror]"
             line = _format_diagnostic(_where(warning.source, fallback), "error",
-                                      warning.line, f"{warning.message} [-Werror]")
+                                      warning.line, f"{warning.message} {tail}")
         else:
+            message = (f"{warning.message} [-W{warning.wclass}]"
+                       if warning.wclass else warning.message)
             line = _format_diagnostic(_where(warning.source, fallback), "warning",
-                                      warning.line, warning.message)
+                                      warning.line, message)
         print(line, file=sys.stderr)
-    return werror and bool(warnings)
+        printed = True
+    return werror and printed
 
 
 def emit_interface(source: Path, search_paths: tuple[Path, ...],
                    target: str | None, defines: dict[str, int],
-                   output: Path | None, werror: bool = False) -> int:
+                   output: Path | None, werror: bool = False,
+                   wenabled: frozenset[str] = frozenset()) -> int:
     """Write a ``.mci`` interface stub for ``source`` and return an exit status.
 
     Compiles the source the same way as a normal build (so ``@if`` is resolved
@@ -621,6 +664,7 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
         defines: Command-line ``-D`` values for ``@if`` conditions.
         output: The ``.mci`` path to write, or ``None`` for ``source.mci``.
         werror: Whether ``-Werror`` promotes warnings to the failure path.
+        wenabled: The opt-in warning classes turned on by ``-W`` flags.
 
     Returns:
         0 on success, 1 on a reported error.
@@ -642,7 +686,7 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
         _report_lang_error(err, source)
         return 1
 
-    if _report_warnings(cg.warnings, source, werror):
+    if _report_warnings(cg.warnings, source, werror, wenabled):
         return 1  # promoted by -Werror: fail without writing the stub
 
     out = output or source.with_suffix(".mci")
@@ -713,6 +757,12 @@ def main() -> int:
     cli.add_argument("-Werror", dest="werror", action="store_true",
                      help="promote warnings to errors: each warning reports as an "
                           "error and the build fails without writing any output")
+    cli.add_argument("-W", dest="wflags", action="append", default=[], metavar="NAME",
+                     help="enable an opt-in warning class, e.g. "
+                          "-Wunchecked-dereference (repeatable); -Wall enables "
+                          "every class. An enabled class names its flag in each "
+                          "warning it prints, and -Werror promotes exactly what "
+                          "printed")
     args = cli.parse_args()
 
     # Split the positionals: exactly one .mc source; everything else (objects,
@@ -757,6 +807,7 @@ def main() -> int:
 
     try:
         defines = parse_defines(args.define)
+        wenabled = parse_wflags(args.wflags)
     except ValueError as err:
         print(f"mcc: error: {err}", file=sys.stderr)
         return 1
@@ -767,7 +818,7 @@ def main() -> int:
 
     if args.emit_interface:
         return emit_interface(args.source, tuple(search_paths), args.target, defines,
-                              args.output, args.werror)
+                              args.output, args.werror, wenabled)
 
     warnings: list[Note] = []
     try:
@@ -784,7 +835,7 @@ def main() -> int:
     # produced -- so they precede the IR under --emit-llvm and the program's
     # own output under --run. -Werror promotes them and fails here, writing
     # no object, executable, or IR.
-    if _report_warnings(warnings, args.source, args.werror):
+    if _report_warnings(warnings, args.source, args.werror, wenabled):
         return 1
 
     if args.emit_llvm:

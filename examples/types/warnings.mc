@@ -56,4 +56,6 @@ fn main() -> int32 {
 
 // See also: static_assert.mc (`@static_assert` and `@error`, the fatal
 // directives), deprecated.mc (`@deprecated` function warnings on this same
-// channel), control-flow/conditional.mc (`@if` compile-time selection).
+// channel), unchecked_dereference.mc (the opt-in `-W<name>` warning classes,
+// default-off analyses on this channel where `@warning` is unconditional),
+// control-flow/conditional.mc (`@if` compile-time selection).

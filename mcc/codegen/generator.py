@@ -19,7 +19,7 @@ from dataclasses import replace as dataclasses_replace
 
 from llvmlite import ir
 
-from mcc.errors import LangError, Note
+from mcc.errors import WARNING_CLASSES, LangError, Note
 from mcc.nodes import (
     AlignOf,
     ArrayLit,
@@ -444,7 +444,7 @@ class CodeGen:
         self.block_exprs: list[BlockExprCtx] = []
         self.str_count = 0
 
-    def warn(self, message: str, line: int) -> None:
+    def warn(self, message: str, line: int, wclass: str | None = None) -> None:
         """Record a non-fatal diagnostic on the warning channel.
 
         The warning is stamped with :attr:`current_source` at emission time
@@ -454,11 +454,47 @@ class CodeGen:
         after generation succeeds; warnings collected before a hard compile
         error are dropped with the failed build.
 
+        Collection is unconditional even for a tagged warning: codegen never
+        sees ``-W`` flags, so the list embedders read keeps every emission,
+        and the driver filters disabled classes at print time.
+
         Args:
             message: The diagnostic text, reported verbatim.
             line: The 1-based source line the warning refers to.
+            wclass: The opt-in warning class this diagnostic belongs to, or
+                ``None`` (the default) for an unconditional warning that
+                always prints.
         """
-        self.warnings.append(Note(message, line, self.current_source))
+        assert wclass is None or wclass in WARNING_CLASSES, (
+            f"unregistered warning class {wclass!r}"
+        )
+        self.warnings.append(Note(message, line, self.current_source, wclass))
+
+    def warn_unchecked_deref(self, base_expr, line: int) -> None:
+        """Warn under ``-Wunchecked-dereference`` when a dereference is unproven.
+
+        The single formatter for the class: every dereference address
+        formation (``*p`` as a load or a store target, ``p->field``, and the
+        raw-pointer case of ``p[i]``) funnels through here with the pointer
+        expression being dereferenced. The question asked is exactly the
+        ``@nonnull`` proof relation (:meth:`proves_nonnull`) -- no new
+        analysis, reporting instead of rejecting -- so a flow-narrowed local
+        or projection, an always-non-null source, a decayed array, or a
+        postfix ``!`` assertion silences the site. Slice indexing never
+        reaches here (a slice's data pointer is the borrow's invariant), and
+        the class never changes the code generated.
+
+        Args:
+            base_expr: The pointer expression being dereferenced (the ``*``
+                operand, the ``->`` base, or the indexed base).
+            line: The dereference's 1-based source line.
+        """
+        if not self.proves_nonnull(base_expr):
+            self.warn(
+                "dereference of a possibly-null pointer (narrow it with a "
+                "null check or assert with postfix '!')",
+                line, wclass="unchecked-dereference",
+            )
 
     def warn_deprecated(self, name: str, msg: str | None, line: int) -> None:
         """Warn that a ``@deprecated`` function was resolved, when ``msg`` is set.
@@ -3672,6 +3708,7 @@ class CodeGen:
             ptr = self.gen_expr(stmt.ptr)
             if not is_pointer(ptr.type):
                 raise LangError(f"cannot dereference a {ptr.type}", stmt.line)
+            self.warn_unchecked_deref(stmt.ptr, stmt.line)
             if ptr.type.pointee.const:
                 raise LangError(
                     "cannot assign through a pointer to a read-only "
@@ -3888,6 +3925,7 @@ class CodeGen:
             ptr = self.gen_expr(target.operand)
             if not is_pointer(ptr.type):
                 raise LangError(f"cannot dereference a {ptr.type}", line)
+            self.warn_unchecked_deref(target.operand, line)
             if ptr.type.pointee.const:
                 raise LangError(
                     "cannot assign through a pointer to a read-only "
@@ -5090,6 +5128,7 @@ class CodeGen:
             tv = self.gen_expr(expr.operand)
             if not is_pointer(tv.type):
                 raise LangError(f"cannot dereference a {tv.type}", line)
+            self.warn_unchecked_deref(expr.operand, line)
             return tv.value, tv.type.pointee, None, tv.type.pointee.volatile
         if isinstance(expr, Index):
             addr, element = self.gen_index_addr(expr.base, expr.index, line)
@@ -5132,6 +5171,7 @@ class CodeGen:
             return self.builder.gep(ptr, [index.value]), element
         if not is_pointer(base.type):
             raise LangError(f"cannot index a {base.type}", line)
+        self.warn_unchecked_deref(base_expr, line)
         index = self.gen_expr(index_expr)
         if not is_integer(index.type):
             raise LangError(f"index must be an integer, not {index.type}", line)
@@ -5163,6 +5203,7 @@ class CodeGen:
                 raise LangError(
                     f"'->' requires a struct pointer, got {base.type}", line
                 )
+            self.warn_unchecked_deref(base_expr, line)
             owner, base_addr = base.type.pointee, base.value
             base_align, base_volatile = None, False
         else:
@@ -5251,6 +5292,7 @@ class CodeGen:
         if expr.op == "*":
             if not is_pointer(tv.type):
                 raise LangError(f"cannot dereference a {tv.type}", expr.line)
+            self.warn_unchecked_deref(expr.operand, expr.line)
             return TypedValue(
                 self.gen_load(tv.value, volatile=tv.type.pointee.volatile),
                 tv.type.pointee,

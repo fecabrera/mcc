@@ -1171,6 +1171,71 @@ See [examples/types/static_assert.mc](../examples/types/static_assert.mc) for
 (For now these are top-level only; a statement-position form, and the
 per-instantiation behavior it gives inside a generic body, are planned.)
 
+### Opt-in warning classes
+
+Some warnings come from analyses that can fire on perfectly legal,
+C-idiomatic code, so they are grouped into named, **default-off** classes.
+A class stays silent until a `-W<name>` flag enables it:
+
+```
+mcc file.mc -Wunchecked-dereference
+```
+
+The flag is repeatable, one class per flag, and `-Wall` enables every
+opt-in class at once. An unknown class name is a hard error
+(`mcc: error: unknown warning class 'name'`), so a typo cannot silently
+enable nothing. An enabled class names its flag in each warning it prints —
+the discoverability convention `[-Werror]` already established:
+
+```
+example.mc: warning: line 3: message [-Wunchecked-dereference]
+```
+
+`-Werror` composes unchanged, promoting exactly what printed: an
+enabled-class warning renders as `message [-Werror=unchecked-dereference]`
+and fails the build, while a *disabled* class neither prints nor fails it —
+a bare `-Werror` build (this repository's CI) is unaffected by opt-in
+classes it never enabled. The author-placed producers (`@warning`,
+[`@deprecated`](#deprecated-functions)) stay unconditional — they are
+explicit requests, not analyses — and keep their plain `[-Werror]` tail.
+Filtering is print-time only, like the dedup: the collected list an
+embedder reads keeps every emission, tagged with its class, and a warning
+class never changes the code generated.
+
+#### -Wunchecked-dereference
+
+The first opt-in class warns on `*p`, `p->field`, and `p[i]` (reads,
+writes, and compound assignments alike) where `p` is a nullable `T*` not
+**proven non-null** at that site — "proven" being exactly the
+[`@nonnull` proof relation](#nonnull-parameters), reporting instead of
+rejecting:
+
+```
+example.mc: warning: line 3: dereference of a possibly-null pointer (narrow it with a null check or assert with postfix '!') [-Wunchecked-dereference]
+```
+
+What proves (and therefore silences a site): a `@nonnull` parameter, a
+local or field projection flow-narrowed by a null-check guard
+(`if (p != null)`, `if (b->data != null)`), a `let` binding seeded from an
+always-non-null source, an array decaying to a pointer, and the postfix
+`p!` assertion — which doubles as the per-site suppressor. Indexing a
+[slice](#slices) never warns (the borrow's data pointer is the slice's
+invariant), and arrays index directly. Narrowing's conservative limits
+transfer as the warning's noise floor: a fact killed by an intervening
+call or loop entry re-warns, and the usual fixes (re-guard, or `let`-bind
+the guarded pointer) apply.
+
+The class is off by default deliberately: mcc pointers are
+nullable-by-default like C's, so a default-on warning would greet every
+ported C idiom with noise. One caveat while the stdlib sweep is pending:
+enabling the class on a program that imports the container modules
+currently surfaces libmc-internal warnings too (their invariant-backed
+dereferences have not yet taken the `!` assertions), so expect stdlib
+lines in the report until that lands.
+
+See [examples/types/unchecked_dereference.mc](../examples/types/unchecked_dereference.mc)
+for the class in action and each way to silence a site.
+
 ### Deprecated functions
 
 `@deprecated("message")` is a declaration attribute on a function: the

@@ -76,7 +76,8 @@ The type system: aliases, arrays and strings, enums, structs (and their
 literals, `extends` bases, flexible array members), unions, the `any` box, and
 generics, plus the compile-time
 directives that check a build's invariants, its configuration, and its use of
-deprecated or removed functions.
+deprecated or removed functions, and the opt-in warning classes that report
+on legal-but-unproven code.
 
 | Example | Shows |
 |---------|-------|
@@ -97,6 +98,7 @@ deprecated or removed functions.
 | [warnings.mc](types/warnings.mc) | `@warning("msg")`, `@error`'s non-fatal twin: `-D`-gated `@if` branches flagging a suspect build configuration without rejecting it, the collect-then-print warning channel, and the `-Werror` flag promoting warnings to a failed build |
 | [deprecated.mc](types/deprecated.mc) | the `@deprecated("msg")` function attribute: a renamed function kept as a still-callable forwarder, every call site (and fn-as-value use) warning with the migration message, the old-API calls behind a `-D`-gated `@if` branch, `-Werror` promotion |
 | [removed.mc](types/removed.mc) | the `@removed("msg")` tombstone, the lifecycle step after `@deprecated`: a bodiless declaration (the one bodiless generic allowed) turning every call into a hard compile error with the migration message, the erroring old-API call behind a `-D`-gated `@if` branch |
+| [unchecked_dereference.mc](types/unchecked_dereference.mc) | the opt-in warning-class framework via its first class: `-Wunchecked-dereference` reporting possibly-null `*p` / `p->field` / `p[i]` sites in legal code, each silencer (null-check guards, proven `let`s, `@nonnull` params, postfix `!`), `-Wall`, unknown-class hard error, and the `[-Werror=<name>]` promotion |
 | [generics.mc](types/generics.mc) | type inference, generic recursion, multiple type parameters |
 | [generic_defaults.mc](types/generic_defaults.mc) | `<T = int64>` type-parameter defaults: the priority order (explicit > typed inference > default > untyped anchoring), a `U = T*` default referencing an earlier parameter, bare `span` / `pair<int32>` omitting a defaulted tail, struct literals filling from the default |
 

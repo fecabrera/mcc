@@ -86,4 +86,7 @@ fn main() -> int32 {
 // nonnull_projections.mc for the same guards proving struct fields;
 // nonnull_assert.mc for the `p!` escape hatch;
 // memory/nonnull_heap_buffers.mc for the one-guard migration of heap
-// buffers across the stdlib's @nonnull contracts.
+// buffers across the stdlib's @nonnull contracts;
+// types/unchecked_dereference.mc for the opt-in `-Wunchecked-dereference`
+// class, which reuses this proof relation to report (not reject) every
+// dereference these guards leave unproven.

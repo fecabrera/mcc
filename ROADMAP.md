@@ -1633,45 +1633,62 @@ already do).
         to a warning the way errors already carry it — for when the collapsed
         repeats hide which type is at fault. Print-time only either way: the
         collected list embedders read already keeps every emission
-  - [ ] opt-in warning flags — named, default-off warning classes over the
-        channel: today every collected warning prints unconditionally and
-        `-Werror` is the only dial. A producer tags its warnings with a
-        class name, the driver enables a class with a repeatable `-W<name>`,
-        and `-Wall` enables every opt-in class at once; an enabled class
-        names its flag in the rendering
-        (`file: warning: line N: msg [-W<name>]`, the discoverability
-        convention `[-Werror]` already established), and `-Werror` composes
-        unchanged, promoting exactly what printed. The author-placed
-        producers (`@warning`, `@deprecated`) stay unconditional — they are
-        explicit requests, not analyses — and opt-in classes are reserved
-        for analysis-derived diagnostics that can fire on legal,
-        C-idiomatic code. Filtering happens at print time, like the dedup
-        above (the collected list embedders read keeps every emission), and
-        a warning class never changes codegen:
-    - [ ] `-Wunchecked-dereference` — the first opt-in class and the
-          motivating one: warn on `*x`, `x->field`, and `x[i]` where `x` is
+  - [x] opt-in warning flags — named, default-off warning classes over the
+        channel: a producer tags its warnings with a class name, the driver
+        enables a class with a repeatable `-W<name>` (an unknown name is a
+        hard CLI error, so a typo cannot silently enable nothing; `error`
+        and `all` are reserved by never being registered as class names,
+        and a class name never starts with `no-`, keeping the `-Wno-<name>`
+        spelling claimable for per-class disabling later), and `-Wall`
+        enables every opt-in class at once; an enabled class names its flag
+        in the rendering (`file: warning: line N: msg [-W<name>]`, the
+        discoverability convention `[-Werror]` already established), and
+        `-Werror` composes unchanged, promoting exactly what printed — an
+        enabled class as `msg [-Werror=<name>]`, while a disabled class
+        neither prints nor fails the build. The author-placed producers
+        (`@warning`, `@deprecated`) stay unconditional — they are explicit
+        requests, not analyses — and keep their plain `[-Werror]` tail
+        byte-identical; opt-in classes are reserved for analysis-derived
+        diagnostics that can fire on legal, C-idiomatic code. Filtering
+        happens at print time, like the dedup above (the collected list
+        embedders read keeps every emission, tagged with its class), and a
+        warning class never changes codegen; implemented, see
+        [Opt-in warning classes](docs/language.md#opt-in-warning-classes):
+    - [x] `-Wunchecked-dereference` — the first opt-in class and the
+          motivating one: warns on `*x`, `x->field`, and `x[i]` (reads,
+          writes, and compound assignments alike) where `x` is
           a nullable `T*` not **proven non-null** at that site, "proven"
           being exactly the shipped `@nonnull` proof relation
           ([Functions and methods](#functions-and-methods)): a `@nonnull`
-          parameter, a flow-narrowed local, an always-non-null source, or a
+          parameter, a flow-narrowed local or field projection, an
+          always-non-null source, or a
           postfix `!` assertion — no new analysis, just the existing proof
           query asked at every dereference site, reporting instead of
           rejecting. Off by default deliberately: mcc pointers are
           nullable-by-default like C's, so a default-on warning would greet
           every ported C idiom with noise; `-Wall` includes it. Postfix `!`
           doubles as the per-site suppressor, and narrowing's conservative
-          limits transfer as the warning's noise floor: member/index
-          pointers (`s.p`, `a[i]`) and globals never carry facts, so they
-          always take `!`, and
-          [loop-body fact preservation](#functions-and-methods) directly
-          lowers the false-positive rate wherever a guard precedes a loop.
-          [Pointer decay](#functions-and-methods) sites never warn (decay
-          already requires the proof), and the print-time dedup above keeps
-          a dereference inside a generic body to one report. The acceptance
-          test is dogfooding: `libmc` compiles warn-free under
-          `-Wunchecked-dereference` (its wave-1 `@nonnull` adoption already
-          cleared the loudest sites), which is what lets this repo's
-          `-Werror` CI eventually add `-Wall`
+          limits transfer as the warning's noise floor: index elements
+          (`a[i]`) and globals never carry facts, so they always take `!`
+          (field projections narrow since the 0.6.1 path facts), and the
+          shipped [loop-body fact preservation](#functions-and-methods)
+          keeps the false-positive rate down wherever a guard precedes a
+          loop. [Pointer decay](#functions-and-methods) sites never warn
+          (decay already requires the proof), slice indexing never warns
+          (the borrow's data pointer is the slice's invariant), and the
+          print-time dedup above keeps a dereference inside a generic body
+          to one report; implemented, see
+          [-Wunchecked-dereference](docs/language.md#-wunchecked-dereference):
+      - [ ] the `libmc` sweep, the acceptance test by dogfooding: wave-1
+            `@nonnull` adoption cleared the loudest sites, but the
+            containers still hold ~60 invariant-backed dereferences that
+            warn under the class (`self.data` index bodies and iterator
+            `obj->data` chains across dict/set/list/queue/ring/stack/
+            hashing/string) until each takes its `!` assertion or guard.
+            Once
+            `libmc` compiles warn-free under `-Wunchecked-dereference`,
+            this repo's `-Werror` CI can add `-Wall`, which stays gated on
+            this sweep
     - [ ] `-Wextern-nonnull` — the enforcement class for `@nonnull` on
           `@extern` declarations, which is opt-in by design: by default an
           unproven pointer reaching an annotated extern slot compiles
