@@ -24,3 +24,6 @@ fn main() -> int32 {
     printf("last message was %d chars\n", written);
     return 0;
 }
+
+// See also: native_variadics.mc for mcc's own variadic form, whose extra
+// arguments the callee CAN read (a typed slice<const any> walked with for).

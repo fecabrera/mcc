@@ -600,7 +600,69 @@ logf("%s = %d (0x%X)", "answer", 42, 255);   // answer = 42 (0xFF)
 (naming the parameter just before the `...`), and `va_end(ap)` releases it.
 It is **opaque**: you can pass it to a C `v*` function but not read arguments
 from it in mcc (there is no `va_arg`). The target's ABI layout is chosen
-automatically (x86-64, arm64/aarch64, and Apple arm64).
+automatically (x86-64, arm64/aarch64, and Apple arm64). For variadics you
+can actually *read* in mcc, see
+[native variadic arguments](#native-variadic-arguments) below.
+
+## Native variadic arguments
+
+mcc's own variadic model is typed and readable, built on
+[the `any` type](#the-any-type) and [slices](#slices): a trailing
+`slice<const any>` parameter marks a **collecting function**, and
+`fn f(args...)` is pure sugar for `fn f(const args: slice<const any>)`. A
+call's extra arguments — everything past the fixed parameters — are each
+boxed into a caller-stack `any` and passed as a read-only slice over them,
+allocation-free. The callee walks the slice with `for` and recovers each
+value with a [`case type`](#the-any-type) type-switch:
+
+```c
+fn join(sep: char, args...) -> int32 {
+    let n: int32 = 0;
+    for a in args {
+        case type (a) {
+            when int32 v:   n = n + v;
+            when char* s:   n = n + 1;
+            else:           n = n - 1;   // the any universe is open
+        }
+    }
+    return n;
+}
+
+join(',', 1, 2, "three");   // args is a 3-element slice<const any>
+join(',');                  // zero extras: an empty slice, length 0
+```
+
+The rules, all type-shaped:
+
+- **The type is the marker.** Any function whose *last* parameter is
+  `slice<const any>` collects, whether written with the sugar or spelled
+  out; a `slice<const any>` in any other position is an ordinary parameter.
+  The `.mci` [interface](#interface-files) renderer emits the desugared
+  parameter, so the marker survives re-import with no extra machinery.
+- **Pass-through.** When the argument count equals the parameter count and
+  the final argument is already exactly a `slice<const any>` (or a
+  `slice<any>`, which widens), it passes through uncollected — the callee
+  sees the original elements, never a re-boxed slice. Anything else at that
+  position collects: a single `any` becomes a one-element slice, a
+  `slice<int32>` boxes as one element.
+- **Boxing is the standard `any` boxing.** The boxable set and its
+  escape hatches apply unchanged: a struct or array extra is a compile
+  error naming the pointer escape (`&s`, `&xs[0]`). Boxes are entry
+  allocas with function lifetime, so calls inside loops and `defer`
+  bodies are safe; as with every slice borrow, the callee must not retain
+  the slice past the call.
+- **v1 restrictions.** A collecting function cannot be
+  [overloaded](#function-overloading) or share a
+  [generic](#generics) name (collection runs on the direct-call path only;
+  generics and overload sets come in a later stage). Function-pointer
+  types carry no marker, so a call through a `fn(...)` value passes the
+  slice explicitly. A collecting function cannot also take C varargs
+  (`...`), cannot be `@extern` (C sees no `slice<const any>`), and `main`
+  cannot collect. A `mut` trailing `slice<const any>` never collects —
+  `mut` lends the caller's own storage — so such a function stays
+  explicit-slice.
+
+See [examples/functions/native_variadics.mc](../examples/functions/native_variadics.mc).
 
 ## Generics
 
@@ -2282,8 +2344,10 @@ put it in struct fields and arrays (`any[N]`), point at it (`any*`), take
 `sizeof(any) == 24`, use it in `.mci` [interfaces](#interface-files). One gap,
 the same shape as the union one: a global/`@static` `any` **initializer** is
 not supported yet — assign at runtime instead (an uninitialized global `any`
-is zero-filled and matches only `else`). See
-[examples/types/any.mc](../examples/types/any.mc).
+is zero-filled and matches only `else`). The box also powers
+[native variadic arguments](#native-variadic-arguments): a call's extra
+arguments box into a caller-stack `slice<const any>` walked exactly like
+`show` above. See [examples/types/any.mc](../examples/types/any.mc).
 
 ## Enums
 

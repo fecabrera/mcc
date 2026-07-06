@@ -1345,7 +1345,9 @@ already do).
       and the `{}`-grammar migration of every existing print caller. This
       lands **staged** (the receiver-migration pattern: each stage is its
       own complete change set with its own CHANGELOG entry, and this box
-      ticks only when the last stage lands). Stage 1, trailing collection
+      ticks only when the last stage lands). Stage 1 (**shipped**, see
+      [Native variadic arguments](docs/language.md#native-variadic-arguments)),
+      trailing collection
       and the `args...` sugar: parser sugar (the parameter loop already
       handles a `...` token for C variadics; `IDENT...` desugars to
       `slice<const any>`); collection in `marshal_args` (the arity gate

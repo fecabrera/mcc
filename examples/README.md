@@ -47,7 +47,8 @@ Branching, looping, compile-time selection, and the scope-based constructs
 
 Defining and calling functions: void/recursion, forward declarations, the
 parameter modifiers (`const`, `mut`, `@noalias`, `@nonnull`), overload sets
-(concrete, generic, and mixed), variadics, and function pointers.
+(concrete, generic, and mixed), variadics (C `...` and native collecting),
+and function pointers.
 
 | Example | Shows |
 |---------|-------|
@@ -65,6 +66,7 @@ parameter modifiers (`const`, `mut`, `@noalias`, `@nonnull`), overload sets
 | [nonnull_loops.mc](functions/nonnull_loops.mc) | narrowed facts crossing loops: a loop kills only the facts it could invalidate (so guard-then-loop just works, in the body and past the exit), `while (p != null)` proves p on every iteration, and a `while (p == null)` retry loop proves p after it |
 | [nonnull_assert.mc](functions/nonnull_assert.mc) | the postfix `p!` non-null assertion, @nonnull's escape hatch where narrowing cannot see the invariant: a zero-cost static proof for heap/returned pointers (null is then UB), one hatch at a `let` seeding all later uses, and the `!=` lexing gotcha |
 | [variadic.mc](functions/variadic.mc) | variadic `...` definitions, `va_list`, `va_start`/`va_end`, forwarding to `vsnprintf` |
+| [native_variadics.mc](functions/native_variadics.mc) | native variadic collection: `args...` as sugar for a trailing `const args: slice<const any>`, extras boxed caller-side into a read-only slice walked with `for` + `case type`, zero extras giving an empty slice, the explicit spelling collecting the same |
 | [function_pointers.mc](functions/function_pointers.mc) | `fn(...) -> R` types (incl. variadic `fn(A, ...)`), callbacks in structs, dispatch tables, `const`/`@static` function aliases, `null` callbacks |
 
 ## types/

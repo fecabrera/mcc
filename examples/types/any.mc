@@ -76,4 +76,6 @@ fn main() -> int32 {
 }
 
 // See also: unions.mc for the raw untagged union `any` is the safe, tagged
-// counterpart to; control-flow/case_when.mc for the value form of case/when.
+// counterpart to; control-flow/case_when.mc for the value form of case/when;
+// functions/native_variadics.mc for the box's headline consumer, native
+// variadic collection.

@@ -10,6 +10,31 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Native variadic arguments (stage 1)** — a trailing `slice<const any>`
+  parameter now marks a *collecting* function, with `fn f(args...)` as pure
+  sugar for `fn f(const args: slice<const any>)`: the call site boxes each
+  extra argument into a caller-stack [`any`](docs/language.md#the-any-type)
+  (entry allocas, function lifetime, so loops and `defer` bodies are safe)
+  and passes a read-only slice over the run — allocation-free — which the
+  callee walks with `for` and a `case type` type-switch. The pass-through
+  rule keeps the change purely additive: at exact arity a final argument
+  that is already exactly `slice<const any>` (or `slice<any>`, which
+  widens) hands over uncollected, so every call that compiled before means
+  what it always did; anything else at that position collects (a single
+  `any` becomes a one-element slice, a `slice<int32>` boxes as one
+  element), and zero extras synthesize an empty `{ null, 0 }` slice.
+  Boxing is the standard `any` boxing, escape hatches included (a struct
+  or array extra still errors naming `&value` / `&value[0]`), and the
+  `.mci` renderer's desugared parameter makes the marker survive re-import
+  for free. Stage-1 restrictions, lifted by later stages: a collecting
+  function cannot be overloaded or share a generic name (`collecting
+  function 'f' cannot be overloaded`; the direct-call path is the only one
+  that collects), function-pointer calls stay explicit-slice (`fn(...)`
+  types carry no marker), and a collecting function cannot also take C
+  varargs, be `@extern`, or be `main`. Stage 2 brings generic/overload-set
+  parity; stage 3 flips `print`/`println` in `std`. See
+  [Native variadic arguments](docs/language.md#native-variadic-arguments).
+
 - **Concrete function overloading (stage 2)** — overload sets now work with
   prototypes, interfaces, and generics, lifting all three stage-1
   restrictions. Prototype pairing is per signature: a bodyless prototype

@@ -1040,7 +1040,9 @@ class Parser:
         """Parse a function definition, an ``@extern`` declaration, or a proto.
 
         Reads the (optionally generic) signature, an optional trailing ``...``
-        for an extern variadic, and then either a body or a terminating ``;``.
+        for an extern variadic (or the ``name...`` native-variadic sugar, a
+        ``const`` parameter of type ``slice<const any>``), and then either a
+        body or a terminating ``;``.
         A bare ``;`` on a non-extern function makes a bodyless prototype: a
         concrete mcc function defined in another object, called with the mcc
         convention (interface stubs emit these).
@@ -1123,6 +1125,26 @@ class Parser:
                     self.cur.line,
                 )
             pname = self.expect("IDENT").text
+            if self.cur.kind == "...":
+                # `args...` -- native variadic sugar: a const parameter of type
+                # slice<const any>, the trailing type that marks a collecting
+                # function (the call site boxes its extra arguments into it).
+                ellipsis = self.advance()
+                if is_const or is_mut or is_noalias or is_nonnull:
+                    raise LangError(
+                        f"'{pname}...' cannot take const, mut, @noalias, or "
+                        "@nonnull (it is already a const slice<const any>)",
+                        ellipsis.line,
+                    )
+                if self.cur.kind != ")":
+                    raise LangError(
+                        f"'{pname}...' must be the last parameter", ellipsis.line
+                    )
+                const_params.add(pname)
+                params.append(
+                    (pname, TypeRef("slice", [TypeRef("any", const=True)]))
+                )
+                break
             if is_const:
                 const_params.add(pname)
             if is_mut:

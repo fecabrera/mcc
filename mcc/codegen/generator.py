@@ -1001,12 +1001,148 @@ class CodeGen:
                     func.line,
                 )
             symbol = self.overload_symbols.get(id(member), member.name)
+            if self.is_collecting_func(member, self.signatures[symbol][1]):
+                raise LangError(
+                    f"collecting function {func.name!r} cannot be overloaded",
+                    func.line,
+                )
             if any(is_valist(p) for p in self.signatures[symbol][1]):
                 raise LangError(
                     f"function {func.name!r} cannot be overloaded: it "
                     "takes a va_list parameter",
                     func.line,
                 )
+
+    @staticmethod
+    def collecting_params(params) -> bool:
+        """Report whether a resolved parameter list marks a collecting function.
+
+        The marker is the trailing parameter *type* alone: exactly
+        ``slice<const any>``, which the ``args...`` sugar desugars to. A call
+        to such a function boxes each extra argument into a caller-stack
+        ``any`` and passes a read-only slice over the run (see
+        :meth:`collect_variadic_args`). Function-pointer types carry no
+        marker, so calls through ``fn(...)`` values stay explicit-slice.
+
+        Args:
+            params: The resolved parameter ``LangType``\\ s.
+
+        Returns:
+            ``True`` when the last parameter is a ``slice<const any>``.
+        """
+        if not params:
+            return False
+        last = params[-1]
+        return (
+            is_slice(last)
+            and last.args[0].const
+            and strip_const(last.args[0]) is ANY
+        )
+
+    def is_collecting_func(self, func: Func, params) -> bool:
+        """Report whether a declared function collects extra arguments.
+
+        The type is the marker (:meth:`collecting_params`), with one
+        exclusion: a ``mut`` trailing parameter never collects -- ``mut``
+        lends the caller's own writable storage, which collection can never
+        synthesize -- so such a function stays explicit-slice.
+
+        Args:
+            func: The declaration.
+            params: Its resolved parameter ``LangType``\\ s.
+
+        Returns:
+            ``True`` when calls to ``func`` collect their extra arguments.
+        """
+        return (
+            self.collecting_params(params)
+            and func.params[-1][0] not in func.mut_params
+        )
+
+    @staticmethod
+    def collecting_ref(ref: TypeRef) -> bool:
+        """Report whether a parameter ``TypeRef`` spells ``slice<const any>``.
+
+        The syntactic twin of :meth:`collecting_params` for generic
+        templates, whose parameter types cannot resolve at declaration time
+        (they may name type parameters). An alias spelling is not followed
+        here; a template hiding the marker behind an alias simply stays
+        explicit-slice until generics learn collection.
+
+        Args:
+            ref: The parameter's declared type.
+
+        Returns:
+            ``True`` for a literal ``slice<const any>`` spelling.
+        """
+        return (
+            ref.name == "slice"
+            and not ref.stars
+            and not ref.dims
+            and len(ref.args) == 1
+            and ref.args[0].name == "any"
+            and ref.args[0].const
+            and not ref.args[0].stars
+            and not ref.args[0].dims
+            and not ref.args[0].args
+        )
+
+    def check_template_collecting(self, func: Func):
+        """Reject a generic template shaped as a collecting function.
+
+        Stage-1 rule: collection runs only through the direct-call path, so a
+        collecting function cannot share a generic name -- the pre-evaluate
+        path's arity-based viability would be ambiguous against the
+        last-position rule. This is the explicit diagnostic that replaces the
+        confusing arity error a call would otherwise hit.
+
+        Args:
+            func: The incoming generic template.
+
+        Raises:
+            LangError: When the trailing parameter spells ``slice<const
+                any>`` (and is not ``mut``).
+        """
+        if (
+            func.params
+            and self.collecting_ref(func.params[-1][1])
+            and func.params[-1][0] not in func.mut_params
+        ):
+            raise LangError(
+                "a generic function cannot be a collecting function "
+                "(native variadic collection does not reach generics yet)",
+                func.line,
+            )
+
+    def check_collecting_decl(self, func: Func, params: list):
+        """Reject collecting-function shapes whose calls could never collect.
+
+        Args:
+            func: The declared function.
+            params: Its resolved parameter ``LangType``\\ s.
+
+        Raises:
+            LangError: For a collecting ``@extern`` (C sees no slice), a
+                collecting ``main`` (the C runtime calls it), or a collecting
+                function that also declares C varargs.
+        """
+        if not self.is_collecting_func(func, params):
+            return
+        if func.extern:
+            raise LangError(
+                "an @extern function cannot be a collecting function "
+                "(C sees no slice<const any>; declare C varargs with '...')",
+                func.line,
+            )
+        if func.name == "main":
+            raise LangError(
+                "function 'main' cannot be a collecting function", func.line
+            )
+        if func.variadic:
+            raise LangError(
+                "a collecting function cannot also take C varargs; drop the '...'",
+                func.line,
+            )
 
     def lookup_enum(self, name: str) -> "EnumType | None":
         """Resolve an enum name, preferring a file-scoped ``@static`` one.
@@ -2132,6 +2268,7 @@ class CodeGen:
                 self.current_source = func.source  # signatures may name private structs
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
+                self.check_collecting_decl(func, params)
                 if func.name in self.extern_decls:
                     if self.signatures[func.name] != (ret, params, func.variadic):
                         raise LangError(
@@ -2212,11 +2349,13 @@ class CodeGen:
             if func.static:
                 self.symbol_bases[key] = self.static_base(func.name, func.source)
                 if func.type_params:
+                    self.check_template_collecting(func)
                     self.static_templates[key] = func
                     continue
                 symbol = self.symbol_bases[key]
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
+                self.check_collecting_decl(func, params)
                 hidden = self.hidden_ref_indices(func, params)
                 fnty = ir.FunctionType(
                     ret.ir, self.param_irs(params, hidden), var_arg=func.variadic
@@ -2244,6 +2383,7 @@ class CodeGen:
                 # joining stays an error -- all overloads of a name live in
                 # one defining module -- as does sharing a name with an
                 # @extern (its C symbol is fixed).
+                self.check_template_collecting(func)
                 members = self.concrete_decls.get(func.name)
                 if members:
                     self.check_mixed_set(func, members)
@@ -2290,6 +2430,14 @@ class CodeGen:
                     # variadics revisit when native variadics land.
                     raise LangError(
                         f"variadic function {func.name!r} cannot be overloaded",
+                        func.line,
+                    )
+                if self.is_collecting_func(func, params):
+                    # A collecting candidate would make arity-based viability
+                    # ambiguous against the last-position rule; a later stage
+                    # lifts this.
+                    raise LangError(
+                        f"collecting function {func.name!r} cannot be overloaded",
                         func.line,
                     )
                 ret = self.lang_type(func.ret_type, func.line)
@@ -2393,12 +2541,18 @@ class CodeGen:
                         f"variadic function {func.name!r} cannot be overloaded",
                         func.line,
                     )
+                if self.is_collecting_func(func, params):
+                    raise LangError(
+                        f"collecting function {func.name!r} cannot be overloaded",
+                        func.line,
+                    )
                 if any(is_valist(p) for p in params):
                     raise LangError(
                         f"function {func.name!r} cannot be overloaded: it "
                         "takes a va_list parameter",
                         func.line,
                     )
+            self.check_collecting_decl(func, params)
             self.concrete_decls.setdefault(func.name, {})[params_key] = func
             self.func_privacy[func.name] = (func.private, func.source)
             self.used_symbols.add(func.name)
@@ -6260,6 +6414,7 @@ class CodeGen:
             raise LangError(f"{expr.name!r} is not a generic function", expr.line)
         self.warn_deprecated(expr.name, self.deprecated_syms.get(symbol), expr.line)
         ret, params, variadic = self.signatures[symbol]
+        mut = self.mut_ref.get(symbol, frozenset())
         args = self.marshal_args(
             expr.args,
             params,
@@ -6267,8 +6422,13 @@ class CodeGen:
             repr(expr.name),
             expr.line,
             self.hidden_ref.get(symbol, frozenset()),
-            self.mut_ref.get(symbol, frozenset()),
+            mut,
             self.nonnull_ref.get(symbol, frozenset()),
+            # The trailing slice<const any> type is the collecting marker;
+            # only the direct-call path collects (function-pointer calls
+            # stay explicit-slice), and a mut trailing parameter never does.
+            collecting=self.collecting_params(params)
+            and len(params) - 1 not in mut,
         )
         return TypedValue(self.builder.call(self.funcs[symbol], args), ret)
 
@@ -6308,12 +6468,15 @@ class CodeGen:
         hidden: frozenset[int] = frozenset(),
         mut: frozenset[int] = frozenset(),
         nonnull: frozenset[int] = frozenset(),
+        collecting: bool = False,
     ) -> list:
         """Evaluate and coerce a call's arguments against the parameter types.
 
         Applies C varargs promotions (small integers and bools widen to
         ``int32``) past a variadic tail, and hands a ``va_list`` over in its
-        platform-specific passed form.
+        platform-specific passed form. For a collecting callee, every
+        argument past the fixed parameters is instead boxed into the trailing
+        ``slice<const any>`` (see :meth:`collect_variadic_args`).
 
         Args:
             arg_exprs: The argument expressions.
@@ -6328,6 +6491,8 @@ class CodeGen:
                 be the caller's own writable storage, never a temporary.
             nonnull: Indices of ``@nonnull`` parameters: the argument must be
                 provably non-null (see :meth:`check_nonnull_arg`).
+            collecting: Whether the callee's trailing ``slice<const any>``
+                parameter collects the extra arguments (native variadics).
 
         Returns:
             The marshalled LLVM argument values.
@@ -6336,14 +6501,25 @@ class CodeGen:
             LangError: On a wrong argument count, a coercion failure, or passing
                 a struct to a variadic function.
         """
-        if len(arg_exprs) < len(params) or (
+        fixed = len(params) - 1 if collecting else len(params)
+        if collecting:
+            if len(arg_exprs) < fixed:
+                raise LangError(
+                    f"{label} expects at least {fixed} argument(s), "
+                    f"got {len(arg_exprs)}",
+                    line,
+                )
+        elif len(arg_exprs) < len(params) or (
             len(arg_exprs) > len(params) and not variadic
         ):
             raise LangError(
                 f"{label} expects {len(params)} argument(s), got {len(arg_exprs)}", line
             )
         args = []
-        for i, arg_expr in enumerate(arg_exprs):
+        # A C-variadic tail runs through the loop for its promotions; a
+        # collecting tail is gathered separately below.
+        head = arg_exprs[:fixed] if collecting else arg_exprs
+        for i, arg_expr in enumerate(head):
             context = f"argument {i + 1} of {label}"
             if i in nonnull:
                 self.check_nonnull_arg(arg_expr, context, line)
@@ -6388,7 +6564,93 @@ class CodeGen:
             else:
                 value = tv.value
             args.append(value)
+        if collecting:
+            args.append(
+                self.collect_variadic_args(
+                    arg_exprs[fixed:], params[-1], fixed in hidden, label, line
+                )
+            )
         return args
+
+    def collect_variadic_args(
+        self, extras: list, ptype: LangType, hidden: bool, label: str, line: int
+    ) -> ir.Value:
+        """Gather a call's extra arguments into the trailing ``slice<const any>``.
+
+        The native variadic model: each extra boxes into a caller-stack
+        ``any`` -- entry allocas with function lifetime, so ``defer`` bodies
+        and calls inside loops are safe -- and a read-only slice over the run
+        is what travels, allocation-free. The pass-through rule keeps
+        explicit-slice calls meaning what they always did: a lone extra that
+        is already exactly ``slice<const any>`` (or ``slice<any>``, which
+        widens) hands over uncollected, so it never double-boxes. Zero extras
+        synthesize an empty ``{ null, 0 }`` slice. An extra that is already
+        an ``any`` copies in as-is (an ``any`` never nests); everything else
+        boxes through :meth:`gen_box_any`, so a struct or array extra hits
+        the standard escape-hatch rejection.
+
+        Args:
+            extras: The argument expressions past the fixed parameters.
+            ptype: The trailing ``slice<const any>`` parameter type.
+            hidden: Whether that parameter travels by hidden reference (a
+                ``const`` parameter, as the ``args...`` sugar declares).
+            label: A description of the callee, for error messages.
+            line: Source line for diagnostics.
+
+        Returns:
+            The LLVM value to pass for the trailing parameter.
+        """
+        context = f"the collected arguments of {label}"
+
+        def passed(tv: TypedValue) -> ir.Value:
+            # A const slice parameter travels by hidden reference, so the
+            # formed view spills to a temporary (spill_to_temp coerces, which
+            # widens a slice<any> pass-through to the const form).
+            if hidden:
+                return self.spill_to_temp(tv, ptype, line, context)
+            return self.coerce(tv, ptype, line, context).value
+
+        if len(extras) == 1:
+            tv = self.gen_expr(extras[0])
+            actual = strip_const(tv.type)
+            if is_slice(actual) and is_any(actual.args[0]):
+                # Pass-through: the argument count equals the parameter count
+                # and the final argument already is the trailing slice type.
+                return passed(TypedValue(tv.value, actual))
+            boxed = [self.box_collected(tv, line)]
+        else:
+            boxed = [self.box_collected(self.gen_expr(e), line) for e in extras]
+        if not boxed:
+            data = ir.Constant(ptype.fields[0][1].ir, None)
+            return passed(self.make_slice(ptype, data, ir.Constant(UINT64.ir, 0)))
+        slot = self.entry_alloca(ir.ArrayType(ANY.ir, len(boxed)), "varargs.box")
+        for i, value in enumerate(boxed):
+            elem = self.builder.gep(
+                slot, [I32_ZERO, ir.Constant(ir.IntType(32), i)], inbounds=True
+            )
+            self.builder.store(value, elem)
+        data = self.builder.gep(slot, [I32_ZERO, I32_ZERO], inbounds=True)
+        return passed(
+            self.make_slice(ptype, data, ir.Constant(UINT64.ir, len(boxed)))
+        )
+
+    def box_collected(self, tv: TypedValue, line: int) -> ir.Value:
+        """Box one collected extra, copying an ``any`` through unchanged.
+
+        Args:
+            tv: The evaluated extra argument.
+            line: Source line for diagnostics.
+
+        Returns:
+            The 24-byte ``any`` value to store into the collection run.
+
+        Raises:
+            LangError: When the extra is outside the boxable set (see
+                :meth:`check_boxable`).
+        """
+        if is_any(tv.type):
+            return tv.value  # any to any is a plain copy, never a nesting
+        return self.gen_box_any(tv, line).value
 
     def narrowable_guard_names(self, cond, op: str) -> set[str]:
         """Collect the locals a null-comparison guard flow-narrows.
