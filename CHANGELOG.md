@@ -10,6 +10,30 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`@noreturn` and `unreachable`** — `@noreturn` marks a function that
+  never returns to its caller (`exit`, `abort`, an infinite loop): a direct
+  call terminates the caller's block, so no dummy return is needed past it,
+  code after it drops silently like code after a `return`, and the
+  C-idiomatic `if (p == null) abort();` guard now flow-narrows `p` for the
+  rest of the scope. `@noreturn` is void-only (so a call never sits in
+  expression position), rejects `return` in the body and `@noreturn main`,
+  and makes fall-off-the-end undefined behavior instead of an error (C11
+  `_Noreturn` semantics — `@noreturn fn spin() { while (true) {} }` is
+  legal); defers deliberately do **not** run at a `@noreturn` call,
+  matching C's `exit`. The flag works on `@extern`/`@asm`/generic functions
+  and prototypes, travels through `.mci` stubs (a stub/definition or
+  extern-redeclaration mismatch is a conflict error), lowers to LLVM's
+  `noreturn` attribute, and is dropped by `&f` function values (the plain
+  `fn()` type cannot carry it — `abort` stays usable as an `atexit`
+  handler); libc's `exit`, `abort`, and `_Exit` ship annotated. The new
+  `unreachable;` statement asserts a path never executes (LLVM
+  `unreachable`; reaching it is undefined behavior) — the exhaustiveness
+  bridge for a `case` `else` arm, ending the forced dummy trailing return.
+  **Breaking** (pre-1.0): `unreachable` is now a reserved word and can no
+  longer be used as an identifier. See
+  [@noreturn functions](docs/language.md#noreturn-functions) and
+  [The unreachable statement](docs/language.md#the-unreachable-statement).
+
 - **Opt-in warning classes and `-Wunchecked-dereference`** — the warning
   channel gains named, **default-off** classes: a repeatable `-W<name>`
   flag enables one, `-Wall` enables them all, and an unknown name is a

@@ -60,6 +60,7 @@
 "return" @keyword.control.return
 "emit" @keyword.control.return
 "defer" @keyword.control
+"unreachable" @keyword.control
 
 [
   "if"

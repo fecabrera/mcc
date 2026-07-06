@@ -36,7 +36,7 @@ fn print(s: uint8*) {
     }
 }
 
-fn kmain() {
+@noreturn fn kmain() {
     print("hello from bare-metal mcc\n");
     while (true) {}                      // nothing to return to
 }

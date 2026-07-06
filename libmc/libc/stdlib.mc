@@ -69,14 +69,14 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @param status: exit status reported to the environment
  */
-@extern fn exit(status: int32);
+@noreturn @extern fn exit(status: int32);
 
 /**
  * Terminates the program immediately, without running cleanup handlers.
  *
  * @param status: exit status reported to the environment
  */
-@extern fn abort();
+@noreturn @extern fn abort();
 
 /**
  * Terminates the program immediately with the given status, without running
@@ -84,7 +84,7 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  *
  * @param status: exit status reported to the environment
  */
-@extern fn _Exit(status: int32);
+@noreturn @extern fn _Exit(status: int32);
 
 /**
  * Registers a function to be called, in reverse order of registration, when the

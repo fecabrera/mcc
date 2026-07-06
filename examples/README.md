@@ -27,8 +27,9 @@ literals, and integer/float arithmetic.
 
 ## control-flow/
 
-Branching, looping, compile-time selection, and the scope-based constructs
-(`defer`, block expressions, iteration).
+Branching, looping, compile-time selection, the never-executed-path
+assertion (`unreachable`), and the scope-based constructs (`defer`, block
+expressions, iteration).
 
 | Example | Shows |
 |---------|-------|
@@ -37,6 +38,7 @@ Branching, looping, compile-time selection, and the scope-based constructs
 | [until.mc](control-flow/until.mc) | `until`, the inverse of `while`: loop while the condition is false |
 | [conditional.mc](control-flow/conditional.mc) | `@if` / `@else` compile-time selection over `TARGET_OS` / `TARGET_ARCH`, `@symbol` per platform |
 | [case_when.mc](control-flow/case_when.mc) | `case` / `when` / `else:` with no fall-through, integer and character subjects, multi-value arms |
+| [unreachable.mc](control-flow/unreachable.mc) | the `unreachable;` statement asserting a path never executes (UB if reached): `else: unreachable;` marking a `case` exhaustive, no dummy trailing return needed after it |
 | [defer.mc](control-flow/defer.mc) | `defer` cleanup at scope exit (return/break included), LIFO order, the block form |
 | [block_expressions.mc](control-flow/block_expressions.mc) | `{ ...; emit v; }` as a value, contained temporaries, branch emits, `defer` inside |
 | [iteration.mc](control-flow/iteration.mc) | `for x in` over the `_it`/`_next` protocol (list, set, dict), the builtin `pair<K, V>`, `break` / `continue` |
@@ -47,8 +49,8 @@ Branching, looping, compile-time selection, and the scope-based constructs
 
 Defining and calling functions: void/recursion, forward declarations, the
 parameter modifiers (`const`, `mut`, `@noalias`, `@nonnull`), overload sets
-(concrete, generic, and mixed), variadics (C `...` and native collecting),
-and function pointers.
+(concrete, generic, and mixed), never-returning functions (`@noreturn`),
+variadics (C `...` and native collecting), and function pointers.
 
 | Example | Shows |
 |---------|-------|
@@ -66,6 +68,7 @@ and function pointers.
 | [nonnull_loops.mc](functions/nonnull_loops.mc) | narrowed facts crossing loops: a loop kills only the facts it could invalidate (so guard-then-loop just works, in the body and past the exit), `while (p != null)` proves p on every iteration, and a `while (p == null)` retry loop proves p after it |
 | [nonnull_projections.mc](functions/nonnull_projections.mc) | flow-narrowing for field projections: the same guards prove a pointer-typed struct field (`b->data`, keyed by access path at any depth) into @nonnull slots, the stricter invalidation model (every call and through-memory store kills the fact), and `let q = b->data;` binding a checked field to a name fact that survives calls and loops |
 | [nonnull_assert.mc](functions/nonnull_assert.mc) | the postfix `p!` non-null assertion, @nonnull's escape hatch where narrowing cannot see the invariant: a zero-cost static proof for heap/returned pointers (null is then UB), one hatch at a `let` seeding all later uses, and the `!=` lexing gotcha |
+| [noreturn.mc](functions/noreturn.mc) | `@noreturn` void functions that never return: a panic-style exit helper, calls diverging like a `return` (no dummy return after), the C-idiomatic `if (p == null) abort();` guard narrowing into @nonnull, the legal `while (true)` spin body, defers skipped at the call |
 | [variadic.mc](functions/variadic.mc) | variadic `...` definitions, `va_list`, `va_start`/`va_end`, forwarding to `vsnprintf` |
 | [native_variadics.mc](functions/native_variadics.mc) | native variadic collection: `args...` as sugar for a trailing `const args: slice<const any>`, extras boxed caller-side into a read-only slice walked with `for` + `case type`, zero extras giving an empty slice, the explicit spelling collecting the same |
 | [function_pointers.mc](functions/function_pointers.mc) | `fn(...) -> R` types (incl. variadic `fn(A, ...)`), callbacks in structs, dispatch tables, `const`/`@static` function aliases, `null` callbacks |

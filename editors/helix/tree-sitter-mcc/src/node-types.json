@@ -959,6 +959,10 @@
           "named": true
         },
         {
+          "type": "unreachable_statement",
+          "named": true
+        },
+        {
           "type": "while_statement",
           "named": true
         }
@@ -1023,6 +1027,10 @@
         },
         {
           "type": "return_statement",
+          "named": true
+        },
+        {
+          "type": "unreachable_statement",
           "named": true
         },
         {
@@ -1996,6 +2004,10 @@
           "named": true
         },
         {
+          "type": "unreachable_statement",
+          "named": true
+        },
+        {
           "type": "while_statement",
           "named": true
         }
@@ -2301,6 +2313,10 @@
         },
         {
           "type": "return_statement",
+          "named": true
+        },
+        {
+          "type": "unreachable_statement",
           "named": true
         },
         {
@@ -3126,6 +3142,10 @@
             "named": true
           },
           {
+            "type": "unreachable_statement",
+            "named": true
+          },
+          {
             "type": "while_statement",
             "named": true
           }
@@ -3763,6 +3783,10 @@
             "named": true
           },
           {
+            "type": "unreachable_statement",
+            "named": true
+          },
+          {
             "type": "while_statement",
             "named": true
           }
@@ -3932,6 +3956,10 @@
           },
           {
             "type": "return_statement",
+            "named": true
+          },
+          {
+            "type": "unreachable_statement",
             "named": true
           },
           {
@@ -6100,6 +6128,11 @@
     }
   },
   {
+    "type": "unreachable_statement",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "when_arm",
     "named": true,
     "fields": {},
@@ -6264,6 +6297,10 @@
           "named": true
         },
         {
+          "type": "unreachable_statement",
+          "named": true
+        },
+        {
           "type": "while_statement",
           "named": true
         }
@@ -6328,6 +6365,10 @@
           },
           {
             "type": "return_statement",
+            "named": true
+          },
+          {
+            "type": "unreachable_statement",
             "named": true
           },
           {
@@ -6747,6 +6788,10 @@
   },
   {
     "type": "union",
+    "named": false
+  },
+  {
+    "type": "unreachable",
     "named": false
   },
   {

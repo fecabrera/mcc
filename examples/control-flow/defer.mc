@@ -79,3 +79,9 @@ fn main() -> int32 {
 
     return 0;   // the block defer ("cleaning up" / "goodbye") runs here, last
 }
+
+// Defers run on every *block exit*, and a call that never returns is not
+// one: `exit(1);` or any other @noreturn call leaves enclosing defers
+// unrun, matching C, where exit() never unwinds the calling stack. Code
+// that must clean up should return an error up to main instead of exiting
+// deep in the call tree. See functions/noreturn.mc.

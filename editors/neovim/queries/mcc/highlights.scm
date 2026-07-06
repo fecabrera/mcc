@@ -50,6 +50,7 @@
   "let"
   "defer"
   "in"
+  "unreachable"
 ] @keyword
 
 [

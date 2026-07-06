@@ -345,6 +345,7 @@ module.exports = grammar({
         $.while_statement,
         $.break_statement,
         $.continue_statement,
+        $.unreachable_statement,
         $.defer_statement,
         $.for_statement,
         $.conditional,
@@ -390,6 +391,7 @@ module.exports = grammar({
 
     break_statement: ($) => seq('break', ';'),
     continue_statement: ($) => seq('continue', ';'),
+    unreachable_statement: ($) => seq('unreachable', ';'),
     defer_statement: ($) => seq('defer', $._body),
 
     for_statement: ($) =>

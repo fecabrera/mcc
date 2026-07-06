@@ -75,6 +75,7 @@ from mcc.nodes import (
     TypeAlias,
     TypeRef,
     Unary,
+    Unreachable,
     Var,
     While,
 )
@@ -420,6 +421,13 @@ class CodeGen:
         # (Generic templates carry the message on the Func node instead and
         # are checked when overload resolution picks them.)
         self.deprecated_syms: dict[str, str] = {}
+        # @noreturn functions, by resolved symbol: a direct call to one
+        # terminates the caller's block (an `unreachable` right after the
+        # call), so no dummy return is needed past it. Function-pointer
+        # calls are deliberately absent -- the plain fn() type drops the
+        # flag, so an indirect call is assumed to return. (Generic templates
+        # carry the flag on the Func node instead, checked at resolution.)
+        self.noreturn_syms: set[str] = set()
         # @removed("msg") tombstones: function name -> the migration message.
         # Name-keyed and deliberately unresolved: a tombstone's signature is
         # never type-checked and gets no ir.Function (every use errors before
@@ -437,6 +445,9 @@ class CodeGen:
         # last); each runs in LIFO order when its block exits.
         self.defer_stack: list[list[list]] = []
         self.ret_type: LangType = VOID
+        # The enclosing @noreturn function's name, or None: set per body by
+        # gen_function, so the Return arm can reject `return` inside one.
+        self.current_noreturn: str | None = None
         # Enclosing loops, innermost last: (continue target, break target).
         self.loops: list[tuple[ir.Block, ir.Block]] = []
         # Enclosing block-expressions, innermost last; each `emit` targets the
@@ -643,6 +654,42 @@ class CodeGen:
             pointee = strip_const(ptype.pointee)
             if pointee is not VOID and not is_flexible_array(pointee):
                 fn.args[i].attributes.dereferenceable = type_size(pointee)
+
+    def check_noreturn_decl(self, func: Func, ret: LangType):
+        """Validate a ``@noreturn`` declaration once its return type resolves.
+
+        ``@noreturn`` is void-only: a call can then never sit in expression
+        position, so terminating the caller's block right after the call is
+        always safe. ``main`` is rejected -- its caller is the C runtime,
+        which expects the return.
+
+        Args:
+            func: The declared function.
+            ret: Its resolved return type.
+
+        Raises:
+            LangError: When a ``@noreturn`` function is ``main`` or non-void.
+        """
+        if not func.noreturn:
+            return
+        if func.name == "main":
+            raise LangError("function 'main' cannot be @noreturn", func.line)
+        if ret is not VOID:
+            raise LangError(
+                f"@noreturn function {func.name!r} must return void, not "
+                f"{ret} (a call never yields a value)",
+                func.line,
+            )
+
+    def mark_noreturn(self, fn: ir.Function, func: Func):
+        """Apply ``@noreturn`` by attaching LLVM's ``noreturn`` attribute.
+
+        The language-level guarantee (call sites terminate their block; the
+        body cannot ``return``) is enforced separately; the attribute hands
+        the fact to LLVM so the backend can drop the dead continuation.
+        """
+        if func.noreturn:
+            fn.attributes.add("noreturn")
 
     @staticmethod
     def nonnull_indices(func: Func) -> frozenset[int]:
@@ -968,9 +1015,11 @@ class CodeGen:
         preserves the return-type-only drift error -- overloads may not
         differ solely in return type) *and* the same derived conventions --
         hidden-reference, ``mut``, ``@nonnull``, and ``@noalias`` positions
-        -- plus the same ``@private`` and ``@inline`` flags (a prototype is
-        never ``@inline``, so an ``@inline`` definition cannot pair with
-        one). Parameter names may differ.
+        -- plus the same ``@private``, ``@inline``, and ``@noreturn`` flags
+        (a prototype is never ``@inline``, so an ``@inline`` definition
+        cannot pair with one; a ``@noreturn`` mismatch would let a stub and
+        its definition disagree on call-site divergence). Parameter names
+        may differ.
 
         On a match, an incoming prototype is simply discarded -- the earlier
         declaration stands, including proto+proto collapse. An incoming
@@ -1008,6 +1057,7 @@ class CodeGen:
             or self.noalias_indices(prior) != self.noalias_indices(func)
             or prior.private != func.private
             or prior.inline != func.inline
+            or prior.noreturn != func.noreturn
         ):
             if func.proto and prior.proto:
                 message = f"conflicting prototypes for {name!r}"
@@ -2341,8 +2391,11 @@ class CodeGen:
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
                 self.check_collecting_decl(func, params)
+                self.check_noreturn_decl(func, ret)
                 if func.name in self.extern_decls:
-                    if self.signatures[func.name] != (ret, params, func.variadic):
+                    if self.signatures[func.name] != (
+                        ret, params, func.variadic
+                    ) or (func.name in self.noreturn_syms) != func.noreturn:
                         raise LangError(
                             f"conflicting extern declarations for {func.name!r}",
                             func.line,
@@ -2366,6 +2419,9 @@ class CodeGen:
                 # @noalias/@nonnull are attribute-only, so allowed on @extern.
                 self.mark_noalias(fn, func, params)
                 self.mark_nonnull(fn, func, params)
+                self.mark_noreturn(fn, func)
+                if func.noreturn:
+                    self.noreturn_syms.add(func.name)
                 self.funcs[func.name] = fn
                 self.signatures[func.name] = (ret, params, func.variadic)
                 self.nonnull_ref[func.name] = self.nonnull_indices(func)
@@ -2428,6 +2484,7 @@ class CodeGen:
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
                 self.check_collecting_decl(func, params)
+                self.check_noreturn_decl(func, ret)
                 hidden = self.hidden_ref_indices(func, params)
                 fnty = ir.FunctionType(
                     ret.ir, self.param_irs(params, hidden), var_arg=func.variadic
@@ -2437,6 +2494,9 @@ class CodeGen:
                 self.mark_inline(fn, func)
                 self.mark_noalias(fn, func, params)
                 self.mark_nonnull(fn, func, params)
+                self.mark_noreturn(fn, func)
+                if func.noreturn:
+                    self.noreturn_syms.add(symbol)
                 self.funcs[symbol] = fn
                 self.signatures[symbol] = (ret, params, func.variadic)
                 self.hidden_ref[symbol] = hidden
@@ -2513,6 +2573,7 @@ class CodeGen:
                         func.line,
                     )
                 ret = self.lang_type(func.ret_type, func.line)
+                self.check_noreturn_decl(func, ret)
                 member = self.concrete_decls.get(func.name, {}).get(params_key)
                 if (
                     member is not None
@@ -2570,6 +2631,9 @@ class CodeGen:
                 self.mark_inline(fn, func)
                 self.mark_noalias(fn, func, params)
                 self.mark_nonnull(fn, func, params)
+                self.mark_noreturn(fn, func)
+                if func.noreturn:
+                    self.noreturn_syms.add(symbol)
                 self.funcs[symbol] = fn
                 self.signatures[symbol] = (ret, params, False)
                 self.hidden_ref[symbol] = hidden
@@ -2629,6 +2693,7 @@ class CodeGen:
             self.func_privacy[func.name] = (func.private, func.source)
             self.used_symbols.add(func.name)
             ret = self.lang_type(func.ret_type, func.line)
+            self.check_noreturn_decl(func, ret)
             hidden = self.hidden_ref_indices(func, params)
             fnty = ir.FunctionType(
                 ret.ir, self.param_irs(params, hidden), var_arg=func.variadic
@@ -2641,6 +2706,9 @@ class CodeGen:
             self.mark_inline(fn, func)
             self.mark_noalias(fn, func, params)
             self.mark_nonnull(fn, func, params)
+            self.mark_noreturn(fn, func)
+            if func.noreturn:
+                self.noreturn_syms.add(func.name)
             self.funcs[func.name] = fn
             self.signatures[func.name] = (ret, params, func.variadic)
             self.hidden_ref[func.name] = hidden
@@ -2781,6 +2849,7 @@ class CodeGen:
         self.ret_type = ret
         self.current_source = func.source
         self.current_variadic = func.variadic  # gates va_start
+        self.current_noreturn = func.name if func.noreturn else None
         self.builder = ir.IRBuilder(fn.append_basic_block("entry"))
         self.locals = {}
         self.scope_names = set()  # the body block resets this, but be explicit
@@ -2812,7 +2881,14 @@ class CodeGen:
             self.locals[pname] = (slot, ptype)
         self.gen_block(func.body)
         if not self.builder.block.is_terminated:
-            if ret is VOID:
+            if func.noreturn:
+                # C11 _Noreturn semantics: the promise is the author's, so
+                # falling off the end is undefined behavior, not an error --
+                # which is what makes `fn spin() { while (true) {} }` legal
+                # as @noreturn (the loop's end block exists but is never
+                # reached; documented in docs/language.md).
+                self.builder.unreachable()
+            elif ret is VOID:
                 self.builder.ret_void()
             elif func.name == "main":
                 self.builder.ret(ir.Constant(ret.ir, 0))
@@ -3331,8 +3407,8 @@ class CodeGen:
         Dispatches on the statement type: returns (with ``defer`` unwinding),
         ``let`` and the assignment/store forms, control flow (``if``,
         ``while``/``until``, ``case``, ``for``), ``break``/``continue`` (running
-        intervening defers), ``defer`` registration, bare blocks, and expression
-        statements.
+        intervening defers), ``unreachable``, ``defer`` registration, bare
+        blocks, and expression statements.
 
         Args:
             stmt: The statement AST node to generate.
@@ -3342,6 +3418,12 @@ class CodeGen:
                 loop), surfaced from the per-statement handling.
         """
         if isinstance(stmt, Return):
+            if self.current_noreturn is not None:
+                raise LangError(
+                    f"cannot return from @noreturn function "
+                    f"{self.current_noreturn!r} (it promises never to return)",
+                    stmt.line,
+                )
             if stmt.value is None:
                 if self.ret_type is not VOID:
                     raise LangError(f"return needs a {self.ret_type} value", stmt.line)
@@ -3669,6 +3751,14 @@ class CodeGen:
             self.run_defers_through(self.loops[-1][2])
             if not self.builder.block.is_terminated:
                 self.builder.branch(self.loops[-1][0])
+        elif isinstance(stmt, Unreachable):
+            # The author asserts this path never executes: terminate the
+            # block (the statement diverges, so no trailing return is needed
+            # and dead code after it is skipped like after a return).
+            # Reaching it at runtime is undefined behavior, like C's
+            # __builtin_unreachable. Defers deliberately do not run -- there
+            # is no control flow to unwind on a path that never happens.
+            self.builder.unreachable()
         elif isinstance(stmt, Case):
             subject = self.gen_expr(stmt.subject)
             if is_struct(subject.type) or subject.type is VOID:
@@ -6572,7 +6662,16 @@ class CodeGen:
             collecting=self.collecting_params(params)
             and len(params) - 1 not in mut,
         )
-        return TypedValue(self.emit_call(self.funcs[symbol], args), ret)
+        result = TypedValue(self.emit_call(self.funcs[symbol], args), ret)
+        if symbol in self.noreturn_syms:
+            # The callee never returns: terminate the block, so the statement
+            # diverges (no dummy return needed past it, dead code after it is
+            # skipped, and a diverging guard body narrows like a return).
+            # @noreturn is void-only, so the call cannot sit in expression
+            # position -- terminating mid-statement is safe. Enclosing defers
+            # deliberately do not run (matching C's exit); see the docs.
+            self.builder.unreachable()
+        return result
 
     def gen_indirect_call(
         self, callee: TypedValue, arg_exprs: list, label: str, line: int
@@ -7711,7 +7810,13 @@ class CodeGen:
                     args.append(self.spill_to_temp(tv, p, expr.line, context))
             else:
                 args.append(self.coerce(tv, p, expr.line, context).value)
-        return TypedValue(self.emit_call(fn, args), ret)
+        result = TypedValue(self.emit_call(fn, args), ret)
+        if func.noreturn:
+            # The resolved candidate (generic instance or concrete set
+            # member) never returns: terminate the block, exactly as in
+            # gen_direct_call.
+            self.builder.unreachable()
+        return result
 
     def denotes_storage(self, arg) -> bool:
         """Whether a possibly-``mut`` generic argument's address may be formed.
@@ -8205,6 +8310,7 @@ class CodeGen:
             self.ret_type,
             self.loops,
             self.current_variadic,
+            self.current_noreturn,
             self.scope_names,
             self.defer_stack,
             self.block_exprs,
@@ -8219,6 +8325,9 @@ class CodeGen:
         self.current_source = func.source  # the signature may name private structs
         try:
             ret = self.lang_type(func.ret_type, func.line)
+            # A generic @noreturn is validated per instance: void-ness may
+            # depend on the bindings (e.g. a return type naming T).
+            self.check_noreturn_decl(func, ret)
             params = [self.lang_type(t, func.line) for _, t in func.params]
             hidden = self.hidden_ref_indices(func, params)
             fnty = ir.FunctionType(ret.ir, self.param_irs(params, hidden))
@@ -8229,6 +8338,9 @@ class CodeGen:
             self.mark_inline(fn, func)
             self.mark_noalias(fn, func, params)
             self.mark_nonnull(fn, func, params)
+            self.mark_noreturn(fn, func)
+            if func.noreturn:
+                self.noreturn_syms.add(mangled)
             # Register before generating the body so recursive calls resolve
             # (a failed instantiation therefore stays memoized -- harmless
             # while compilation aborts on the first error).
@@ -8259,6 +8371,7 @@ class CodeGen:
                 self.ret_type,
                 self.loops,
                 self.current_variadic,
+                self.current_noreturn,
                 self.scope_names,
                 self.defer_stack,
                 self.block_exprs,

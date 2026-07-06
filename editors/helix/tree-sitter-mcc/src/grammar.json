@@ -1669,6 +1669,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "unreachable_statement"
+        },
+        {
+          "type": "SYMBOL",
           "name": "defer_statement"
         },
         {
@@ -2042,6 +2046,19 @@
         {
           "type": "STRING",
           "value": "continue"
+        },
+        {
+          "type": "STRING",
+          "value": ";"
+        }
+      ]
+    },
+    "unreachable_statement": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "unreachable"
         },
         {
           "type": "STRING",

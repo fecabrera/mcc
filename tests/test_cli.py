@@ -126,6 +126,29 @@ def test_libc_stdlib_string_bindings(tmp_path):
     assert out.stdout == "1234 42 abcd 1\n"
 
 
+def test_noreturn_exit_skips_defers_at_runtime(tmp_path):
+    # A @noreturn call is not a return, so enclosing defers never run on
+    # that path (matching C's exit()) and the exit status travels. Run as a
+    # real subprocess: exit() through the in-process JIT would take pytest
+    # down with it.
+    src = tmp_path / "quit.mc"
+    src.write_text(
+        'import "libc/stdio";\n'
+        'import "libc/stdlib";\n'
+        "fn main() -> int32 {\n"
+        '    defer printf("cleanup\\n");\n'
+        '    printf("before\\n");\n'
+        "    exit(3);\n"
+        "}"
+    )
+    exe = tmp_path / "quit"
+    result = mcc(src, "-o", exe)
+    assert result.returncode == 0, result.stderr
+    out = subprocess.run([exe], capture_output=True, text=True)
+    assert out.stdout == "before\n"  # the deferred cleanup never printed
+    assert out.returncode == 3
+
+
 def test_libc_errno_and_time(tmp_path):
     # errno (the __error / __errno_location split, via @if) read after a failed
     # open, plus time.h's gmtime/strftime on the epoch -- both deterministic.

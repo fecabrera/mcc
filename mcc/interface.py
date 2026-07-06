@@ -310,6 +310,11 @@ class InterfaceWriter:
             params.append("...")
         ret = "" if _is_void(func.ret_type) else f" -> {func.ret_type}"
         head = "@private fn" if func.private else "fn"
+        # @noreturn is re-emitted so the importer's call sites diverge too
+        # (and so the stub keeps pairing with its definition -- the pair
+        # check rejects a @noreturn mismatch).
+        if func.noreturn:
+            head = f"@noreturn {head}"
         # @deprecated is re-emitted so the importer's call sites warn too
         # (generic/@inline functions get this for free from their verbatim
         # source span); the message is re-escaped, undoing the parse-time

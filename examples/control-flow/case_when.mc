@@ -69,3 +69,6 @@ fn main() -> int32 {
     }
     return 0;
 }
+
+// See also: unreachable.mc for `else: unreachable;`, which asserts a case
+// is exhaustive and drops the dummy trailing return.

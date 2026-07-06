@@ -327,7 +327,9 @@ compiler narrows a plain `T*` local to non-null from either of the two `if`
 guard shapes. `if (p != null) { ... }` proves `p` inside the then branch
 (with an `else`, `if (p == null) {A} else {B}` symmetrically proves `p` in
 `B`), and the C-idiomatic early guard — an else-less `if (p == null)` whose
-body always diverges (`return`, `break`, `continue`, or every nested path
+body always diverges (`return`, `break`, `continue`, a call to a
+[`@noreturn` function](#noreturn-functions) like `abort()`, an
+[`unreachable;`](#the-unreachable-statement), or every nested path
 returning) — proves `p` for the remainder of the enclosing scope.
 `and`/`or` chains thread through both shapes:
 `if (p != null and q != null)` proves both in the then branch, and a
@@ -621,6 +623,64 @@ mangled `f(int32)` for a set — from the stub, so it matches the symbols the
 defining object emitted.
 
 See [examples/functions/overloading.mc](../examples/functions/overloading.mc).
+
+### @noreturn functions
+
+`@noreturn` marks a function that never returns to its caller — it exits,
+aborts, or loops forever. The compiler then treats every direct call as
+**diverging**: the rest of the block is dead, so no dummy `return` is needed
+after the call (code past it is silently dropped, exactly like code after a
+`return`), an all-arms-diverge `if`/`case` counts as diverging through it,
+and a diverging null guard narrows (below):
+
+```c
+import "std";                        // exit, abort, and _Exit are @noreturn
+
+@noreturn fn fail(code: int32) {
+    exit(code);
+}
+
+fn parse(input: char*) -> int32 {
+    if (input == null) fail(2);      // diverges: no return needed after it
+    return input[0] as int32;        // and `input` is proven non-null here
+}
+```
+
+The rules:
+
+- **Void-only.** A `@noreturn` function cannot declare a return type
+  (`@noreturn function 'f' must return void, not int32`): a call can then
+  never sit in expression position, which is what makes terminating the
+  caller's block mid-statement safe. `main` cannot be `@noreturn` — its
+  caller is the C runtime, which expects the return.
+- **No `return` in the body** — `cannot return from @noreturn function 'f'`.
+  Falling off the end of the body is *not* an error (C11 `_Noreturn`
+  semantics): the promise is the author's, and the compiler plants an
+  [`unreachable`](#the-unreachable-statement) there, so actually reaching
+  the end is **undefined behavior**. This is also what makes the canonical
+  spin form legal — `@noreturn fn spin() { while (true) {} }` needs no
+  unreachable trailing return.
+- **[Defers](#defer) do not run at a `@noreturn` call.** A call that never
+  returns is not a block exit, so enclosing `defer`s are skipped on that
+  path — matching C, where `exit()` does not unwind the stack.
+- **Declarations of every kind.** The annotation works on definitions,
+  [`@extern` declarations](#extern-declarations) (libc's `exit`, `abort`,
+  and `_Exit` ship annotated), [`@asm` functions](#inline-assembly), generic
+  functions (each instance is checked void; the flag rides the template),
+  and [bodyless prototypes](#bodyless-fn-prototypes) —
+  [interface stubs](#interface-files) re-emit the `@noreturn` prefix, and
+  the prototype/definition pair check rejects a mismatch, as does an
+  `@extern` redeclaration that drops the flag.
+- **[Function values](#function-pointers) lose the flag.** `&f` of a
+  `@noreturn` function is allowed, but the plain `fn()` type cannot carry
+  the contract, so a call through the pointer is assumed to return (this
+  keeps `abort` usable as an `atexit` handler; the loss is only the
+  divergence convenience, never a soundness hole).
+
+The fact is handed to LLVM as the `noreturn` function attribute, so the
+optimizer drops the dead continuation paths.
+
+See [examples/functions/noreturn.mc](../examples/functions/noreturn.mc).
 
 ## Variadic functions
 
@@ -1515,6 +1575,39 @@ switching on a **type** instead of a value: its subject is an
 [`any`](#the-any-type), each arm names one type and binds the recovered
 value, and `else:` is mandatory. See [The any type](#the-any-type).
 
+### The unreachable statement
+
+`unreachable;` asserts that a path is never executed. The statement
+**diverges**: no `return` is needed after (or instead of) it, dead code past
+it is dropped like code after a `return`, and a diverging null-guard body
+made of it [narrows](#nonnull-parameters). It lowers to LLVM `unreachable`,
+so actually reaching it at runtime is **undefined behavior** — the optimizer
+deletes the path — exactly like C's `__builtin_unreachable()`. It is an
+assertion the compiler trusts, not a checked trap.
+
+Its idiomatic home is the `else` arm of an exhaustive `case`, where it
+replaces the dummy trailing return the compiler would otherwise demand:
+
+```c
+fn name(dir: int32) -> char* {      // dir is always 0..2 by construction
+    case (dir) {
+        when 0: return "north";
+        when 1: return "east";
+        when 2: return "south";
+        else: unreachable;          // asserts the case is exhaustive
+    }
+}                                    // no unreachable dummy return needed
+```
+
+On a `case type` (whose `else:` is mandatory) it asserts a closed universe
+of boxed types the same way. `unreachable` is a reserved word — it can no
+longer be used as an identifier.
+
+For a *function* that never returns rather than a path that never happens,
+see [@noreturn functions](#noreturn-functions) — a `@noreturn` body that
+falls off its end gets an implicit `unreachable`. See
+[examples/control-flow/unreachable.mc](../examples/control-flow/unreachable.mc).
+
 ## Defer
 
 `defer` schedules a statement (or a `{ }` block) to run when the enclosing
@@ -1555,7 +1648,16 @@ body fires at the end of that block — each loop iteration runs its own. The
 deferred code is evaluated when it runs, not when it is scheduled, so it sees
 the latest values of the variables it names (unlike Go, which snapshots the
 arguments). A returned value is computed _before_ the defers run, so freeing a
-buffer in a defer can't clobber what you return. See
+buffer in a defer can't clobber what you return.
+
+Defers run on every **block exit** — and a call to a
+[`@noreturn` function](#noreturn-functions) is not one. `exit(1);` leaves
+enclosing defers unrun (the process ends inside the callee; there is no
+return path to unwind), matching C, where `exit()` runs `atexit` handlers
+but never unwinds the calling stack. Code that must clean up should
+`return` an error up to `main` instead of exiting deep in the call tree. An
+[`unreachable;`](#the-unreachable-statement) likewise runs no defers — a
+path that never happens has nothing to unwind. See
 [examples/control-flow/defer.mc](../examples/control-flow/defer.mc).
 
 ## Block expressions

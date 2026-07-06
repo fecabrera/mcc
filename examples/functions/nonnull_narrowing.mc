@@ -21,8 +21,10 @@ fn show(p: int32*) -> int32 {
 }
 
 // Shape 2: the C-idiomatic early guard. An else-less `if (p == null)` whose
-// body always diverges (return, break, continue, or every nested path
-// returning) proves p for the remainder of the enclosing scope.
+// body always diverges (return, break, continue, a @noreturn call like
+// abort(), an `unreachable;`, or every nested path diverging) proves p for
+// the remainder of the enclosing scope. The abort-guard form is shown in
+// noreturn.mc.
 fn get(p: int32*) -> int32 {
     if (p == null) {
         return 0;

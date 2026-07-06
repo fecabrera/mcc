@@ -1232,10 +1232,10 @@ already do).
         always diverges narrows the remainder of the enclosing scope.
         Divergence is read off the builder's terminated-block state rather
         than a `return`/`break`/`continue` scan, so nested all-diverging
-        `if`s already count, and a future
+        `if`s already count, and the since-shipped
         [`@noreturn`/`unreachable`](#functions-and-methods) (letting
-        `if (p == null) abort();` guard) is absorbed with zero narrowing
-        changes. Sound and conservative: bare local pointer variables
+        `if (p == null) abort();` guard) was absorbed with zero narrowing
+        changes, as designed. Sound and conservative: bare local pointer variables
         narrow (globals and index expressions never do; `mut` parameters
         carry no per-name fact; member projections gained their own
         path-keyed facts in the follow-on below), taking `&p` anywhere in
@@ -1543,12 +1543,32 @@ already do).
         [Variadic functions](docs/language.md#variadic-functions)
   - [ ] `va_arg` interop — read individual arguments from a C-ABI `va_list`
         in mcc (today a `va_list` can only be forwarded to a C `v*` function)
-- [ ] `@noreturn` and `unreachable` — `@noreturn` marks a function that never
-      returns (`exit`, `abort`, an infinite loop), so a call needs no dummy
-      return after it and the backend drops the dead path; `unreachable` is a
-      statement asserting a path is never reached (lowering to LLVM
-      `unreachable`), for the fall-through of an
-      [exhaustive `case`](#types-and-generics) or an impossible branch
+- [x] `@noreturn` and `unreachable` — `@noreturn` marks a void function that
+      never returns (`exit`, `abort`, an infinite loop): a direct call
+      terminates the caller's block, so no dummy return is needed after it,
+      the backend drops the dead path (LLVM's `noreturn` attribute), the
+      `if (p == null) abort();` guard flow-narrows, defers deliberately do
+      not run at the call (matching C's `exit`), fall-off-the-end is UB
+      (C11 `_Noreturn`, so `while (true) {}` bodies are legal), and the
+      flag rides `@extern`/`@asm`/generics/prototypes and `.mci` stubs
+      (mismatches are conflict errors) but is dropped by `&f` function
+      values (keeping `abort` usable as an `atexit` handler); `unreachable`
+      is a reserved-word statement asserting a path is never reached
+      (lowering to LLVM `unreachable`, UB if executed), the exhaustiveness
+      bridge for an [exhaustive `case`](#types-and-generics)'s `else` arm or
+      an impossible branch; implemented, see
+      [@noreturn functions](docs/language.md#noreturn-functions) and
+      [The unreachable statement](docs/language.md#the-unreachable-statement):
+  - [ ] stdlib `panic(msg)` — a `@noreturn` "print to stderr and abort"
+        entry point in `std`, the idiomatic guard body once formatted
+        printing settles
+  - [ ] `-Wdead-code` — an opt-in class (via the shipped warning registry)
+        reporting statements silently dropped after a `return`, a
+        `@noreturn` call, or an `unreachable`
+  - [ ] constant-condition loop folding — recognize `while (true)`-style
+        loops during generation so the never-taken exit edge (and its empty
+        `end` block before a `@noreturn` body's auto-`unreachable`) never
+        gets emitted, as optimizer cleanliness
 
 ### Metaprogramming and builtins
 

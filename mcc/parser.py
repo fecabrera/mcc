@@ -62,6 +62,7 @@ from mcc.nodes import (
     TypeAlias,
     TypeRef,
     Unary,
+    Unreachable,
     Var,
     While,
 )
@@ -421,6 +422,7 @@ class Parser:
             self.expect(";")
             return Import(path, line)
         private = static = extern = packed = volatile = inline = asm = False
+        noreturn = False
         align = None
         symbol = None
         deprecated = None
@@ -447,6 +449,8 @@ class Parser:
                 inline = True
             elif annot.text == "@asm":
                 asm = True
+            elif annot.text == "@noreturn":
+                noreturn = True
             elif annot.text == "@clobbers":
                 clobbers = self.parse_clobber_list(annot.line)
             elif annot.text == "@align":
@@ -504,6 +508,9 @@ class Parser:
             raise LangError("@asm only applies to functions with a body", self.cur.line)
         if clobbers and not asm:
             raise LangError("@clobbers only applies to @asm", self.cur.line)
+        if noreturn and self.cur.kind != "fn":
+            # Functions only: definitions, @extern/@asm declarations, protos.
+            raise LangError("@noreturn only applies to functions", self.cur.line)
         if deprecated is not None and self.cur.kind != "fn":
             # v1 scope: functions only (types, enums, and globals later).
             raise LangError("@deprecated only applies to functions", self.cur.line)
@@ -627,7 +634,7 @@ class Parser:
             )
         return self.parse_function(
             private, static, extern, symbol, inline, asm, clobbers, deprecated,
-            removed,
+            removed, noreturn,
         )
 
     # Tokens that can begin an expression; used to settle the `as T * x`
@@ -1036,6 +1043,7 @@ class Parser:
         clobbers: list[str] | None = None,
         deprecated: str | None = None,
         removed: str | None = None,
+        noreturn: bool = False,
     ) -> Func:
         """Parse a function definition, an ``@extern`` declaration, or a proto.
 
@@ -1057,6 +1065,7 @@ class Parser:
             clobbers: Registers clobbered by an ``@asm fn`` body, or ``None``.
             deprecated: The ``@deprecated("...")`` message, or ``None``.
             removed: The ``@removed("...")`` tombstone message, or ``None``.
+            noreturn: Whether ``@noreturn`` was applied (never returns).
 
         Returns:
             The parsed ``Func``.
@@ -1189,6 +1198,7 @@ class Parser:
                 # Both attribute-only: no ABI change, so allowed on @extern.
                 noalias_params=noalias_params,
                 nonnull_params=nonnull_params,
+                noreturn=noreturn,
                 deprecated_msg=deprecated,
                 removed_msg=removed,
                 type_param_defaults=type_param_defaults,
@@ -1239,6 +1249,7 @@ class Parser:
                 private=private,
                 static=static,
                 inline=inline,
+                noreturn=noreturn,
                 deprecated_msg=deprecated,
                 type_param_defaults=type_param_defaults,
             )
@@ -1284,6 +1295,7 @@ class Parser:
                 mut_params=mut_params,
                 noalias_params=noalias_params,
                 nonnull_params=nonnull_params,
+                noreturn=noreturn,
                 deprecated_msg=deprecated,
                 removed_msg=removed,
                 type_param_defaults=type_param_defaults,
@@ -1303,6 +1315,7 @@ class Parser:
             mut_params=mut_params,
             noalias_params=noalias_params,
             nonnull_params=nonnull_params,
+            noreturn=noreturn,
             deprecated_msg=deprecated,
             removed_msg=removed,
             type_param_defaults=type_param_defaults,
@@ -1409,9 +1422,10 @@ class Parser:
         """Parse one statement inside a function body.
 
         Covers ``@if``, blocks, ``return``, ``emit``, ``let``, ``if``/``else``,
-        ``case``, ``while``/``until``, ``break``, ``continue``, ``defer``,
-        ``for``, and expression statements -- including assignments, recognized
-        by their target form (a variable, ``*ptr``, ``base[i]``, or a member).
+        ``case``, ``while``/``until``, ``break``, ``continue``,
+        ``unreachable``, ``defer``, ``for``, and expression statements --
+        including assignments, recognized by their target form (a variable,
+        ``*ptr``, ``base[i]``, or a member).
 
         Returns:
             The parsed statement node.
@@ -1480,6 +1494,10 @@ class Parser:
             self.advance()
             self.expect(";")
             return Continue(tok.line)
+        if tok.kind == "unreachable":
+            self.advance()
+            self.expect(";")
+            return Unreachable(tok.line)
         if tok.kind == "defer":
             self.advance()
             # `defer stmt;` or `defer { ... }` -- parse_body handles both.

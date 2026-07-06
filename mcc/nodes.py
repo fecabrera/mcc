@@ -281,6 +281,12 @@ class Func:
             prove the argument non-null, and the callee may pass the
             parameter onward as proof. Lowered to LLVM's ``nonnull`` (plus
             ``dereferenceable``) argument attributes.
+        noreturn: ``@noreturn`` -- the function never returns to its caller
+            (it exits, aborts, or loops forever). Void-only. A call site's
+            block is terminated right after the call (so no dummy return is
+            needed past it), falling off the end of the body is undefined
+            behavior (an auto-``unreachable``, C11 ``_Noreturn`` semantics),
+            and a ``return`` statement in the body is a compile error.
         deprecated_msg: The ``@deprecated("...")`` migration message, or
             ``None``. Every call site (and function-value use) emits a
             warning carrying it; the function stays callable.
@@ -314,6 +320,7 @@ class Func:
     mut_params: set[str] = field(default_factory=set)
     noalias_params: set[str] = field(default_factory=set)
     nonnull_params: set[str] = field(default_factory=set)
+    noreturn: bool = False
     deprecated_msg: str | None = None
     removed_msg: str | None = None
     type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
@@ -493,6 +500,22 @@ class Break:
 @dataclass
 class Continue:
     """A ``continue`` statement jumping to the innermost loop's next iteration.
+
+    Attributes:
+        line: Source line for diagnostics.
+    """
+
+    line: int
+
+
+@dataclass
+class Unreachable:
+    """An ``unreachable;`` statement asserting a path is never reached.
+
+    Lowers to LLVM ``unreachable``: the block is terminated, so no trailing
+    ``return`` is needed after it and the arm counts as diverging. Actually
+    reaching it at runtime is undefined behavior (like C's
+    ``__builtin_unreachable``).
 
     Attributes:
         line: Source line for diagnostics.
