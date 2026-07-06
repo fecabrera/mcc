@@ -66,11 +66,15 @@ fn main() -> int32 {
     return 0;
 }
 
-// Narrowing is deliberately conservative: only bare local pointer variables
-// narrow. Globals, mut parameters, and member/index expressions like s.p or
-// a[i] never do; taking &p anywhere in the function disables narrowing of p;
-// and the fact dies on anything that could null the variable: reassigning p,
-// passing p as a mut argument, or a shadowing `let p`. A loop drops exactly
+// Narrowing is deliberately conservative: these per-name facts attach only
+// to bare local pointer variables. Globals and index expressions like a[i]
+// never narrow, and a mut parameter never carries a name fact (an aliasing
+// callee could null it without naming it here); taking &p anywhere in the
+// function disables narrowing of p; and the fact dies on anything that
+// could null the variable: reassigning p, passing p as a mut argument, or a
+// shadowing `let p`. Field projections like s.p and b->data narrow too, as
+// access-path facts with a stricter invalidation model: see
+// nonnull_projections.mc. A loop drops exactly
 // the facts it could invalidate, and no others: see nonnull_loops.mc for the
 // full loop story (guard-then-loop, loop-header guards, post-exit proofs).
 // Facts also seed through `let`: a pointer binding whose initializer is
@@ -79,6 +83,7 @@ fn main() -> int32 {
 // the postfix `p!` assertion is the escape hatch: see nonnull_assert.mc.
 // See also: nonnull.mc for @nonnull itself and the always-non-null sources;
 // nonnull_loops.mc for narrowed facts crossing loops;
+// nonnull_projections.mc for the same guards proving struct fields;
 // nonnull_assert.mc for the `p!` escape hatch;
 // memory/nonnull_heap_buffers.mc for the one-guard migration of heap
 // buffers across the stdlib's @nonnull contracts.

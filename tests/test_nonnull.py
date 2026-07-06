@@ -1122,6 +1122,620 @@ def test_narrowing_emits_no_instructions():
     assert compile_ir(program("p")) == compile_ir(program("p!"))
 
 
+# ------------------------------------------- projection (path) narrowing
+
+BUF = "struct Buf { data: int32*; }\n"
+
+
+def test_projection_then_branch_narrows():
+    # `if (b->data != null)` proves the projection inside the then branch.
+    assert run(
+        BUF + FIRST + "fn peek(b: Buf*) -> int32 {\n"
+        "    if (b != null and b->data != null) { return first(b->data); }\n"
+        "    return -1;\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 9;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    return peek(&b) + peek(null) + 1;\n"
+        "}"
+    ) == 9
+
+
+def test_projection_dot_base_narrows():
+    # A struct-value base narrows through `.` exactly like `->`.
+    assert run(
+        BUF + FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 4;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data != null) { return first(b.data); }\n"
+        "    return 0;\n"
+        "}"
+    ) == 4
+
+
+def test_projection_early_return_guard_narrows_remainder():
+    assert run(
+        BUF + FIRST + "fn peek(@nonnull b: Buf*) -> int32 {\n"
+        "    if (b->data == null) { return 0; }\n"
+        "    return first(b->data);\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 6;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    return peek(&b);\n"
+        "}"
+    ) == 6
+
+
+def test_projection_else_branch_narrows():
+    assert run(
+        BUF + FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 3;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data == null) { return 0; } else { return first(b.data); }\n"
+        "}"
+    ) == 3
+
+
+def test_projection_while_header_narrows_body():
+    # The header re-proves per back edge, so the fact holds at the top of
+    # every iteration even though the body's store blanket-kills it.
+    assert run(
+        BUF + FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 2;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    let total: int32 = 0;\n"
+        "    while (b.data != null) {\n"
+        "        total = total + first(b.data);\n"
+        "        if (total >= 6) { b.data = null; }\n"
+        "    }\n"
+        "    return total;\n"
+        "}"
+    ) == 6
+
+
+def test_projection_while_exit_condition_narrows_after_loop():
+    # The normal exit leaves `b.data == null` false, so the projection is
+    # proven after the loop, whatever the body did.
+    assert run(
+        BUF + FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 5;\n"
+        "    let b = struct Buf { data = null };\n"
+        "    while (b.data == null) { b.data = &x; }\n"
+        "    return first(b.data);\n"
+        "}"
+    ) == 5
+
+
+def test_projection_or_guard_threads_with_names():
+    # A diverging or-guard proves a name and a projection together.
+    assert run(
+        BUF + FIRST + "fn peek(b: Buf*) -> int32 {\n"
+        "    if (b == null or b->data == null) { return -1; }\n"
+        "    return first(b->data);\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 7;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    return peek(&b) + peek(null) + 1;\n"
+        "}"
+    ) == 7
+
+
+def test_projection_short_circuit_rhs_sees_fact():
+    # In `b.data != null and use(b.data)` the rhs runs only when the lhs
+    # held, so the projection is proven while it evaluates.
+    assert run(
+        BUF + FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 8;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data != null and first(b.data) == 8) { return 8; }\n"
+        "    return 0;\n"
+        "}"
+    ) == 8
+
+
+def test_projection_mut_param_base_narrows():
+    # A mut parameter is an ineligible *name* fact, but a fine path base:
+    # the blanket call/store kills cover the aliasing that bans the name.
+    assert run(
+        BUF + FIRST + "fn peek(mut b: Buf) -> int32 {\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    return first(b.data);\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 5;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    return peek(b);\n"
+        "}"
+    ) == 5
+
+
+def test_multi_level_projection_narrows():
+    assert run(
+        BUF + FIRST + "struct Outer { inner: Buf*; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 3;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    let o = struct Outer { inner = &b };\n"
+        "    let p: Outer* = &o;\n"
+        "    if (p->inner->data != null) { return first(p->inner->data); }\n"
+        "    return 0;\n"
+        "}"
+    ) == 3
+
+
+def test_paren_deref_projection_canonicalizes():
+    # `(*b).data` and `b->data` are the same lvalue and share one path key,
+    # in both directions.
+    assert run(
+        BUF + FIRST + "fn peek(@nonnull b: Buf*) -> int32 {\n"
+        "    if ((*b).data == null) { return 0; }\n"
+        "    return first(b->data);\n"
+        "}\n"
+        "fn peek2(@nonnull b: Buf*) -> int32 {\n"
+        "    if (b->data == null) { return 0; }\n"
+        "    return first((*b).data);\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 2;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    return peek(&b) + peek2(&b);\n"
+        "}"
+    ) == 4
+
+
+def test_extends_inherited_projection_narrows():
+    # The spliced base field projects off the extending struct.
+    assert run(
+        BUF + FIRST + "struct Ext extends Buf { n: int32; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 6;\n"
+        "    let e = struct Ext { data = &x, n = 1 };\n"
+        "    let p: Ext* = &e;\n"
+        "    if (p->data != null) { return first(p->data); }\n"
+        "    return 0;\n"
+        "}"
+    ) == 6
+
+
+def test_volatile_owner_projection_never_forms():
+    # A @volatile owner's field can change between the check and the use
+    # (that is the point of @volatile), so no fact ever forms.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            "@volatile struct Reg { data: int32*; }\n" + FIRST
+            + "fn peek(r: Reg*) -> int32 {\n"
+            "    if (r != null and r->data != null) { return first(r->data); }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_volatile_via_extends_projection_never_forms():
+    # @volatile is inherited through extends, and so is the exclusion.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            "@volatile struct Reg { data: int32*; }\n"
+            "struct Ext extends Reg { n: int32; }\n" + FIRST
+            + "fn peek(@nonnull e: Ext*) -> int32 {\n"
+            "    if (e->data != null) { return first(e->data); }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_global_base_projection_does_not_narrow():
+    # Paths root at locals only: any call could rewrite a global's field
+    # without the blanket kills ever seeing a site here.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + "@static let g: Buf;\n" + FIRST + "fn main() -> int32 {\n"
+            "    if (g.data != null) { return first(g.data); }\n"
+            "    return 0;\n"
+            "}"
+        )
+
+
+def test_index_projection_does_not_narrow():
+    # Array elements carry no path fact (excluded from v1).
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn main() -> int32 {\n"
+            "    let bs: Buf[2];\n"
+            "    if (bs[0].data != null) { return first(bs[0].data); }\n"
+            "    return 0;\n"
+            "}"
+        )
+
+
+# ---------------------------------------------- projection fact invalidation
+
+
+def test_projection_fact_dies_on_base_reassignment():
+    # Reassigning the base retargets every path rooted at it.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn peek(b: Buf*, c: Buf*) -> int32 {\n"
+            "    if (b != null and b->data != null) {\n"
+            "        b = c;\n"
+            "        return first(b->data);\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_projection_fact_dies_on_shadowing_let():
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn peek(b: Buf*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    { let b: Buf* = null; }\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_scalar_compound_assign_keeps_projection_fact():
+    # A compound assignment to a bare scalar local writes its own slot
+    # only: it prefix-kills paths rooted at *that* name (none here), and
+    # the projection fact survives.
+    assert run(
+        BUF + FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 4;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    let n: int32 = 1;\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    n += 2;\n"
+        "    return first(b.data) + n;\n"
+        "}"
+    ) == 7
+
+
+def test_projection_fact_dies_on_store_through_pointer():
+    # Any through-memory store may alias the guarded field: blanket kill.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn poke(b: Buf*, q: int32**) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    *q = null;\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_projection_fact_dies_on_element_store():
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn poke(b: Buf*, qs: int32*[2]) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    qs[0] = null;\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_projection_fact_dies_on_member_store():
+    # A store to *any* field kills every path fact -- another base may
+    # alias the guarded one.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn poke(b: Buf*, c: Buf*) -> int32 {\n"
+            "    if (b == null or c == null or b->data == null) { return 0; }\n"
+            "    c->data = null;\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_projection_fact_dies_on_compound_member_store():
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "struct Pair { data: int32*; n: int32; }\n"
+            "fn poke(b: Buf*, p: Pair*) -> int32 {\n"
+            "    if (b == null or p == null or b->data == null) { return 0; }\n"
+            "    p->n += 1;\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_projection_fact_dies_at_any_call():
+    # A callee can reach the field through any escaped or global pointer.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn noop() { }\n"
+            "fn peek(b: Buf*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    noop();\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_projection_before_call_argument_accepted():
+    # Argument checks interleave with lowering left to right: the
+    # projection's load happens under its guard, before g() runs.
+    assert run(
+        BUF + "fn two(@nonnull p: int32*, n: int32) -> int32 { return *p + n; }\n"
+        "fn g() -> int32 { return 1; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 4;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    return two(b.data, g());\n"
+        "}"
+    ) == 5
+
+
+def test_projection_after_call_argument_rejected():
+    # In the other order g() runs first and may null the field before the
+    # projection is loaded.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + "fn two(n: int32, @nonnull p: int32*) -> int32 { return *p + n; }\n"
+            "fn g() -> int32 { return 1; }\n"
+            "fn main() -> int32 {\n"
+            "    let x: int32 = 4;\n"
+            "    let b = struct Buf { data = &x };\n"
+            "    if (b.data == null) { return 0; }\n"
+            "    return two(g(), b.data);\n"
+            "}"
+        )
+
+
+def test_projection_before_call_argument_accepted_generic():
+    # The generic path pre-evaluates arguments, so the proof is recorded
+    # per argument at evaluation time, matching the direct path.
+    assert run(
+        BUF + "fn two<T>(@nonnull p: T*, n: int32) -> T { return *p + n; }\n"
+        "fn g() -> int32 { return 1; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 4;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    return two(b.data, g());\n"
+        "}"
+    ) == 5
+
+
+def test_projection_after_call_argument_rejected_generic():
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + "fn two<T>(n: int32, @nonnull p: T*) -> T { return *p + n; }\n"
+            "fn g() -> int32 { return 1; }\n"
+            "fn main() -> int32 {\n"
+            "    let x: int32 = 4;\n"
+            "    let b = struct Buf { data = &x };\n"
+            "    if (b.data == null) { return 0; }\n"
+            "    return two(g(), b.data);\n"
+            "}"
+        )
+
+
+def test_address_of_projection_alone_is_harmless():
+    # &b->data needs no formation ban: only an actual aliasing write (a
+    # store or a call, both blanket kills) can null the field.
+    assert run(
+        BUF + FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 7;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    let alias: int32** = &b.data;\n"
+        "    if (b.data != null) { return first(b.data); }\n"
+        "    return 0;\n"
+        "}"
+    ) == 7
+
+
+def test_aliasing_store_after_address_of_projection_kills():
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn main() -> int32 {\n"
+            "    let x: int32 = 7;\n"
+            "    let b = struct Buf { data = &x };\n"
+            "    let alias: int32** = &b.data;\n"
+            "    if (b.data == null) { return 0; }\n"
+            "    *alias = null;\n"
+            "    return first(b.data);\n"
+            "}"
+        )
+
+
+def test_union_cross_member_store_kills():
+    # Union members share storage; the member-store blanket kill covers a
+    # write through a sibling.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            "union U { data: int32*; raw: uint64; }\n" + FIRST
+            + "fn peek(u: U*) -> int32 {\n"
+            "    if (u == null or u->data == null) { return 0; }\n"
+            "    u->raw = 0;\n"
+            "    return first(u->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_projection_fact_drops_at_loop_entry():
+    # No pre-scan for paths yet: every projection fact drops wholesale at
+    # loop entry (guard inside the body, or hatch with `!`).
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn peek(b: Buf*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    let total: int32 = 0;\n"
+            "    let i: int32 = 0;\n"
+            "    while (i < 3) {\n"
+            "        total = total + first(b->data);\n"
+            "        i = i + 1;\n"
+            "    }\n"
+            "    return total;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_projection_fact_drops_at_for_entry():
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn peek(b: Buf*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    let total: int32 = 0;\n"
+            "    for i in range(0, 3) { total = total + first(b->data); }\n"
+            "    return total;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_call_in_guard_tail_drops_path_fact():
+    # The rhs of the `and` runs *after* the projection's null test and may
+    # null the field before the branch, so the path fact must not form.
+    # (A name fact has no such window: no call can reach an eligible local.)
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn check() -> bool { return true; }\n"
+            "fn peek(@nonnull b: Buf*) -> int32 {\n"
+            "    if (b->data != null and check()) { return first(b->data); }\n"
+            "    return 0;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_call_in_guard_tail_keeps_name_fact():
+    # The asymmetry pinned: the same shape still proves a bare local.
+    assert run(
+        FIRST + "fn check() -> bool { return true; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 3;\n"
+        "    let p: int32* = &x;\n"
+        "    if (p != null and check()) { return first(p); }\n"
+        "    return 0;\n"
+        "}"
+    ) == 3
+
+
+def test_assign_to_aliased_struct_kills_path_facts():
+    # `s = ...` writes storage `p` points at (&s exists): the whole-struct
+    # assignment rewrites the guarded field through the alias.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn main() -> int32 {\n"
+            "    let x: int32 = 1;\n"
+            "    let s = struct Buf { data = &x };\n"
+            "    let p: Buf* = &s;\n"
+            "    if (p->data != null) {\n"
+            "        s = struct Buf { data = null };\n"
+            "        return first(p->data);\n"
+            "    }\n"
+            "    return 0;\n"
+            "}"
+        )
+
+
+# ------------------------------------------------ projection fact consumers
+
+
+def test_projection_narrowing_compiles_generic_sizeof_repro():
+    # The motivating repro: a diverging or-guard chains a size check, a
+    # name, and a projection; the projection then crosses a generic
+    # @nonnull slot. Compile-only: the local is deliberately uninitialized.
+    assert "define" in compile_ir(
+        "struct A<T> { ptr: T*; }\n"
+        "fn f<T>(@nonnull buf: T*, n: uint64) { }\n"
+        "fn main() -> int32 {\n"
+        "    let a: A<int64>*;\n"
+        "    if (sizeof(int64) != sizeof(uint64) or a == null or a->ptr == null)\n"
+        "        return 1;\n"
+        "    f(a->ptr, sizeof(a));\n"
+        "    return 0;\n"
+        "}"
+    )
+
+
+def test_guarded_projection_decays_into_mut():
+    # A proven projection decays into a mut slot like a proven local does.
+    assert run(
+        BUF + "fn bump(mut n: int32) { n = n + 1; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 4;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    bump(b.data);\n"
+        "    return x;\n"
+        "}"
+    ) == 5
+
+
+def test_guarded_projection_decays_into_generic_const():
+    # A struct-only pattern (`const c: Cell<T>`) can only bind a pointer
+    # argument through the decay reading, whose proof was recorded when
+    # the projection argument was evaluated (the generic pre-eval path).
+    assert run(
+        "struct Cell<T> { n: T; }\n"
+        "struct Holder { cell: Cell<int32>*; }\n"
+        "fn read<T>(const c: Cell<T>) -> T { return c.n; }\n"
+        "fn main() -> int32 {\n"
+        "    let c = struct Cell<int32> { n = 6 };\n"
+        "    let h = struct Holder { cell = &c };\n"
+        "    if (h.cell == null) { return 0; }\n"
+        "    return read(h.cell);\n"
+        "}"
+    ) == 6
+
+
+def test_projection_hatch_still_works():
+    # a->ptr! keeps working with no guard in sight (the shipped behavior).
+    assert run(
+        BUF + FIRST + "fn main() -> int32 {\n"
+        "    let x: int32 = 2;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    return first(b.data!);\n"
+        "}"
+    ) == 2
+
+
+def test_let_seeds_name_fact_from_guarded_projection():
+    # `let q = b.data` under the guard seeds q's *name* fact, which then
+    # survives calls and loops the path fact would not.
+    assert run(
+        BUF + FIRST + "fn noop() { }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 3;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    let q: int32* = b.data;\n"
+        "    noop();\n"
+        "    return first(q);\n"
+        "}"
+    ) == 3
+
+
+def test_projection_cast_to_pointer_preserves_proof():
+    # The as-cast proof threading applies to projections too.
+    assert run(
+        BUF + "fn firstb(@nonnull p: uint8*) -> int32 { return *p as int32; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 1;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    return firstb(b.data as uint8*);\n"
+        "}"
+    ) == 1
+
+
 # ------------------------------------------------------ escape hatch (p!)
 
 

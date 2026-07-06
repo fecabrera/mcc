@@ -190,6 +190,33 @@ def contains_break(obj) -> bool:
     return False
 
 
+def contains_call(obj) -> bool:
+    """Whether an expression subtree may emit a runtime call or store.
+
+    Recurses like :func:`collect_addr_taken`. Used when a guard chain's
+    facts are collected for a branch: an eligible bare local cannot be
+    written by a call, but a narrowed *projection* lives in memory, so a
+    later-evaluated operand that can call (``Call``/``CallExpr``/``@asm``)
+    or run arbitrary statements (a block expression) may null the field
+    after its null test and before the branch -- the earlier operand's
+    path facts must not survive such an operand. ``sizeof``-style builtins
+    are their own node types and emit nothing, so they do not count.
+
+    Args:
+        obj: An AST node, list, or scalar to scan.
+
+    Returns:
+        ``True`` when the subtree may call or store at runtime.
+    """
+    if isinstance(obj, (Call, CallExpr, Asm, BlockExpr)):
+        return True
+    if is_dataclass(obj):
+        return any(contains_call(getattr(obj, f.name)) for f in dataclass_fields(obj))
+    if isinstance(obj, (list, tuple)):
+        return any(contains_call(item) for item in obj)
+    return False
+
+
 # Builtin struct templates, available in every program with no import: the
 # shared `iterator<T>` cursor behind the `_it`/`_next` protocol, and the
 # `pair<K, V>` element the keyed containers yield from `_next`. They are
@@ -305,6 +332,15 @@ class CodeGen:
         # the fact is just dropped on any event that could null the variable
         # (see narrowable_guard_names for the invalidation rules).
         self.narrowed_nonnull: set[str] = set()
+        # Pointer-typed field projections flow-narrowed to non-null by a
+        # null-check guard, keyed by their access path -- ('a', 'b', 'ptr')
+        # for a->b->ptr (arrow-insensitively; see nonnull_path_of). Unlike a
+        # name fact, the pointee field lives in memory a callee or any
+        # through-memory store could reach, so every fact here dies at each
+        # call emission and at each *p/element/field store (blanket kills),
+        # while a direct write to the base variable prefix-kills just its
+        # own paths (see kill_paths_rooted).
+        self.narrowed_paths: set[tuple[str, ...]] = set()
         # Names whose address is taken (&x) anywhere in the current function's
         # body -- such locals are never narrowable (a stored pointer could
         # null them without naming them).
@@ -2720,6 +2756,7 @@ class CodeGen:
         self.mut_locals = set(func.mut_params)
         self.nonnull_locals = set(func.nonnull_params)
         self.narrowed_nonnull = set()
+        self.narrowed_paths = set()
         self.addr_taken = set()
         collect_addr_taken(func.body, self.addr_taken)
         for i, ((pname, _), ptype, arg) in enumerate(zip(func.params, params, fn.args)):
@@ -2765,6 +2802,7 @@ class CodeGen:
         # whole function regardless, so this only governs name visibility.
         outer_locals, outer_names = dict(self.locals), self.scope_names
         outer_narrowed = set(self.narrowed_nonnull)
+        outer_paths = set(self.narrowed_paths)
         self.scope_names = set()
         self.defer_stack.append([])
         try:
@@ -2783,6 +2821,7 @@ class CodeGen:
             # narrowing, shadowed names) end with it; invalidations from
             # inside persist outward. Intersecting achieves both.
             self.narrowed_nonnull &= outer_narrowed
+            self.narrowed_paths &= outer_paths
 
     def run_deferred_scope(self, scope: list):
         """Emit one block's deferred actions, last-registered first.
@@ -3093,9 +3132,11 @@ class CodeGen:
         self.scope_names.add(name)
         # A shadowing binding is a fresh, possibly-null variable: the shadowed
         # @nonnull parameter's fact must not transfer to it. Ditto for a
-        # flow-narrowed fact on the shadowed name.
+        # flow-narrowed fact on the shadowed name, and for any projection
+        # fact rooted at it (the path now reads through different storage).
         self.nonnull_locals.discard(name)
         self.narrowed_nonnull.discard(name)
+        self.kill_paths_rooted(name)
 
     def coerce(
         self, tv: TypedValue, expected: LangType, line: int, context: str
@@ -3445,9 +3486,22 @@ class CodeGen:
                     "reassignment could drop the non-null guarantee",
                     stmt.line,
                 )
-            # A reassignment may store null: any flow-narrowed fact dies here.
+            # A reassignment may store null: any flow-narrowed fact dies
+            # here, with every projection fact rooted at the name.
             self.narrowed_nonnull.discard(stmt.name)
+            self.kill_paths_rooted(stmt.name)
             slot, var_type, volatile = self.var_addr(stmt.name, stmt.line)
+            # Overwriting a struct whose storage is reachable through a
+            # pointer -- an address-taken local, a mut parameter (the
+            # caller's storage), or a global (its address may be known
+            # anywhere) -- can rewrite a field some other path fact reads
+            # through an alias: every projection fact dies.
+            if is_struct(strip_const(var_type)) and (
+                stmt.name not in self.locals
+                or stmt.name in self.addr_taken
+                or stmt.name in self.mut_locals
+            ):
+                self.narrowed_paths.clear()
             if var_type.const:
                 raise LangError(
                     f"cannot assign to read-only variable {stmt.name!r}", stmt.line
@@ -3474,12 +3528,12 @@ class CodeGen:
                     with then:
                         added = self.narrow_nonnull(then_facts)
                         self.gen_block(stmt.then)
-                        self.narrowed_nonnull -= added
+                        self.retract_narrowed(added)
                         then_diverged = self.builder.block.is_terminated
                     with otherwise:
                         added = self.narrow_nonnull(else_facts)
                         self.gen_block(stmt.otherwise)
-                        self.narrowed_nonnull -= added
+                        self.retract_narrowed(added)
                         else_diverged = self.builder.block.is_terminated
                 # When both arms diverge (return/emit/break), the merge block
                 # the builder now sits in is unreachable; terminate it so the
@@ -3490,7 +3544,7 @@ class CodeGen:
                 with self.builder.if_then(cond):
                     added = self.narrow_nonnull(then_facts)
                     self.gen_block(stmt.then)
-                    self.narrowed_nonnull -= added
+                    self.retract_narrowed(added)
                     then_diverged = self.builder.block.is_terminated
                 # The C-idiomatic early guard: a diverging `if (p == null)`
                 # body with no else proves p non-null for the remainder of
@@ -3498,7 +3552,7 @@ class CodeGen:
                 # intersects on exit). Assignments inside the diverging body
                 # cannot reach the remainder, so they do not invalidate it.
                 if then_diverged:
-                    self.narrowed_nonnull |= else_facts
+                    self.narrow_nonnull(else_facts)
         elif isinstance(stmt, While):
             kind = "until" if stmt.until else "while"
             # A loop's condition and body re-run on the back edge, where a
@@ -3506,8 +3560,12 @@ class CodeGen:
             # before the loop -- so a pre-scan drops exactly the facts the
             # loop could invalidate (an assignment, a shadowing let, or a
             # mut lend anywhere in the condition or body); the rest survive
-            # the loop, and past it.
+            # the loop, and past it. Projection facts have no pre-scan yet:
+            # any call or through-memory store in the loop could null the
+            # field on a later iteration, so all of them drop wholesale
+            # (header facts below re-prove per back edge regardless).
             self.narrowed_nonnull -= self.loop_kill_set(stmt)
+            self.narrowed_paths.clear()
             cond_bb = self.builder.append_basic_block(f"{kind}.cond")
             body_bb = self.builder.append_basic_block(f"{kind}.body")
             end_bb = self.builder.append_basic_block(f"{kind}.end")
@@ -3534,7 +3592,7 @@ class CodeGen:
                 self.gen_block(stmt.body)
             finally:
                 self.loops.pop()
-            self.narrowed_nonnull -= added
+            self.retract_narrowed(added)
             if not self.builder.block.is_terminated:
                 self.builder.branch(cond_bb)
             self.builder.position_at_end(end_bb)
@@ -3543,8 +3601,10 @@ class CodeGen:
             # proves p after the loop no matter what the body did -- unless a
             # `break` can reach the end without re-testing the condition.
             if not contains_break(stmt.body):
-                self.narrowed_nonnull |= self.narrowable_guard_names(
-                    stmt.cond, "!=" if stmt.until else "=="
+                self.narrow_nonnull(
+                    self.narrowable_guard_names(
+                        stmt.cond, "!=" if stmt.until else "=="
+                    )
                 )
         elif isinstance(stmt, Conditional):
             # Compile-time @if: emit only the live branch's statements, inline
@@ -3625,6 +3685,9 @@ class CodeGen:
                 "assignment through pointer",
             )
             self.gen_store(value.value, ptr.value, volatile=ptr.type.pointee.volatile)
+            # A through-memory store can land in any guarded field (the
+            # pointer may alias one): every projection fact dies.
+            self.narrowed_paths.clear()
         elif isinstance(stmt, StoreIndex):
             base_t = self.lvalue_type(stmt.base)
             if base_t is not None and is_array(base_t) and self.writes_const(stmt.base):
@@ -3640,6 +3703,7 @@ class CodeGen:
                 self.gen_expr(stmt.value), element, stmt.line, "assignment to element"
             )
             self.gen_store(value.value, addr, volatile=element.volatile)
+            self.narrowed_paths.clear()  # an element store may alias a field
         elif isinstance(stmt, StoreMember):
             if not stmt.arrow and self.writes_const(stmt.base):
                 raise LangError(
@@ -3655,6 +3719,9 @@ class CodeGen:
                 f"assignment to field {stmt.field!r}",
             )
             self.gen_store(value.value, addr, align=align, volatile=volatile)
+            # The stored-to field (or a union sibling, or an alias through
+            # another base) may be a guarded one: every projection fact dies.
+            self.narrowed_paths.clear()
         elif isinstance(stmt, ExprStmt):
             self.gen_expr(stmt.expr)
         else:
@@ -3807,8 +3874,10 @@ class CodeGen:
                     "reassignment could drop the non-null guarantee",
                     line,
                 )
-            # `p += n` moves the pointer; any flow-narrowed fact dies here.
+            # `p += n` moves the pointer; any flow-narrowed fact dies here,
+            # with every projection fact rooted at the name.
             self.narrowed_nonnull.discard(target.name)
+            self.kill_paths_rooted(target.name)
             slot, var_type, volatile = self.var_addr(target.name, line)
             if var_type.const:
                 raise LangError(
@@ -3825,6 +3894,10 @@ class CodeGen:
                     f"{ptr.type.pointee}",
                     line,
                 )
+            # A compound `*p op= v` is a through-memory store, like
+            # StoreDeref: every projection fact dies (ditto the element
+            # and member arms below).
+            self.narrowed_paths.clear()
             return ptr.value, ptr.type.pointee, None, ptr.type.pointee.volatile
         if isinstance(target, Index):
             base_t = self.lvalue_type(target.base)
@@ -3839,12 +3912,14 @@ class CodeGen:
                 raise LangError(
                     "cannot assign through a read-only slice<const T>", line
                 )
+            self.narrowed_paths.clear()
             return addr, element, None, element.volatile
         if isinstance(target, Member):
             if not target.arrow and self.writes_const(target.base):
                 raise LangError(
                     "cannot assign to a field of a const parameter", line
                 )
+            self.narrowed_paths.clear()
             return self.gen_member_addr(target.base, target.field, target.arrow, line)
         raise LangError("invalid assignment target", line)
 
@@ -3882,8 +3957,10 @@ class CodeGen:
         # iteration may already have invalidated a fact proved before the
         # loop -- a pre-scan drops exactly the facts the loop could
         # invalidate, for every `for` variant (range/enumerate/slice/
-        # protocol); the rest survive the loop, and past it.
+        # protocol); the rest survive the loop, and past it. Projection
+        # facts have no pre-scan yet and drop wholesale, as at `while`.
         self.narrowed_nonnull -= self.loop_kill_set(stmt)
+        self.narrowed_paths.clear()
         # `for x in range(...)` is a builtin counting loop, lowered directly to
         # a counter with no struct or protocol calls. A user-defined `range`
         # function, if any, takes precedence.
@@ -3940,7 +4017,7 @@ class CodeGen:
             end_bb = self.builder.append_basic_block("for.end")
             self.builder.branch(cond_bb)
             self.builder.position_at_end(cond_bb)
-            more = self.builder.call(next_fn, [it_slot, x_slot])  # next(&_it, &x)
+            more = self.emit_call(next_fn, [it_slot, x_slot])  # next(&_it, &x)
             self.builder.cbranch(more, body_bb, end_bb)
             self.builder.position_at_end(body_bb)
             self.loops.append((cond_bb, end_bb, len(self.defer_stack)))
@@ -4358,7 +4435,7 @@ class CodeGen:
             self.builder.branch(cond_bb)
             self.builder.position_at_end(cond_bb)
             # next(&_it, &e.value) fills the value field in place.
-            more = self.builder.call(next_fn, [it_slot, value_ptr])
+            more = self.emit_call(next_fn, [it_slot, value_ptr])
             self.builder.cbranch(more, body_bb, end_bb)
             self.builder.position_at_end(body_bb)
             # The position is claimed as soon as the element is yielded, so a
@@ -4551,7 +4628,7 @@ class CodeGen:
             self.narrowable_guard_names(expr.lhs, "!=" if expr.op == "and" else "==")
         )
         rhs = self.gen_cond(expr.rhs)
-        self.narrowed_nonnull -= added
+        self.retract_narrowed(added)
         rhs_block = self.builder.block  # the rhs may have added blocks of its own
         self.builder.branch(end_block)
         self.builder.position_at_end(end_block)
@@ -5307,7 +5384,7 @@ class CodeGen:
         inline = ir.InlineAsm(
             fnty, template, ",".join(constraints), side_effect=out is None
         )
-        result = self.builder.call(inline, [tv.value for tv in inputs])
+        result = self.emit_call(inline, [tv.value for tv in inputs])
         return TypedValue(result, out) if out else TypedValue(result, VOID)
 
     def gen_cast(self, expr: Cast) -> TypedValue:
@@ -6310,7 +6387,7 @@ class CodeGen:
         self.require_valist(expr.line)
         i8ptr = self.builder.bitcast(addr, RAWPTR.ir)
         return TypedValue(
-            self.builder.call(self.va_intrinsic(expr.name), [i8ptr]), VOID
+            self.emit_call(self.va_intrinsic(expr.name), [i8ptr]), VOID
         )
 
     def va_intrinsic(self, kind: str) -> ir.Function:
@@ -6396,6 +6473,29 @@ class CodeGen:
             self.funcs[symbol], function_type(ret, tuple(params), variadic)
         )
 
+    def emit_call(self, callee, args: list) -> ir.Value:
+        """Emit a call instruction and drop every projection fact.
+
+        A callee can reach any non-local memory -- a global pointer, an
+        address that escaped earlier, its own statics -- so a store to a
+        guarded field cannot be ruled out: every ``narrowed_paths`` fact
+        dies at the call. Name facts are untouched (an eligible local is
+        unreachable from a callee; the ``mut``-lend channel invalidates at
+        its own site). Every runtime call funnels through here -- direct,
+        function-pointer, generic-instance, the ``for ... in`` protocol's
+        ``_next``, ``@asm``, and the ``va_*`` intrinsics.
+
+        Args:
+            callee: The LLVM function or callable value.
+            args: The marshalled LLVM argument values.
+
+        Returns:
+            The call instruction's result value.
+        """
+        result = self.builder.call(callee, args)
+        self.narrowed_paths.clear()
+        return result
+
     def gen_direct_call(self, expr: Call, symbol: str) -> TypedValue:
         """Emit a direct call to a known, non-generic function.
 
@@ -6430,7 +6530,7 @@ class CodeGen:
             collecting=self.collecting_params(params)
             and len(params) - 1 not in mut,
         )
-        return TypedValue(self.builder.call(self.funcs[symbol], args), ret)
+        return TypedValue(self.emit_call(self.funcs[symbol], args), ret)
 
     def gen_indirect_call(
         self, callee: TypedValue, arg_exprs: list, label: str, line: int
@@ -6456,7 +6556,7 @@ class CodeGen:
             raise LangError(f"cannot call a value of type {callee.type}", line)
         ret, params, variadic = callee.type.signature
         args = self.marshal_args(arg_exprs, params, variadic, label, line)
-        return TypedValue(self.builder.call(callee.value, args), ret)
+        return TypedValue(self.emit_call(callee.value, args), ret)
 
     def marshal_args(
         self,
@@ -6652,17 +6752,26 @@ class CodeGen:
             return tv.value  # any to any is a plain copy, never a nesting
         return self.gen_box_any(tv, line).value
 
-    def narrowable_guard_names(self, cond, op: str) -> set[str]:
-        """Collect the locals a null-comparison guard flow-narrows.
+    def narrowable_guard_names(self, cond, op: str) -> set:
+        """Collect the facts a null-comparison guard flow-narrows.
 
-        A bare comparison matches ``p <op> null`` or ``null <op> p`` where
-        ``p`` is a bare variable eligible for narrowing: a plain pointer
-        **local** (a global never narrows -- any call could store null into
-        it) that is not a ``mut`` parameter (a callee taking two ``mut``
-        references can alias it, so per-name invalidation at the call would
-        miss the write), not already ``@nonnull`` (nothing to narrow), and
-        whose address is never taken anywhere in the function (see
-        :func:`collect_addr_taken`).
+        A bare comparison matches ``p <op> null`` or ``null <op> p``. Two
+        shapes of ``p`` carry a fact:
+
+        - a bare variable eligible for narrowing (a **name** fact): a plain
+          pointer **local** (a global never narrows -- any call could store
+          null into it) that is not a ``mut`` parameter (a callee taking two
+          ``mut`` references can alias it, so per-name invalidation at the
+          call would miss the write), not already ``@nonnull`` (nothing to
+          narrow), and whose address is never taken anywhere in the function
+          (see :func:`collect_addr_taken`);
+        - a pointer-typed field projection like ``s.p`` or ``a->b->ptr``
+          (a **path** fact, keyed by :meth:`nonnull_path_of`). Paths need
+          none of the name exclusions -- their invalidation model is the
+          blanket kill at every call and through-memory store, which covers
+          aliasing wholesale -- but a ``@volatile`` owner anywhere along the
+          path means the field can change between check and use, so no fact
+          forms. Index expressions still carry no fact.
 
         ``and``/``or`` chains thread through: for the ``"!="`` query (facts
         that hold when the condition is *true*) an ``and`` unions both
@@ -6670,8 +6779,11 @@ class CodeGen:
         (facts that hold when the condition is *false*) an ``or`` unions
         both, since both disjuncts failed. The other operator contributes
         nothing for that query -- a false ``and`` (or a true ``or``) pins
-        down neither operand. Member/index expressions still carry no
-        per-name fact.
+        down neither operand. One asymmetry: when the later-evaluated
+        operand may call or store (see :func:`contains_call`), the earlier
+        operand's *path* facts are dropped -- the field could be nulled
+        between its test and the branch (a name fact has no such window:
+        no call can reach an eligible local).
 
         Args:
             cond: The guard condition expression.
@@ -6681,22 +6793,30 @@ class CodeGen:
                 the remainder after a diverging then body / a loop's exit).
 
         Returns:
-            The narrowable variable names (possibly empty).
+            The narrowable facts (possibly empty): variable names as
+            strings, projection paths as tuples.
         """
         if isinstance(cond, Logical):
             if cond.op != ("and" if op == "!=" else "or"):
                 return set()
-            return self.narrowable_guard_names(
-                cond.lhs, op
-            ) | self.narrowable_guard_names(cond.rhs, op)
+            lhs = self.narrowable_guard_names(cond.lhs, op)
+            if contains_call(cond.rhs):
+                lhs = {fact for fact in lhs if isinstance(fact, str)}
+            return lhs | self.narrowable_guard_names(cond.rhs, op)
         if not isinstance(cond, Binary) or cond.op != op:
             return set()
-        if isinstance(cond.lhs, Var) and isinstance(cond.rhs, NullLit):
-            name = cond.lhs.name
-        elif isinstance(cond.rhs, Var) and isinstance(cond.lhs, NullLit):
-            name = cond.rhs.name
+        if isinstance(cond.rhs, NullLit):
+            other = cond.lhs
+        elif isinstance(cond.lhs, NullLit):
+            other = cond.rhs
         else:
             return set()
+        if isinstance(other, Member):
+            path = self.nonnull_path_of(other)
+            return set() if path is None else {path}
+        if not isinstance(other, Var):
+            return set()
+        name = other.name
         entry = self.locals.get(name)
         if entry is None or not is_pointer(entry[1]):
             return set()
@@ -6706,20 +6826,109 @@ class CodeGen:
             return set()
         return {name}
 
-    def narrow_nonnull(self, names: set[str]) -> set[str]:
+    def nonnull_path_of(self, expr) -> "tuple[str, ...] | None":
+        """The projection-fact key for a pointer-typed field chain, or None.
+
+        A chain of ``Member`` hops rooted at a local variable maps to the
+        tuple ``(base name, field, ...)``. The key is arrow-insensitive --
+        ``->`` and ``.`` spell the same hop, unambiguous because a field is
+        either struct-typed or pointer-typed -- and ``(*a).f`` canonicalizes
+        to the same path as ``a->f`` (one deref per hop; a double deref is
+        not a projection). The walk resolves owner types hop by hop, and no
+        fact key exists when: the base is not a local (globals and
+        call-rooted chains are excluded), any owner along the path is
+        ``@volatile`` (directly or inherited via ``extends`` -- the field
+        can change between check and use, mirroring the register-block
+        rationale for volatile loads), a hop is not a struct field, or the
+        final field is not pointer-typed. Array elements (``a->xs[0]``)
+        carry no path.
+
+        Args:
+            expr: The candidate expression (any AST node).
+
+        Returns:
+            The path tuple, or ``None`` when the expression carries no fact.
+        """
+        fields: list[str] = []
+        base = expr
+        while isinstance(base, Member):
+            fields.append(base.field)
+            base = base.base
+            # `(*a).f` is the same lvalue as `a->f`: strip a single deref so
+            # both spell one path key.
+            if isinstance(base, Unary) and base.op == "*":
+                base = base.operand
+        if not fields or not isinstance(base, Var):
+            return None
+        entry = self.locals.get(base.name)
+        if entry is None:
+            return None
+        t = entry[1]
+        for fname in reversed(fields):
+            owner = strip_const(t)
+            if is_pointer(owner):
+                owner = strip_const(owner.pointee)
+            if not is_struct(owner) or owner.volatile:
+                return None
+            for name, ftype in owner.fields:
+                if name == fname:
+                    t = ftype
+                    break
+            else:
+                return None
+        if not is_pointer(strip_const(t)):
+            return None
+        return (base.name, *reversed(fields))
+
+    def narrow_nonnull(self, facts: set) -> set:
         """Record flow-narrowed non-null facts for a guard's branch.
 
         Args:
-            names: The names to narrow (possibly empty).
+            facts: The facts to narrow (possibly empty): names as strings,
+                projection paths as tuples.
 
         Returns:
-            The names actually added -- what the guard must remove again at
-            branch exit. A name already narrowed is excluded (an outer
-            guard's fact must survive this one's exit).
+            The facts actually added -- what the guard must retract again
+            at branch exit (see :meth:`retract_narrowed`). A fact already
+            narrowed is excluded (an outer guard's fact must survive this
+            one's exit).
         """
-        added = names - self.narrowed_nonnull
-        self.narrowed_nonnull |= added
+        names = {fact for fact in facts if isinstance(fact, str)}
+        paths = facts - names
+        added = (names - self.narrowed_nonnull) | (paths - self.narrowed_paths)
+        self.narrowed_nonnull |= names
+        self.narrowed_paths |= paths
         return added
+
+    def retract_narrowed(self, added: set):
+        """Remove facts a guard added, at its branch's exit.
+
+        Discards, rather than subtracts: a fact may already be gone (a call
+        or store inside the branch blanket-killed the path facts).
+
+        Args:
+            added: What :meth:`narrow_nonnull` returned at branch entry.
+        """
+        for fact in added:
+            if isinstance(fact, tuple):
+                self.narrowed_paths.discard(fact)
+            else:
+                self.narrowed_nonnull.discard(fact)
+
+    def kill_paths_rooted(self, name: str):
+        """Drop every projection fact rooted at a variable name.
+
+        The prefix kill: reassigning, compound-assigning, shadowing, or
+        ``mut``-lending ``a`` retargets (or may null) what ``a`` denotes, so
+        every ``a...`` path fact is stale. Facts rooted elsewhere survive --
+        writing the *pointer* ``a`` cannot change another base's fields.
+
+        Args:
+            name: The base variable name.
+        """
+        self.narrowed_paths = {
+            path for path in self.narrowed_paths if path[0] != name
+        }
 
     def loop_kill_set(self, obj, kills: set[str] | None = None) -> set[str]:
         """Names whose flow-narrowed facts a loop could invalidate.
@@ -6807,11 +7016,12 @@ class CodeGen:
         parameter of the current function (the guarantee travels
         transitively), a plain pointer local flow-narrowed by a null-check
         guard (``if (p != null) { ... }`` or a diverging
-        ``if (p == null) ...``), a postfix ``p!`` assertion (the
-        programmer's explicit, unchecked claim), and an ``as`` cast to a
-        pointer type of any of these (a pointer reinterpretation preserves
-        the address; a non-pointer intermediate, e.g. an integer round-trip,
-        severs the proof).
+        ``if (p == null) ...``), a field projection flow-narrowed the same
+        way (``if (a->ptr != null) { ... }``; see :meth:`nonnull_path_of`),
+        a postfix ``p!`` assertion (the programmer's explicit, unchecked
+        claim), and an ``as`` cast to a pointer type of any of these (a
+        pointer reinterpretation preserves the address; a non-pointer
+        intermediate, e.g. an integer round-trip, severs the proof).
 
         Args:
             expr: The argument expression.
@@ -6836,15 +7046,24 @@ class CodeGen:
                 return True
             var_type = self.var_type_of(expr.name)
             return var_type is not None and is_array(var_type)
+        if isinstance(expr, Member):
+            return self.nonnull_path_of(expr) in self.narrowed_paths
         return False
 
-    def check_nonnull_arg(self, arg_expr, context: str, line: int):
+    def check_nonnull_arg(
+        self, arg_expr, context: str, line: int, proven: "bool | None" = None
+    ):
         """Require proof that an argument to a ``@nonnull`` slot is non-null.
 
         Args:
             arg_expr: The argument expression.
             context: A label describing the site, for the error message.
             line: Source line for diagnostics.
+            proven: The proof, when it was already judged at evaluation
+                time (the generic call path pre-evaluates every argument;
+                a later argument's nested call blanket-kills path facts,
+                but an earlier argument's load already happened under its
+                guard); ``None`` judges it here, against the current facts.
 
         Raises:
             LangError: When the argument is the ``null`` literal or is not
@@ -6854,7 +7073,9 @@ class CodeGen:
             raise LangError(
                 f"cannot pass null as {context}: the parameter is @nonnull", line
             )
-        if not self.proves_nonnull(arg_expr):
+        if proven is None:
+            proven = self.proves_nonnull(arg_expr)
+        if not proven:
             raise LangError(
                 f"cannot pass a possibly-null pointer as {context}: the "
                 "parameter is @nonnull (pass &x, a string or array literal, "
@@ -6896,7 +7117,7 @@ class CodeGen:
 
     def check_decay_arg(
         self, arg_expr, arg_type: LangType, kind: str, ptype: LangType,
-        context: str, line: int,
+        context: str, line: int, proven: "bool | None" = None,
     ):
         """Require proof that a pointer decaying into ``const``/``mut`` is non-null.
 
@@ -6913,11 +7134,16 @@ class CodeGen:
             ptype: The parameter type the pointer decays into.
             context: A label describing the site, for the error message.
             line: Source line for diagnostics.
+            proven: The proof, when it was already judged at evaluation
+                time (see :meth:`check_nonnull_arg`); ``None`` judges it
+                here, against the current facts.
 
         Raises:
             LangError: When the pointer is not provably non-null.
         """
-        if not self.proves_nonnull(arg_expr):
+        if proven is None:
+            proven = self.proves_nonnull(arg_expr)
+        if not proven:
             raise LangError(
                 f"cannot pass a possibly-null {arg_type} as {context}: "
                 f"decaying into a {kind} {ptype} parameter forms a reference, "
@@ -7017,12 +7243,15 @@ class CodeGen:
                 line,
             )
         # Lending the storage as mut lets the callee store null through the
-        # reference: any flow-narrowed fact for the name dies here. The point
+        # reference: any flow-narrowed fact for the name dies here, with
+        # every projection fact rooted at it (redundant with the blanket
+        # call kill, but keeps point invalidation uniform). The point
         # invalidation is sound because & of a mut parameter is banned and a
         # function with mut parameters cannot become a function value, so the
         # callee cannot leak the address past the call.
         if isinstance(arg_expr, Var):
             self.narrowed_nonnull.discard(arg_expr.name)
+            self.kill_paths_rooted(arg_expr.name)
 
     def mut_ref_arg(
         self, arg_expr, ptype: LangType, line: int, context: str
@@ -7213,7 +7442,16 @@ class CodeGen:
         matching = [f for f in candidates if len(f.params) == len(expr.args)]
         maybe_mut = frozenset().union(*(self.mut_indices(f) for f in matching))
         arg_tvs, addrs = [], {}
+        # Non-null proofs are judged per argument as it is evaluated, not at
+        # the post-resolution check sites: a nested call inside a *later*
+        # argument blanket-kills the path facts, but an earlier projection
+        # argument's load already happened under its guard -- so
+        # f(a->ptr, g()) is fine while f(g(), a->ptr) rightly fails (the
+        # direct path gets the same semantics from marshal_args checking
+        # interleaved with lowering).
+        proofs: list[bool] = []
         for i, arg in enumerate(expr.args):
+            proofs.append(self.proves_nonnull(arg))
             if i in maybe_mut and self.denotes_storage(arg):
                 addr, t, align, volatile = self.gen_addr(arg, expr.line)
                 addrs[i] = (addr, t, align, volatile)
@@ -7359,7 +7597,8 @@ class CodeGen:
                 _, t, align, volatile = addrs[i]
                 if self.decays_to(t, p, mut=True):
                     self.check_decay_arg(
-                        expr.args[i], strip_const(t), "mut", p, context, expr.line
+                        expr.args[i], strip_const(t), "mut", p, context,
+                        expr.line, proven=proofs[i],
                     )
                     decayed.add(i)
                     continue
@@ -7377,17 +7616,20 @@ class CodeGen:
                 expr.args[i], StrLit
             ):
                 self.check_decay_arg(
-                    expr.args[i], tv.type, "mut", p, context, expr.line
+                    expr.args[i], tv.type, "mut", p, context, expr.line,
+                    proven=proofs[i],
                 )
                 decayed.add(i)
                 continue
             raise LangError(self.not_assignable(i, expr.name), expr.line)
         # The proof is syntactic, so it runs on the argument expressions even
-        # though they were already lowered to values for binding inference.
+        # though they were already lowered to values for binding inference --
+        # against the facts recorded when each argument was evaluated.
         for i in self.nonnull_indices(func):
             if i < len(expr.args):
                 self.check_nonnull_arg(
-                    expr.args[i], f"argument {i + 1} of {expr.name!r}", expr.line
+                    expr.args[i], f"argument {i + 1} of {expr.name!r}",
+                    expr.line, proven=proofs[i],
                 )
         hidden = self.hidden_ref_indices(func, params)
         args = []
@@ -7420,14 +7662,14 @@ class CodeGen:
                 if self.decays_to(tv.type, p, mut=False):
                     self.check_decay_arg(
                         expr.args[i], strip_const(tv.type), "const", p,
-                        context, expr.line,
+                        context, expr.line, proven=proofs[i],
                     )
                     args.append(tv.value)
                 else:
                     args.append(self.spill_to_temp(tv, p, expr.line, context))
             else:
                 args.append(self.coerce(tv, p, expr.line, context).value)
-        return TypedValue(self.builder.call(fn, args), ret)
+        return TypedValue(self.emit_call(fn, args), ret)
 
     def denotes_storage(self, arg) -> bool:
         """Whether a possibly-``mut`` generic argument's address may be formed.
@@ -7928,6 +8170,7 @@ class CodeGen:
             self.mut_locals,
             self.nonnull_locals,
             self.narrowed_nonnull,
+            self.narrowed_paths,
             self.addr_taken,
         )
         self.type_bindings = bindings
@@ -7981,6 +8224,7 @@ class CodeGen:
                 self.mut_locals,
                 self.nonnull_locals,
                 self.narrowed_nonnull,
+                self.narrowed_paths,
                 self.addr_taken,
             ) = saved
             self.type_bindings = outer_bindings

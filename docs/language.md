@@ -316,8 +316,9 @@ The accepted proofs are the always-non-null sources: `&x` (the address of
 named storage), a string or array literal, an array decaying to a pointer
 (local, `@static`, or global), transitively a `@nonnull` parameter of
 the calling function (so a `@nonnull` callee forwards its own parameter
-onward with no check), a plain pointer local flow-narrowed by a null check
-(below), an `as` cast to a pointer type of any proven source (aliases of
+onward with no check), a plain pointer local or a pointer-typed field
+projection flow-narrowed by a null check (below), an `as` cast to a
+pointer type of any proven source (aliases of
 pointer types count; a non-pointer intermediate like `p as uint64 as T*`
 severs the proof), and the explicit escape hatch (further below).
 
@@ -355,11 +356,13 @@ Narrowing is purely static — it emits no instructions — and it is
 deliberately conservative, so the fact only exists where nothing can null
 the pointer between the check and the use:
 
-- **Only bare local pointer variables narrow.** Globals never narrow (any
-  call in between could store null into one), `mut` parameters never narrow
-  (a callee taking two `mut` references can alias one, so a call could null
-  it without naming it here), and member/index expressions like `s.p` or
-  `a[i]` carry no per-name fact — assert those with `!` instead.
+- **Bare local pointer variables narrow, and so do field projections**
+  like `s.p` or `b->data` (see the projection rules below, which are
+  stricter). Globals never narrow (any call in between could store null
+  into one), `mut` parameters never carry a *name* fact (a callee taking
+  two `mut` references can alias one, so a call could null it without
+  naming it here), and index expressions like `a[i]` carry no fact —
+  assert those with `!` instead.
 - **Taking `&p` anywhere in the function disables narrowing of `p`**
   entirely: once its address exists, a stored pointer could null `p`
   without ever naming it.
@@ -396,11 +399,58 @@ provably non-null (`let q = p;` under a guard, `let p = &x;`,
 `let s: uint8* = "...";`, `let q = p!;`) starts narrowed, under the same
 eligibility rules, and dies on the same events.
 
+**Projection facts.** The same guard shapes also narrow a pointer-typed
+*field projection*: `if (b->data != null)` proves `b->data` in the then
+branch, a diverging `if (b->data == null)` proves it for the remainder,
+loop headers and exit conditions prove it the same way, and `and`/`or`
+chains thread projections and bare names together
+(`if (b == null or b->data == null) { return -1; }` proves both). A
+proven projection crosses `@nonnull` slots and decays into `const`/`mut`
+parameters exactly like a proven local. The fact is keyed by the access
+path, so any depth works (`p->inner->data`), `.` and `->` spell the same
+fact, and `(*b).data` is the same fact as `b->data`. The base must be a
+local variable; `mut` and `@nonnull` parameters are fine as *bases*
+(`fn f(mut b: Buf)` may guard and use `b.data`), while globals,
+call results, and array elements (`bs[0].data`) carry no path fact. A
+`@volatile` owner anywhere along the path (directly or inherited via
+`extends`) never forms a fact: volatile means the field can change
+between the check and the use, the same reason volatile accesses are
+never elided or reordered.
+
+Because the field itself lives in memory that other code can reach, a
+projection fact dies far more eagerly than a name fact:
+
+- **at every function call**: any callee could store to the field
+  through an escaped or global pointer (this includes calls in a later
+  argument: `f(b->data, g())` compiles, since arguments check and load
+  left to right, while `f(g(), b->data)` does not);
+- **at every through-memory store**: `*p = ...`, `arr[i] = ...`, and
+  `s.f = ...` (any base, any field: a write through one base may alias
+  another's field, and a union member store hits its siblings), plus
+  their compound forms;
+- **wholesale at every loop entry** (unlike name facts, no pre-scan
+  yet); a `while (b->data != null)` header still proves the body top,
+  since the condition re-proves it on each back edge;
+- **on the base**: reassigning, shadowing, or `mut`-lending `b` kills
+  every `b...` path fact.
+
+One asymmetry in guard chains: when a *later* operand of the chain can
+call (`if (b->data != null and check())`), the projection fact does not
+form, because `check()` runs after the null test and could null the
+field before the branch; a bare local has no such window, so name facts
+still form there. Taking `&b->data` is not itself an event (unlike `&p`
+for a name fact): only an actual aliasing write can null the field, and
+every channel for one (a store or a call) already kills the fact.
+
+Where a checked field must cross a call or a loop, bind it:
+`let q = b->data;` under the guard seeds a *name* fact for `q` that
+survives both, and `b->data!` remains the explicit hatch.
+
 Each null comparison must be exactly `p != null` / `p == null` (either
 operand order), possibly chained with `and`/`or` as above. Ternary
-conditions do not narrow, and member/index expressions still carry no
-per-name fact. Where narrowing cannot see the invariant, the escape hatch
-below is the pressure valve.
+conditions do not narrow, and index expressions carry no fact. Where
+narrowing cannot see the invariant, the escape hatch below is the
+pressure valve.
 
 **The escape hatch: postfix `!`.** A heap or returned `T*` carries no
 syntactic proof, so it cannot cross into a `@nonnull` slot on its own. The
@@ -473,6 +523,8 @@ flow-narrowing,
 [examples/functions/nonnull_narrowing.mc](../examples/functions/nonnull_narrowing.mc);
 for narrowed facts crossing loops,
 [examples/functions/nonnull_loops.mc](../examples/functions/nonnull_loops.mc);
+for projection facts,
+[examples/functions/nonnull_projections.mc](../examples/functions/nonnull_projections.mc);
 for the escape hatch,
 [examples/functions/nonnull_assert.mc](../examples/functions/nonnull_assert.mc);
 and for the heap-buffer migration,

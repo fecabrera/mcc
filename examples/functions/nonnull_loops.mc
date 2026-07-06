@@ -89,6 +89,8 @@ fn main() -> int32 {
 }
 
 // See also: nonnull_narrowing.mc for the guard shapes that create these
-// facts; nonnull_assert.mc for the `p!` hatch where no guard fits;
+// facts; nonnull_projections.mc for field facts, which every loop drops
+// wholesale at entry (bind the field to a name to carry it across);
+// nonnull_assert.mc for the `p!` hatch where no guard fits;
 // memory/nonnull_heap_buffers.mc for the guard-then-loop idiom against the
 // stdlib's @nonnull contracts.

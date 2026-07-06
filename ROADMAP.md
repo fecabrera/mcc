@@ -1235,10 +1235,12 @@ already do).
         `if`s already count, and a future
         [`@noreturn`/`unreachable`](#functions-and-methods) (letting
         `if (p == null) abort();` guard) is absorbed with zero narrowing
-        changes. Sound and conservative: only bare local pointer variables
-        narrow (globals, `mut` parameters, and member/index expressions
-        never do), taking `&p` anywhere in the function bans narrowing of
-        `p`, facts die on reassignment, on passing as a `mut` argument, and
+        changes. Sound and conservative: bare local pointer variables
+        narrow (globals and index expressions never do; `mut` parameters
+        carry no per-name fact; member projections gained their own
+        path-keyed facts in the follow-on below), taking `&p` anywhere in
+        the function bans narrowing of `p`, facts die on reassignment, on
+        passing as a `mut` argument, and
         on a shadowing `let`, and every fact drops at loop entry (see the
         follow-on below). This opened the gate to adopting `@nonnull` across
         `libmc` (the adoption items below; wave 1 shipped); implemented, see
@@ -1290,10 +1292,14 @@ already do).
           excluding `time`'s `timer` (null is documented OK).
           `libc/stdio.mc` is deferred indefinitely, not part of this wave:
           it has real null-meaningful carve-outs (`freopen`'s `filename`,
-          `setbuf`'s `buf`), and annotating `fwrite`'s `ptr` would force a
-          `str.data!` hatch inside `std.mc`'s `writestr` (member
-          expressions never prove), the highest downstream friction for
-          the lowest value. The annotations ship unconditionally, in the
+          `setbuf`'s `buf`), and annotating `fwrite`'s `ptr` would ask
+          `std.mc`'s `writestr` for a proof. The shipped projection facts
+          (above) have since dissolved the guard-then-single-call shape
+          (`if (str.data == null) return; fwrite(str.data, ...)` now
+          proves), but a `str.data` used across calls or inside a loop
+          still needs a `let`-seeded binding or a `str.data!` hatch, so
+          stdio remains the highest downstream friction for the lowest
+          value. The annotations ship unconditionally, in the
           source and in `.mci` stubs alike: no `-D`/`@if` gate (the
           declared contract never varies per build; a gate would also
           have to duplicate every declaration, since `@if` is
@@ -1329,6 +1335,33 @@ already do).
           targets count; a non-pointer intermediate severs the proof — so
           `md5("abc" as uint8*, n)` now proves like `md5("abc", n)`);
           implemented, see
+          [@nonnull parameters](docs/language.md#nonnull-parameters)
+    - [x] projection facts — the same guard shapes narrow a pointer-typed
+          *field projection* (`if (b->data != null)`, the diverging
+          `== null` guard, loop headers and exit conditions, `and`/`or`
+          chains threading projections and names together), keyed by
+          access path at any depth, arrow-insensitively (`(*b).data` is
+          `b->data`); a proven projection crosses `@nonnull` slots on the
+          direct and generic call paths alike (both check-and-load
+          arguments left to right, so `f(b->data, g())` proves while
+          `f(g(), b->data)` is rejected), decays into `const`/`mut`, and
+          seeds a name fact through `let q = b->data;` (the idiom for
+          carrying a checked field across calls and loops, with
+          `b->data!` as the hatch). Bases must be locals — `mut` and
+          `@nonnull` parameter bases included (the receiver-migration
+          consumer), globals and array elements excluded — and a
+          `@volatile` owner anywhere along the path (`extends`-inherited
+          too) never forms a fact. Soundness is a kill model instead of
+          formation bans: every call emission and every through-memory
+          store (deref/element/field, compound forms included, so union
+          siblings and `&b->data` aliases are covered wholesale) drops
+          all path facts, loop entry drops them wholesale (no pre-scan
+          parity yet), reassigning/shadowing/`mut`-lending the base
+          prefix-kills its paths, and a guard whose later operand can
+          call (`b->data != null and check()`) forms no path fact at all.
+          Recorded follow-ups: a loop pre-scan for paths (mirroring
+          loop-body fact preservation above), element paths
+          (`a->xs[0]`), and global bases; implemented, see
           [@nonnull parameters](docs/language.md#nonnull-parameters)
     - [ ] first-class `T!` type — non-null on return types, locals, struct
           fields, and function-pointer types, which needs a real distinct type

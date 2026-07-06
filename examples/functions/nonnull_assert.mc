@@ -47,8 +47,10 @@ fn main() -> int32 {
 }
 
 // The hatch's home ground is what narrowing cannot track at all: globals,
-// member and index expressions like s.p or a[i], and a returned pointer used
-// once, where a guard would be noise.
+// index expressions like a[i], and a returned pointer used once, where a
+// guard would be noise. (Field projections like s.p narrow now, under
+// stricter rules: see nonnull_projections.mc; `s.p!` remains the hatch where
+// a call has killed the field's fact and a binding would be noise.)
 // See also: nonnull.mc for @nonnull parameters and the always-non-null proof
 // sources that need no assertion; nonnull_narrowing.mc for the null-check
 // guards that avoid the hatch in idiomatic code; nonnull_loops.mc for

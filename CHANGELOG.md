@@ -8,6 +8,35 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **`@nonnull` flow-narrowing for field projections** — null-check guards
+  now prove pointer-typed *field projections* non-null, not just bare
+  locals: `if (b->data != null)` narrows the then branch, a diverging
+  `if (b->data == null)` narrows the remainder, loop headers and exit
+  conditions narrow the same way, and `and`/`or` chains thread projections
+  and names together (`if (b == null or b->data == null) return -1;`). A
+  proven projection crosses `@nonnull` slots (direct and generic calls
+  alike), decays into `const`/`mut` parameters, threads through `as`
+  casts, and seeds a name fact via `let q = b->data;`. Facts are keyed by
+  access path at any depth, arrow-insensitively (`(*b).data` is
+  `b->data`); the base must be a local (`mut` and `@nonnull` parameter
+  bases included; globals and array elements carry no fact), and a
+  `@volatile` owner anywhere along the path (`extends`-inherited too)
+  never forms one. Because the field lives in reachable memory, the fact
+  dies far more eagerly than a name fact: at every call (so
+  `f(b->data, g())` compiles while `f(g(), b->data)` does not; arguments
+  check and load left to right on both call paths), at every
+  through-memory store (`*p`/element/field, compound forms included, any
+  base: aliases and union siblings are covered wholesale), wholesale at
+  loop entry, on reassignment/shadowing/`mut`-lending of the base, and a
+  guard whose later operand can call (`b->data != null and check()`)
+  forms no fact at all. `&b->data` alone is not an event: only an
+  aliasing write can null the field, and every channel for one is a store
+  or a call. To carry a checked field across a call or loop, bind it
+  (`let q = b->data;`) or assert (`b->data!`). See
+  [@nonnull parameters](docs/language.md#nonnull-parameters).
+
 ## [0.6.0] - 2026-07-05
 
 ### Added
