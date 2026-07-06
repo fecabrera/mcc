@@ -1361,8 +1361,44 @@ already do).
           call (`b->data != null and check()`) forms no path fact at all.
           Recorded follow-ups: a loop pre-scan for paths (mirroring
           loop-body fact preservation above), element paths
-          (`a->xs[0]`), and global bases; implemented, see
+          (`a->xs[0]`), global bases, and the blanket call kill's
+          refinement (the item below); implemented, see
           [@nonnull parameters](docs/language.md#nonnull-parameters)
+    - [ ] call write-effect analysis — refine projection facts' blanket
+          rule above (every call kills all path facts) with a
+          per-function, transitive **write-effect bit**: a call to a
+          bit-clear callee preserves path facts, everything else keeps
+          the shipped kill. A function's bit is set if it performs any
+          through-memory store (the `StoreDeref`/`StoreIndex`/
+          `StoreMember` statement forms or their compound-assignment
+          arms), writes any global, calls anything opaque (`@extern`,
+          `@asm`, a call through a function-pointer value), or calls a
+          function whose bit is set; computed bottom-up over the whole
+          program's call graph (whole-program compilation makes this
+          closed-world, the same property the projection kills already
+          lean on), recursion cycles resolving conservatively (assume
+          set unless a fixpoint proves otherwise), and generic
+          functions taking their bit per monomorphized instance.
+          Parameter signatures can never be the trigger, recorded here
+          so `const`-argument-based skipping is not re-proposed:
+          (1) a path fact lives in the struct's storage (`a->ptr`
+          inside `*a`), not in the argument, so a callee never
+          receiving `a` proves nothing (`*a` may be reachable from a
+          global regardless of the parameter list); (2) self-aliasing:
+          `a->ptr` may point into `*a` itself, so a write through any
+          received pointer can be a write to the fact's storage; and
+          (3) `const` launders through opaque callees: a
+          `const buf: T*` parameter's value can cross into `@extern`
+          varargs with no const contract (`println` wrapping `printf`
+          is the canonical case), so const-ness of the signature says
+          nothing about the transitive body. The concrete consequence:
+          `fn f1<T>(@nonnull const buf: T*, n: uint64)` whose body
+          calls `println` still kills path facts under the refinement
+          (`println` wraps `@extern printf`), while a pure leaf like a
+          math helper stops killing. Name facts are unaffected either
+          way (they already survive calls), and `let q = a->ptr;`
+          remains the practical idiom for carrying a checked field
+          across consecutive calls meanwhile
     - [ ] first-class `T!` type — non-null on return types, locals, struct
           fields, and function-pointer types, which needs a real distinct type
           rather than a per-binding fact (a larger blast radius). Optional and
