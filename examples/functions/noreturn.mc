@@ -3,7 +3,8 @@ import "std";
 // `@noreturn` marks a void function that never returns to its caller: it
 // exits, aborts, or loops forever. The compiler then treats every direct
 // call as diverging, like a `return`: no dummy return is needed after it,
-// code past it is silently dropped, and a null guard whose body is one
+// code past it is silently dropped (reported by the opt-in `-Wdead-code`
+// class: see control-flow/dead_code.mc), and a null guard whose body is one
 // narrows the pointer (the same rules as nonnull_narrowing.mc). libc's
 // `exit`, `abort`, and `_Exit` (import "std" or "libc/stdlib") ship
 // annotated. Prerequisites: functions.mc, nonnull.mc, nonnull_narrowing.mc.

@@ -1562,13 +1562,19 @@ already do).
   - [ ] stdlib `panic(msg)` — a `@noreturn` "print to stderr and abort"
         entry point in `std`, the idiomatic guard body once formatted
         printing settles
-  - [ ] `-Wdead-code` — an opt-in class (via the shipped warning registry)
+  - [x] `-Wdead-code` — an opt-in class (via the shipped warning registry)
         reporting statements silently dropped after a `return`, a
-        `@noreturn` call, or an `unreachable`
+        `@noreturn` call, or an `unreachable` (also `break`/`continue`/
+        `emit` and all-paths-diverging statements; one warning per dead
+        region, naming the killing construct type-free so generic
+        re-emissions dedup); defers dropped because another *defer*
+        diverged are deliberately out of scope — a different diagnostic;
+        implemented, see [-Wdead-code](docs/language.md#-wdead-code)
   - [ ] constant-condition loop folding — recognize `while (true)`-style
         loops during generation so the never-taken exit edge (and its empty
         `end` block before a `@noreturn` body's auto-`unreachable`) never
-        gets emitted, as optimizer cleanliness
+        gets emitted, as optimizer cleanliness — and, with the exit edge
+        gone, extend `-Wdead-code`'s reach to the code after such a loop
 
 ### Metaprogramming and builtins
 

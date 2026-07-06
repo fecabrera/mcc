@@ -118,6 +118,8 @@ fn main() -> int32 {
 
 // See also: warnings.mc for the warning channel, `-Werror`, and the
 // unconditional `@warning` this class contrasts with;
+// control-flow/dead_code.mc for the second class, `-Wdead-code`, riding
+// the same framework;
 // functions/nonnull.mc for the proof relation and its always-non-null
 // sources; functions/nonnull_narrowing.mc for the guard shapes that
 // silence a site; functions/nonnull_assert.mc for the postfix `!` hatch.

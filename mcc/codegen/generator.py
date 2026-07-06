@@ -507,6 +507,49 @@ class CodeGen:
                 line, wclass="unchecked-dereference",
             )
 
+    def warn_dead_code(self, prev, stmt) -> None:
+        """Warn under ``-Wdead-code`` that ``stmt`` begins an unreachable region.
+
+        The single formatter for the class: both statement-walking loops (a
+        block's, and the statement-level ``@if`` live arm's) funnel through
+        here when they find the builder's block already terminated, with
+        ``prev`` the statement whose generation terminated it. Emitted once
+        per dead region -- at its first statement -- after which the walk
+        drops the rest of the region exactly as it always has, so the class
+        never changes the code generated. The message names the killing
+        construct by its AST class and is deliberately type-free: dead code
+        is never type-checked, and a generic body must emit byte-identical
+        messages per instantiation so the driver's print-time dedup collapses
+        them to one diagnostic.
+
+        Args:
+            prev: The statement that terminated the block (a ``return``,
+                ``break``, ``continue``, ``unreachable``, ``emit``, a call to
+                a ``@noreturn`` function, or a construct all of whose paths
+                diverge).
+            stmt: The first unreachable statement; the warning points at its
+                line.
+        """
+        if isinstance(prev, Return):
+            what = "nothing runs after the 'return' above"
+        elif isinstance(prev, Break):
+            what = "nothing runs after 'break'"
+        elif isinstance(prev, Continue):
+            what = "nothing runs after 'continue'"
+        elif isinstance(prev, Unreachable):
+            what = "nothing runs after 'unreachable'"
+        elif isinstance(prev, Emit):
+            what = "nothing runs after 'emit'"
+        elif isinstance(prev, ExprStmt):
+            # Only a direct call to a @noreturn function terminates the
+            # block from expression-statement position.
+            what = "nothing runs after a call to a @noreturn function"
+        else:
+            # A statement with internal control flow -- if/case/@if/a bare
+            # block -- every generated path of which diverged.
+            what = "every path through the statement above diverges"
+        self.warn(f"unreachable code: {what}", stmt.line, wclass="dead-code")
+
     def warn_deprecated(self, name: str, msg: str | None, line: int) -> None:
         """Warn that a ``@deprecated`` function was resolved, when ``msg`` is set.
 
@@ -2918,10 +2961,15 @@ class CodeGen:
         self.scope_names = set()
         self.defer_stack.append([])
         try:
+            prev = None
             for stmt in statements:
                 if self.builder.block.is_terminated:
-                    break  # unreachable code after return/break/continue
+                    # Unreachable code after return/break/continue: report
+                    # the region once (-Wdead-code), then drop it as always.
+                    self.warn_dead_code(prev, stmt)
+                    break
                 self.gen_statement(stmt)
+                prev = stmt
             # Reached the end without diverging: run this block's defers (LIFO).
             # An early return/break/continue already ran them on its own path.
             if not self.builder.block.is_terminated:
@@ -3728,10 +3776,16 @@ class CodeGen:
             # Compile-time @if: emit only the live branch's statements, inline
             # in the current scope. The dead branch is never type-checked.
             taken = stmt.then if self.eval_static_cond(stmt.cond) else stmt.otherwise
+            prev = None
             for inner in taken:
                 if self.builder.block.is_terminated:
+                    # This loop has its own skip, so a dead tail inside a
+                    # taken @if arm reports here (-Wdead-code), not in
+                    # gen_block; the dead branch was never walked at all.
+                    self.warn_dead_code(prev, inner)
                     break
                 self.gen_statement(inner)
+                prev = inner
         elif isinstance(stmt, Block):
             self.gen_block(stmt.body)  # a bare { } -- its own scope
         elif isinstance(stmt, For):

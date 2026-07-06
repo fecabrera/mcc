@@ -2,7 +2,8 @@ import "std";
 
 // `unreachable;` asserts that a path is never executed. The statement
 // diverges like a `return`: no return is needed after (or instead of) it,
-// and code past it is silently dropped. It lowers to LLVM `unreachable`,
+// and code past it is silently dropped (the opt-in `-Wdead-code` class
+// reports such drops: see dead_code.mc). It lowers to LLVM `unreachable`,
 // so actually reaching it at runtime is undefined behavior, exactly like
 // C's __builtin_unreachable(): an assertion the compiler trusts, not a
 // checked trap. Prerequisites: case_when.mc.

@@ -10,6 +10,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`-Wdead-code`** — a new opt-in warning class reporting the statements
+  the generator has always silently dropped as unreachable: everything
+  after a `return`, `break`, `continue`, `unreachable`, or `emit`, after a
+  direct call to a `@noreturn` function, and after an `if`/`case`/`@if`
+  statement all of whose paths diverge. One warning per dead region, at its
+  first statement, naming the killing construct
+  (`unreachable code: nothing runs after the 'return' above [-Wdead-code]`);
+  the messages are deliberately type-free (dead code is never type-checked),
+  so a generic body's per-instantiation re-emissions dedup to one printed
+  diagnostic. Code after `while (true)` does not warn yet (the loop's exit
+  edge is still emitted; the constant-condition folding roadmap item will
+  extend the class), dead `@if` branches are structurally unseen and never
+  warn, and defers dropped because another *defer* diverged are a separate
+  planned diagnostic. Default-off; enabled by `-Wdead-code`/`-Wall`,
+  promoted by `-Werror` as `[-Werror=dead-code]`, and it never changes the
+  code generated. See [-Wdead-code](docs/language.md#-wdead-code) and
+  [examples/control-flow/dead_code.mc](examples/control-flow/dead_code.mc).
+
 - **`@noreturn` and `unreachable`** — `@noreturn` marks a function that
   never returns to its caller (`exit`, `abort`, an infinite loop): a direct
   call terminates the caller's block, so no dummy return is needed past it,

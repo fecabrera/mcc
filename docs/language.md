@@ -1296,6 +1296,51 @@ lines in the report until that lands.
 See [examples/types/unchecked_dereference.mc](../examples/types/unchecked_dereference.mc)
 for the class in action and each way to silence a site.
 
+#### -Wdead-code
+
+The generator has always silently dropped statements it can prove
+unreachable: everything after a `return`, `break`, `continue`,
+[`unreachable`](#the-unreachable-statement), or `emit`, after a direct call
+to a [`@noreturn`](#noreturn-functions) function, and after an
+`if`/`case`/`@if` statement all of whose generated paths diverge. The
+`dead-code` class reports those drops instead of hiding them:
+
+```
+example.mc: warning: line 4: unreachable code: nothing runs after the 'return' above [-Wdead-code]
+```
+
+One warning per dead region, at its first statement, naming the construct
+that killed it (`'break'`, `'unreachable'`, "a call to a `@noreturn`
+function", "every path through the statement above diverges", ...). The
+messages never name types or callees — dead code is dropped before it is
+ever type-checked, and the type-free wording keeps a generic body's
+per-instantiation re-emissions byte-identical so the print-time dedup
+collapses them to a single diagnostic. Like every opt-in class, it never
+changes the code generated.
+
+What does *not* warn, deliberately:
+
+- **Code after `while (true)`** — the generator still emits the loop's
+  exit edge, so the following code is structurally reachable today. The
+  constant-condition loop folding item on the roadmap will extend the
+  class's reach here.
+- **The dead branch of an `@if`** — a not-taken compile-time branch is
+  structurally unseen (never walked, never type-checked), which is its
+  point; only a dead *tail inside the taken branch* warns.
+- **`defer` bodies dropped because a *defer* diverged** — when one deferred
+  action diverges at scope exit, the remaining registered actions are
+  dropped; that is a different (planned) diagnostic, not dead code. A
+  `defer` statement *in* a dead region is dead code like any other
+  statement, warns, and never registers its body.
+
+The class is default-off like the rest of the
+[opt-in classes](#opt-in-warning-classes): `-Wdead-code` (or `-Wall`)
+enables it, and under `-Werror` it promotes as
+`[-Werror=dead-code]` — a bare `-Werror` build stays unaffected.
+
+See [examples/control-flow/dead_code.mc](../examples/control-flow/dead_code.mc)
+for each killing construct and the non-cases.
+
 ### Deprecated functions
 
 `@deprecated("message")` is a declaration attribute on a function: the

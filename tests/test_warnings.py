@@ -588,6 +588,239 @@ def test_slice_indexing_never_warns():
     assert class_warnings(src) == []
 
 
+# --- -Wdead-code: statements silently dropped after a diverging construct ---
+
+DEAD = "dead-code"
+
+
+def dead_code_warnings(source: str) -> list[tuple[str, int]]:
+    """The dead-code emissions of a source, as (message, line)."""
+    return [(w.message, w.line)
+            for w in generate(source).warnings if w.wclass == DEAD]
+
+
+def test_code_after_return_warns():
+    src = """
+    fn main() -> int32 {
+        return 0;
+        let x: int32 = 1;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after the 'return' above", 4),
+    ]
+
+
+def test_code_after_break_warns():
+    src = """
+    fn main() -> int32 {
+        while (true) {
+            break;
+            let x: int32 = 1;
+        }
+        return 0;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after 'break'", 5),
+    ]
+
+
+def test_code_after_continue_warns():
+    src = """
+    fn main() -> int32 {
+        let i: int32 = 0;
+        while (i < 3) {
+            i = i + 1;
+            continue;
+            i = 100;
+        }
+        return i - 3;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after 'continue'", 7),
+    ]
+
+
+def test_code_after_unreachable_warns():
+    src = """
+    fn main() -> int32 {
+        if (true) { return 0; }
+        unreachable;
+        let x: int32 = 1;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after 'unreachable'", 5),
+    ]
+
+
+def test_code_after_a_noreturn_call_warns():
+    # An expression statement that terminated the block is necessarily a
+    # direct call to a @noreturn function; the message never names the
+    # callee (type-free, so generic re-emissions stay byte-identical).
+    src = """
+    @noreturn @extern fn abort();
+    fn main() -> int32 {
+        abort();
+        return 0;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after a call to a @noreturn function", 5),
+    ]
+
+
+def test_code_after_emit_warns():
+    src = """
+    fn main() -> int32 {
+        let v = {
+            emit 3;
+            let d: int32 = 1;
+        };
+        return v - 3;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after 'emit'", 5),
+    ]
+
+
+def test_code_after_a_diverging_if_else_warns():
+    src = """
+    fn main() -> int32 {
+        let x: int32 = 1;
+        if (x > 0) { return 1; } else { return 2; }
+        let y: int32 = 0;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: every path through the statement above diverges", 5),
+    ]
+
+
+def test_code_after_an_all_arms_diverging_case_warns():
+    src = """
+    fn main() -> int32 {
+        let x: int32 = 1;
+        case (x) {
+            when 1: return 0;
+            else:   return 2;
+        }
+        let y: int32 = 0;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: every path through the statement above diverges", 8),
+    ]
+
+
+def test_code_after_a_diverging_bare_block_warns():
+    src = """
+    fn main() -> int32 {
+        { return 0; }
+        let x: int32 = 1;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: every path through the statement above diverges", 4),
+    ]
+
+
+def test_one_warning_per_dead_region_at_its_first_statement():
+    # Per-region granularity: the walk reports the first dead statement and
+    # drops the rest of the region exactly as it always has.
+    src = """
+    fn main() -> int32 {
+        return 0;
+        let x: int32 = 1;
+        let y: int32 = 2;
+        let z: int32 = 3;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after the 'return' above", 4),
+    ]
+
+
+def test_a_dead_defer_warns_and_never_runs():
+    # A defer in a dead region is dead code like any other statement: it is
+    # never registered, so its body cannot run at scope exit.
+    src = """
+    fn main() -> int32 {
+        let x: int32 = 40;
+        return x + 2;
+        defer { x = 0; }
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after the 'return' above", 5),
+    ]
+    assert run(src) == 42
+
+
+def test_code_after_while_true_is_not_dead():
+    # The generator still emits the loop's exit edge, so code after
+    # `while (true)` is structurally reachable today; the constant-condition
+    # folding roadmap item will extend the class to cover it.
+    src = """
+    fn main() -> int32 {
+        while (true) { break; }
+        return 0;
+    }
+    """
+    assert dead_code_warnings(src) == []
+
+
+def test_dead_tail_inside_a_live_static_if_arm_warns():
+    # The statement-level @if walks its taken arm with its own skip, so the
+    # dead tail reports there, not in the enclosing block's walk.
+    src = """
+    fn main() -> int32 {
+        @if (1) {
+            return 0;
+            let x: int32 = 1;
+        }
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after the 'return' above", 5),
+    ]
+
+
+def test_dead_static_if_branch_never_warns():
+    # The not-taken @if branch is structurally unseen -- never walked, never
+    # type-checked -- so nothing inside it can be reported as dead code.
+    src = """
+    fn main() -> int32 {
+        @if (0) {
+            return 0;
+            let x: int32 = 1;
+        }
+        return 0;
+    }
+    """
+    assert dead_code_warnings(src) == []
+
+
+def test_generic_body_collects_identical_messages_per_instantiation():
+    # The message is type-free, so both instantiations emit byte-identical
+    # (source, line, message) entries and the driver's print-time dedup
+    # collapses them to one diagnostic (see test_cli.py).
+    src = """
+    fn pick<T>(v: T) -> int32 {
+        return 1;
+        let dead: int32 = 0;
+    }
+    fn main() -> int32 { return pick(1) + pick(true) - 2; }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after the 'return' above", 4),
+        ("unreachable code: nothing runs after the 'return' above", 4),
+    ]
+
+
 # --- the driver's print-time gate: parse_wflags and _report_warnings ---
 
 def test_parse_wflags_accepts_registered_names():

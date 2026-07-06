@@ -800,6 +800,78 @@ def test_emit_interface_honors_warning_classes(tmp_path):
     assert not (tmp_path / "deref.mci").exists()
 
 
+# ---------------------------------------------------------------- -Wdead-code
+
+DEAD_SRC = (
+    "fn main() -> int32 {\n"
+    "    return 0;\n"
+    "    let x: int32 = 1;\n"
+    "}\n"
+)
+DEAD_WARNING = "unreachable code: nothing runs after the 'return' above"
+
+
+def test_dead_code_class_is_off_by_default(tmp_path):
+    # The CI shape: even under bare -Werror, the default-off class neither
+    # prints nor fails the build.
+    src = tmp_path / "dead.mc"
+    src.write_text(DEAD_SRC)
+    exe = tmp_path / "dead"
+    result = mcc(src, "-Werror", "-o", exe)
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert exe.exists()
+
+
+def test_wdead_code_enables_the_class_and_names_it(tmp_path):
+    src = tmp_path / "dead.mc"
+    src.write_text(DEAD_SRC)
+    result = mcc(src, "-Wdead-code", "--emit-llvm")
+    assert result.returncode == 0  # a warning, not an error: IR still emits
+    assert result.stderr == (
+        f"{src}: warning: line 3: {DEAD_WARNING} [-Wdead-code]\n")
+    assert 'define i32 @"main"()' in result.stdout
+
+
+def test_wall_enables_dead_code(tmp_path):
+    src = tmp_path / "dead.mc"
+    src.write_text(DEAD_SRC)
+    result = mcc(src, "-Wall", "--emit-llvm")
+    assert result.returncode == 0
+    assert result.stderr == (
+        f"{src}: warning: line 3: {DEAD_WARNING} [-Wdead-code]\n")
+
+
+def test_werror_promotes_dead_code_and_names_it(tmp_path):
+    src = tmp_path / "dead.mc"
+    src.write_text(DEAD_SRC)
+    exe = tmp_path / "dead"
+    result = mcc(src, "-Wdead-code", "-Werror", "-o", exe)
+    assert result.returncode == 1
+    assert result.stderr == (
+        f"{src}: error: line 3: {DEAD_WARNING} [-Werror=dead-code]\n")
+    assert not exe.exists()  # promoted failure produces no executable
+    assert not exe.with_suffix(".o").exists()
+
+
+def test_dead_code_in_a_generic_body_prints_once_across_instantiations(tmp_path):
+    # The message never names types (dead code is not type-checked), so both
+    # instantiations emit byte-identical entries and the (file, line,
+    # message) dedup collapses them to a single printed diagnostic.
+    src = tmp_path / "dead.mc"
+    src.write_text(
+        "fn pick<T>(v: T) -> int32 {\n"
+        "    return 1;\n"
+        "    let dead: int32 = 0;\n"
+        "}\n"
+        "fn main() -> int32 { return pick(1) + pick(true) - 2; }\n"
+    )
+    result = mcc(src, "-Wdead-code", "--emit-llvm")
+    assert result.returncode == 0
+    warning = f"{src}: warning: line 3: {DEAD_WARNING} [-Wdead-code]\n"
+    assert result.stderr.count(warning) == 1
+
+
 # ------------------------------------------------------------- @deprecated
 
 DEPRECATED_SRC = (
