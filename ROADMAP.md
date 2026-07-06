@@ -1106,6 +1106,41 @@ already do).
         type's override wins across an interface call too (a `C*` upcast
         to `A*` and boxed as a `writer` still calls `C::write`, never
         `A::write`)
+    - [ ] `case type` over interfaces — once interfaces land,
+          `case type (x)` admits an interface arm (`when writer w:`), a
+          set-membership test over the same compile-time FNV-1a-64 type
+          tag that shipped `case type` arms already lower to
+          integer-equality chains on: whole-program compilation
+          statically knows every type implementing the interface and
+          every type that boxes into `any`, so the arm lowers to a
+          small multi-tag equality chain, each hit forming the fat
+          pointer from a per-tag vtable constant plus the payload, no
+          runtime registry. What matches: structs cannot box into `any`
+          (the shipped escape-hatch rejection), so the base match is a
+          boxed `T*` whose pointee type implements the interface, the
+          pointer supplying `data*` directly; and the complementary
+          direction is first-class, since a fat pointer is two words
+          and the `any` payload is exactly `[2 x uint64]`, so an
+          interface value itself boxes into `any` and matches its own
+          interface arm, which is what makes a heterogeneous
+          `slice<const any>` of interface values work and is the
+          natural endpoint for the stdlib's `format_arg` dispatch (a
+          `when printable p:` arm replacing one arm per concrete type;
+          `format_arg` lives in the
+          [native variadics](#functions-and-methods) item's stage 3).
+          Arm ordering becomes semantic: today every arm is a distinct
+          concrete type so order cannot matter, but an interface arm
+          overlaps concrete arms, so the spec is first-match-wins in
+          textual order (an unreachable-later-arm diagnostic is worth
+          considering), and the mandatory `else` is unchanged, since
+          interface arms widen individual arms without closing the open
+          `any` universe. The nesting is the dependency: this hangs off
+          interfaces, whose own chain (methods above, over the shipped
+          concrete overloading) is unblocked from the bottom. Open
+          question, recorded not solved: the tag-to-vtable table is a
+          whole-program artifact, so the `.mci` story needs the same
+          care the [function overloading](#functions-and-methods) item
+          gave the plain-vs-mangled symbol choice
 - [x] `@noalias` parameters — C's `restrict`: mark a pointer parameter
       (`fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64)`) as
       not overlapping any other pointer the function can reach, mapping to
