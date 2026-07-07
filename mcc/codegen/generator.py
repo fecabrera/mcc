@@ -949,6 +949,59 @@ class CodeGen:
         self.used_symbols.add(candidate)
         return candidate
 
+    @staticmethod
+    def overload_salt(source: str | None) -> str | None:
+        """The per-module salt for a ``@private`` overload's mangled symbol.
+
+        A ``@private`` member of an open overload set is a candidate only
+        inside its own module, so two modules may each contribute one with
+        the same parameter pattern; salting the mangled symbol with the
+        defining file's stem (``format(int32).util``) keeps the two from
+        colliding. Unlike :meth:`static_base` the salt is a pure function of
+        the source path -- no order-dependent counter -- and it strips the
+        ``.mci`` suffix down to the same stem as the ``.mc``: a private
+        member traveling in an interface stub (say, a helper an ``@inline``
+        body calls) compiles in the consumer and must spell the exact symbol
+        the defining object emitted so the ``linkonce_odr`` copies merge.
+
+        Args:
+            source: The defining file, or ``None`` for a program parsed from
+                a string.
+
+        Returns:
+            The stem to salt with, or ``None`` when there is no source file
+            (a single-string program has no foreign module to collide with).
+        """
+        if source is None:
+            return None
+        stem = source.rsplit("/", 1)[-1]
+        return stem.removesuffix(".mci").removesuffix(".mc")
+
+    def import_closure(self, source: str) -> set[str | None]:
+        """Every file reachable from ``source`` through its ``import`` graph.
+
+        Walks :attr:`Program.module_imports` (recorded by the driver's
+        import merge). Used to derive an interface stub's symbol choice: the
+        object a ``.mci`` describes was compiled seeing its own declarations
+        plus whatever its own imports contributed -- and nothing the
+        consumer added later.
+
+        Args:
+            source: The file to start from.
+
+        Returns:
+            The reachable source paths, ``source`` included.
+        """
+        seen: set[str | None] = {source}
+        work = [source]
+        graph = self.program.module_imports
+        while work:
+            for target in graph.get(work.pop(), ()):
+                if target not in seen:
+                    seen.add(target)
+                    work.append(target)
+        return seen
+
     def template_base(self, func: Func, groups: bool = True) -> str:
         """Spell a generic template's order-independent symbol base.
 
@@ -1867,9 +1920,8 @@ class CodeGen:
     def check_mixed_set(self, func: Func, members: dict[str, Func]):
         """Validate a generic template joining a concrete name (a mixed set).
 
-        A template may share its name with a concrete function or concrete
-        set only from its own module (all overloads of a name live in one
-        defining module), and only when the concrete side is overloadable at
+        Overload sets are open: the concrete side may live in any module.
+        The only requirement is that the concrete side is overloadable at
         all -- ``main``, a variadic function, and a ``va_list``-taking
         function never join a set, whichever side declares first.
 
@@ -1878,15 +1930,10 @@ class CodeGen:
             members: The name's concrete declarations, by params-key.
 
         Raises:
-            LangError: On a cross-module mix or a non-overloadable concrete
-                side.
+            LangError: On a non-overloadable concrete side.
         """
         if func.name == "main":
             raise LangError("function 'main' cannot be overloaded", func.line)
-        if next(iter(members.values())).source != func.source:
-            raise LangError(
-                f"function {func.name!r} already defined", func.line
-            )
         for member in members.values():
             if member.variadic:
                 raise LangError(
@@ -3099,17 +3146,27 @@ class CodeGen:
             self.globals[var.name] = (glob, var_type, var.volatile)
             self.global_privacy[var.name] = (var.private, var.source)
             self.used_symbols.add(var.name)
-        # Concrete overloading: pre-group plain declarations by (source, name)
-        # so the plain-vs-mangled symbol choice is known before the first
-        # member declares. Prototypes count -- a .mci stub's prototypes must
-        # derive the same symbols the defining object emitted -- but a set
-        # forms only when the declarations spell two or more DISTINCT
-        # parameter lists: a same-signature prototype+definition pair is one
-        # member (the classic forward declaration keeps its plain symbol).
-        # A name with a single signature keeps its plain, C-linkable symbol;
-        # only same-module sets of two or more mangle. @extern, @static,
+        # Concrete overloading: pre-group plain declarations by name (sets
+        # are open -- the whole-program union) so the plain-vs-mangled symbol
+        # choice is known before the first member declares. Prototypes
+        # count -- a .mci stub's prototypes must derive the same symbols the
+        # defining object emitted -- but a set forms only when the
+        # declarations spell two or more DISTINCT parameter lists: a
+        # same-signature prototype+definition pair is one member (the
+        # classic forward declaration keeps its plain symbol). The symbol
+        # choice is judged per declaring file:
+        #   * a `.mci`-sourced declaration counts its own stub's signatures
+        #     plus the public ones reachable through the stub's own import
+        #     closure -- exactly what the already-compiled object it
+        #     describes was built seeing. A consumer-side extension never
+        #     re-derives a stub's pinned symbols;
+        #   * a `.mc`-sourced declaration counts every signature visible to
+        #     it: the whole-program union minus other modules' @private
+        #     members (invisible, so they cannot flip a symbol choice).
+        # A file whose visible set has a single signature keeps its plain,
+        # C-linkable symbol; sets of two or more mangle. @extern, @static,
         # generics, and tombstones never join the concrete grouping.
-        plain_decls: dict[tuple[str | None, str], list[Func]] = {}
+        plain_decls: dict[str, list[Func]] = {}
         for func in self.program.functions:
             if (
                 func.removed_msg is None
@@ -3117,18 +3174,34 @@ class CodeGen:
                 and not func.static
                 and not func.type_params
             ):
-                plain_decls.setdefault((func.source, func.name), []).append(func)
+                plain_decls.setdefault(func.name, []).append(func)
         overload_keys: set[tuple[str | None, str]] = set()
-        for key, decls in plain_decls.items():
+        for name, decls in plain_decls.items():
             if len(decls) < 2:
                 continue
-            self.current_source = key[0]  # signatures may name private structs
-            sigs = {
-                tuple(str(self.lang_type(t, f.line)) for _, t in f.params)
-                for f in decls
-            }
-            if len(sigs) > 1:
-                overload_keys.add(key)
+            spelled: list[tuple[Func, tuple[str, ...]]] = []
+            for f in decls:
+                # Per declaration: its signature may name @private structs.
+                self.current_source = f.source
+                spelled.append(
+                    (f, tuple(str(self.lang_type(t, f.line)) for _, t in f.params))
+                )
+            public_sigs = {sig for f, sig in spelled if not f.private}
+            by_source: dict[str | None, set[tuple[str, ...]]] = {}
+            for f, sig in spelled:
+                by_source.setdefault(f.source, set()).add(sig)
+            for source, own_sigs in by_source.items():
+                if source is not None and source.endswith(".mci"):
+                    closure = self.import_closure(source)
+                    visible = own_sigs | {
+                        sig
+                        for f, sig in spelled
+                        if not f.private and f.source in closure
+                    }
+                else:
+                    visible = own_sigs | public_sigs
+                if len(visible) > 1:
+                    overload_keys.add((source, name))
         declared: set[tuple[str | None, str]] = set()
         for func in self.program.functions:
             if func.removed_msg is not None:
@@ -3322,15 +3395,28 @@ class CodeGen:
                 # call, so they collide here, across modules included.
                 base = self.template_base(func)
                 overloads = self.templates.setdefault(func.name, [])
-                if any(
-                    self.template_bases[id(prior)] == base
-                    for prior in overloads
-                ):
-                    raise LangError(
+                clash = next(
+                    (
+                        prior
+                        for prior in overloads
+                        if self.template_bases[id(prior)] == base
+                    ),
+                    None,
+                )
+                if clash is not None:
+                    err = LangError(
                         f"function '{base}' already defined; overloads must "
                         "differ in parameter patterns",
                         func.line,
                     )
+                    err.notes.append(
+                        Note(
+                            f"previous declaration of {func.name!r} is here",
+                            clash.line,
+                            clash.source,
+                        )
+                    )
+                    raise err
                 # Disjoint type groups make same-pattern templates a
                 # resolvable set (distinct bases above); overlapping ones
                 # would be ambiguous at every shared deduction, so they
@@ -3341,14 +3427,18 @@ class CodeGen:
                 continue
             if in_set:
                 # A member of a concrete overload set (two or more distinct
-                # parameter lists on one name in one module, prototypes
+                # parameter lists visible to this file, prototypes
                 # included). Members link by a signature-derived mangled
                 # symbol -- `f(int32, char*)`, the canonical str(LangType) of
                 # the parameter types only: the return type never
                 # distinguishes overloads, and const/mut markers and
                 # @nonnull/@noalias annotations live outside the parameter
                 # types, so attribute-only variants spell the same symbol and
-                # collide as duplicates below.
+                # collide as duplicates below. A @private member's symbol is
+                # additionally salted with its file stem (it is invisible
+                # outside its module, so it must never collide with another
+                # module's members); its registry key carries the same salt
+                # so privacy variants never alias one entry.
                 if func.name == "main":
                     # JIT and cc both resolve the plain `main` symbol.
                     raise LangError(
@@ -3371,33 +3461,89 @@ class CodeGen:
                     )
                 ret = self.lang_type(func.ret_type, func.line)
                 self.check_noreturn_decl(func, ret)
-                member = self.concrete_decls.get(func.name, {}).get(params_key)
+                salt = (
+                    self.overload_salt(func.source) if func.private else None
+                )
+                entry_key = (
+                    params_key if salt is None else f"{params_key}\x00{salt}"
+                )
+                symbol = f"{func.name}({params_key})" + (
+                    f".{salt}" if salt is not None else ""
+                )
+                member = self.concrete_decls.get(func.name, {}).get(entry_key)
                 if (
                     member is not None
                     and id(member) in self.overload_symbols
-                    and self.can_pair_prototype(func, params_key)
+                    and self.can_pair_prototype(func, entry_key)
                 ):
                     # Per-signature forward declaration inside the set: the
                     # params-key selected the pair -- cross-source too, which
                     # is how a defining module's .mc completes its own .mci
-                    # stub's prototypes member by member. A plain-symbol
-                    # function from another module never pairs here (a set
-                    # cannot extend a foreign single); it falls through to
-                    # the collision error below.
-                    self.pair_prototype(func, params_key, ret, params)
+                    # stub's prototypes member by member (a @private member's
+                    # salt normalizes .mci and .mc to one stem, so its stub
+                    # prototype pairs too). A plain-symbol function from
+                    # another module never pairs here; it is absorbed as an
+                    # ordinary member below.
+                    self.pair_prototype(func, entry_key, ret, params)
                     continue
-                prior = self.overloads.get(func.name)
-                templates = self.templates.get(func.name)
+                if member is not None and id(member) not in self.overload_symbols:
+                    # The same pattern already stands as a plain-symbol
+                    # function (another module's single, or an interface
+                    # stub's pinned member): a second member with an
+                    # identical parameter list would tie at every call.
+                    err = LangError(
+                        f"function '{func.name}({params_key})' already "
+                        "defined; overloads must differ in parameter types",
+                        func.line,
+                    )
+                    err.notes.append(
+                        Note(
+                            f"previous declaration of {func.name!r} is here",
+                            member.line,
+                            member.source,
+                        )
+                    )
+                    raise err
+                # A privacy-only variant of one signature from one file is a
+                # duplicate, not a second member (the two would tie at every
+                # call).
+                twin_salt = self.overload_salt(func.source)
+                twin = (
+                    self.concrete_decls.get(func.name, {}).get(params_key)
+                    if func.private
+                    else self.concrete_decls.get(func.name, {}).get(
+                        f"{params_key}\x00{twin_salt}"
+                    )
+                    if twin_salt is not None
+                    else None
+                )
+                if twin is not None and twin.source == func.source:
+                    raise LangError(
+                        f"function '{func.name}({params_key})' already "
+                        "defined; overloads must differ in parameter types",
+                        func.line,
+                    )
+                plain_member = None
+                if func.name in self.funcs:
+                    # The name stands as a plain-symbol function. An open set
+                    # absorbs a plain concrete single (an interface stub's
+                    # pinned member, or a module whose own visible set is
+                    # this one signature); an @extern's fixed C symbol never
+                    # joins, and a global or tombstone is not a function.
+                    plain_member = next(
+                        (
+                            m
+                            for m in self.concrete_decls.get(
+                                func.name, {}
+                            ).values()
+                            if id(m) not in self.overload_symbols
+                        ),
+                        None,
+                    )
                 if (
-                    func.name in self.funcs
+                    (func.name in self.funcs and plain_member is None)
                     or func.name in self.globals
                     or func.name in self.removed
-                    # All overloads of a name live in one defining module
-                    # (its .mci counts as that module): a new signature from
-                    # another file cannot extend the set...
-                    or (prior is not None and prior[0].source != func.source)
-                    # ...and a mixed generic/concrete set is same-module too.
-                    or (templates is not None and templates[0].source != func.source)
                 ):
                     raise LangError(
                         f"function {func.name!r} already defined", func.line
@@ -3410,13 +3556,25 @@ class CodeGen:
                         "takes a va_list parameter",
                         func.line,
                     )
-                symbol = f"{func.name}({params_key})"
                 if symbol in self.funcs:
-                    raise LangError(
+                    err = LangError(
                         f"function {symbol!r} already defined; overloads "
                         "must differ in parameter types",
                         func.line,
                     )
+                    prior = self.concrete_decls.get(func.name, {}).get(
+                        entry_key
+                    )
+                    if prior is not None:
+                        err.notes.append(
+                            Note(
+                                f"previous declaration of {func.name!r} "
+                                "is here",
+                                prior.line,
+                                prior.source,
+                            )
+                        )
+                    raise err
                 hidden = self.hidden_ref_indices(func, params)
                 fnty = ir.FunctionType(ret.ir, self.param_irs(params, hidden))
                 fn = ir.Function(self.module, fnty, name=symbol)
@@ -3436,9 +3594,18 @@ class CodeGen:
                 self.hidden_ref[symbol] = hidden
                 self.mut_ref[symbol] = self.mut_indices(func)
                 self.nonnull_ref[symbol] = self.nonnull_indices(func)
-                self.overloads.setdefault(func.name, []).append(func)
+                members = self.overloads.setdefault(func.name, [])
+                if plain_member is not None and not any(
+                    m is plain_member for m in members
+                ):
+                    # The standing plain single becomes an ordinary member:
+                    # resolution iterates self.overloads, and emission falls
+                    # back to the plain name for a member with no
+                    # overload_symbols entry.
+                    members.append(plain_member)
+                members.append(func)
                 self.overload_symbols[id(func)] = symbol
-                self.concrete_decls.setdefault(func.name, {})[params_key] = func
+                self.concrete_decls.setdefault(func.name, {})[entry_key] = func
                 self.used_symbols.add(symbol)
                 continue
             if self.can_pair_prototype(func, params_key):
@@ -3449,22 +3616,20 @@ class CodeGen:
                 continue
             if (
                 func.name in self.funcs
-                or func.name in self.overloads
                 or func.name in self.globals
                 or func.name in self.removed
             ):
                 raise LangError(f"function {func.name!r} already defined", func.line)
-            templates = self.templates.get(func.name)
-            if templates is not None:
-                # A single concrete declaration joining same-module generic
-                # templates forms a mixed set; it keeps its plain symbol (the
-                # symbol choice counts concrete signatures alone), and calls
-                # route through overload resolution. The concrete side must
-                # still be overloadable at all.
-                if templates[0].source != func.source:
-                    raise LangError(
-                        f"function {func.name!r} already defined", func.line
-                    )
+            set_members = self.overloads.get(func.name)
+            if set_members is not None or func.name in self.templates:
+                # A single plain-symbol concrete joining a standing set (open
+                # sets: this file's own visible set is just this signature --
+                # an interface stub's pinned member, or a module that cannot
+                # see the foreign @private members that formed the set), or
+                # joining generic templates (a mixed set). Either way it
+                # keeps its plain symbol, and calls route through overload
+                # resolution. The concrete side must still be overloadable
+                # at all.
                 if func.name == "main":
                     raise LangError(
                         "function 'main' cannot be overloaded", func.line
@@ -3485,10 +3650,32 @@ class CodeGen:
                         "takes a va_list parameter",
                         func.line,
                     )
+                dup = self.concrete_decls.get(func.name, {}).get(params_key)
+                if dup is not None:
+                    # A member already spells this exact parameter list: a
+                    # second one would tie at every call.
+                    err = LangError(
+                        f"function '{func.name}({params_key})' already "
+                        "defined; overloads must differ in parameter types",
+                        func.line,
+                    )
+                    err.notes.append(
+                        Note(
+                            f"previous declaration of {func.name!r} is here",
+                            dup.line,
+                            dup.source,
+                        )
+                    )
+                    raise err
             self.check_collecting_decl(func, params)
             self.concrete_decls.setdefault(func.name, {})[params_key] = func
             self.func_privacy[func.name] = (func.private, func.source)
             self.used_symbols.add(func.name)
+            if set_members is not None:
+                # An ordinary member from here on: resolution iterates
+                # self.overloads, and emission falls back to the plain name
+                # for a member with no overload_symbols entry.
+                set_members.append(func)
             ret = self.lang_type(func.ret_type, func.line)
             self.check_noreturn_decl(func, ret)
             hidden = self.hidden_ref_indices(func, params)
@@ -7569,19 +7756,44 @@ class CodeGen:
             # (tier, specificity) rank) through the same pre-evaluate path.
             # A mixed set's
             # concrete side is either the mangled set or a single plain
-            # function sharing the name (same module, by construction).
+            # function sharing the name.
             candidates = list(generic) if generic is not None else []
             if expr.name in self.overloads:
                 candidates += self.overloads[expr.name]
             elif generic is not None:
                 candidates += self.concrete_decls.get(expr.name, {}).values()
-            if expr.type_args and generic is None:
+            # Sets are open and privacy is per overload: another module's
+            # @private member is not a candidate here -- the call simply
+            # falls through to the members this file can see (so a foreign
+            # @private overload can never win, shadow, or make a call
+            # ambiguous outside its module).
+            visible = [
+                f
+                for f in candidates
+                if not f.private or f.source == self.current_source
+            ]
+            if not visible:
+                owners = ", ".join(
+                    sorted(
+                        {
+                            f.source.rsplit("/", 1)[-1]
+                            if f.source
+                            else "its file"
+                            for f in candidates
+                        }
+                    )
+                )
+                raise LangError(
+                    f"function {expr.name!r} is private to {owners}",
+                    expr.line,
+                )
+            if expr.type_args and not any(f.type_params for f in visible):
                 # Explicit type arguments select among the generic
                 # candidates; a purely concrete set has none.
                 raise LangError(
                     f"{expr.name!r} is not a generic function", expr.line
                 )
-            return self.gen_generic_call(expr, candidates)
+            return self.gen_generic_call(expr, visible)
         if expr.name not in self.funcs:
             raise LangError(
                 f"undefined function {expr.name!r} (missing import?)", expr.line
@@ -8868,9 +9080,23 @@ class CodeGen:
                 )
             viable.sort(key=lambda entry: entry[0], reverse=True)
             if len(viable) > 1 and viable[0][0] == viable[1][0]:
-                raise LangError(
+                # Open sets make cross-module ties possible, so cite the
+                # contenders' declaration sites.
+                err = LangError(
                     f"call to {expr.name!r} is ambiguous between overloads", expr.line
                 )
+                top = viable[0][0]
+                for rank_key, contender, _ in viable:
+                    if rank_key != top:
+                        break
+                    err.notes.append(
+                        Note(
+                            "candidate is here",
+                            contender.line,
+                            contender.source,
+                        )
+                    )
+                raise err
             _, func, bindings = viable[0]
         # The winner is known; a mixed overload set warns only when resolution
         # picks a deprecated candidate.

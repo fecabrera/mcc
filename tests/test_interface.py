@@ -262,9 +262,11 @@ def test_root_definition_completes_an_mci_set_member(tmp_path):
     assert run_path(main) == 5
 
 
-def test_consumer_cannot_extend_an_mci_set(tmp_path):
-    # Cross-module extension: a new signature from the consumer's file would
-    # change the set size the defining object was compiled with.
+def test_consumer_extends_an_mci_set(tmp_path):
+    # Open sets: a new signature from the consumer's file extends the
+    # stub's set. The stub's members keep the symbols the defining object
+    # was compiled with (its own set size); only the consumer's addition
+    # derives from the enlarged whole-program set.
     (tmp_path / "api.mci").write_text(
         "fn pick(x: int32) -> int32;\nfn pick(p: char*) -> int32;\n"
     )
@@ -272,10 +274,98 @@ def test_consumer_cannot_extend_an_mci_set(tmp_path):
     main.write_text(
         'import "api";\n'
         "fn pick(b: bool) -> int32 { return 3; }\n"
-        "fn main() -> int32 { return 0; }\n"
+        "fn main() -> int32 { return pick(true); }\n"
+    )
+    ir = str(compile_to_ir(main))
+    assert 'declare i32 @"pick(int32)"' in ir  # stub symbols unchanged
+    assert 'declare i32 @"pick(char*)"' in ir
+    assert 'define i32 @"pick(bool)"' in ir  # the consumer's new member
+
+
+def test_consumer_extends_a_singleton_mci(tmp_path):
+    # A stub with ONE pick describes an object exporting the plain,
+    # C-linkable symbol; a consumer extension must not re-derive it. The
+    # stub member keeps its plain symbol (the set mixes plain and mangled
+    # members), and dispatch still routes by argument type.
+    (tmp_path / "api.mci").write_text("fn pick(x: int32) -> int32;\n")
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "api";\n'
+        "fn pick(b: bool) -> int32 { return 3; }\n"
+        "fn main() -> int32 { return pick(7) * 10 + pick(true); }\n"
+    )
+    ir = str(compile_to_ir(main))
+    assert 'declare i32 @"pick"(' in ir  # the stub's plain symbol, pinned
+    assert 'define i32 @"pick(bool)"' in ir
+    assert 'call i32 @"pick"(' in ir
+    assert 'call i32 @"pick(bool)"(' in ir
+
+
+def test_two_singleton_stubs_claiming_one_plain_symbol_collide(tmp_path):
+    # Two stubs that each pin the plain symbol describe two objects that
+    # could never link together; the collision is a compile error, not a
+    # silent re-mangle.
+    (tmp_path / "one.mci").write_text("fn pick(x: int32) -> int32;\n")
+    (tmp_path / "two.mci").write_text("fn pick(p: char*) -> int32;\n")
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "one";\nimport "two";\nfn main() -> int32 { return 0; }\n'
     )
     with pytest.raises(LangError, match="function 'pick' already defined"):
         run_path(main)
+
+
+def test_stub_symbol_choice_counts_its_own_imports(tmp_path):
+    # A stub's set size is what its defining object saw: its own
+    # declarations plus its import closure. Here ext's one `fmt` was
+    # compiled against base's two, so its member was mangled -- the
+    # consumer must re-derive exactly that, not a plain singleton.
+    (tmp_path / "base.mc").write_text(
+        "fn fmt(x: int32) -> int32 { return 1; }\n"
+        "fn fmt(p: char*) -> int32 { return 2; }\n"
+    )
+    ext = tmp_path / "ext.mc"
+    ext.write_text(
+        'import "base";\nfn fmt(b: bool) -> int32 { return 3; }\n'
+    )
+    definer = str(compile_to_ir(ext))
+    assert 'define i32 @"fmt(bool)"' in definer
+    out = tmp_path / "ext.mci"
+    assert emit_interface(ext, (tmp_path,), None, {}, out) == 0
+    ext.unlink()
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "ext";\nfn main() -> int32 { return fmt(true); }\n'
+    )
+    ir = str(compile_to_ir(main))
+    assert 'declare i32 @"fmt(bool)"' in ir
+    assert 'call i32 @"fmt(bool)"(' in ir
+
+
+def test_private_member_symbol_round_trips_through_a_stub(tmp_path):
+    # An @private member's mangled symbol is salted with the defining
+    # FILE'S stem, normalized so `.mci` and `.mc` spell the same salt: the
+    # @inline member's body travels in the stub, compiles in the consumer,
+    # and its call must hit the exact symbol the defining object emitted.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "@private\nfn describe(x: int32) -> int32 { return x + 1; }\n"
+        "@inline\nfn describe(b: bool) -> int32 "
+        "{ return describe(b ? 1 : 0); }\n"
+    )
+    definer = str(compile_to_ir(lib))
+    assert 'define i32 @"describe(int32).lib"' in definer
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    assert "@private fn describe(x: int32) -> int32;" in out.read_text()
+    lib.unlink()
+    consumer = tmp_path / "consumer.mc"
+    consumer.write_text(
+        'import "lib";\nfn main() -> int32 { return describe(true); }\n'
+    )
+    ir = str(compile_to_ir(consumer))
+    assert 'declare i32 @"describe(int32).lib"' in ir
+    assert 'call i32 @"describe(int32).lib"' in ir
 
 
 def test_private_sibling_keeps_consumer_symbols_mangled(tmp_path):
@@ -813,3 +903,26 @@ def test_removed_generic_round_trips_through_mci(tmp_path):
     err = excinfo.value
     assert str(err) == "line 2: 'stale' was removed: use fresh instead"
     assert err.source == str(main.resolve())
+
+
+def test_singleton_mci_joins_a_standing_set(tmp_path):
+    # The reverse import order: the consumer's members declare first, then
+    # the stub's plain single arrives and is absorbed into the set. Calls
+    # route to the plain symbol for the stub's signature and to the mangled
+    # ones for the consumer's.
+    (tmp_path / "api.mci").write_text("fn pick(x: int32) -> int32;\n")
+    (tmp_path / "ext.mc").write_text(
+        "fn pick(b: bool) -> int32 { return 3; }\n"
+        "fn pick(p: char*) -> int32 { return 4; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "ext";\nimport "api";\n'
+        "fn main() -> int32 {\n"
+        '    return pick(7) + pick(true) + pick("s");\n'
+        "}\n"
+    )
+    ir = str(compile_to_ir(main))
+    assert 'call i32 @"pick"(' in ir
+    assert 'call i32 @"pick(bool)"(' in ir
+    assert 'call i32 @"pick(char*)"(' in ir

@@ -10,6 +10,35 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Open overload sets** — overload sets are open by default (a minor
+  version bump, pre-1.0): any module may add overloads to an existing
+  name — concrete, generic, or mixed — and the set is the whole-program
+  union at import merge, in any import order; the one-defining-module rule
+  and its `function 'f' already defined` cross-module join error are gone.
+  The gate is the declare-time collision rules, now cross-module for
+  concretes too: same-pattern duplicates collide with a note citing the
+  prior member's site, and cross-module ambiguities cite both declaration
+  sites. Resolution is unchanged (concrete beats bounded generic beats
+  unbounded), so an import can only add candidates or collide loudly —
+  and a concrete overload replacing group-covered behavior is the intended
+  protocol move: one overload in your own module plugs your type into a
+  foreign set (the example joins the string module's `string_append` set;
+  the planned stdlib formatting protocol rides on the same mechanism).
+  Privacy and deprecation are per overload now: an `@private`
+  overload is a candidate only inside its own module (foreign calls fall
+  through to the members they can see; its mangled symbol is salted with
+  the file stem, `f(int32).util`, so it never collides with foreign
+  members), and `@deprecated` warns only when resolution picks that
+  member. Symbol choice is judged per declaring file over the signatures
+  it can see, and `.mci` stubs stay ABI-pinned: a stub's members re-derive
+  their symbols from the stub plus its own import closure, so consumers
+  may extend a stub's set without re-mangling the compiled object's
+  symbols (two singleton stubs claiming one plain symbol still collide —
+  those objects could never link). `main`, variadic, and collecting
+  (`args...`) functions stay non-overloadable. See
+  [Function overloading](docs/language.md#function-overloading) and
+  [examples/functions/open_overloads.mc](examples/functions/open_overloads.mc).
+
 - **The `with` statement** — `with (t = v as T) body; else other;` is the
   checked-`as` test: it tests an `any` subject's boxed tag against one type
   and, on a match, binds `t` to the recovered value, scoped to the true

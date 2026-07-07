@@ -51,7 +51,8 @@ diverging constructs make unreachable.
 
 Defining and calling functions: void/recursion, forward declarations, the
 parameter modifiers (`const`, `mut`, `@noalias`, `@nonnull`), overload sets
-(concrete, generic, and mixed), never-returning functions (`@noreturn`),
+(concrete, generic, mixed, and open across modules), never-returning
+functions (`@noreturn`),
 variadics (C `...` and native collecting), and function pointers.
 
 | Example | Shows |
@@ -63,6 +64,7 @@ variadics (C `...` and native collecting), and function pointers.
 | [mut_overloads.mc](functions/mut_overloads.mc) | generic overloads mixing `mut` and non-`mut` positions: a `mut` overload next to a pointer one, rvalues dropping `mut` candidates, writability judged against the chosen overload, single argument evaluation |
 | [overloading.mc](functions/overloading.mc) | concrete function overloading: a constructor-flavored `counter_init` family dispatched by arity and by argument type, a string literal still adapting to a `slice<const char>` member, the must-differ-in-parameter-types rule |
 | [mixed_overloads.mc](functions/mixed_overloads.mc) | a generic template and concrete functions sharing one name: the (is-concrete, specificity) rank, concrete fast paths winning exact matches, the generic catch-all covering the rest, explicit type args selecting among the generic candidates only |
+| [open_overloads.mc](functions/open_overloads.mc) | open overload sets: a module making its own struct appendable by declaring one `string_append` overload into the stdlib's foreign concrete set, the whole-program union at import merge, members from two modules resolving side by side, the join that used to be a duplicate-definition error |
 | [pointer_decay.mc](functions/pointer_decay.mc) | a proven-non-null `T*` decaying into a `const`-struct or `mut` slot: one call shape for a stack value and a null-guarded heap pointer, rvalue `&x` decaying too, the narrowed fact surviving the call |
 | [noalias.mc](functions/noalias.mc) | `@noalias` pointer parameters (C's `restrict`): the unchecked no-overlap promise that lets the optimizer treat a copy's regions as disjoint |
 | [nonnull.mc](functions/nonnull.mc) | `@nonnull` pointer parameters: the checked "definitely non-null" refinement — call sites must prove the argument non-null, the callee skips the re-check |

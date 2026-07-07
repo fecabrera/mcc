@@ -189,6 +189,8 @@ def merge_imports(program: Program, base_dir: Path,
     structs, functions = [], []
     globals_, consts, conditionals, enums, aliases = [], [], [], [], []
     directives = []
+    module_imports: dict[str | None, tuple[str, ...]] = {}
+    edges: list[str] = []
     imports = program.imports + _conditional_imports(program.conditionals, facts)
     for import_path, line in imports:
         candidates = []
@@ -199,7 +201,12 @@ def merge_imports(program: Program, base_dir: Path,
             tried = ", ".join(str(c) for c in candidates)
             raise LangError(f"cannot import {import_path!r}: tried {tried}", line,
                             source=source)
+        # The edge records even when the target was already loaded (a shared
+        # import): the graph must reflect what each file can see, not just
+        # who happened to load it first.
+        edges.append(str(target.resolve()))
         imported = load_program(target, search_paths, facts, visited)
+        module_imports.update(imported.module_imports)
         structs += imported.structs
         functions += imported.functions
         globals_ += imported.globals
@@ -208,6 +215,7 @@ def merge_imports(program: Program, base_dir: Path,
         enums += imported.enums
         aliases += imported.aliases
         directives += imported.directives
+    module_imports[source] = tuple(edges)
     structs += program.structs
     functions += program.functions
     globals_ += program.globals
@@ -217,7 +225,7 @@ def merge_imports(program: Program, base_dir: Path,
     aliases += program.aliases
     directives += program.directives
     return Program([], structs, functions, globals_, consts, conditionals, enums,
-                   aliases, directives)
+                   aliases, directives, module_imports=module_imports)
 
 
 def load_program(path: Path, search_paths: tuple[Path, ...] = (),

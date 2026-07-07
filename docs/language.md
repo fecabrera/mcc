@@ -584,25 +584,49 @@ that keep it C-simple:
   `f(x: int32)` beside `f(x: int64)`, the call `f(0)` is a compile error —
   the literal adapts to either width, and mcc declares rather than guesses.
   `f(0 as int64)` or a typed variable disambiguates.
-- **One defining module.** All overloads of a name — generic members of a
-  mixed set included — must be declared in one file; the same name defined
-  in two modules stays a collision error. This keeps the symbol choice
-  (below) a per-file fact. A module's generated `.mci` interface counts as
-  that module: importing the stub alongside the module's own source pairs
-  prototype with definition member by member, but a consumer file cannot
-  extend an imported set with a new signature.
-- **A single definition keeps its plain symbol.** Only a name with two or
-  more definitions mangles: each member then links by a signature-derived
-  symbol spelled from its parameter types (`f(int32, char*)`). Generic
-  templates mangle the same way, by parameter *pattern*: every template
-  takes a base spelled from its declaration (`f<$0>($0*)`) and an instance
-  appends its bindings — see [Template symbols](#template-symbols). A lone
-  concrete function keeps its plain, C-linkable symbol and the direct-call
-  fast path — zero cost until a name actually overloads. (The accepted cost on overloaded calls: they route
+- **Sets are open.** Any module may add overloads to an existing name, with
+  no opt-in marker: the set is the whole-program union at import merge, in
+  any import order. The gate is the declare-time collision rules, which run
+  cross-module: same-pattern duplicates collide (with a note citing the
+  prior member's site), alpha-renamed same-base templates collide, and
+  overlapping [closed type groups](#closed-type-groups) collide. Resolution
+  is unchanged, so adding an import can only add candidates or collide
+  loudly — it never silently rewires a call, with three deliberate
+  edges: an import may supply a *better-ranked* candidate (a concrete
+  beating a group template is the intended protocol behavior, see below),
+  an *equal-ranked* candidate makes existing calls ambiguous (a loud error
+  citing both declaration sites), and a name growing into a set moves its
+  calls off the direct-call fast path and makes `let g = f;` an error
+  (below).
+- **A single visible signature keeps its plain symbol.** A name mangles per
+  declaring file, counting the signatures that file can see (the
+  whole-program set minus other modules' `@private` members): with two or
+  more, each of the file's members links by a signature-derived symbol
+  spelled from its parameter types (`f(int32, char*)`). Generic templates
+  mangle the same way, by parameter *pattern*: every template takes a base
+  spelled from its declaration (`f<$0>($0*)`) and an instance appends its
+  bindings — see [Template symbols](#template-symbols). A lone concrete
+  function keeps its plain, C-linkable symbol and the direct-call fast
+  path — zero cost until a name actually overloads. (The accepted cost on overloaded calls: they route
   through the overload-resolution path, so a `const`-struct argument spills
   to a temporary instead of sharing the caller's storage.)
+- **Privacy is per overload.** An `@private` overload is a candidate only
+  inside its own module: a foreign call simply does not see it — resolution
+  falls through to the members the calling file can see (when *no* member
+  is visible the call errors, `function 'f' is private to util.mc`). It
+  never collides with other modules' members either: a `@private` member's
+  mangled symbol is salted with its file's stem (`f(int32).util`), so two
+  modules may each keep a private overload of the same shape. Note the
+  flip side: a dispatch site that lives in another module resolves *there*,
+  so a `@private` overload never influences it — a library's deferred
+  `case type` dispatch falls to the members visible in the library even
+  when the calling module holds a private overload that its own direct
+  calls resolve to. Within one file, a `@private`/public pair on one parameter
+  list is still a duplicate.
 - **An overloaded name is not a function value.** `let g = f;` needs a
-  single address; with a set there is no one `f`.
+  single address; with a set there is no one `f` — and since sets are
+  open, adding an import can be what turns a working `let g = f;` into
+  this error.
 - **Non-overloadables:** `main` (JIT and `cc` resolve the plain symbol),
   variadic functions (the viability filter matches arity exactly),
   functions with a `va_list` parameter, `@extern`/`@symbol` functions
@@ -614,9 +638,9 @@ String literals keep adapting when a function becomes overloaded: a literal
 [non-overloaded call](#slices).
 
 **Mixed generic/concrete sets.** A generic template may share its name with
-concrete functions from the same module; the candidates join one set and
-resolve under a leading (tier, specificity) rank with three tiers: a
-**concrete** overload beats a **bounded** generic (one with a
+concrete functions — from any module, sets being open; the candidates join
+one set and resolve under a leading (tier, specificity) rank with three
+tiers: a **concrete** overload beats a **bounded** generic (one with a
 [closed type group](#closed-type-groups)) beats an **unbounded** generic.
 The concrete tier wins on an exact match — including against a generic
 whose *effective* parameter list ties the concrete one — the bounded tier's
@@ -641,15 +665,35 @@ prototype with a *different* parameter list simply joins the overload set as
 its own member. A prototype with no matching definition stays what it
 already is — a link-time error.
 
-**Interfaces.** `--emit-interface` renders an overload set as same-name
-prototypes, and the whole set always travels: an included function pulls in
-every same-name sibling, even an unreferenced `@private` overload (kept
-`@private` in the stub) and the generic members of a mixed set. The importer
-re-derives each member's symbol — plain for a single concrete signature,
-mangled `f(int32)` for a set — from the stub, so it matches the symbols the
-defining object emitted.
+**Open sets as protocols.** Because a concrete overload outranks a bounded
+generic, a module can *replace* group-covered behavior for its own types
+with no annotation: where a library covers the signed integers with one
+closed-group template, a user's concrete overload at `int32` simply wins
+the exact match. This is the language's protocol story — make a type
+appendable (see
+[examples/functions/open_overloads.mc](../examples/functions/open_overloads.mc))
+and, once the planned stdlib formatting and iteration protocols land,
+printable or iterable, by writing one overload for it in your own module.
+Only *same-pattern* replacement (swapping out a library's concrete `bool`
+member, say) still collides; a planned `@override` annotation covers that
+last case.
 
-See [examples/functions/overloading.mc](../examples/functions/overloading.mc).
+**Interfaces.** `--emit-interface` renders an overload set's members from
+the emitting file as same-name prototypes, and the file's whole
+contribution always travels: an included function pulls in every same-name
+sibling, even an unreferenced `@private` overload (kept `@private` in the
+stub) and the generic members of a mixed set. A stub describes an
+already-compiled object, so its symbols are **pinned**: the importer
+re-derives each member's symbol from the stub's own declarations plus its
+import closure — exactly what the defining object was compiled seeing —
+and consumer-side extensions never re-mangle a stub's members. A consumer
+may extend a stub's set with new signatures (the set then mixes the stub's
+pinned symbols with the consumer's), and two stubs that each pin the same
+plain symbol collide at compile time — correct, since the two objects they
+describe could never link together.
+
+See [examples/functions/overloading.mc](../examples/functions/overloading.mc)
+and [examples/functions/open_overloads.mc](../examples/functions/open_overloads.mc).
 
 ### @noreturn functions
 
@@ -1499,6 +1543,10 @@ cannot be attributed. The attribute combines with `@private`, `@static`,
 `@extern`, `@inline`, and `@asm`, and applies to functions only for now
 (types, enums, and globals later). The message decodes string escapes like any
 literal, and must be non-empty.
+
+Deprecation is per overload: in an
+[overload set](#function-overloading) — open across modules — only a call
+that *resolves to* the deprecated member warns; siblings stay quiet.
 
 There is no suppression: every call site warns, even one inside another
 deprecated function — a migration cannot hide behind a second alias. What *is*
@@ -3058,7 +3106,9 @@ that needs it without being able to name it). An
 [overload set](#function-overloading) always travels whole: an included
 function pulls in every same-name sibling, even an unreferenced `@private`
 overload, because the importer derives the plain-vs-mangled symbol choice
-from the set size the stub shows it. Unreachable `@private`/`@static`
+from the set the stub (plus its import closure) shows it — the stub pins
+the symbols its object was compiled with, and a consumer extending the set
+never re-mangles them. Unreachable `@private`/`@static`
 declarations are dropped, the original `import` lines are preserved (a
 dependency's own `.mci` is imported in turn), and `@if` is already resolved, so
 each interface matches the target it was generated for.
@@ -3098,7 +3148,13 @@ The two differ in what they do to the _name_, not just who may use it. A
 the global namespace; `@private` only stops _other files_ from referencing
 it. A `@static` definition is renamed to a file-scoped symbol (`helper@file`)
 and leaves the global namespace, so several files can each carry their own
-`helper` with no clash. So reach for `@private` to hide an internal helper
+`helper` with no clash. For functions there is one softening of the
+namespace rule: privacy is judged **per overload** in an
+[overload set](#function-overloading), so a `@private` overload is simply
+invisible to other files — foreign calls fall through to the members they
+can see, and a `@private` member never collides with another module's
+distinct-pattern overloads of the same name (its mangled symbol is salted
+with the file stem). So reach for `@private` to hide an internal helper
 that has a unique name, and for `@static` when you want a hidden helper with
 a _common_ name (`init`, `dump`) that several files define independently —
 and because a `@static` symbol is file-local rather than global, an unused

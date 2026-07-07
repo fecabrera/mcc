@@ -120,6 +120,13 @@ class Program:
         directives: Top-level ``@static_assert``/``@error``/``@warning``
             directives, checked during code generation after types and
             constants are known.
+        module_imports: Per-file import graph recorded while the driver
+            merges the ``import`` tree: each key is a file's resolved path
+            (``None`` for a program parsed from a string) and its value the
+            resolved paths that file imports directly. Code generation walks
+            it to find the signatures an interface stub's defining object
+            could see (open overload sets derive a stub's plain-vs-mangled
+            symbol choice from the stub's own import closure).
     """
 
     imports: list[tuple[str, int]]
@@ -132,6 +139,9 @@ class Program:
     aliases: list["TypeAlias"] = field(default_factory=list)
     directives: list["StaticAssert | ErrorDirective"] = field(
         default_factory=list
+    )
+    module_imports: dict[str | None, tuple[str, ...]] = field(
+        default_factory=dict
     )
 
 

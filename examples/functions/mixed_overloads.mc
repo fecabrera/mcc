@@ -1,7 +1,9 @@
 import "std";
 
 // Mixed generic/concrete overload sets: a generic template and concrete
-// functions may share one name in one file, forming a single overload set.
+// functions may share one name, forming a single overload set (from any
+// module too, sets being open: open_overloads.mc joins a concrete set
+// cross-module).
 // Candidates rank by (is-concrete, specificity): a concrete member wins any
 // call it matches exactly, and the generic tier covers everything else. The
 // motivating shape is fast paths plus a catch-all: hand-tuned members for
@@ -41,8 +43,9 @@ fn main() -> int32 {
     return 0;
 }
 
-// The whole set, generic members included, must live in one defining file;
-// an importing file cannot add a member to it. Symbol choice counts the
+// The set is open: any module may add members, generic or concrete, and
+// the whole-program union resolves under the same rank (open_overloads.mc
+// shows the cross-module join). Symbol choice counts the
 // concrete signatures alone: the two concrete members here link as
 // "describe(int32)" and "describe(float64)", but a template beside a single
 // concrete member leaves that member's plain C-linkable symbol intact.

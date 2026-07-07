@@ -1046,42 +1046,44 @@ already do).
         `self: <struct>*` receiver, and a `mut` return formed from `self` gives a
         memory-safe mutable accessor. See its receiver-kind note for the
         field-projection and vtable details
-- [ ] Open overload sets — lift the shipped
-      [function overloading](docs/language.md#function-overloading)
-      rule that all overloads of a name live in one defining module
-      (`check_mixed_set` in `mcc/codegen/generator.py`, "a template may
-      share its name with a concrete function or concrete set only from
-      its own module", plus its concrete-side counterpart, both raising
-      `function 'f' already defined` on a cross-module join; that error
-      site is the single gate this item removes). Sets become open by
-      default, with no opt-in marker: any module may add overloads to
-      an existing name, and the set is the whole-program union at
-      import merge. The gate becomes the declare-time collision rules
-      that already run cross-module for templates: same-pattern
-      duplicates collide, alpha-renamed same-base templates collide,
-      and overlapping [closed type groups](#types-and-generics)
-      collide. Resolution semantics are unchanged (shape filter,
-      specificity, concrete beats bounded generic beats unbounded), so
-      adding an import can only add candidates or collide loudly, never
-      silently rewire a call except by supplying a better-ranked
-      candidate, which is the intended protocol behavior.
-      Non-overloadable functions stay non-overloadable exactly as
-      shipped: `main`, variadic (`...`) functions, and collecting
-      (`args...`) functions. Two known implementation liabilities the
-      item must resolve (design notes, not open user decisions):
-      privacy is tracked per name today (`func_privacy`), and open
-      sets need per-overload privacy (an `@private` overload is a
-      candidate only inside its own module and neither collides with
-      nor is visible to foreign modules); the deprecation bookkeeping
-      (`deprecated_syms`) has the same per-name shape. Each module's
-      `.mci` stub renders the overloads that module contributes, and
-      importing several modules unions the sets; the shipped
+- [x] Open overload sets — lifted the rule that all overloads of a
+      name live in one defining module: sets are open by default, with
+      no opt-in marker — any module may add overloads to an existing
+      name, and the set is the whole-program union at import merge, in
+      any import order. The gate is the declare-time collision rules,
+      now run cross-module for concretes too: same-pattern duplicates
+      collide (citing the prior member's site in a note),
+      alpha-renamed same-base templates collide, and overlapping
+      [closed type groups](#types-and-generics) collide; cross-module
+      ambiguities cite both declaration sites. Resolution semantics
+      are unchanged (shape filter, specificity, concrete beats bounded
+      generic beats unbounded), so adding an import can only add
+      candidates or collide loudly, never silently rewire a call
+      except by supplying a better-ranked candidate, which is the
+      intended protocol behavior. Non-overloadable functions stay
+      non-overloadable exactly as shipped: `main`, variadic (`...`)
+      functions, and collecting (`args...`) functions. The two
+      per-name liabilities were resolved as per-overload semantics: an
+      `@private` overload is a candidate only inside its own module —
+      foreign calls fall through to the members they can see, and its
+      mangled symbol is salted with the file stem
+      (`format(int32).util`, normalized across `.mc`/`.mci`) so it
+      never collides with foreign members; `@deprecated` warns only
+      when resolution picks the deprecated member. Symbol choice is
+      judged per declaring file over the signatures it can *see*
+      (whole-program minus foreign `@private` members), and a `.mci`
+      stub is ABI-pinned: its members' symbols re-derive from the stub
+      plus its own import closure (the driver records the per-module
+      import graph for this), so a consumer extending a stub's set
+      never re-mangles the compiled object's symbols, and two
+      singleton stubs both claiming one plain symbol collide loudly —
+      correct, as the two objects could never link. The shipped
       order-independent
       [template symbol bases](docs/language.md#template-symbols) are
-      what make that union linkable and order-independent, so this
-      item is only sound because they shipped. The driving use case is
-      the formatting protocol: the stdlib format module declares the
-      baseline
+      what make the union linkable and order-independent, so this
+      item was only sound because they shipped. The driving use case
+      is the formatting protocol: the stdlib format module declares
+      the baseline
       `format(mut str: string, value: X, const modifier: string)`
       overload family (closed signed/unsigned groups, concretes, a
       generic slice list-renderer, an unbounded `<typename>` fallback),
@@ -1092,9 +1094,12 @@ already do).
       overload for it in their own module (today pointer-shaped,
       `value: point*` boxed via `&p`, until the
       [struct boxing](#structs-arrays-and-data-layout) follow-up under
-      `any` lands). Verified: that whole chain works today except the
-      cross-module join, which fails with
-      `function 'format' already defined` at the user's overload.
+      `any` lands) — the whole chain now works cross-module, with the
+      deliberate privacy consequence that a `@private` `format`
+      overload is invisible to `println`'s dispatch (it resolves in
+      the stdlib's module) while direct `format(...)` calls in the
+      owning module see it. Implemented, see
+      [Function overloading](docs/language.md#function-overloading).
       Iteration is the protocol family's second member: the
       `for … in` protocol sub-item above is slated to desugar into
       `iterate`/`get_next` overloads riding this same mechanism. The

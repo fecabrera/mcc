@@ -1,9 +1,11 @@
 import "std";
 
 // Concrete function overloading: plain (non-generic) functions sharing a
-// name in one file form an overload set, and the call picks the member
-// whose parameter list fits the arguments. The motivating shape is a
-// constructor-flavored family: one `init` name, several ways to seed it.
+// name form an overload set, and the call picks the member whose parameter
+// list fits the arguments. The motivating shape is a constructor-flavored
+// family: one `init` name, several ways to seed it. This file keeps the
+// whole set in one module; sets are open, so members may also come from
+// different modules (open_overloads.mc).
 // Builds on functions.mc and mut_params.mc (what `mut self` means);
 // generic overload sets, which resolve in the same order, are covered in
 // mut_overloads.mc, and a set mixing concrete members with a generic
@@ -81,5 +83,6 @@ fn main() -> int32 {
 
 // See also: mut_overloads.mc (generic overload sets and the resolution
 // order), mixed_overloads.mc (a generic template joining a concrete set),
+// open_overloads.mc (extending a set from another module),
 // mut_params.mc (mut parameters), types/structs.mc (struct types, covered
 // later in the tour). Full rules: docs/language.md, "Function overloading".

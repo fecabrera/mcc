@@ -560,9 +560,10 @@ def test_mixed_set_same_shape_tie_is_ambiguous():
         )
 
 
-def test_mixed_set_cannot_span_modules(tmp_path):
-    # All overloads of a name -- generic members included -- live in one
-    # defining module, in either import order.
+def test_mixed_set_spans_modules(tmp_path):
+    # Open sets: a generic template and a concrete function may share a name
+    # across modules, in either import order. The concrete keeps its plain
+    # symbol and beats the generic on an exact match.
     (tmp_path / "gen.mc").write_text("fn pick<T>(x: T) -> int32 { return 0; }")
     (tmp_path / "conc.mc").write_text(
         "fn pick(x: int32) -> int32 { return 1; }"
@@ -572,9 +573,33 @@ def test_mixed_set_cannot_span_modules(tmp_path):
         'import "conc";\nimport "gen";\n',
     ):
         main = tmp_path / "main.mc"
-        main.write_text(imports + "fn main() -> int32 { return 0; }\n")
-        with pytest.raises(LangError, match="function 'pick' already defined"):
-            run_path(main)
+        main.write_text(
+            imports
+            + "fn main() -> int32 {\n"
+            "    let b = false;\n"
+            "    return pick(7) * 10 + pick(b);\n"
+            "}\n"
+        )
+        assert run_path(main) == 10
+
+
+def test_cross_module_group_template_joins_a_concrete_set(tmp_path):
+    # The generic escape hatch: a closed-group template from another module
+    # joins a foreign concrete set (mixed sets used to close both sides into
+    # one module, so even the template side died at declaration).
+    (tmp_path / "conc.mc").write_text(
+        "fn pick(p: char*) -> int32 { return 1; }\n"
+        "fn pick(b: bool) -> int32 { return 2; }\n"
+    )
+    (tmp_path / "gen.mc").write_text(
+        "fn pick<T: int32 | int64>(x: T) -> int32 { return 3; }"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "conc";\nimport "gen";\n'
+        "fn main() -> int32 { return pick(9) * 10 + pick(true); }\n"
+    )
+    assert run_path(main) == 32
 
 
 def test_main_cannot_join_a_mixed_set():
@@ -650,20 +675,25 @@ def test_variadic_concrete_cannot_join_a_mixed_set():
         )
 
 
-def test_cross_module_same_name_still_collides(tmp_path):
-    # All overloads of a name must live in one defining module: the symbol
-    # choice (plain vs mangled) is a per-file fact.
+def test_cross_module_singles_join_one_set(tmp_path):
+    # Open sets: two modules that each declare one `pick` merge into a
+    # whole-program set at import; both members mangle (each file sees two
+    # signatures) and dispatch by argument type.
     (tmp_path / "a.mc").write_text("fn pick(x: int32) -> int32 { return 1; }")
     (tmp_path / "b.mc").write_text("fn pick(p: char*) -> int32 { return 2; }")
-    main = tmp_path / "main.mc"
-    main.write_text(
-        'import "a";\nimport "b";\nfn main() -> int32 { return 0; }\n'
-    )
-    with pytest.raises(LangError, match="function 'pick' already defined"):
-        run_path(main)
+    for imports in (
+        'import "a";\nimport "b";\n',
+        'import "b";\nimport "a";\n',
+    ):
+        main = tmp_path / "main.mc"
+        main.write_text(
+            imports
+            + 'fn main() -> int32 { return pick(7) * 10 + pick("s"); }\n'
+        )
+        assert run_path(main) == 12
 
 
-def test_cross_module_set_and_single_collide_either_order(tmp_path):
+def test_cross_module_single_extends_a_set_either_order(tmp_path):
     (tmp_path / "family.mc").write_text(
         "fn pick(x: int32) -> int32 { return 1; }\n"
         "fn pick(p: char*) -> int32 { return 2; }\n"
@@ -676,12 +706,17 @@ def test_cross_module_set_and_single_collide_either_order(tmp_path):
         'import "lone";\nimport "family";\n',
     ):
         main = tmp_path / "main.mc"
-        main.write_text(imports + "fn main() -> int32 { return 0; }\n")
-        with pytest.raises(LangError, match="function 'pick' already defined"):
-            run_path(main)
+        main.write_text(
+            imports
+            + "fn main() -> int32 {\n"
+            "    let wide: int64 = 0;\n"
+            '    return pick(7 as int32) * 100 + pick("s") * 10 + pick(wide);\n'
+            "}\n"
+        )
+        assert run_path(main) == 123
 
 
-def test_cross_module_sets_collide_too(tmp_path):
+def test_cross_module_sets_union(tmp_path):
     (tmp_path / "one.mc").write_text(
         "fn pick(x: int32) -> int32 { return 1; }\n"
         "fn pick(p: char*) -> int32 { return 2; }\n"
@@ -692,10 +727,86 @@ def test_cross_module_sets_collide_too(tmp_path):
     )
     main = tmp_path / "main.mc"
     main.write_text(
-        'import "one";\nimport "two";\nfn main() -> int32 { return 0; }\n'
+        'import "one";\nimport "two";\n'
+        "fn main() -> int32 {\n"
+        "    let wide: int64 = 0;\n"
+        '    return pick(7 as int32) * 1000 + pick("s") * 100\n'
+        "        + pick(wide) * 10 + pick(true);\n"
+        "}\n"
+    )
+    assert run_path(main) == 1234
+
+
+def test_cross_module_same_pattern_still_collides(tmp_path):
+    # The declare-time gate that stays: two modules may not both spell one
+    # parameter list. As plain singles the name itself collides; inside a
+    # larger set the mangled symbol collides, and the error cites the prior
+    # member's site.
+    (tmp_path / "a.mc").write_text("fn pick(x: int32) -> int32 { return 1; }")
+    (tmp_path / "b.mc").write_text("fn pick(x: int32) -> int32 { return 2; }")
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "a";\nimport "b";\nfn main() -> int32 { return 0; }\n'
     )
     with pytest.raises(LangError, match="function 'pick' already defined"):
         run_path(main)
+    (tmp_path / "b.mc").write_text(
+        "fn pick(x: int32) -> int32 { return 2; }\n"
+        "fn pick(p: char*) -> int32 { return 3; }\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "function 'pick(int32)' already defined; overloads must differ "
+            "in parameter types"
+        ),
+    ) as excinfo:
+        run_path(main)
+    assert any(
+        n.source and n.source.endswith("a.mc") for n in excinfo.value.notes
+    )
+
+
+def test_cross_module_ambiguity_cites_both_sites(tmp_path):
+    # An import supplying an equal-rank candidate makes the call ambiguous
+    # -- loudly, citing both declaration sites.
+    (tmp_path / "a.mc").write_text(
+        "fn pick<T>(x: T, y: int32) -> int32 { return 1; }"
+    )
+    (tmp_path / "b.mc").write_text(
+        "fn pick<T>(x: int32, y: T) -> int32 { return 2; }"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "a";\nimport "b";\n'
+        "fn main() -> int32 { return pick(1, 2); }\n"
+    )
+    with pytest.raises(
+        LangError, match="call to 'pick' is ambiguous between overloads"
+    ) as excinfo:
+        run_path(main)
+    sources = {n.source for n in excinfo.value.notes}
+    assert any(s and s.endswith("a.mc") for s in sources)
+    assert any(s and s.endswith("b.mc") for s in sources)
+
+
+def test_cross_module_concrete_outranks_a_group_template(tmp_path):
+    # The protocol behavior @override is scoped around: replacing
+    # group-covered behavior needs no annotation, because a concrete beats a
+    # bounded generic on an exact match through the ordinary rank tiers.
+    (tmp_path / "lib.mc").write_text(
+        "fn pick<T: int32 | int64>(x: T) -> int32 { return 1; }"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\n'
+        "fn pick(x: int32) -> int32 { return 2; }\n"
+        "fn main() -> int32 {\n"
+        "    let wide: int64 = 0;\n"
+        "    return pick(7) * 10 + pick(wide);\n"
+        "}\n"
+    )
+    assert run_path(main) == 21
 
 
 def test_overloaded_name_is_not_a_function_value():
@@ -830,3 +941,206 @@ def test_prototype_pairs_with_its_set_member():
         "fn f(p: char*) -> int32 { return 2; }\n"
         "fn main() -> int32 { return f(0) * 10 + f(\"x\"); }"
     ) == 12
+
+
+# ------------------- open sets: per-overload privacy
+
+
+def test_foreign_private_overload_is_not_a_candidate(tmp_path):
+    # An @private overload is a candidate only inside its own module: a
+    # foreign call falls through to the members it can see (here the
+    # unbounded generic), instead of erroring on the private one.
+    (tmp_path / "lib.mc").write_text(
+        "fn describe<T>(x: T) -> int32 { return 0; }\n"
+        "@private\nfn describe(x: int32) -> int32 { return 1; }\n"
+        "fn via_lib(x: int32) -> int32 { return describe(x); }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\n'
+        "fn main() -> int32 { return describe(5) * 10 + via_lib(5); }\n"
+    )
+    # main's call skips the private member (generic: 0); lib's own call
+    # sees it (concrete beats generic on the exact match: 1).
+    assert run_path(main) == 1
+
+
+def test_all_private_set_is_a_privacy_error(tmp_path):
+    (tmp_path / "pri.mc").write_text(
+        "@private\nfn hidden(x: int32) -> int32 { return 1; }\n"
+        "@private\nfn hidden(p: char*) -> int32 { return 2; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "pri";\nfn main() -> int32 { return hidden(5); }\n'
+    )
+    with pytest.raises(
+        LangError, match="function 'hidden' is private to pri.mc"
+    ):
+        run_path(main)
+
+
+def test_private_members_salt_their_symbols(tmp_path):
+    # Two modules may each contribute an @private member with the same
+    # parameter pattern: the mangled symbols carry the defining file's stem,
+    # so they never collide, and each module resolves to its own.
+    (tmp_path / "base.mc").write_text(
+        "fn fmt(x: int32) -> int32 { return 0; }\n"
+        "fn fmt(p: char*) -> int32 { return 9; }\n"
+    )
+    (tmp_path / "m1.mc").write_text(
+        'import "base";\n'
+        "@private\nfn fmt(b: bool) -> int32 { return 1; }\n"
+        "fn via_m1() -> int32 { return fmt(true); }\n"
+    )
+    (tmp_path / "m2.mc").write_text(
+        'import "base";\n'
+        "@private\nfn fmt(b: bool) -> int32 { return 2; }\n"
+        "fn via_m2() -> int32 { return fmt(true); }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "m1";\nimport "m2";\n'
+        "fn main() -> int32 { return via_m1() * 10 + via_m2(); }\n"
+    )
+    assert run_path(main) == 12
+    out = str(compile_to_ir(main))
+    assert 'i32 @"fmt(bool).m1"(' in out
+    assert 'i32 @"fmt(bool).m2"(' in out
+
+
+def test_privacy_only_variant_is_still_a_duplicate():
+    # One file may not spell one parameter list twice, even when the two
+    # differ only in @private (they would tie at every call).
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "function 'f(int32)' already defined; overloads must differ in "
+            "parameter types"
+        ),
+    ):
+        compile_ir(
+            "fn f(x: int32) -> int32 { return 1; }\n"
+            "@private\nfn f(x: int32) -> int32 { return 2; }\n"
+            "fn f(p: char*) -> int32 { return 3; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_deferred_dispatch_skips_foreign_private_overloads(tmp_path):
+    # The formatting-protocol consequence, pinned deliberately: a dispatch
+    # site that lives in another module (println's format_arg pattern -- a
+    # generic `with` arm resolved at end of codegen) cannot see the caller's
+    # @private overload; the value falls through to the fallback. Direct
+    # calls in the owning module still see it.
+    (tmp_path / "lib.mc").write_text(
+        "fn render<T>(x: T) -> int32 { return 0; }\n"
+        "fn dispatch(args...) -> int32 {\n"
+        "    with (t = args[0] as T) { return render(t); }\n"
+        "    return -1;\n"
+        "}\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\n'
+        "@private\nfn render(x: int32) -> int32 { return 1; }\n"
+        "fn main() -> int32 { return dispatch(5) * 10 + render(5); }\n"
+    )
+    # dispatch's arm resolves in lib.mc, where the private member is
+    # invisible (generic fallback: 0); the direct call sees it (1).
+    assert run_path(main) == 1
+
+
+def test_deprecated_overload_warns_through_a_cross_module_set(tmp_path):
+    # Deprecation is per overload on the set path: only resolution picking
+    # the deprecated member warns, imports included.
+    (tmp_path / "lib.mc").write_text(
+        '@deprecated("use pick(int64) instead")\n'
+        "fn pick(x: int32) -> int32 { return 1; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\n'
+        "fn pick(p: char*) -> int32 { return 2; }\n"
+        "fn main() -> int32 {\n"
+        '    return pick(7) * 10 + pick("s");\n'
+        "}\n"
+    )
+    warnings = []
+    compile_to_ir(main, warnings=warnings)
+    assert [
+        (w.message, w.line) for w in warnings
+    ] == [("'pick' is deprecated: use pick(int64) instead", 4)]
+
+
+def test_plain_single_duplicating_a_set_member_collides(tmp_path):
+    # a.mc's set holds a mangled pick(int32); b.mc's pick(int32) stays a
+    # plain single (a's @private sibling is invisible to b, so b sees one
+    # signature) -- but it spells a pattern the set already has.
+    (tmp_path / "a.mc").write_text(
+        "fn pick(x: int32) -> int32 { return 1; }\n"
+        "@private\nfn pick(b: bool) -> int32 { return 2; }\n"
+    )
+    (tmp_path / "b.mc").write_text("fn pick(x: int32) -> int32 { return 3; }")
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "a";\nimport "b";\nfn main() -> int32 { return 0; }\n'
+    )
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "function 'pick(int32)' already defined; overloads must differ "
+            "in parameter types"
+        ),
+    ) as excinfo:
+        run_path(main)
+    assert any(
+        n.source and n.source.endswith("a.mc") for n in excinfo.value.notes
+    )
+
+
+def test_set_member_duplicating_a_plain_single_collides(tmp_path):
+    # The mirror image: the stub pins a plain pick(int32), and a module
+    # whose own set mangles spells the same pattern.
+    (tmp_path / "api.mci").write_text("fn pick(x: int32) -> int32;\n")
+    (tmp_path / "b.mc").write_text(
+        "fn pick(x: int32) -> int32 { return 1; }\n"
+        "fn pick(b: bool) -> int32 { return 2; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "api";\nimport "b";\nfn main() -> int32 { return 0; }\n'
+    )
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "function 'pick(int32)' already defined; overloads must differ "
+            "in parameter types"
+        ),
+    ) as excinfo:
+        run_path(main)
+    assert any(
+        n.source and n.source.endswith("api.mci")
+        for n in excinfo.value.notes
+    )
+
+
+def test_all_private_sets_from_two_modules_name_both_owners(tmp_path):
+    (tmp_path / "pri1.mc").write_text(
+        "@private\nfn hidden(x: int32) -> int32 { return 1; }\n"
+        "@private\nfn hidden(b: bool) -> int32 { return 2; }\n"
+    )
+    (tmp_path / "pri2.mc").write_text(
+        "@private\nfn hidden(p: char*) -> int32 { return 3; }\n"
+        "@private\nfn hidden(n: int64) -> int32 { return 4; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "pri1";\nimport "pri2";\n'
+        "fn main() -> int32 { return hidden(5); }\n"
+    )
+    with pytest.raises(
+        LangError,
+        match="function 'hidden' is private to pri1.mc, pri2.mc",
+    ):
+        run_path(main)
