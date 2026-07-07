@@ -143,11 +143,16 @@ already do).
 
 ### Types and generics
 
-- [ ] `typeof(expr)` — use an expression's static type in a type position,
-      including in an alias: `type t = typeof(var);`. Its own hard problem
-      is typing an expression without emitting IR in the single-pass
-      compiler, so a v1 is restricted to emission-free forms like the
-      `typeof(var)` above. Shares the type-identity concept with
+- [ ] `@typeof(expr)` — use an expression's static type in a type position,
+      including in an alias: `type t = @typeof(var);`. The `@` prefix is
+      deliberate: it is resolved entirely at compile time and yields a
+      type, never a value, so it joins the `@if`/`@else` compile-time
+      family, while the value-level
+      [`typename`](#metaprogramming-and-builtins) builtin stays bare next
+      to `sizeof` because its result folds into an actual variable. Its
+      own hard problem is typing an expression without emitting IR in the
+      single-pass compiler, so a v1 is restricted to emission-free forms
+      like the `@typeof(var)` above. Shares the type-identity concept with
       [`any`](#structs-arrays-and-data-layout)'s tag scheme but is not a
       build dependency of it (`any`'s boxing site knows the source's static
       type, and a `case type` arm names its type literally)
@@ -326,7 +331,7 @@ already do).
         [formatted `{}` print](#strings-and-formatting), then
         [string interpolation](#strings-and-formatting). Depends on unions
         (above) and a compile-time type-id scheme;
-        [`typeof`](#types-and-generics) shares the type-identity concept but
+        [`@typeof`](#types-and-generics) shares the type-identity concept but
         is **not** a build dependency (the boxing site knows the source's
         static type, and a `case type` arm names its type literally).
         Settled design: `any` is a compiler-built interned `LangType` on the
@@ -344,7 +349,11 @@ already do).
         `case type` onto the existing integer-equality `case` codegen. An
         in-compile hash collision is detected and errored; a per-type
         `linkonce_odr` descriptor pointer (RTTI-style) is the recorded
-        upgrade path if runtime type names are ever wanted. The v1 boxable
+        upgrade path if runtime type names are ever wanted, though the
+        planned [`typename`](#metaprogramming-and-builtins) builtin inside
+        the generic-arms sub-item below covers the arm-side need
+        statically, leaving a bare `else` arm as the only descriptor-only
+        case. The v1 boxable
         set is primitives, pointers (each pointer type its own tag), and
         slices; structs and arrays are rejected (by value the payload is
         unbounded, by pointer the lifetime goes implicit; `&s` is the
@@ -1322,7 +1331,7 @@ already do).
       later path. The foundations this once waited on are shipped:
       [`any`](docs/language.md#the-any-type) landed with its tagged 24-byte
       box, compile-time FNV-1a-64 type-ids (collision-checked, so no
-      `typeof` is needed), implicit boxing at
+      `@typeof` is needed), implicit boxing at
       assignment/argument/return/store (structs and arrays reject with an
       escape-hatch message), and `case type` with its mandatory `else`. The
       callee side described above works end to end today, verified by
@@ -1443,6 +1452,38 @@ already do).
   - [ ] `@define <name> = <value>` — a named compile-time substitution
 - [ ] Bit-twiddling builtins — `byte_swap<T>` (`llvm.bswap`) and
       `bit_reverse<T>` (`llvm.bitreverse`) over the integer types
+- [ ] `typename` builtin — recover the canonical name of a type as a `const`
+      string: mirrors `sizeof` in taking a type or an expression
+      (`typename(int64)`, `typename(x)`) and folds at compile time to a
+      deduplicated rodata string literal, typed like any other string
+      literal, zero runtime machinery. Value-level by design: the result
+      flows into a variable if needed (`let n = typename(T);`), a parameter,
+      a struct, a `println`, which is what distinguishes it from the planned
+      [`@typeof`](#types-and-generics) (compile-time-only, yielding a type
+      usable in type position, its `@` prefix placing it with the
+      `@if`/`@else` compile-time family, and not part of this item) and why
+      the bare name reads next to `sizeof` instead of implying C's
+      `typeof`. The canonical
+      spelling already exists in the compiler: `str(LangType)` drives the
+      [`any`](#structs-arrays-and-data-layout) tags (`any_tag` hashes
+      exactly this string), the signature mangles, and diagnostics, so
+      `typename` surfaces that string unchanged, deterministic across
+      compilations (the property the tag hashing relies on) and precisely
+      the preimage of the value's `any` tag. Monomorphization gives
+      per-instantiation resolution for free: in `fn f<T>(...)`,
+      `typename(T)` resolves to its own literal per instantiation. The
+      powerful combination is with the
+      [generic arms in `case type`](#structs-arrays-and-data-layout):
+      inside `when T v:` the arm is a real generic context, so
+      `typename(T)` names the dynamic type of the boxed `any` per tag,
+      statically, covering most of what the `any` item's descriptor-pointer
+      upgrade path was reserved for without descriptors (the one remaining
+      descriptor-only case is naming a type in a bare `else` arm, where
+      only the erased `any` exists). Semantics pinned: `typename(expr)`
+      uses the expression's **static** type, so an `any` names as `"any"`,
+      never its dynamic type. One open detail, recorded not settled:
+      whether `const T` names with the `const` stripped, matching what
+      boxing does with tags; settle at implementation
 - [ ] Builtin `enumerate` — pairing each element with its `uint64` position:
   - [x] over containers, arrays, and slices — implemented, see
         [Control flow](docs/language.md#control-flow)
