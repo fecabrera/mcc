@@ -75,6 +75,7 @@ from mcc.nodes import (
     StructLit,
     Ternary,
     TypeAlias,
+    TypeName,
     TypeRef,
     Unary,
     Unreachable,
@@ -599,6 +600,9 @@ class CodeGen:
         # last. See BlockExprCtx.
         self.block_exprs: list[BlockExprCtx] = []
         self.str_count = 0
+        # One rodata global per distinct string contents; identical literals
+        # (source strings and `typename` results alike) share bytes.
+        self.string_globals: dict[str, ir.GlobalVariable] = {}
 
     def warn(self, message: str, line: int, wclass: str | None = None) -> None:
         """Record a non-fatal diagnostic on the warning channel.
@@ -5825,6 +5829,12 @@ class CodeGen:
             struct_type = self.lang_type(expr.type_name, expr.line)
             off = field_offset(struct_type, expr.field, expr.line)
             return TypedValue(ir.Constant(UINT64.ir, off), UINT64)
+        if isinstance(expr, TypeName):
+            # The canonical spelling is str(LangType) -- exactly the string
+            # any_tag hashes -- with a top-level const stripped, matching what
+            # boxing does with tags (so typename(v) is the preimage of v's tag).
+            named = strip_const(self.sizeof_operand(expr.type_name, expr.line))
+            return self.gen_string(str(named))
         if isinstance(expr, Len):
             # The element count is a compile-time property of the array's type;
             # read it through the address so the array does not decay first. It
@@ -6699,8 +6709,13 @@ class CodeGen:
 
         Returns:
             A private, unnamed, constant ``GlobalVariable`` holding the
-            NUL-terminated UTF-8 bytes of ``text``.
+            NUL-terminated UTF-8 bytes of ``text``. Deduplicated: identical
+            contents (from any mix of source literals and ``typename``
+            results) share one global.
         """
+        cached = self.string_globals.get(text)
+        if cached is not None:
+            return cached
         data = self.string_data(text)
         list_ty = ir.ArrayType(ir.IntType(8), len(data))
         glob = ir.GlobalVariable(self.module, list_ty, name=f".str.{self.str_count}")
@@ -6709,6 +6724,7 @@ class CodeGen:
         glob.global_constant = True
         glob.unnamed_addr = True
         glob.initializer = ir.Constant(list_ty, data)
+        self.string_globals[text] = glob
         return glob
 
     def gen_string(self, text: str) -> TypedValue:
@@ -6983,6 +6999,9 @@ class CodeGen:
             struct_type = self.lang_type(expr.type_name, line)
             off = field_offset(struct_type, expr.field, line)
             return TypedValue(ir.Constant(UINT64.ir, off), UINT64)
+        if isinstance(expr, TypeName):
+            named = strip_const(self.lang_type(expr.type_name, line))
+            return TypedValue(self.const_string(str(named)), CHARPTR)
         if isinstance(expr, Var):
             const = self.consts.get(expr.name)
             if const is not None:

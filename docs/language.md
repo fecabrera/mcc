@@ -2704,6 +2704,56 @@ is zero-filled and matches only `else`). The box also powers
 arguments box into a caller-stack `slice<const any>` walked exactly like
 `show` above. See [examples/types/any.mc](../examples/types/any.mc).
 
+## The typename builtin
+
+`typename(...)` recovers the **canonical name of a type** as a string. It
+mirrors [`sizeof`](#pointers) in every surface respect: the operand is a type
+or, as a bare name in scope, a variable (`typename(v)` names `v`'s type; the
+operand is never evaluated), and it folds at compile time — the result is an
+ordinary rodata string literal, a `char*`, sharing bytes with every other
+literal spelling the same characters. Zero runtime machinery, and value-level
+by design: the name flows into a variable, a parameter, a struct field, a
+`println`, anywhere a string literal can, including a `const` or `@static`
+initializer.
+
+```c
+println("%s", typename(int64));          // int64
+println("%s", typename(slice<int32>));   // slice<int32>
+let x: const float64 = 1.5;
+println("%s", typename(x));              // float64 — const strips
+const NAME = typename(uint8);            // folds like sizeof does
+```
+
+The spelling is the compiler's canonical one — the same string the
+[`any`](#the-any-type) tags hash, the signature mangles, and the diagnostics
+use — so it is deterministic across compilations, and `typename(T)` is
+precisely the preimage of a `T` value's tag. Two consequences pin the
+details:
+
+- A top-level `const` **strips**, matching what boxing does with tags:
+  `typename(const int64)`, or `typename(x)` of a `const int64` variable, is
+  `"int64"`.
+- `typename(expr)` uses the expression's **static** type: an `any` names as
+  `"any"`, never its dynamic type.
+
+In a generic, `typename(T)` resolves per instantiation — monomorphization
+gives each copy its own literal. The powerful composition is with the
+[generic arms in `case type`](#the-any-type): inside `when T v:` or
+`when T* ptr:` the arm is a real generic context, so `typename(T)` names the
+dynamic type of the boxed `any` per tag, statically — no descriptors, no
+registry:
+
+```c
+fn describe(a: any) {
+    case type (a) {
+        when T v: println("a boxed %s", typename(T));
+        else:     println("nothing yet");
+    }
+}
+```
+
+See [examples/types/typename.mc](../examples/types/typename.mc).
+
 ## Enums
 
 An `enum` is a named set of compile-time constants. The declaration names the

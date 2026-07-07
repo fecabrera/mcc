@@ -86,5 +86,6 @@ fn main() -> int32 {
 // See also: any.mc for the box itself and single-type concrete arms;
 // case_type_groups.mc for multi-type arms, the halfway point between
 // concrete and generic; generics.mc for monomorphization in general;
-// functions/native_variadics.mc, whose for + case type walk these arms
-// make generic.
+// typename.mc, whose typename(T) inside these arms names a box's dynamic
+// type statically; functions/native_variadics.mc, whose for + case type
+// walk these arms make generic.

@@ -10,6 +10,26 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`typename` builtin** — `typename(...)` recovers the canonical name of a
+  type as a string, mirroring `sizeof` in every surface respect: it takes a
+  type or an expression (`typename(int64)`, `typename(x)`, `typename(T)` in
+  a generic) and folds at compile time to an ordinary deduplicated rodata
+  string literal (a `char*`), usable anywhere a string literal is — a
+  variable, a parameter, a `const`/`@static` initializer. The spelling is
+  the compiler's canonical one, the exact string the `any` tags hash, so
+  `typename(T)` is precisely the preimage of a `T` value's tag; a top-level
+  `const` strips to match what boxing does, and `typename(expr)` uses the
+  expression's *static* type (an `any` names as `"any"`, never its dynamic
+  type). In a generic, `typename(T)` resolves per instantiation — including
+  inside generic `case type` arms, where `typename(T)` names the dynamic
+  type of the boxed `any` per tag with no runtime machinery. Identical
+  string literals (source strings and `typename` results alike) now share
+  one rodata constant at emission, rather than leaving the merge to the
+  optimizer. **Breaking** (pre-1.0): `typename` is now a reserved word and
+  can no longer be used as an identifier. See
+  [The typename builtin](docs/language.md#the-typename-builtin) and
+  [examples/types/typename.mc](examples/types/typename.mc).
+
 - **Generic `case type` arms** — `when T* ptr:` matches every boxed pointer
   tag not claimed by an earlier arm, with `T` bound to the pointee and the
   binding typed as the pointer; `when T v:` matches every remaining boxed

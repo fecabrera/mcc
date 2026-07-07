@@ -1114,6 +1114,26 @@ class OffsetOf:
 
 
 @dataclass
+class TypeName:
+    """A ``typename(type)`` expression -- a compile-time string literal.
+
+    Folds to the operand type's canonical spelling -- the same ``str(LangType)``
+    string the ``any`` tags hash -- emitted as an ordinary deduplicated rodata
+    string literal (a ``char*``). Like ``sizeof``, a bare name that is a
+    variable in scope is taken as that variable, so ``typename(v)`` names
+    ``v``'s static type; the operand is never evaluated. A top-level ``const``
+    strips, matching what boxing does with tags.
+
+    Attributes:
+        type_name: The type (or in-scope variable) whose name is taken.
+        line: Source line for diagnostics.
+    """
+
+    type_name: TypeRef
+    line: int
+
+
+@dataclass
 class Len:
     """A ``len(array expression)`` yielding the element count.
 

@@ -60,6 +60,7 @@ from mcc.nodes import (
     StructLit,
     Ternary,
     TypeAlias,
+    TypeName,
     TypeRef,
     Unary,
     Unreachable,
@@ -651,6 +652,7 @@ class Parser:
         "sizeof",
         "alignof",
         "offsetof",
+        "typename",
         "len",
         "(",
         "[",
@@ -1882,6 +1884,11 @@ class Parser:
             field = self.expect("IDENT").text
             self.expect(")")
             return OffsetOf(type_name, field, tok.line)
+        if tok.kind == "typename":
+            self.expect("(")
+            type_name = self.parse_type_ref()
+            self.expect(")")
+            return TypeName(type_name, tok.line)
         if tok.kind == "len":
             self.expect("(")
             operand = self.parse_expr()

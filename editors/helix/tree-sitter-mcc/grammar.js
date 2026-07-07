@@ -510,6 +510,7 @@ module.exports = grammar({
         $.sizeof_expression,
         $.alignof_expression,
         $.offsetof_expression,
+        $.typename_expression,
         $.len_expression,
         $.asm_expression,
       ),
@@ -549,6 +550,7 @@ module.exports = grammar({
     alignof_expression: ($) => seq('alignof', '(', $._type, ')'),
     offsetof_expression: ($) =>
       seq('offsetof', '(', $._type, ',', field('field', $.identifier), ')'),
+    typename_expression: ($) => seq('typename', '(', $._type, ')'),
     len_expression: ($) => seq('len', '(', $._expression, ')'),
 
     // ----------------------------------------------------------- inline asm

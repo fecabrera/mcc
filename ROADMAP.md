@@ -350,7 +350,7 @@ already do).
         in-compile hash collision is detected and errored; a per-type
         `linkonce_odr` descriptor pointer (RTTI-style) is the recorded
         upgrade path if runtime type names are ever wanted, though the
-        planned [`typename`](#metaprogramming-and-builtins) builtin inside
+        [`typename`](#metaprogramming-and-builtins) builtin inside
         the generic-arms sub-item below covers the arm-side need
         statically, leaving a bare `else` arm as the only descriptor-only
         case. The v1 boxable
@@ -1552,7 +1552,7 @@ already do).
   - [ ] `@define <name> = <value>` — a named compile-time substitution
 - [ ] Bit-twiddling builtins — `byte_swap<T>` (`llvm.bswap`) and
       `bit_reverse<T>` (`llvm.bitreverse`) over the integer types
-- [ ] `typename` builtin — recover the canonical name of a type as a `const`
+- [x] `typename` builtin — recover the canonical name of a type as a `const`
       string: mirrors `sizeof` in taking a type or an expression
       (`typename(int64)`, `typename(x)`) and folds at compile time to a
       deduplicated rodata string literal, typed like any other string
@@ -1581,9 +1581,10 @@ already do).
       descriptor-only case is naming a type in a bare `else` arm, where
       only the erased `any` exists). Semantics pinned: `typename(expr)`
       uses the expression's **static** type, so an `any` names as `"any"`,
-      never its dynamic type. One open detail, recorded not settled:
-      whether `const T` names with the `const` stripped, matching what
-      boxing does with tags; settle at implementation
+      never its dynamic type. A top-level `const` strips, matching what
+      boxing does with tags, keeping the name the tag's preimage —
+      implemented, see
+      [The typename builtin](docs/language.md#the-typename-builtin)
 - [ ] Builtin `enumerate` — pairing each element with its `uint64` position:
   - [x] over containers, arrays, and slices — implemented, see
         [Control flow](docs/language.md#control-flow)

@@ -94,11 +94,12 @@
   "as"
 ] @keyword.operator
 
-; sizeof / alignof / offsetof / len read as built-in calls.
+; sizeof / alignof / offsetof / typename / len read as built-in calls.
 [
   "sizeof"
   "alignof"
   "offsetof"
+  "typename"
   "len"
 ] @function.builtin
 

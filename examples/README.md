@@ -78,8 +78,8 @@ variadics (C `...` and native collecting), and function pointers.
 ## types/
 
 The type system: aliases, arrays and strings, enums, structs (and their
-literals, `extends` bases, flexible array members), unions, the `any` box, and
-generics, plus the compile-time
+literals, `extends` bases, flexible array members), unions, the `any` box, the
+`typename` builtin, and generics, plus the compile-time
 directives that check a build's invariants, its configuration, and its use of
 deprecated or removed functions, and the opt-in warning classes that report
 on legal-but-unproven code.
@@ -101,6 +101,7 @@ on legal-but-unproven code.
 | [any.mc](types/any.mc) | the builtin `any` tagged box (24 bytes: tag + payload): implicit boxing at assignment/argument/return, the primitive/pointer/slice boxable set (each pointer type its own tag), recovery only via `case type` with its mandatory `else`, boxing `&s` as the struct escape hatch |
 | [case_type_groups.mc](types/case_type_groups.mc) | multi-type `case type` arms: comma-listed types over one binding sharing one body, the binding an implicit generic compiled once per listed type, an overload set resolving per copy (`width(n)` picks a different member per width), the duplicate-type rejection, `else` still mandatory |
 | [generic_case_arms.mc](types/generic_case_arms.mc) | generic `case type` arms: an unresolved bare name introducing an arm-scoped type parameter, `when T* ptr:` catching every unclaimed pointer tag (T bound to the pointee) and `when T v:` every remaining tag, bodies monomorphized per tag from the whole program's boxed set, first-match-wins order carving concrete arms out of the fallbacks, the zero-filled `any` keeping `else` mandatory |
+| [typename.mc](types/typename.mc) | the `typename` builtin recovering a type's canonical name as a compile-time string: type and in-scope-variable operands (never evaluated, `sizeof`-style), generic instantiations spelled with their type args, top-level `const` stripping, folding into a `const` initializer, the static-type rule (`any` names as "any"), `typename(T)` per generic instantiation, and generic `case type` arms naming a box's dynamic type statically |
 | [static_assert.mc](types/static_assert.mc) | the top-level compile-time directives `@static_assert(cond, "msg")` and `@error("msg")`: guarding a struct's layout with `sizeof`/`offsetof`/`alignof`, `const`- and `Enum::Member`-based checks, and an `@error` guarded by a dead `@if` branch to reject a target |
 | [warnings.mc](types/warnings.mc) | `@warning("msg")`, `@error`'s non-fatal twin: `-D`-gated `@if` branches flagging a suspect build configuration without rejecting it, the collect-then-print warning channel, and the `-Werror` flag promoting warnings to a failed build |
 | [deprecated.mc](types/deprecated.mc) | the `@deprecated("msg")` function attribute: a renamed function kept as a still-callable forwarder, every call site (and fn-as-value use) warning with the migration message, the old-API calls behind a `-D`-gated `@if` branch, `-Werror` promotion |
