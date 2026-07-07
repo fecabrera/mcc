@@ -357,7 +357,8 @@ already do).
         type-switch is `case type (a) { when int32 n: ... else: ... }`:
         `type` stays a contextual keyword (it is not reserved, and `case`
         expects `(` next, so the grammar has room), a binding is required,
-        no multi-type arms in type mode, and `else` is required (the `any`
+        multi-type arms are excluded in v1 (the lift is recorded in the
+        generic-arms sub-item below), and `else` is required (the `any`
         universe is open); the scrutinee is an `any`, with `any*`
         auto-dereferencing per the member-access precedent. The
         `when T name:` arm is deliberately shaped so a future
@@ -377,7 +378,7 @@ already do).
           by-value-vs-by-pointer payload and lifetime questions are settled
     - [ ] checked `as` unwrap — recover a value outside `case type`, once a
           checked-failure mechanism exists to hang the tag mismatch on
-    - [ ] generic pointer arm in `case type` — `when T* ptr:` matches any
+    - [ ] generic arms in `case type` — `when T* ptr:` matches any
           boxed pointer type, the pointer fallback after concrete pointer
           arms (in the stdlib formatter,
           `when T* ptr: l = snprintf(buf, MAX_BUF_LEN, "%p", ptr);` after
@@ -413,14 +414,93 @@ already do).
           textual-order rule the
           interface arm establishes (`when char* s:` stays ahead of the
           fallback), the unreachable-later-arm diagnostic applying the
-          same way; the mandatory `else` is unchanged, since a `T*` arm
-          widens over pointers only and non-pointer tags still need
-          arms or `else`. Unlike the interface arm this depends only on
-          the shipped `any`/`case type` machinery above, which is why
-          it lives here and not under interfaces. Open question,
-          deferred: whether a fully generic `when T v:` arm falls out
-          of the same machinery or is rejected as redundant with a
-          binding `else`
+          same way; a lone `T*` arm widens over pointers only, so
+          non-pointer tags still need arms or `else`. Unlike the
+          interface arm this depends only on the shipped
+          `any`/`case type` machinery above, which is why it lives here
+          and not under interfaces. Settled: the fully generic
+          `when T v:` arm is admitted too, riding the identical
+          machinery (the closed whole-program boxed-tag set, the same
+          set-membership test over the compile-time FNV-1a tags, the
+          arm body monomorphized once per matching tag with `T` bound
+          to that tag's type, each instantiation fully type-checked
+          with the same no-viable-overload compile error at the
+          `case type` site naming the offending type, and
+          `T`-unused instantiations collapsing). It is not redundant
+          with a binding `else`, which is exactly the argument for
+          admitting it: an `else` binding would hand over the erased
+          `any` itself, through which nothing type-specific can be
+          called, while `when T v:` hands over the unwrapped typed
+          value. Composition with the pointer arm stays
+          first-match-wins textual order, no overload-style specificity
+          ranking between `T*` and `T` arms: `when T* ptr:` first
+          consumes every pointer tag (binding `T` to the pointee type),
+          then `when T v:` consumes every remaining tag (binding `T` to
+          the boxed type itself), and a `T v` arm written before a `T*`
+          arm makes the latter unreachable, caught by the same
+          unreachable-later-arm diagnostic (a lone `when T v:` does
+          match pointer tags too, binding e.g. `v: char*` with
+          `T = char*`). Exhaustiveness follows: a trailing `when T v:`
+          arm covers the closed tag set by construction (alone, or with
+          a `T*` arm in front), so `else` becomes optional exactly when
+          such an arm is present, a deliberate carve-out from the
+          otherwise mandatory `else`, and an `else` written anyway is
+          unreachable and gets the same diagnostic. The accepted trade
+          is action at a distance, the same trade the pointer arm
+          already accepted but wider: the generic arm is type-checked
+          against every type boxed anywhere in the program, so a new
+          `any` use in one module can newly fail a distant `case type`;
+          the mitigation is structural, concrete arms and (future)
+          interface arms in front consuming the tags handled specially,
+          the generic arm body written against genuinely generic
+          operations. The motivating end-state is the stdlib formatter:
+          concrete arms for bespoke types, `when T* ptr:` printing `%p`
+          as the pointer fallback, `when T v:` dispatching into a
+          generic formatter, no `else`, and every boxed type without a
+          viable formatting path a compile error instead of a runtime
+          gap. Settled in the same discussion: multi-type arms in type
+          mode, `when int32, int16, int8 n: printf("%d", n);`, a
+          comma-separated list of concrete types over one binding, the
+          third member of the same arm family with identical lowering
+          (set-membership over the listed types' FNV-1a tags) and the
+          binding treated as an implicit generic: the body is
+          monomorphized once per listed type, each instantiation fully
+          type-checked, and a listed type with no viable overload or
+          instantiation for a called function is the same compile-time
+          error at the `case type` site naming the offending type,
+          exactly like the `T v` and `T* ptr` arms. This supersedes
+          the parent item's v1 "no multi-type arms in type mode" rule:
+          that ban existed because a single binding could not carry
+          one static type, and the generic reinterpretation dissolves
+          the objection (`n` is never union-typed, each instantiation
+          has a concrete type). Unlike the `T*` and `T` arms there is
+          no action at a distance: the check set is written in source,
+          the arm type-checked against precisely the listed types
+          whether or not each is ever boxed anywhere in the program,
+          making it the most predictable arm of the family, bounded
+          genericity without interfaces. Ordering and reachability are
+          uniform with the rest: first-match-wins textual order, the
+          unreachable-later-arm diagnostic firing per listed type
+          (after `when char* s:`, an arm `when char*, int32 n:` has a
+          dead `char*` member and is flagged). List hygiene: a
+          duplicate type within one list is a compile error, and v1
+          lists take concrete types only, no named generic patterns
+          like `T*` as list members (what `T` would bind to per member
+          is unresolved and nothing needs it). Exhaustiveness is
+          unchanged: an explicit list does not close the universe, so
+          `else` or later arms are still required unless a trailing
+          fully generic arm is present. The motivating use is
+          formatter-style grouping: `when int32, int16, int8 n:`
+          shares one `%d` body, mechanically sound because the
+          narrower instantiations pass through C default argument
+          promotions at the varargs `printf` call, and
+          `when uint32, uint16, uint8 n:` likewise shares `%u`. The
+          arm family is now enumerated in full: a concrete arm (one
+          tag), a multi-type arm (the explicit tag list), `when T*
+          ptr:` (every pointer tag), `when T v:` (every tag), and the
+          future [interface arm](#functions-and-methods) (the tags
+          implementing the interface), all lowering to the same tag
+          set-membership test with per-tag monomorphized bodies
   - [ ] global/`@static` union initializers — teach the const-initializer
         path to emit a union constant (zero-fill plus the one written member).
         Until then a global/`@static` union initializer is rejected with an
@@ -656,34 +736,36 @@ already do).
           (`dealloc(self->data)`, `dict`'s keys and entry array) and never
           deallocates the receiver's own box, which remains the caller's
           separate `dealloc(p)` on a pointer the caller still holds, so
-          nothing needs to stay pointer-taking or be split. The migration
-          lands **staged**: each stage is its own complete change set with
-          its own CHANGELOG entry, and this box ticks only when the last
-          stage lands. The order is forced, not chosen: the pointer decay
-          above ships first as its own change set; then `stack` + `queue`
-          (every call site is `&x`-shaped, so decay proves them for free
-          and no guards appear); then `dict` + `set` (about thirteen
-          heap-pointer test call sites take guards); then
-          `list` + `string` as one stage, because the ten `@inline`
-          `string` wrappers re-lend `self` into the `list_*` slots (`&` of
-          a `mut` parameter is banned, so `string` cannot flip before
-          `list`); and finally `std`, whose `format_arg`/`format_args`
-          accumulator flips to `mut` together with the in-flight
-          variadic-format work, since those functions break the moment
-          `string` flips. A transitional both-signatures period is
-          skipped by design: a forward declaration pairs with its
-          definition rather than overloading it, and though the
-          since-shipped
+          nothing needs to stay pointer-taking or be split. A
+          transitional both-signatures period is skipped by design: a
+          forward declaration pairs with its definition rather than
+          overloading it, and though the shipped
           [function overloading](docs/language.md#function-overloading)
           could express a dual-shape set, each stage flips its containers
           atomically instead of carrying legacy overloads. The migration
-          doubles as the decay rule's
-          acceptance test (the whole stdlib
+          doubles as the decay rule's acceptance test (the whole stdlib
           plus its tests and examples compiling over decayed call sites
           proves the rule covers real call patterns) and pre-positions
           [Methods / OOP](#functions-and-methods): the receiver kinds land
           as method sugar over already-correct `mut self`/`const self`
-          signatures
+          signatures. Lands **staged**, in a forced order (each stage its
+          own change set with its own CHANGELOG entry; this box ticks
+          when the last stage lands):
+      - [x] stage 1: pointer decay — the enabling rule ships on its own,
+            the parent item above
+      - [x] stage 2: `stack` + `queue` — every call site is `&x`-shaped,
+            so decay proves them for free and no guards appear
+      - [x] stage 3: `dict` + `set` — about thirteen heap-pointer test
+            call sites take guards
+      - [x] stage 4: `list` + `string` as one unit — the ten `@inline`
+            `string` wrappers re-lend `self` into the `list_*` slots, and
+            `&` of a `mut` parameter is banned, so `string` cannot flip
+            before `list`
+      - [ ] stage 5: `std` — the `format_arg`/`format_args` accumulator
+            flips to `mut` together with the
+            [native variadics](#functions-and-methods) stage-3 format
+            work (its vehicle), since those functions break the moment
+            `string` flips
   - [ ] `for … in` protocol over `mut` — `_next` still takes its element slot
         as a raw pointer (`fn list_next<T>(it: …, out: T*) -> bool`) because
         the compiler emits the `_next(&it, &slot)` call itself; teaching that
@@ -1272,56 +1354,49 @@ already do).
       callee-must-not-retain caveat is the same one every slice borrow
       documents. The two real costs: collection parity across both
       marshaling paths (`marshal_args` and the generic pre-evaluate path),
-      and the `{}`-grammar migration of every existing print caller. This
-      lands **staged** (the receiver-migration pattern: each stage is its
-      own complete change set with its own CHANGELOG entry, and this box
-      ticks only when the last stage lands). Stage 1 (**shipped**, see
-      [Native variadic arguments](docs/language.md#native-variadic-arguments)),
-      trailing collection
-      and the `args...` sugar: parser sugar (the parameter loop already
-      handles a `...` token for C variadics; `IDENT...` desugars to
-      `slice<const any>`); collection in `marshal_args` (the arity gate
-      learns `>=` for collecting callees; the lowering mirrors the shipped
-      literal-adaptation borrow: entry `[N x any]` alloca, box each extra,
-      form the slice, hidden-reference spill; plus the empty-slice
-      synthesis); the pass-through rule; the overload/generic ban with its
-      explicit diagnostic; `check_boxable`'s existing struct/array
-      rejections firing naturally at the collection site; and the full
-      sweep (tests for arity edges, pass-through, zero extras,
-      struct-extra rejection, `defer`/loop call sites, `.mci` round trip;
-      an `examples/functions/` example; docs; changelog). Stage 2, generic
-      and overload-set parity: collection through the pre-evaluate path
-      (its arity filter and viability arity error exclude collecting
-      candidates today), mirroring the literal-adaptation parity lesson
-      from
-      [function overloading](docs/language.md#function-overloading)'s
-      stage 1, and
-      lifting the stage-1 ban. Stage 3, the stdlib flip: fix the five
-      recorded bugs in the dormant `format_arg` WIP (the `char*` arm
-      appends the uninitialized `buf` instead of `s`, and the correct fix
-      needs a null guard, since a boxed `char*` can hold `null` while
-      `string_append`'s `char*` overload is `@nonnull`; the unconditional
-      trailing `buf` append; the unused `snprintf` length `l`, fixed by
-      the bounded `(char*, n)` append overload; `%llf` to `%f`; and the
-      silent excess-placeholder and trailing-brace edges get spec'd), flip
-      `print`/`println` to the slice signatures, and migrate every
-      printf-grammar caller to `{}` placeholders in the same change set
-      (279 `println` sites across 69 example files plus test assertions;
-      the migration is mechanical but cannot trail the flip, since a
-      printf string through the `{}` formatter prints its specifiers
-      literally). Two decisions defer to stage 3: whether `NATIVE_VARGS`
-      survives as a one-release migration toggle (a plain `-D` define
-      today, no target sets it, and the test helpers would need defines
-      threaded through) or the fact and its `@else` branches delete
-      outright at the flip (the audit leans delete: a half-flipped
-      ecosystem means two format grammars in every doc), and the final
-      `{}` grammar spec (`{x}`/`{X}` modifiers already work in the WIP).
-      Stage 3 is also the vehicle for the
-      [libmc receiver migration](#functions-and-methods)'s final `std`
-      stage, and the downstream
-      [formatted `{}` print](#strings-and-formatting) and
-      [string interpolation](#strings-and-formatting) items key off
-      stage 3, not stage 1.
+      and the `{}`-grammar migration of every existing print caller. Lands
+      **staged** (the receiver-migration pattern: each stage is its own
+      complete change set with its own CHANGELOG entry; this box ticks
+      when the last stage lands):
+  - [x] stage 1: trailing collection and the `args...` sugar — parser sugar
+        (`IDENT...` desugars to `slice<const any>`), collection in
+        `marshal_args` mirroring the literal-adaptation borrow (entry
+        `[N x any]` alloca, box each extra, form the slice; zero extras
+        synthesize the empty slice), the pass-through rule, the v1
+        overload/generic ban with its explicit diagnostic, and
+        `check_boxable`'s struct/array rejections firing at the
+        collection site; implemented, see
+        [Native variadic arguments](docs/language.md#native-variadic-arguments)
+  - [ ] stage 2: generic and overload-set parity — collection through the
+        pre-evaluate path (its arity filter and viability arity error
+        exclude collecting candidates today), mirroring the
+        literal-adaptation parity lesson from
+        [function overloading](docs/language.md#function-overloading)'s
+        first stage, and lifting the stage-1 ban
+  - [ ] stage 3: the stdlib flip — fix the five recorded bugs in the
+        dormant `format_arg` WIP (the `char*` arm appends the
+        uninitialized `buf` instead of `s`, with the fix needing a null
+        guard, since a boxed `char*` can hold `null` while
+        `string_append`'s `char*` overload is `@nonnull`; the
+        unconditional trailing `buf` append; the unused `snprintf` length
+        `l`, fixed by the bounded `(char*, n)` append overload; `%llf` to
+        `%f`; and the silent excess-placeholder and trailing-brace edges
+        get spec'd), flip `print`/`println` to the slice signatures, and
+        migrate every printf-grammar caller to `{}` placeholders in the
+        same change set (279 `println` sites across 69 example files plus
+        test assertions; mechanical, but it cannot trail the flip, since
+        a printf string through the `{}` formatter prints its specifiers
+        literally). Two decisions defer here: whether `NATIVE_VARGS`
+        survives as a one-release migration toggle or the fact and its
+        `@else` branches delete outright at the flip (the audit leans
+        delete: a half-flipped ecosystem means two format grammars in
+        every doc), and the final `{}` grammar spec (`{x}`/`{X}`
+        modifiers already work in the WIP). Also the vehicle for the
+        [libmc receiver migration](#functions-and-methods)'s final `std`
+        stage; the downstream
+        [formatted `{}` print](#strings-and-formatting) and
+        [string interpolation](#strings-and-formatting) items key off
+        this stage, not stage 1
 - [ ] C variadics — the C-ABI `...`/`va_list` machinery, beyond forwarding:
   - [x] variadic declarations and `va_list` forwarding — implemented, see
         [Variadic functions](docs/language.md#variadic-functions)
