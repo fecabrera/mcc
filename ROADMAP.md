@@ -17,7 +17,10 @@ its reference section in the [language reference](docs/language.md).
       types: generic, concrete, and mixed sets (a concrete overload beats a
       generic on an exact match), signature-derived mangled symbols (a single
       definition keeps its plain C-linkable name), `.mci` support, and
-      [order-independent template symbol bases](docs/language.md#template-symbols)
+      [order-independent template symbol bases](docs/language.md#template-symbols);
+      all overloads of a name currently live in one defining module, a
+      rule slated to be lifted by the planned open overload sets item
+      in [Functions and methods](#functions-and-methods)
 - [x] [Variables](docs/language.md#variables) — `let` with type inference
 - [x] [Constants](docs/language.md#constants) — `const`, folded at compile time
 - [x] [Conditional compilation](docs/language.md#conditional-compilation) — structured `@if`,
@@ -996,7 +999,26 @@ already do).
         `fn list_next<T>(it: …, mut out: T) -> bool` the expected shape and
         removes the last stdlib out-pointer (the `get` family already
         migrated). The `_it`/`_next` signatures are a compiler-checked
-        convention, so this is a coordinated compiler + stdlib change
+        convention today; the settled direction is that they stop
+        being one: `for x in c` desugars to overloadable protocol
+        calls (sketched as `iterate(c)` obtaining the iteration state
+        and `get_next(...)` advancing it), resolved through ordinary
+        whole-program overload resolution rather than compiler-magic
+        underscore names, making iteration the second member of the
+        overload-protocol family beside formatting and a dependent of
+        the open overload sets item below: the stdlib provides the
+        baseline overloads (slices, `range`, `enumerate`), and a user
+        type becomes for-in-iterable by adding its own overloads in
+        its own module. Open, not settled: the spelling, whether
+        `get_next` writes the element through a `mut` binding and
+        returns `bool`, and how the desugar interacts with the
+        existing builtin for-in lowerings (slices/`range`/`enumerate`
+        must not regress, presumably by those lowerings migrating into
+        the stdlib baseline overloads). The `mut` shape survives
+        regardless, iterator state advanced through a `mut` parameter
+        and the element delivered without an out-pointer, which is
+        what makes the protocol shapes work; either way this stays a
+        coordinated compiler + stdlib change
   - [ ] `mut` returns — a function that returns an lvalue:
         `fn string_ref(mut self: string, i: uint64) -> mut char` makes
         `string_ref(str, 0) = '/'` legal (as well as comparing it or copying it
@@ -1024,13 +1046,103 @@ already do).
         `self: <struct>*` receiver, and a `mut` return formed from `self` gives a
         memory-safe mutable accessor. See its receiver-kind note for the
         field-projection and vtable details
+- [ ] Open overload sets — lift the shipped
+      [function overloading](docs/language.md#function-overloading)
+      rule that all overloads of a name live in one defining module
+      (`check_mixed_set` in `mcc/codegen/generator.py`, "a template may
+      share its name with a concrete function or concrete set only from
+      its own module", plus its concrete-side counterpart, both raising
+      `function 'f' already defined` on a cross-module join; that error
+      site is the single gate this item removes). Sets become open by
+      default, with no opt-in marker: any module may add overloads to
+      an existing name, and the set is the whole-program union at
+      import merge. The gate becomes the declare-time collision rules
+      that already run cross-module for templates: same-pattern
+      duplicates collide, alpha-renamed same-base templates collide,
+      and overlapping [closed type groups](#types-and-generics)
+      collide. Resolution semantics are unchanged (shape filter,
+      specificity, concrete beats bounded generic beats unbounded), so
+      adding an import can only add candidates or collide loudly, never
+      silently rewire a call except by supplying a better-ranked
+      candidate, which is the intended protocol behavior.
+      Non-overloadable functions stay non-overloadable exactly as
+      shipped: `main`, variadic (`...`) functions, and collecting
+      (`args...`) functions. Two known implementation liabilities the
+      item must resolve (design notes, not open user decisions):
+      privacy is tracked per name today (`func_privacy`), and open
+      sets need per-overload privacy (an `@private` overload is a
+      candidate only inside its own module and neither collides with
+      nor is visible to foreign modules); the deprecation bookkeeping
+      (`deprecated_syms`) has the same per-name shape. Each module's
+      `.mci` stub renders the overloads that module contributes, and
+      importing several modules unions the sets; the shipped
+      order-independent
+      [template symbol bases](docs/language.md#template-symbols) are
+      what make that union linkable and order-independent, so this
+      item is only sound because they shipped. The driving use case is
+      the formatting protocol: the stdlib format module declares the
+      baseline
+      `format(mut str: string, value: X, const modifier: string)`
+      overload family (closed signed/unsigned groups, concretes, a
+      generic slice list-renderer, an unbounded `<typename>` fallback),
+      and `println`'s `format_arg` dispatches into the set through a
+      generic `with`/`case type` arm resolved per boxed tag at end of
+      codegen over the whole-program overload set; with open sets, a
+      programmer makes a type printable by writing one `format`
+      overload for it in their own module (today pointer-shaped,
+      `value: point*` boxed via `&p`, until the
+      [struct boxing](#structs-arrays-and-data-layout) follow-up under
+      `any` lands). Verified: that whole chain works today except the
+      cross-module join, which fails with
+      `function 'format' already defined` at the user's overload.
+      Iteration is the protocol family's second member: the
+      `for … in` protocol sub-item above is slated to desugar into
+      `iterate`/`get_next` overloads riding this same mechanism. The
+      family is free-function overload sets rather than per-struct
+      member rules deliberately: a protocol built as an overload set
+      is joinable by any type (builtins, pointers, enums, slices,
+      types from modules the programmer does not own), which a
+      member-function or interface rule can never be (no one can add
+      a method to `slice<T>` or to a foreign library's struct). The
+      overload-set protocol family is the language's protocol story,
+      and the Methods / OOP item below is checked against it rather
+      than the reverse: methods must not become the privileged
+      mechanism for protocols
+  - [ ] `@override` — replace a same-pattern member of an open set.
+        With open sets, replacing group-covered or generic-covered
+        behavior already falls out of the shipped ranking with no
+        annotation (a user's concrete
+        `format(mut str: string, value: int32, const modifier: string)`
+        outranks the stdlib's closed-group template), which scopes
+        the annotation to the one remaining case: replacing a
+        same-pattern member of the set, e.g. the stdlib's concrete
+        bool formatter, or its unbounded `<typename>` fallback
+        replaced by the user's own unbounded template. Marking an
+        overload `@override` suppresses the declare-time
+        duplicate-pattern collision; the annotated definition
+        replaces the unannotated one regardless of import order, and
+        the replaced body is never emitted. Defaults settled: an
+        `@override` whose pattern matches no existing overload is a
+        declare-time error (typo protection, the C++
+        override-specifier rationale), and two `@override`s of one
+        pattern collide like any duplicate. Taxonomy: an `@X`
+        value-supplier promise, "this definition replaces an existing
+        one", the `@deprecated`/`@removed` family. The driving use
+        case is the same protocol story: a programmer setting their
+        own formatters for stdlib-covered types
 - [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
       keyed to a struct, including `@private` methods and the special
       constructor/destructor below (the `for … in` protocol already dispatches
-      by struct name to pave the way). On a plain `struct`, every method call
+      by struct name to pave the way, though iteration itself is slated to
+      move to the overload-set protocol family of the open overload sets item
+      above). On a plain `struct`, every method call
       is a direct, statically-bound call; dynamic dispatch exists only behind
       the explicit opt-in of the polymorphic lane below, so code that does not
-      opt in pays nothing:
+      opt in pays nothing. A settled scope boundary from the open overload
+      sets item above: protocols (formatting, iteration) are free-function
+      overload sets, not methods; methods must not become the privileged
+      mechanism for protocols, and this item is checked against that family
+      rather than the reverse:
   ```c
   struct point { x: int32; y: int32; }
   fn point::constructor(self: struct point*, x: int32, y: int32) { ... }
