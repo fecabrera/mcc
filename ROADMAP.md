@@ -434,10 +434,62 @@ already do).
           below
     - [ ] struct boxing — lift the v1 struct/array rejection once the
           by-value-vs-by-pointer payload and lifetime questions are settled
-    - [ ] checked `as` unwrap — recover a value outside `case type`, once a
-          checked-failure mechanism exists to hang the tag mismatch on;
-          the generic-arms item below parks its else-optional carve-out
-          behind the same mechanism (both want the same trap)
+    - [ ] checked `as` — recover a value outside `case type`. The core
+          primitive is `v as T t`, with `v` an `any`: it tests the
+          boxed tag and, on success, binds `t` as the unwrapped typed
+          value, scoped to the true branch. The binding name is
+          required: bare `v as T` is not admitted, because `expr as T`
+          is already a cast on non-`any` subjects and the binding
+          identifier is what distinguishes the checked test; `as` on
+          anything but an `any` keeps its cast semantics everywhere.
+          The consuming surface is a single dedicated statement under
+          a new `with` keyword,
+          `with (v as T t) f(t); else do_something();`, braces
+          optional as usual
+          (`with (v as T t) { f(t); } else { do_something(); }`),
+          chosen because it is clearly distinct from `if ... else` and
+          from the ternary; an expression (ternary) form was
+          considered and set aside in favor of the one distinct
+          statement surface (it is also the harder form: with a
+          generic `T`, every per-tag instantiation of the true
+          expression would have to agree with the else expression on
+          one result type). `with` becomes a new reserved word, a
+          pre-1.0 break with the same treatment as `typename` (lexer
+          keyword plus editor grammars); verified currently unused as
+          an identifier in `libmc/` and `examples/`. The statement is
+          pure sugar over a two-arm `case type`
+          (`when <pattern> t: ...; else: ...`), riding the shipped
+          generic-arms machinery below unchanged: `T` may be a
+          concrete resolvable type (single tag compare), an arm-scoped
+          generic introduced by an unresolved bare name (monomorphized
+          per boxed tag over the closed whole-program tag set, each
+          instantiation's body type-checked with the same compile
+          error naming an offending boxed type), or a `T*` pointer
+          pattern, the same detection rule as generic case-type arms.
+          Crucially the statement carries its else inline or has
+          defined fall-through, so it does not wait for the
+          checked-failure trap: an unmatched tag (including tag-0
+          zeroed anys) takes the `else`, or falls through a lone
+          `with` doing nothing (defined behavior); only the bare
+          prefix unwrap of stage 2 stays parked behind the trap.
+          v1 restrictions, settled as defaults: the `as` binding is
+          the entire `with (...)` head (no `&&`/`||`/`!` composition,
+          keeping the binding's scope obvious), and
+          `while (v as T t)` is not admitted (a possible later
+          extension). Condenses the stdlib formatter's
+          `case type (arg) { when T t:
+          format(str, t, modifier); else:
+          string_append(str, "(unknown)"); }` to a one-liner, and is
+          the explicit-else alternative to the separately discussed
+          implicit any-to-overload dispatch idea. Staged:
+      - [ ] stage 1: the `with` statement — reserves the keyword;
+            optional `else` with defined fall-through, both brace
+            styles, lowering to the two-arm `case type`
+      - [ ] stage 2: bare `let t = v as T;` unwrap — trap on tag
+            mismatch, still parked behind a checked-failure mechanism
+            to hang the mismatch on; the generic-arms item below parks
+            its else-optional carve-out behind the same mechanism
+            (both want the same trap)
     - [x] generic arms in `case type` — `when T* ptr:` matches any
           boxed pointer type, the pointer fallback after concrete pointer
           arms (in the stdlib formatter,
@@ -514,14 +566,17 @@ already do).
           set by
           construction, alone or with a `T*` arm in front, so `else`
           could be dropped and one written anyway flagged unreachable)
-          is not retracted but deferred behind the checked `as`
-          sub-item above and its checked-failure mechanism: tag-0 `any`
+          is not retracted but deferred behind the bare-unwrap stage 2
+          of the checked `as` sub-item above and its checked-failure
+          mechanism (the `with` statement stage there carries its else
+          inline and does not wait): tag-0 `any`
           values are defined behavior today (a struct literal omitting
           an `any` field zero-fills it, and that value flows into
           `case type` and lands in `else`), so making the unmatched
           edge `unreachable` would turn a defined shape into UB; the
           carve-out waits for a trap to hang that edge on, the same
-          trap checked `as` wants. Generic-arm detection needs no new
+          trap the bare checked-`as` unwrap wants. Generic-arm
+          detection needs no new
           syntax: a bare name in arm position that resolves (builtin,
           struct, alias, enum, or an enclosing generic's active type
           binding) is a concrete arm, and an unresolved bare name with
