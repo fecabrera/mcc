@@ -12,6 +12,12 @@ its reference section in the [language reference](docs/language.md).
 - [x] [Variadic functions](docs/language.md#variadic-functions) — C's variadic arguments: `...`
       and `va_list` forwarding
 - [x] [Generics](docs/language.md#generics) — monomorphized, on functions and structs
+- [x] [Function overloading](docs/language.md#function-overloading) — one name,
+      several parameter lists, resolved at the call site by arity and argument
+      types: generic, concrete, and mixed sets (a concrete overload beats a
+      generic on an exact match), signature-derived mangled symbols (a single
+      definition keeps its plain C-linkable name), `.mci` support, and
+      [order-independent template symbol bases](docs/language.md#template-symbols)
 - [x] [Variables](docs/language.md#variables) — `let` with type inference
 - [x] [Constants](docs/language.md#constants) — `const`, folded at compile time
 - [x] [Conditional compilation](docs/language.md#conditional-compilation) — structured `@if`,
@@ -59,6 +65,10 @@ its reference section in the [language reference](docs/language.md).
       `@packed`/`@align`/`@volatile`, `extends` (prefix specialization),
       struct value upcast, flexible array members (a trailing `field: T[]` that
       adds 0 to `sizeof` and decays to a `T*` at the struct's tail)
+- [x] [Struct extension of a type parameter](docs/language.md#structs) — a bare
+      type parameter in the `extends` slot (`struct wrapper<T> extends T`)
+      embeds `T`'s fields as the layout prefix per instantiation (the
+      intrusive-container shape); single base by design
 - [x] [Builtin structs](docs/language.md#control-flow) — `iterator<T>` (the
       shared `_it`/`_next` cursor), `pair<K, V>` (what the keyed containers
       yield), and `enumerated<T>` (what `enumerate` yields), available with no
@@ -75,6 +85,18 @@ its reference section in the [language reference](docs/language.md).
 - [x] [Imports](docs/language.md#imports) — bare-name resolution, search paths
 - [x] [Visibility](docs/language.md#visibility) — `@private`, `@static`
 - [x] [Extern declarations](docs/language.md#extern-declarations) — `@extern`, `@symbol`
+- [x] [Bodyless `fn` prototypes](docs/language.md#bodyless-fn-prototypes) — a
+      plain `fn` ending in `;`: concrete prototypes for functions defined in
+      another object (mcc calling convention, which `@extern`'s C ABI rejects)
+      and forward declarations (a prototype pairs with its definition and is
+      discarded)
+- [x] [`@noalias` parameters](docs/language.md#noalias-parameters) — C's
+      `restrict`: an unchecked per-parameter promise mapped to LLVM `noalias`;
+      allowed on `@extern`, rejected on `mut` and non-pointer parameters
+- [x] [`@removed(msg)` tombstones](docs/language.md#removed-functions) — the
+      terminal state of the availability lifecycle, one step past
+      `@deprecated`: a bodiless declaration turning every call site into a
+      hard compile error that carries the migration message
 - [x] [Strings](docs/language.md#strings) — string and char literals with C escapes
 - [x] [Comments](docs/language.md#comments) — line, block, doc
 
@@ -82,7 +104,7 @@ its reference section in the [language reference](docs/language.md).
 
 - [x] Core — `memory` (typed `alloc`/`dealloc`), `std` (`print`/`println`,
       `swap`/`replace`)
-- [x] Containers — `list`, `stack`, `queue`, `set`, `dict`, `string` (counting
+- [x] Containers — `list`, `stack`, `queue`, `ring`, `set`, `dict`, `string` (counting
       loops use the builtin [`range`](docs/language.md#control-flow))
 - [x] Hashing — `splitmix64`, `fnv1a`, `murmur3`, `crc32`, `md5`
 - [x] [libc bindings](docs/language.md#reaching-libc) — `stdio`, `stdlib`, `string`, `ctype`,
@@ -93,6 +115,8 @@ its reference section in the [language reference](docs/language.md).
 - [x] Native compilation and linking
 - [x] JIT execution (`--run`)
 - [x] LLVM IR output (`--emit-llvm`)
+- [x] Assembly output (`--emit-asm`/`-S`) — target `.s` text, alongside
+      `--emit-llvm` and `-c`
 - [x] Optimization levels `-O0`–`-O3`
 - [x] Cross-compilation (`--target`), `--general-regs-only`, `--strict-align`,
       `--nostdlib`, `-I`
@@ -144,7 +168,8 @@ already do).
     mints no monomorphized artifact of its own. Everything downstream
     follows from transparency: an alias instantiation works in the
     `extends` slot (a concrete alias there already works today) and
-    composes with the [bare-parameter base](#types-and-generics) below,
+    composes with the shipped
+    [bare-parameter base](docs/language.md#structs),
     serves as a generic bound, appears inside another generic's body
     (`entry<U>` with `U` the outer parameter), and a method lookup under
     [non-struct receivers](#functions-and-methods) sees the underlying
@@ -199,57 +224,6 @@ already do).
           [interfaces](#functions-and-methods) dispatch; depends on
           interface declarations and the methods they are made of, so it
           lands after both
-- [x] Struct extension of a type parameter — a bare type parameter in the
-      `extends` slot, `struct wrapper<T> extends T`, embedding `T`'s fields
-      as the layout prefix per instantiation:
-  - [x] concrete and generic bases — `struct point3 extends point` lays the
-        base's fields out first, so a derived pointer or value upcasts to
-        the base, and a generic struct already extends a base built from
-        its own parameters (`struct entry<K, V> extends pair<K, V>`),
-        resolved with the instantiation's bindings in scope. Single base
-        by design, not omission: only one base can occupy offset 0, so
-        the prefix property that makes the upcast zero-cost is unique by
-        construction, and a second base would sit at an interior offset,
-        turning upcasts into pointer adjustments; `extends A, B` stays
-        rejected, additional state is composition via named fields, and
-        a type presenting as several things is the planned
-        [interfaces](#functions-and-methods) job; implemented,
-        see [Structs](docs/language.md#structs)
-  - [x] a bare parameter as the base — the intrusive-container shape, an
-        embedded/systems feature squarely in the language's dual
-        apps/systems remit:
-    ```c
-    struct linked_list_entry<T> extends T { next: linked_list_entry<T>*; }
-    struct linked_list<T> { head: linked_list_entry<T>*; }
-    ```
-    `linked_list_entry<mystruct>` embeds the payload's fields first and
-    appends the link, so an entry pointer upcasts to `mystruct*` and the
-    payload is reached with no indirection (note `next` must be a
-    **pointer**, `linked_list_entry<T>*`: the existing
-    self-reference-through-a-pointer rule for plain structs). The
-    semantics is field **embedding** with prefix layout, not a named
-    member, so the shipped upcast applies unchanged. Much of this already
-    falls out of the generic-base resolution above: `extends T` resolves
-    through the instantiation's bindings today, the layout, literal, and
-    upcast paths work, and a non-struct argument is already rejected per
-    instantiation (`int32 is not a struct; cannot extend it`). The
-    residual work is promoting an accidental capability to a supported
-    one: the language reference admits only a base "named as a struct"
-    (no bare-parameter form), nothing in the test suite pins the
-    behavior, and no example exists. So this ships as documentation of
-    the rule set, tests pinning layout, upcast, and the per-instantiation
-    rejections (a non-struct `T`; a union or flexible-array-member base,
-    both already invalid for `extends`; a field-name collision between
-    `T`'s fields and the extender's, which the shipped
-    [instantiation backtraces](#tooling-and-c-interop) trace to the
-    triggering instantiation), and the intrusive-list example. Distinct
-    from the planned `T extends mystruct` **bound** above: the bound
-    constrains what a caller may bind `T` to, while this uses `T` as the
-    base (same keyword, different positions, no grammar overlap; the two
-    compose as `struct wrapper<T extends node> extends T`). Non-goals
-    inherited from `extends`: no method inheritance (once
-    [methods](#functions-and-methods) land, `T`'s methods are reached
-    through the upcast) and no constructor chaining
 - [x] Enum member reuse — a derived enum inherits a base enum's members by
       naming it in the existing `:` slot:
       `enum x_status: x_error { SUCCESS = 0 }` copies `x_error`'s member table
@@ -623,8 +597,9 @@ already do).
         one parameter kind that promises there is none. An unproven heap
         `T*` takes the usual one-line guard or hatch; a non-null `T!`
         return from `new`, if the deferred first-class `T!` item happens,
-        would prove it at the source. (4) Under
-        [function overloading](#functions-and-methods), an exact pointer
+        would prove it at the source. (4) Under the shipped
+        [function overloading](docs/language.md#function-overloading), an
+        exact pointer
         match always beats a decayed one, and the mechanism is **two-tier
         viability**, not a specificity tweak: decayed candidates enter
         resolution only when no candidate matches the pointer type
@@ -696,9 +671,13 @@ already do).
           accumulator flips to `mut` together with the in-flight
           variadic-format work, since those functions break the moment
           `string` flips. A transitional both-signatures period is
-          impossible anyway: a forward declaration pairs with its
-          definition rather than overloading it, and concrete overloading
-          has not shipped. The migration doubles as the decay rule's
+          skipped by design: a forward declaration pairs with its
+          definition rather than overloading it, and though the
+          since-shipped
+          [function overloading](docs/language.md#function-overloading)
+          could express a dual-shape set, each stage flips its containers
+          atomically instead of carrying legacy overloads. The migration
+          doubles as the decay rule's
           acceptance test (the whole stdlib
           plus its tests and examples compiling over decayed call sites
           proves the rule covers real call patterns) and pre-positions
@@ -733,199 +712,13 @@ already do).
         resolution — the exact decision point an assignable call expression
         needs — and a `-> mut T` stub in a `.mci` is pure return-type
         rendering on the shipped
-        [bodyless prototypes](#functions-and-methods)
+        [bodyless prototypes](docs/language.md#bodyless-fn-prototypes)
   - [ ] motivating use case: method receivers — once methods / OOP (the item
         below) land, `const`/`mut`/by-value on `self` express
         read-only / mutating / consuming methods directly, replacing today's raw
         `self: <struct>*` receiver, and a `mut` return formed from `self` gives a
         memory-safe mutable accessor. See its receiver-kind note for the
         field-projection and vtable details
-- [ ] Function overloading — one name, several parameter lists, resolved at
-      the call site by arity and argument types:
-  - [x] generic overload sets — generic functions sharing a name form an
-        overload set dispatched per call: viability by parameter-pattern
-        match, then a specificity ranking (concrete types beat structured
-        patterns beat bare type parameters, with pointer depth counting), an
-        equal-rank tie a compile error naming the ambiguity, and sets mixing
-        `mut` resolved through the deferred lvalue/value machinery above;
-        `@deprecated` warns only when a deprecated overload wins, and
-        `@removed` replaces the whole set; implemented, see
-        [Generics](docs/language.md#generics) and
-        [mut parameters](docs/language.md#mut-parameters)
-  - [x] concrete functions and methods — lift the generic-only gate so plain
-        definitions overload too, the constructor-flavored families being the
-        motivating case:
-    ```c
-    fn string_init(mut self: string)
-    fn string_init(mut self: string, const str: string)
-    fn string_init(mut self: string, const str: char*, n: uint64)
-    ```
-    Concrete candidates join the same overload set and the shipped
-    resolution order applies verbatim, plus one new rank tier: candidates
-    sort on (is-concrete, specificity), which makes "a fully concrete
-    signature is maximally specific" exactly true (without the tier, a
-    generic whose *effective* parameter list is all-concrete, its type
-    parameter appearing only in the return type or filled by a shipped
-    [declared default](docs/language.md#type-parameter-defaults), would
-    tie an identical concrete overload under the shipped ranking). A
-    mixed concrete/generic set then resolves with the concrete overload
-    beating a generic on an exact match (today a generic may not even
-    share a name with a concrete function; that rejection lifts). Rules
-    that keep it C-simple: resolution is by arguments only, so two
-    overloads may not differ solely in return type (that stays a
-    duplicate definition), and not solely in `const`/`mut` markers on the
-    same types either, since a same-type `mut`/non-`mut` pair is
-    uncallable under the shipped resolution rules (an rvalue argument
-    filters out the `mut` candidate; an lvalue keeps both, and a
-    same-shape tie is ambiguous), so allowing it buys nothing and it
-    stays a duplicate definition, which is also what keeps markers out of
-    the mangle below. Parameter annotations follow the same rule:
-    `fn func(@nonnull a: T*)` beside `fn func(a: T*)` (or a `@noalias`
-    variant) is a duplicate definition too, on simpler grounds than the
-    `mut` argument needs: `@nonnull`/`@noalias` are caller promises
-    about the value supplied and `const`/`mut` are callee contracts, and
-    neither class is part of the call shape, so neither participates in
-    resolution or the mangle. Mechanically both already live outside the
-    stored parameter types (`const`/`mut` in name-sets on the function,
-    the annotations as index-set conventions, none of them in the
-    parameter `LangType`s), so attribute-only variants would spell the
-    identical mangled symbol and the parameter-typed duplicate check
-    makes them collide naturally, while per-signature prototype pairing
-    still catches convention drift within one signature. Cross-class
-    combinations resolve by the underlying types alone:
-    `fn func(@nonnull a: T*)` and `fn func(mut a: T)` are distinct
-    overloads because the parameter types differ (`T*` vs `T`), but
-    `fn func(@nonnull a: T*)` and `fn func(mut a: T*)` collide, the
-    type list being identical (`T*`) with only markers and annotations
-    differing. Overloads differing only in integer width are
-    **ambiguous** for an untyped literal argument (`f(0)` between
-    `f(x: int32)` and `f(x: int64)` is an error; `0 as int64` or a typed
-    variable disambiguates, the same declared-not-guessed stance as
-    generic parameter defaults); the shipped viability/ranking machinery
-    already produces exactly this error today (verified live on a
-    width-only pair), so that rule ships as tests and docs, not new
-    machinery. An overloaded name still cannot be taken as a plain
-    `fn(...)` value, and the v1 non-overloadables: variadic functions
-    (the arity filter is exact-length; C-style variadics revisit when
-    [native variadics](#functions-and-methods) land), `main` (JIT and
-    `cc` both resolve the plain symbol), `@extern`/`@symbol` functions
-    (their C symbol is fixed), and `@static`. The overload-set scope
-    decision that keeps separate compilation correct: all overloads of a
-    concrete name must be declared in **one defining module** (its `.mci`
-    counts as that module). "A single definition keeps its plain symbol"
-    makes plain-vs-mangled depend on set size, and set size is
-    context-dependent across builds: module A's lone `f(int32)` exports
-    plain `f`, so a consumer importing A's `.mci` and adding `f(int64)`
-    would mangle both members and call `f(int32)`, a symbol A's object
-    never emitted (a link failure). Same-module scoping makes the symbol
-    choice a per-file fact, stable and derivable from the `.mci` alone;
-    the `string_init` family above satisfies it naturally, and
-    cross-module set extension is deferred until a use case appears. The
-    one piece of new machinery is symbol naming: concrete overloads link
-    across objects by symbol, so an overloaded name takes a
-    **signature-derived** mangled symbol spelled `name(int32, char*)`
-    from the canonical `str(LangType)`, the exact canonicalization
-    generic instance symbols already use (`gen<int32>` proves that
-    character class links through `.o` + `cc` today; no hashing needed).
-    Parameter types only: nothing for the return (per the no-return-only
-    rule) and no markers or annotations (per the widened duplicate rule
-    above), so the mangle is deterministic from the signature alone and
-    a `.mci`
-    [bodyless prototype](#functions-and-methods) (which carries only the
-    signature) names the same symbol its definition emitted, unlike the
-    declaration-order bases generic templates use (safe under today's
-    whole-program compilation because templates travel as source and
-    re-instantiate; the sub-item below records the separate-compilation
-    hazard). A name with a single definition keeps its plain, C-linkable
-    symbol and the direct-call fast path untouched; the accepted v1 cost
-    lands only on overloaded calls, which route through the pre-evaluate
-    path, so a `const`-struct hidden-reference argument spills to a
-    temporary instead of sharing the caller's storage (zero regression
-    for non-overloaded code). Prototype pairing becomes per-signature
-    (the seam in `can_pair_prototype`/`pair_prototype` was built for
-    this): a same-signature prototype/definition pair keeps every shipped
-    pairing rule, which is also what preserves the return-type-only
-    duplicate error; a different-signature prototype simply joins the
-    set, so "definition does not match its prototype" survives only for
-    same-parameter-list drift, and a prototype with no matching
-    definition stays what it already is, a link-time error
-    (prototype-only programs compile clean today, pinned by
-    `tests/test_forward_decls.py`, so there is no compile-time
-    unmatched-prototype check to preserve). The declare pass's
-    cross-file duplicate detection becomes signature-aware the same way
-    (`merge_imports` does no duplicate detection; it all lives in
-    codegen's declare pass): the same name with the same parameter list
-    twice stays an error, different lists merge into one set. Pairs with
-    [namespaced exported symbols](#tooling-and-c-interop), and
-    [C header generation](#tooling-and-c-interop) can only export the
-    plain-named form (an overload set cannot cross into C under one
-    name). Sequencing: this ships before Methods / OOP below, since
-    methods key on the receiver type plus name and the class lane rides
-    constructor overloads on exactly this machinery (the
-    [`new <struct>(...)`](#functions-and-methods) sugar picks the
-    constructor overload by its argument list); and whichever of this and
-    [`mut` returns](#functions-and-methods) lands second adds return
-    mutability to the prototype pair-match tuple, one line of
-    coordination. This lands **staged** (the receiver-migration
-    pattern: each stage is its own complete change set with its own
-    CHANGELOG entry, and this box ticks only when the last stage
-    lands). Stage 1 (**shipped**, see
-    [Function overloading](docs/language.md#function-overloading)),
-    same-module overload sets with no `.mci`
-    involvement: a pre-grouping pass over the program's functions by
-    (source, name) so the plain-vs-mangled symbol choice is known
-    before the first member declares (the declare pass is single-pass
-    today; this grouping is the main structural change), declarations
-    and registry entries keyed by the mangle, the generic-only gate
-    lifted for same-source sets, `gen_call` routing sets through the
-    pre-evaluate path under the (is-concrete, specificity) tier with a
-    concrete winner skipping instantiation, an explicit rejection where
-    a function value would form (the cannot-be-taken-as-a-value rule
-    above), the non-overloadables enforced (the v1 list above, plus
-    functions taking a `va_list` parameter),
-    string-literal-to-`slice` adaptation parity built into the
-    pre-evaluate path (`marshal_args` adapts literals today, the
-    generic-call path does not; without parity, making a previously
-    single function overloaded silently breaks its literal call sites,
-    exactly the hazard the string-flavored family in stage 3 would
-    hit), and -- so a stage-1 `--emit-interface` cannot write a stub the
-    importer rejects -- interface emission erroring on a module whose
-    public surface contains a set until the `.mci` support below
-    lands. Stage 2 (**shipped**, see
-    [Function overloading](docs/language.md#function-overloading)),
-    signature-aware pairing, `.mci` support, and mixed
-    sets: `concrete_decls` re-keyed per signature, `pair_prototype`
-    comparing per params-key (the pairing rules above), a
-    different-signature prototype joining the set, the `.mci` closure
-    force-pulling every same-name sibling of an included function (a
-    private unreferenced overload must not shrink the consumer's view
-    of the set size and flip the symbol choice back to plain, a link
-    failure otherwise), and mixed generic/concrete sets with
-    concrete-beats-generic on exact match. Stage 3 (**shipped**, see
-    `libmc/list.mc`/`libmc/string.mc`), `libmc` adoption:
-    `string_init`/`string_from_array` collapse into the motivating
-    constructor family above, with the example and docs sweep. The
-    template-symbol sub-item below trails independently of all three.
-    - [x] order-independent template symbol bases (**shipped**, see
-          [Template symbols](docs/language.md#template-symbols)) — the
-          signature-derived mangling extended to generic templates,
-          retiring the recorded hazard in the shipped scheme: template
-          overload sets took declaration-order symbol bases (`name`,
-          `name#1`, ...), so two separately compiled objects that merged
-          the same templates in different orders could emit *different
-          templates'* instances under one `linkonce_odr` symbol, a silent
-          wrong-merge that whole-program compilation hid and the
-          [Library output](#tooling-and-c-interop) precompiled-stdlib
-          direction would have exposed. Every template now takes a base
-          spelled from its declaration alone — type parameters
-          alpha-renamed to positional `$i` placeholders, defaults and
-          `mut` markers included, `const` and the return type out —
-          which also makes same-pattern template pairs (alpha-renamed
-          copies, return-type-only variants: ambiguous at every call) a
-          declare-time duplicate error, across modules too. Remaining
-          recorded edge, out of scope here: `@static` template bases keep
-          the `name.filestem` scheme, whose `.N` disambiguating counter
-          is still minted in declaration order
 - [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
       keyed to a struct, including `@private` methods and the special
       constructor/destructor below (the `for … in` protocol already dispatches
@@ -968,8 +761,8 @@ already do).
         open: `constructor`/`destructor` or `init`/`destroy` (both pairs on
         the table for now; examples use the former). A struct wanting several
         initialization signatures (empty / copy / from raw parts) declares
-        overloaded constructors, riding
-        [function overloading](#functions-and-methods) above
+        overloaded constructors, riding the shipped
+        [function overloading](docs/language.md#function-overloading)
   - [ ] destructor — `fn <struct>::destructor(self: <struct>*)`, the cleanup
         counterpart: releases what the constructor acquired. Deferred
         automatically for a stack-constructed value (above); for a heap
@@ -1095,8 +888,8 @@ already do).
     typo directions caught: the same name and signature without the
     marker is an error (no silent shadowing), and a marker with no base
     method to override is an error. Overload selection stays static: the
-    argument list picks the signature by static types (riding
-    [function overloading](#functions-and-methods) above) and only the
+    argument list picks the signature by static types (riding the shipped
+    [function overloading](docs/language.md#function-overloading)) and only the
     receiver's dynamic type picks the body, the Java rule. C
     compatibility does not enter this design at all: `extends` is not a
     C construct, so a straight-ported C program cannot contain it and no
@@ -1190,18 +983,9 @@ already do).
           concrete overloading) is unblocked from the bottom. Open
           question, recorded not solved: the tag-to-vtable table is a
           whole-program artifact, so the `.mci` story needs the same
-          care the [function overloading](#functions-and-methods) item
+          care the shipped
+          [function overloading](docs/language.md#function-overloading)
           gave the plain-vs-mangled symbol choice
-- [x] `@noalias` parameters — C's `restrict`: mark a pointer parameter
-      (`fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64)`) as
-      not overlapping any other pointer the function can reach, mapping to
-      LLVM's `noalias` attribute so loads/stores can be reordered and
-      vectorized — meaningful for the `mem*`-shaped functions in the standard
-      library. The promise is unchecked: overlapping arguments are undefined
-      behavior, as in C. Attribute-only, so it is allowed on `@extern` (the
-      libc `restrict` family is marked); rejected on `mut` (aliasing is
-      allowed there) and non-pointer parameters; implemented, see
-      [@noalias parameters](docs/language.md#noalias-parameters)
 - [x] `@nonnull` parameters — a checked "definitely non-null" refinement over
       C's nullable-by-default `T*`, opt-in per parameter: the callee is
       statically guaranteed a non-null argument and skips the re-check, and the
@@ -1210,7 +994,8 @@ already do).
       parameter onward needs no check). This is a *checked* type refinement, not
       an unchecked optimizer hint: passing a plain `T*` to a `@nonnull` slot
       without proof is a compile error. Attribute-only at runtime, sharing
-      `T*`'s representation and reusing the `@noalias` machinery above (LLVM
+      `T*`'s representation and reusing the shipped
+      [`@noalias`](docs/language.md#noalias-parameters) machinery (LLVM
       `nonnull`/`dereferenceable` param attributes, the per-param annotation
       slot, `.mci` round-trip). Represented as a per-binding fact set like
       `const_locals`, not a new type. Always-non-null sources (`&x`,
@@ -1413,43 +1198,6 @@ already do).
           appears. A non-null return type extends return types the same way
           [`mut` returns](#functions-and-methods) does, so sequence it after
           that work if it happens
-- [ ] Bodyless `fn` prototypes — a plain `fn` ending in `;`, beyond the
-      `.mci` stub form:
-  - [x] concrete prototypes — `fn bump(mut n: int32);` declares a concrete
-        mcc function defined in another object, called with the **mcc**
-        convention, so `const`-struct and `mut` parameters keep their
-        hidden-reference passing (which `@extern`, meaning C ABI,
-        deliberately rejects). Generic, `@inline`, `@asm`, and `@static`
-        functions cannot be prototypes (their body or symbol cannot live
-        elsewhere), with one carve-out: a
-        [`@removed`](#metaprogramming-and-builtins) tombstone, which never
-        instantiates. Interface stubs are the intended writer; implemented,
-        see [Bodyless fn prototypes](docs/language.md#bodyless-fn-prototypes)
-  - [x] forward declarations — a prototype plus its definition in one program
-        was a duplicate-definition error, and declaration order never
-        needs one (signatures are declared before any body generates, so
-        names resolve regardless of definition order). Accept a matching
-        pair, same-file or cross-file: the prototype is checked against the
-        definition, then discarded, and identical prototype-plus-prototype
-        collapses onto one declaration (like the existing `@extern`
-        redeclaration collapse), while a signature mismatch stays a
-        declaration-time error. This removes the function-level collisions
-        of a build that imports a module's `.mci` while also compiling its
-        `.mc` source, but does not deliver that build by itself: such a
-        build trips first on the module's duplicated structs and consts
-        (the declare pass's `already defined` errors), and its generic
-        templates (emitted verbatim into the `.mci`) silently join the
-        overload set and make every call ambiguous; those need the
-        [driver-level module dedup](#tooling-and-c-interop) pass. Must not
-        weaken genuine duplicate detection or `@removed`'s
-        one-tombstone-claims-the-name rule (a tombstone plus a live
-        definition stays a declaration-time error). Planned
-        [function overloading](#functions-and-methods) rewrites this same
-        duplicate-detection block to be signature-aware, so write the
-        acceptance as one helper that work subsumes: the same name and
-        parameter list twice stays an error unless exactly one is a
-        prototype; implemented, see
-        [Bodyless fn prototypes](docs/language.md#bodyless-fn-prototypes)
 - [ ] Native variadic arguments — `fn f(args: slice<const any>)` (with
       `fn f(args...)` as sugar): a trailing `slice<const any>` parameter collects
       the call's extra arguments, so `f(x, a, b, c)` (after `f`'s fixed
@@ -1518,7 +1266,9 @@ already do).
       and overload-set parity: collection through the pre-evaluate path
       (its arity filter and viability arity error exclude collecting
       candidates today), mirroring the literal-adaptation parity lesson
-      from [function overloading](#functions-and-methods)'s stage 1, and
+      from
+      [function overloading](docs/language.md#function-overloading)'s
+      stage 1, and
       lifting the stage-1 ban. Stage 3, the stdlib flip: fix the five
       recorded bugs in the dormant `format_arg` WIP (the `char*` arm
       appends the uninitialized `buf` instead of `s`, and the correct fix
@@ -1654,8 +1404,8 @@ already do).
         replacements, and the internal stdlib/test callers were repointed to
         the new names (CI runs `-Werror`). Scope v1 is functions only
         (types/enums/globals later); the terminal escalation to a hard error
-        is not a flag on `@deprecated` but its own
-        [`@removed` tombstone](#metaprogramming-and-builtins) directive below;
+        is not a flag on `@deprecated` but the shipped
+        [`@removed` tombstone](docs/language.md#removed-functions) directive;
         implemented, see
         [Deprecated functions](docs/language.md#deprecated-functions)
   - [ ] dedup relaxation — warnings deduplicate at print time on their
@@ -1762,47 +1512,6 @@ already do).
           program's libc contract on one define, and break `.mci`
           identity (stubs re-emit `@nonnull`) plus the merge collapse of
           matching `@extern` redeclarations
-- [x] `@removed(msg)` tombstones — the
-      terminal state of the function-availability lifecycle, one step past
-      [`@deprecated`](#metaprogramming-and-builtins) above: a function goes from
-      available, to `@deprecated(msg)` (warns, still callable), to `@removed(msg)`
-      (a hard compile **error** at every call site), to finally deleted (the name
-      gone, a generic "unknown function"). A declaration attribute on a function
-      that turns each *call site* into a compile error carrying the migration
-      message, so pulling an implementation still gives callers a targeted
-      `copy_bytes was removed: use bytecopy instead` for a release cycle rather
-      than a bare `unknown function 'copy_bytes'`. A small delta sharing
-      `@deprecated`'s machinery — now built and ready to reuse: the call-site
-      hooks at the name-resolution points, the `.mci` round-trip (so importers
-      of a removed stdlib function get the error), and the `Func`-node message
-      storage all shipped with `@deprecated`, and the shared prerequisite
-      (repointing the live internal callers of the deprecated forwarders in
-      [dict](libmc/dict.mc), [md5](libmc/hashing/md5.mc), and
-      `tests/test_structs.py`) is done. Two differences from `@deprecated`:
-      (1) it emits
-      through the existing error/abort path, where `@deprecated` warns over
-      the now-shipped [warning channel](#metaprogramming-and-builtins); (2)
-      the tombstone is a **bodiless** declaration, since the implementation is
-      gone, and for concrete functions that form already parses (bodyless `fn`
-      prototypes, the shipped `.mci` stub form), so the residual parser work
-      was one carve-out: lift the "a generic function cannot be a bodyless
-      prototype (its body must travel to be instantiated)" rejection when
-      `@removed` is present, since a tombstone never instantiates
-      (`@removed("use bytecopy") fn copy_bytes<T>(dst: T*, src: T*, n: uint64);`
-      tripped exactly that rejection before). Prior art: Swift's
-      `@available(..., obsoleted:)` and C#'s `[Obsolete(msg, error: true)]`.
-      Bodiless is the settled shape (not a dead stub body): a stub would fight
-      the shipped prototype form, since it must still compile, keeps its
-      callees alive, and could itself call removed functions. Two freebies
-      fall out of what shipped alongside:
-      [instantiation backtraces](#tooling-and-c-interop) attach their note
-      chain to a removed-call error inside a generic body at no extra cost,
-      and a `@removed` example is naturally `-Werror`-clean in CI, since the
-      tombstone itself compiles and only ever errors (unlike `@deprecated`'s,
-      which needs the dead-`@if` trick that
-      [examples/types/warnings.mc](examples/types/warnings.mc) established);
-      implemented, see
-      [Removed functions](docs/language.md#removed-functions)
 - [ ] [Inline assembly](docs/language.md#inline-assembly) — arch-specific (pair with `@if` on
       `TARGET_ARCH`), preferring intrinsics where they exist:
   - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an
@@ -1893,10 +1602,6 @@ already do).
       (today whatever the driver `cc` defaults to)
 - [ ] Compiler-driver selection — `--cc=/path/to/cc` to choose the C driver used
       for linking (today the system `cc` on `PATH`)
-- [x] Assembly output — `--emit-asm` (`-S`) to write target `.s` assembly text
-      (alongside `--emit-llvm` for IR and `-c` for an object), for inspection or
-      handing to an external assembler; implemented, see
-      [Usage](README.md#usage)
 - [ ] C struct-passing ABI — classify by-value struct arguments and returns
       into registers/`byval`/`sret` per the platform ABI, so structs cross the
       C boundary correctly (today only scalars and pointers are ABI-compatible;
@@ -1919,9 +1624,9 @@ already do).
           `.mc`'s bodies. This is what actually delivers a build where a
           library's `.mci` and its `.mc` source coexist: it drops the
           stub's structs, consts, generic templates, and tombstones
-          wholesale, with
-          [forward declarations](#functions-and-methods) covering the
-          function-prototype level. One deliberate carve-out: generated
+          wholesale, with the shipped
+          [forward declarations](docs/language.md#bodyless-fn-prototypes)
+          covering the function-prototype level. One deliberate carve-out: generated
           `.mci`s re-emit `@removed` tombstones, so a tombstone plus an
           identical-message tombstone must collapse (differing messages
           stay an error), a documented amendment to the one-tombstone rule
