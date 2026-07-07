@@ -727,19 +727,29 @@ class CaseType:
     every boxed pointer tag and ``when T v:`` every remaining boxed tag,
     the body monomorphized once per matching tag.
 
+    The ``with`` statement (``with (t = v as T) body; else other;``) is pure
+    sugar over this node: the parser desugars it to a single-arm ``CaseType``
+    whose ``otherwise`` is the ``else`` body -- or empty, since a lone
+    ``with`` has defined fall-through -- with ``is_with`` set so diagnostics
+    name the construct the user wrote.
+
     Attributes:
         subject: The matched expression; must be an ``any`` (an ``any*``
             auto-dereferences).
         arms: ``(list of TypeRefs, binding name, body statements, line)`` per
             ``when``.
-        otherwise: The mandatory ``else:`` body.
+        otherwise: The mandatory ``else:`` body (possibly-empty ``else``
+            body for a desugared ``with``).
         line: Source line for diagnostics.
+        is_with: Whether this node was written as a ``with`` statement, so
+            errors say ``with`` rather than ``case type``.
     """
 
     subject: object
     arms: list
     otherwise: list
     line: int
+    is_with: bool = False
 
 
 @dataclass

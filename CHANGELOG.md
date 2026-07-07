@@ -10,6 +10,28 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **The `with` statement** — `with (t = v as T) body; else other;` is the
+  checked-`as` test: it tests an `any` subject's boxed tag against one type
+  and, on a match, binds `t` to the recovered value, scoped to the true
+  branch. Pure sugar over a single-arm `case type`, riding its machinery
+  unchanged: the pattern follows the exact generic-arm detection rule — a
+  resolvable name is a concrete tag test, an unresolved bare name a generic
+  `T` (monomorphized per boxed tag over the whole program's boxed set) or
+  `T*` pointer pattern, each copy fully type-checked with the failure note
+  naming the offending type. The initializer-style head is itself the
+  checked context — inside it `t = v as T` is the tag test plus bind, the
+  same spelling as the planned bare unwrap `let t = v as T;`, while `as`
+  everywhere else keeps its cast meaning — the binding is required
+  (`with (v as T)` without `t =` does not parse), both bodies take a
+  statement or a braced block like `if`, and the `else` is optional: an
+  unmatched tag (a zero-filled `any`'s tag 0 included) takes the `else` or
+  falls through a lone `with` doing nothing, defined behavior. The checked
+  bind is the entire parenthesized head (no `and`/`or` composition, no
+  `while` form).
+  **Breaking**: `with` is now a reserved word and can no longer be used as
+  an identifier. See [The with statement](docs/language.md#the-with-statement)
+  and [examples/types/with_unwrap.mc](examples/types/with_unwrap.mc).
+
 - **Closed type groups** — a pipe-separated closed group of types after a
   generic parameter name, `fn f<T: int64 | int32>(x: T)`, constrains what
   `T` may instantiate to. Deduction is unchanged; the group is a

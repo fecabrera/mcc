@@ -6,8 +6,10 @@ import "std";
 // value where an `any` is expected wraps it. The v1 boxable set is the
 // primitives, pointers (each pointer type gets its own tag), and slices.
 // Structs, unions, and arrays do not box; the escape hatch is boxing a
-// pointer to them. The only way back out is the `case type` switch below --
-// there is no `as` unwrap and no tag/payload field access.
+// pointer to them. The only way back out is a checked test: the `case type`
+// switch below, or its single-pattern statement sugar `with` (see
+// with_unwrap.mc) -- there is no unchecked `as` unwrap and no tag/payload
+// field access.
 // Prerequisites: structs.mc and unions.mc; slice<char> is covered in
 // memory/slices.mc, the value form of case/when in control-flow/case_when.mc.
 
@@ -80,5 +82,7 @@ fn main() -> int32 {
 // case_type_groups.mc for multi-type arms, several types sharing one body
 // over one binding; generic_case_arms.mc for generic arms, `when T* ptr:`
 // and `when T v:` fallbacks over every tag no concrete arm claims;
+// with_unwrap.mc for `with (t = v as T)`, the one-arm statement sugar with
+// an optional else;
 // functions/native_variadics.mc for the box's headline consumer, native
 // variadic collection.

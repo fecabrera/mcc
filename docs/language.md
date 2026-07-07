@@ -1747,6 +1747,56 @@ switching on a **type** instead of a value: its subject is an
 [`any`](#the-any-type), each arm names one or more types and binds the
 recovered value, and `else:` is mandatory. See [The any type](#the-any-type).
 
+### The with statement
+
+`with (t = v as T) body; else other;` is the checked-`as` test: it tests an
+[`any`](#the-any-type) subject's boxed tag against one type and, on a match,
+binds `t` to the recovered value, **scoped to the true branch** (the `else`
+branch has no binding). It is pure sugar over a single-arm `case type` —
+`case type (v) { when T t: body else: other }` — condensing the common
+one-type unwrap to a line:
+
+```mcc
+fn describe(a: any) {
+    with (n = a as int32) println("int32: %d", n);
+    else println("something else");
+}
+```
+
+The pieces, each inherited from the construct it desugars to:
+
+- The head is initializer-style and is itself the **checked context**:
+  inside `with (...)`, `t = v as T` is the tag test plus bind, while `as`
+  everywhere else keeps its [cast](#casts) meaning — so the **subject must
+  be an `any`** (an `any*` auto-dereferences, as in `case type`), and a
+  non-`any` subject is a compile error at the `with` site. The binding is
+  **required**: `with (v as T)` without the `t =` does not parse. The head
+  deliberately mirrors the planned bare unwrap `let t = v as T;` — the same
+  spelling, with `with`/`else` supplying the mismatch handling that the
+  bare form will get from a trap.
+- The pattern follows the exact detection rule of
+  [generic `case type` arms](#the-any-type): a type name that resolves is a
+  concrete test (a single tag compare); an *unresolved* bare name introduces
+  an arm-scoped type parameter — `with (v = a as T)` monomorphizes its body
+  once per boxed tag in the whole program's boxed set, `with (ptr = a as T*)`
+  over the pointer tags only — each copy fully type-checked, a tag the body
+  does not compile for failing the compile with a note naming the type. The
+  generic form keeps `case type`'s reach-the-end conservatism: a
+  value-returning function still needs a statement after the `with` even
+  when both branches return. Exactly **one** pattern: dispatching over
+  several types is what `case type` is for.
+- Both bodies take a single statement or a braced block, like `if`. The
+  `else` is **optional** — where `case type`'s open tag set makes its
+  `else:` arm mandatory, `with` carries its miss behavior inline: an
+  unmatched tag (including a zero-filled `any`'s tag 0) runs the `else`, or
+  falls through a lone `with` doing nothing. Defined behavior, not a trap.
+- The checked bind is the **entire** parenthesized head: it does not
+  compose with `and`/`or`, and there is no `while (t = v as T)` — keeping
+  the binding's scope obvious.
+
+`with` is a reserved word. See
+[examples/types/with_unwrap.mc](../examples/types/with_unwrap.mc).
+
 ### The unreachable statement
 
 `unreachable;` asserts that a path is never executed. The statement
@@ -2693,10 +2743,12 @@ an array, `&xs[0]`): the compile error names the escape hatch. An `any` never
 boxes another `any` (`any` to `any` is a plain copy), and an
 [enum](#enums) member boxes under its underlying type's tag.
 
-The **only** way to recover the value is the `case type` type-switch — with
-no exceptions in the language, an unchecked `as` unwrap would be either a
-tag-ignoring pun or a new trap mechanism, so there is none (and the
-tag/payload fields are not readable):
+The **only** way to recover the value is a checked tag test — the
+`case type` type-switch below, or its one-pattern sugar, the
+[`with` statement](#the-with-statement) — with no exceptions in the
+language, an unchecked `as` unwrap would be either a tag-ignoring pun or a
+new trap mechanism, so there is none (and the tag/payload fields are not
+readable):
 
 ```c
 fn show(a: any) {

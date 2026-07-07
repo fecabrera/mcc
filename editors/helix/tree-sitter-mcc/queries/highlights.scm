@@ -67,6 +67,7 @@
   "else"
   "case"
   "when"
+  "with"
 ] @keyword.control.conditional
 
 [

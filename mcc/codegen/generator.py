@@ -328,6 +328,8 @@ class PendingArm:
         ctx: The per-function context snapshot at the arm's chain position
             (see :meth:`GenContext.fork`); each tag's compile restores a
             fresh fork of it.
+        label: What the per-tag failure note calls the arm -- ``case type
+            arm`` as written, ``with pattern`` for a desugared ``with``.
     """
 
     switch: ir.Instruction
@@ -341,6 +343,7 @@ class PendingArm:
     pointer_only: bool
     claimed: set
     ctx: GenContext
+    label: str = "case type arm"
 
 
 # Builtin struct templates, available in every program with no import: the
@@ -4742,7 +4745,10 @@ class CodeGen:
         (an integer equality chain), and a matching arm loads the payload
         reinterpreted as its type into a fresh binding scoped to the arm. An
         ``any*`` subject auto-dereferences, per the member-access-through-
-        pointer precedent. The ``else:`` arm is guaranteed by the parser.
+        pointer precedent. The ``else:`` arm is guaranteed by the parser --
+        except for a desugared ``with`` statement (``is_with``), whose
+        ``otherwise`` may be empty: an unmatched tag falls through to the
+        end block, the statement's defined no-else behavior.
 
         A multi-type arm (``when int32, int16 n:``) treats its binding as an
         implicit generic: the shared body AST compiles once per listed type,
@@ -4787,6 +4793,14 @@ class CodeGen:
                 strip_const(pointee),
             )
         if not is_any(subject.type):
+            if stmt.is_with:
+                # The desugared `with` names the construct the user wrote;
+                # on a non-any subject its `as` would be a cast, not a test.
+                raise LangError(
+                    f"with needs an any (or any*) subject, got "
+                    f"{subject.type}; 'as' on a non-any is a cast",
+                    stmt.line,
+                )
             raise LangError(
                 f"case type needs an any (or any*), got {subject.type}",
                 stmt.line,
@@ -4847,6 +4861,8 @@ class CodeGen:
                         pointer_only=pointer_only,
                         claimed=seen,
                         ctx=ctx,
+                        label="with pattern" if stmt.is_with
+                        else "case type arm",
                     )
                 )
                 self.builder.position_at_end(next_bb)
@@ -5026,7 +5042,7 @@ class CodeGen:
                 err.source = self.current_source
             err.notes.append(
                 Note(
-                    f"in case type arm for {boxed}",
+                    f"in {pending.label} for {boxed}",
                     pending.when_line,
                     pending.ctx.current_source,
                 )

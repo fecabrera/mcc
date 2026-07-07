@@ -1543,6 +1543,8 @@ class Parser:
             return If(cond, then, otherwise, tok.line)
         if tok.kind == "case":
             return self.parse_case()
+        if tok.kind == "with":
+            return self.parse_with()
         if tok.kind in ("while", "until"):
             self.advance()
             self.expect("(")
@@ -1698,6 +1700,67 @@ class Parser:
                 line,
             )
         return CaseType(subject, arms, otherwise, line)
+
+    def parse_with(self):
+        """Parse a ``with (t = v as T) body; else other;`` checked-``as`` test.
+
+        Tests an ``any`` subject's boxed tag against ``T`` and, on a match,
+        binds ``t`` to the recovered value, scoped to the true branch (the
+        ``else`` branch has no binding). Pure sugar over a single-arm
+        ``case type``: the pattern follows the same rules as a ``case type``
+        arm type -- a resolvable name is a concrete test, an unresolved bare
+        name (``T``, ``T*``) a generic pattern monomorphized per boxed tag
+        -- but names exactly one type. The head is initializer-style and is
+        itself the checked context: inside it ``t = v as T`` is the tag test
+        plus bind (deliberately the same spelling as the planned bare unwrap
+        ``let t = v as T;``, with ``with``/``else`` supplying the mismatch
+        handling), while ``as`` everywhere else keeps its cast semantics.
+        The binding is required -- ``with (v as T)`` without ``t =`` does
+        not parse -- and the head does not compose with ``and``/``or``.
+        Both bodies take a single statement or a braced block, like ``if``;
+        the ``else`` is optional -- an unmatched tag (including a zeroed
+        ``any``'s tag 0) falls through a lone ``with`` doing nothing.
+
+        Returns:
+            The desugared ``CaseType`` node, ``is_with`` set.
+
+        Raises:
+            LangError: When the binding is missing or the pattern lists
+                more than one type.
+        """
+        line = self.expect("with").line
+        self.expect("(")
+        if self.cur.kind != "IDENT" or self.tokens[self.pos + 1].kind != "=":
+            raise LangError(
+                "a with head binds a name first, as in "
+                "'with (n = v as int32)'",
+                line,
+            )
+        name = self.advance().text
+        self.advance()  # the '='
+        # The subject sits below `as` in the precedence chain: whole-
+        # expression parsing would swallow `as T` as a cast of the subject
+        # instead of leaving it as the head's pattern.
+        subject = self.parse_unary()
+        self.expect("as")
+        type_ref = self.parse_type_ref()
+        if self.cur.kind == ",":
+            raise LangError(
+                "a with pattern tests exactly one type; dispatch over "
+                "several with case type",
+                line,
+            )
+        self.expect(")")
+        body = self.parse_body()
+        otherwise = []
+        # `else:` belongs to an enclosing `case`, never to this `with`.
+        if self.cur.kind == "else" and self.tokens[self.pos + 1].kind != ":":
+            self.advance()
+            otherwise = self.parse_body()
+        return CaseType(
+            subject, [([type_ref], name, body, line)], otherwise, line,
+            is_with=True,
+        )
 
     # Expressions, by descending precedence level. `or` is loosest, then
     # `and`; both bind looser than comparisons, so `a > 0 or b < 0` needs no

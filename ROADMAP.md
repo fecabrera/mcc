@@ -435,25 +435,29 @@ already do).
     - [ ] struct boxing — lift the v1 struct/array rejection once the
           by-value-vs-by-pointer payload and lifetime questions are settled
     - [ ] checked `as` — recover a value outside `case type`. The core
-          primitive is `v as T t`, with `v` an `any`: it tests the
-          boxed tag and, on success, binds `t` as the unwrapped typed
-          value, scoped to the true branch. The binding name is
-          required: bare `v as T` is not admitted, because `expr as T`
-          is already a cast on non-`any` subjects and the binding
-          identifier is what distinguishes the checked test; `as` on
-          anything but an `any` keeps its cast semantics everywhere.
-          The consuming surface is a single dedicated statement under
-          a new `with` keyword,
-          `with (v as T t) f(t); else do_something();`, braces
-          optional as usual
-          (`with (v as T t) { f(t); } else { do_something(); }`),
+          primitive is the initializer-style head `t = v as T` inside
+          `with (...)`, with `v` an `any` (binding name first, chosen
+          because it reads easier): it tests the boxed tag and, on a
+          match, binds `t` to the unwrapped typed value, scoped to the
+          true branch. The binding is mandatory (`with (v as T)` is a
+          parse error), but the disambiguation lives in the head
+          itself: the `with (...)` head is the checked context, `as`
+          keeps its cast semantics everywhere else, and a non-`any`
+          subject in a with head stays a compile error. The consuming
+          surface is a single dedicated statement under a new `with`
+          keyword, `with (t = v as T) f(t); else do_something();`,
+          braces optional as usual
+          (`with (t = v as T) { f(t); } else { do_something(); }`),
           chosen because it is clearly distinct from `if ... else` and
           from the ternary; an expression (ternary) form was
           considered and set aside in favor of the one distinct
           statement surface (it is also the harder form: with a
           generic `T`, every per-tag instantiation of the true
           expression would have to agree with the else expression on
-          one result type). `with` becomes a new reserved word, a
+          one result type). The head deliberately mirrors stage 2's
+          bare unwrap `let t = v as T;`: identical spelling, with
+          `with`/`else` supplying the mismatch handling that stage 2
+          gets from the trap. `with` becomes a new reserved word, a
           pre-1.0 break with the same treatment as `typename` (lexer
           keyword plus editor grammars); verified currently unused as
           an identifier in `libmc/` and `examples/`. The statement is
@@ -472,19 +476,21 @@ already do).
           zeroed anys) takes the `else`, or falls through a lone
           `with` doing nothing (defined behavior); only the bare
           prefix unwrap of stage 2 stays parked behind the trap.
-          v1 restrictions, settled as defaults: the `as` binding is
-          the entire `with (...)` head (no `&&`/`||`/`!` composition,
-          keeping the binding's scope obvious), and
-          `while (v as T t)` is not admitted (a possible later
-          extension). Condenses the stdlib formatter's
+          v1 restrictions, settled as defaults: the binding
+          initializer is the entire `with (...)` head (no
+          `&&`/`||`/`!` composition, keeping the binding's scope
+          obvious), and `while (t = v as T)` is not admitted (a
+          possible later extension). Condenses the stdlib formatter's
           `case type (arg) { when T t:
           format(str, t, modifier); else:
           string_append(str, "(unknown)"); }` to a one-liner, and is
           the explicit-else alternative to the separately discussed
           implicit any-to-overload dispatch idea. Staged:
-      - [ ] stage 1: the `with` statement — reserves the keyword;
-            optional `else` with defined fall-through, both brace
-            styles, lowering to the two-arm `case type`
+      - [x] stage 1: the `with` statement — `with (t = v as T) ...;
+            else ...;`, reserving the keyword; optional `else` with
+            defined fall-through, both brace styles, lowering to the
+            two-arm `case type`; implemented, see
+            [The with statement](docs/language.md#the-with-statement)
       - [ ] stage 2: bare `let t = v as T;` unwrap — trap on tag
             mismatch, still parked behind a checked-failure mechanism
             to hang the mismatch on; the generic-arms item below parks

@@ -342,6 +342,7 @@ module.exports = grammar({
         $.let_statement,
         $.if_statement,
         $.case_statement,
+        $.with_statement,
         $.while_statement,
         $.break_statement,
         $.continue_statement,
@@ -378,6 +379,23 @@ module.exports = grammar({
       ),
 
     _body: ($) => $._statement,
+
+    // `with (t = v as T) body; else other;` -- the checked-`as` test. The
+    // head is initializer-style: binding name first, then the subject-and-
+    // pattern `v as T`, which parses as a cast_expression here.
+    with_statement: ($) =>
+      prec.right(
+        seq(
+          'with',
+          '(',
+          field('binding', $.identifier),
+          '=',
+          field('subject', $._expression),
+          ')',
+          field('consequence', $._body),
+          optional(seq('else', field('alternative', $._body))),
+        ),
+      ),
 
     case_statement: ($) =>
       seq('case', '(', field('subject', $._expression), ')', '{', repeat($.when_arm), optional($.else_arm), '}'),

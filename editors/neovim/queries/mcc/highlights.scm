@@ -78,6 +78,7 @@
   "else"
   "case"
   "when"
+  "with"
 ] @keyword.conditional
 
 [

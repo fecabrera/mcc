@@ -87,5 +87,8 @@ fn main() -> int32 {
 // case_type_groups.mc for multi-type arms, the halfway point between
 // concrete and generic; generics.mc for monomorphization in general;
 // typename.mc, whose typename(T) inside these arms names a box's dynamic
-// type statically; functions/native_variadics.mc, whose for + case type
-// walk these arms make generic.
+// type statically; with_unwrap.mc for the `with` statement, a one-arm sugar
+// whose pattern follows this exact detection rule (and shares the
+// assumed-to-reach-the-end caveat for generic patterns);
+// functions/native_variadics.mc, whose for + case type walk these arms make
+// generic.
