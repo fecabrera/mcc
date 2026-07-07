@@ -708,16 +708,20 @@ class Case:
 class CaseType:
     """A ``case type (a) { when int32 n: ... else: ... }`` type-switch.
 
-    Matches an ``any`` subject's tag against each arm's type; the matching
+    Matches an ``any`` subject's tag against each arm's types; the matching
     arm's binding holds the recovered value, scoped to that arm. ``type`` is a
     contextual keyword (the plain ``case`` grammar expects ``(`` next), each
-    arm names exactly one type and must bind a name, and ``else`` is required
-    -- the set of types an ``any`` can hold is open.
+    arm names one or more comma-separated types over one binding and must
+    bind a name, and ``else`` is required -- the set of types an ``any`` can
+    hold is open. A multi-type arm's binding is an implicit generic: the
+    shared body compiles once per listed type, the binding typed as that
+    type per copy.
 
     Attributes:
         subject: The matched expression; must be an ``any`` (an ``any*``
             auto-dereferences).
-        arms: ``(TypeRef, binding name, body statements, line)`` per ``when``.
+        arms: ``(list of TypeRefs, binding name, body statements, line)`` per
+            ``when``.
         otherwise: The mandatory ``else:`` body.
         line: Source line for diagnostics.
     """

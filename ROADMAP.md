@@ -590,13 +590,14 @@ already do).
           comment documents the superseded v1 rule), and the parse-time
           mandatory-`else` test survives if the check moves to codegen
           with the message kept verbatim. Staged:
-      - [ ] stage 1: multi-type arms — S-sized, zero deferral
+      - [x] stage 1: multi-type arms — S-sized, zero deferral
             machinery (the check set is written in source): a comma
             list in `parse_case_type`, the existing concrete-arm
             lowering looped over the listed types sharing one body AST,
             per-listed-type seen entries giving the duplicate and
             unreachable diagnostics, per-type failures Note-wrapped;
-            flips the pinned no-multi-type-arms test by design
+            flips the pinned no-multi-type-arms test by design;
+            implemented, see [The any type](docs/language.md#the-any-type)
       - [ ] stage 2: `when T* ptr:` and `when T v:` together — L-sized,
             both riding the same machinery (the boxed-only tag
             registry, the snapshot/pending worklist, the finalize

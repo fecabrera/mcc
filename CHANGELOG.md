@@ -10,6 +10,22 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Multi-type `case type` arms** — an arm may list several comma-separated
+  concrete types over one binding: `when int32, int16, int8 n:` is one arm,
+  three tags, one shared body. The binding is an implicit generic: the body
+  compiles once per listed type with the binding typed as that type (never
+  a union), so an overload set called in the body resolves per copy, and
+  every copy is fully type-checked — a listed type for which the shared
+  body doesn't compile (say, a call with no viable overload) fails the
+  compile with a note naming the offending type. Each listed type claims
+  its own tag, so a type listed twice in one arm and a type repeated
+  across arms both hit the existing `duplicate case type arm` error, and
+  an explicit list doesn't close the universe: `else` stays mandatory.
+  This supersedes the v1 "no comma-separated type lists in type mode"
+  rule (stage 1 of the generic-arms-in-`case type` roadmap item). See
+  [The any type](docs/language.md#the-any-type) and
+  [examples/types/case_type_groups.mc](examples/types/case_type_groups.mc).
+
 - **Call write-effect analysis** — projection facts (a guarded `b->data`)
   now survive calls to callees the compiler proves transitively
   write-free, refining the blanket rule that every call kills every path

@@ -1669,8 +1669,8 @@ an arm.
 
 `case type (a) { when int32 n: ... else: ... }` is the same statement shape
 switching on a **type** instead of a value: its subject is an
-[`any`](#the-any-type), each arm names one type and binds the recovered
-value, and `else:` is mandatory. See [The any type](#the-any-type).
+[`any`](#the-any-type), each arm names one or more types and binds the
+recovered value, and `else:` is mandatory. See [The any type](#the-any-type).
 
 ### The unreachable statement
 
@@ -2638,15 +2638,24 @@ fn show(a: any) {
 It rides the [`case`](#control-flow) statement's shape — the subject is
 evaluated once, arms run without fall-through — with the type-mode specifics:
 
-- Each arm names **one type** and **must bind a name**; the binding holds the
-  recovered value, typed as the arm's type and scoped to the arm. No
-  comma-separated type lists.
+- Each arm **must bind a name**; the binding holds the recovered value,
+  typed as the arm's type and scoped to the arm.
+- An arm may list **several comma-separated types over one binding** —
+  `when int32, int16, int8 n: printf("%d\n", n as int32);` — sharing one
+  body. The binding is an implicit generic: the body compiles once per
+  listed type with the binding typed as that type (never a union), each copy
+  fully type-checked — a listed type for which the body doesn't compile
+  (say, a call with no viable overload) is a compile error naming the
+  offending type. An explicit list doesn't close the universe, so `else` (or
+  later arms) is still required. See
+  [examples/types/case_type_groups.mc](../examples/types/case_type_groups.mc).
 - `else:` is **mandatory**: the set of types an `any` can hold is open, so a
   type-switch is never exhaustive without it.
 - The subject must be an `any`; an `any*` subject auto-dereferences, like
   member access through a pointer.
-- Two arms naming the same type are a compile error, as is an arm whose type
-  could never box (a struct arm, or `when any`).
+- Two arms naming the same type are a compile error — one arm listing a type
+  twice included — as is an arm whose type could never box (a struct arm, or
+  `when any`).
 
 The tag is the 64-bit FNV-1a hash of the boxed type's canonical name,
 computed at compile time — no runtime registry, so tags are deterministic

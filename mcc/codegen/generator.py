@@ -1303,7 +1303,7 @@ class CodeGen:
                 scan_stmts(stmt.otherwise, bound)
             elif isinstance(stmt, CaseType):
                 scan_expr(stmt.subject, bound)
-                for _type_ref, name, body, _line in stmt.arms:
+                for _type_refs, name, body, _line in stmt.arms:
                     arm_scope = dict(bound)
                     arm_scope[name] = "local"
                     scan_stmts(body, arm_scope)
@@ -4303,12 +4303,22 @@ class CodeGen:
         ``any*`` subject auto-dereferences, per the member-access-through-
         pointer precedent. The ``else:`` arm is guaranteed by the parser.
 
+        A multi-type arm (``when int32, int16 n:``) treats its binding as an
+        implicit generic: the shared body AST compiles once per listed type,
+        the binding typed as that type per copy, and every copy is fully
+        type-checked -- a listed type for which the body does not compile is
+        a compile error, its note naming the offending type. Each listed
+        type claims its own tag, so a duplicate within one list and a
+        duplicate across arms both hit the same hard error.
+
         Args:
             stmt: The ``CaseType`` node.
 
         Raises:
             LangError: When the subject is not an ``any`` (or ``any*``), an
-                arm's type can never be boxed, or two arms name the same type.
+                arm's type can never be boxed, two arms name the same type
+                (or one arm lists it twice), or a listed type's body copy
+                fails to compile.
         """
         subject = self.gen_expr(stmt.subject)
         if is_pointer(subject.type) and is_any(subject.type.pointee):
@@ -4335,39 +4345,61 @@ class CodeGen:
         end_bb = self.builder.append_basic_block("casetype.end")
         reaches_end = False
         seen: set[int] = set()
-        for type_ref, name, body, when_line in stmt.arms:
-            arm_type = strip_const(
-                self.check_boxable(self.lang_type(type_ref, when_line), when_line)
-            )
-            arm_tag = self.any_tag(arm_type, when_line)
-            if arm_tag in seen:
-                raise LangError(
-                    f"duplicate case type arm for {arm_type}", when_line
+        for type_refs, name, body, when_line in stmt.arms:
+            # A multi-type arm is the concrete lowering looped over its list:
+            # one tag test and one body copy per listed type, sharing the AST.
+            for type_ref in type_refs:
+                arm_type = strip_const(
+                    self.check_boxable(
+                        self.lang_type(type_ref, when_line), when_line
+                    )
                 )
-            seen.add(arm_tag)
-            cond = self.builder.icmp_unsigned(
-                "==", tag, ir.Constant(UINT64.ir, arm_tag)
-            )
-            arm_bb = self.builder.append_basic_block("casetype.arm")
-            next_bb = self.builder.append_basic_block("casetype.next")
-            self.builder.cbranch(cond, arm_bb, next_bb)
-            self.builder.position_at_end(arm_bb)
-            # The binding is a fresh copy of the payload, reinterpreted as the
-            # arm's type and scoped to the arm (like a for-loop's variable).
-            typed_ptr = self.builder.bitcast(payload_ptr, arm_type.ir.as_pointer())
-            var_slot = self.entry_alloca(arm_type.ir, name)
-            self.builder.store(self.builder.load(typed_ptr), var_slot)
-            outer_locals, outer_names = dict(self.locals), self.scope_names
-            self.scope_names = set()
-            try:
-                self.bind_local(name, var_slot, arm_type)
-                self.gen_block(body)
-            finally:
-                self.locals, self.scope_names = outer_locals, outer_names
-            if not self.builder.block.is_terminated:
-                self.builder.branch(end_bb)
-                reaches_end = True
-            self.builder.position_at_end(next_bb)
+                arm_tag = self.any_tag(arm_type, when_line)
+                if arm_tag in seen:
+                    raise LangError(
+                        f"duplicate case type arm for {arm_type}", when_line
+                    )
+                seen.add(arm_tag)
+                cond = self.builder.icmp_unsigned(
+                    "==", tag, ir.Constant(UINT64.ir, arm_tag)
+                )
+                arm_bb = self.builder.append_basic_block("casetype.arm")
+                next_bb = self.builder.append_basic_block("casetype.next")
+                self.builder.cbranch(cond, arm_bb, next_bb)
+                self.builder.position_at_end(arm_bb)
+                # The binding is a fresh copy of the payload, reinterpreted as
+                # the copy's type and scoped to the arm (like a for-loop's
+                # variable).
+                typed_ptr = self.builder.bitcast(
+                    payload_ptr, arm_type.ir.as_pointer()
+                )
+                var_slot = self.entry_alloca(arm_type.ir, name)
+                self.builder.store(self.builder.load(typed_ptr), var_slot)
+                outer_locals, outer_names = dict(self.locals), self.scope_names
+                self.scope_names = set()
+                try:
+                    self.bind_local(name, var_slot, arm_type)
+                    self.gen_block(body)
+                except LangError as err:
+                    # Each copy is fully type-checked; when a shared body
+                    # fails for one listed type, a note names it (the same
+                    # frame idiom as instantiate, keeping the primary
+                    # `file: error: line N: message` head intact).
+                    if len(type_refs) > 1:
+                        err.notes.append(
+                            Note(
+                                f"in case type arm for {arm_type}",
+                                when_line,
+                                self.current_source,
+                            )
+                        )
+                    raise
+                finally:
+                    self.locals, self.scope_names = outer_locals, outer_names
+                if not self.builder.block.is_terminated:
+                    self.builder.branch(end_bb)
+                    reaches_end = True
+                self.builder.position_at_end(next_bb)
         self.gen_block(stmt.otherwise)  # the mandatory else arm
         if not self.builder.block.is_terminated:
             self.builder.branch(end_bb)

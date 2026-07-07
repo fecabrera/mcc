@@ -30,7 +30,8 @@ def test_parses_into_a_case_type_node():
     ).functions
     (node,) = func.body
     assert isinstance(node, CaseType)
-    ((type_ref, name, body, _line),) = node.arms
+    ((type_refs, name, body, _line),) = node.arms
+    (type_ref,) = type_refs
     assert type_ref.name == "int32" and name == "n" and len(body) == 1
     assert len(node.otherwise) == 1
 
@@ -45,13 +46,27 @@ def test_arm_binding_is_required():
         parse("fn f(a: any) { case type (a) { when int32: g(); else: h(); } }")
 
 
-def test_no_multi_type_arms():
-    # `when int32, float64 x:` stops at the comma: no binding name follows the
-    # first type, so type mode rejects the list form the value case allows.
+def test_parses_a_multi_type_arm():
+    # `when int32, int16 n:` is one arm: a type list over a single binding.
+    (func,) = parse(
+        "fn f(a: any) { case type (a) { when int32, int16 n: g(); else: h(); } }"
+    ).functions
+    (node,) = func.body
+    ((type_refs, name, _body, _line),) = node.arms
+    assert [t.name for t in type_refs] == ["int32", "int16"] and name == "n"
+
+
+def test_multi_type_arm_still_needs_a_binding():
     with pytest.raises(LangError, match="a case type arm needs a binding name"):
         parse(
-            "fn f(a: any) { case type (a) { when int32, float64 x: g(); else: h(); } }"
+            "fn f(a: any) { case type (a) { when int32, float64: g(); else: h(); } }"
         )
+
+
+def test_else_still_required_beside_a_multi_type_arm():
+    # An explicit type list does not close the universe of boxable types.
+    with pytest.raises(LangError, match="case type needs an else arm"):
+        parse("fn f(a: any) { case type (a) { when int32, int16 n: g(); } }")
 
 
 def test_type_stays_a_contextual_keyword():
@@ -259,6 +274,120 @@ def test_sizeof_and_alignof():
         "fn main() -> int32 {"
         " return (sizeof(any) == 24 and alignof(any) == 8) ? 0 : 1; }"
     ) == 0
+
+
+# --------------------------------------------------------- multi-type arms
+
+def test_multi_type_arm_groups_dispatch():
+    # One arm, several tags: each listed type matches its own tag and the
+    # binding holds the recovered value, typed as that copy's type.
+    assert run(
+        """
+        fn kind(a: any) -> int32 {
+            case type (a) {
+                when int32, int16, int8 n:    return n as int32;
+                when uint32, uint16, uint8 u: return (u as int32) + 100;
+                else:                         return -1;
+            }
+        }
+        fn main() -> int32 {
+            let w: int16 = -3;
+            let b: uint8 = 7;
+            if (kind(5) != 5)     { return 1; }
+            if (kind(w) != -3)    { return 2; }
+            if (kind(b) != 107)   { return 3; }
+            if (kind(2.5) != -1)  { return 4; }
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_binding_is_typed_per_listed_type():
+    # The shared body compiles once per listed type: an overload set resolves
+    # against each copy's concrete binding type, not a union.
+    assert run(
+        """
+        fn width(n: int32) -> int32 { return 4; }
+        fn width(n: int16) -> int32 { return 2; }
+        fn probe(a: any) -> int32 {
+            case type (a) {
+                when int32, int16 n: return width(n);
+                else:                return -1;
+            }
+        }
+        fn main() -> int32 {
+            let w: int16 = 1;
+            if (probe(1) != 4) { return 1; }
+            if (probe(w) != 2) { return 2; }
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_multi_type_arm_falls_through_per_copy():
+    # A non-diverging copy branches to the shared end block, like any arm.
+    assert run(
+        """
+        fn score(a: any) -> int32 {
+            let out: int32 = -1;
+            case type (a) {
+                when int32, int16 n: out = n as int32;
+                else:                out = 0;
+            }
+            return out + 1;
+        }
+        fn main() -> int32 {
+            let w: int16 = 9;
+            if (score(41) != 42)  { return 1; }
+            if (score(w) != 10)   { return 2; }
+            if (score(2.5) != 1)  { return 3; }
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_duplicate_type_within_one_list_is_rejected():
+    with pytest.raises(LangError, match="duplicate case type arm for int32"):
+        compile_ir(
+            "fn main() -> int32 { let a: any = 5;"
+            " case type (a) { when int32, int32 n: return 1; else: return 0; } }"
+        )
+
+
+def test_duplicate_between_a_list_and_a_later_arm_is_rejected():
+    with pytest.raises(LangError, match="duplicate case type arm for int16"):
+        compile_ir(
+            "fn main() -> int32 { let a: any = 5;"
+            " case type (a) { when int32, int16 n: return 1;"
+            " when int16 m: return 2; else: return 0; } }"
+        )
+
+
+def test_per_type_body_failure_names_the_offending_type():
+    # Every copy is fully type-checked: a listed type for which the shared
+    # body does not compile errors out, the note naming that type (the
+    # primary `file: error: line N: message` head stays intact).
+    with pytest.raises(LangError, match="cannot dereference a int32") as exc:
+        compile_ir(
+            "fn main() -> int32 { let a: any = 5;"
+            " case type (a) { when int32*, int32 p: return *p; else: return 0; } }"
+        )
+    assert any(
+        "in case type arm for int32" == note.message for note in exc.value.notes
+    )
+
+
+def test_unknown_type_in_a_list_is_rejected():
+    # Stage 1 lists take concrete types only; an unresolved name is still the
+    # plain unknown-type error (generic T*/T arms are a later stage).
+    with pytest.raises(LangError, match="unknown type 'in32'"):
+        compile_ir(
+            "fn main() -> int32 { let a: any = 5;"
+            " case type (a) { when int32, in32 n: return 1; else: return 0; } }"
+        )
 
 
 # ------------------------------------------------------------ rejections

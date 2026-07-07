@@ -1579,9 +1579,11 @@ class Parser:
     def parse_case_type(self, line: int):
         """Parse a ``case type (a) { when int32 n: ... else: ... }`` type-switch.
 
-        Each ``when`` arm names exactly one type (no comma-separated lists in
-        type mode) and must bind a name -- the binding holds the recovered
-        value, typed as the arm's type and scoped to the arm. The ``else:``
+        Each ``when`` arm names one or more comma-separated types over a
+        single binding -- the binding holds the recovered value, scoped to
+        the arm. A multi-type arm (``when int32, int16 n:``) shares one body:
+        the binding is an implicit generic, so codegen compiles the body once
+        per listed type with the binding typed as that type. The ``else:``
         arm is mandatory: the set of types an ``any`` can hold is open, so a
         type-switch is never exhaustive without it.
 
@@ -1602,7 +1604,9 @@ class Parser:
         arms = []
         while self.cur.kind == "when":
             when_line = self.advance().line
-            type_ref = self.parse_type_ref()
+            type_refs = [self.parse_type_ref()]
+            while self.accept(","):  # `when int32, int16 n:` -- one binding
+                type_refs.append(self.parse_type_ref())
             if self.cur.kind != "IDENT":
                 raise LangError(
                     "a case type arm needs a binding name, as in 'when int32 n:'",
@@ -1613,7 +1617,7 @@ class Parser:
             body = []
             while self.cur.kind not in ("when", "else", "}"):
                 body.append(self.parse_statement())
-            arms.append((type_ref, name, body, when_line))
+            arms.append((type_refs, name, body, when_line))
         otherwise = None
         if self.accept("else"):
             self.expect(":")
