@@ -1583,7 +1583,10 @@ class Parser:
         single binding -- the binding holds the recovered value, scoped to
         the arm. A multi-type arm (``when int32, int16 n:``) shares one body:
         the binding is an implicit generic, so codegen compiles the body once
-        per listed type with the binding typed as that type. The ``else:``
+        per listed type with the binding typed as that type. Generic arms
+        (``when T* ptr:``, ``when T v:``) need no new syntax here: whether a
+        bare arm-type name is concrete or introduces an arm-scoped type
+        parameter is decided by name resolution at codegen. The ``else:``
         arm is mandatory: the set of types an ``any`` can hold is open, so a
         type-switch is never exhaustive without it.
 

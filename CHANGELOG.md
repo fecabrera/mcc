@@ -10,6 +10,30 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Generic `case type` arms** — `when T* ptr:` matches every boxed pointer
+  tag not claimed by an earlier arm, with `T` bound to the pointee and the
+  binding typed as the pointer; `when T v:` matches every remaining boxed
+  tag, with `T` bound to the boxed type itself (pointer tags included). No
+  new syntax: a bare arm-type name that resolves is a concrete arm, an
+  unresolved bare name with at most one `*` introduces an arm-scoped type
+  parameter (so inside `fn g<T>`, `when T v:` stays a concrete arm per
+  instantiation). The arm is a real generic context: the body monomorphizes
+  once per matching tag drawn from the whole program's boxed set — deferred
+  to an end-of-codegen fixpoint, since body copies can box new types and
+  instantiate new generics — and each copy is fully type-checked, so
+  `handle(ptr)` dispatching into a generic or overload set compiles per tag
+  and a boxed type with no viable callee is a compile error at the
+  `case type` site whose note names the offending type. Dispatch stays
+  first-match-wins textual order (`when char* s:` shields the string tag
+  from a later `when T* ptr:`); an arm subsumed by a generic arm above it
+  (anything after `T v`; a concrete pointer arm or second `T*` arm after
+  `T*`) is a hard unreachable-arm error. `else` stays mandatory — a
+  zero-filled `any` (tag 0) matches no arm — and a deferred arm is assumed
+  to reach the case's end, so an all-arms-return `case type` still needs a
+  trailing `return` in a value-returning function (stage 2, completing the
+  generic-arms-in-`case type` roadmap item). See
+  [The any type](docs/language.md#the-any-type).
+
 - **Multi-type `case type` arms** — an arm may list several comma-separated
   concrete types over one binding: `when int32, int16, int8 n:` is one arm,
   three tags, one shared body. The binding is an implicit generic: the body

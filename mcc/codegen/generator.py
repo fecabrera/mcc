@@ -13,6 +13,8 @@ arguments, exactly like generic functions monomorphize.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from dataclasses import fields as dataclass_fields
 from dataclasses import is_dataclass
 from dataclasses import replace as dataclasses_replace
@@ -218,6 +220,128 @@ def contains_call(obj) -> bool:
     return False
 
 
+def _fork_defer_stack(stack: list) -> list:
+    """Deep-copy a defer stack's per-scope lists (the scopes stay live)."""
+    return [list(scope) for scope in stack]
+
+
+@dataclass
+class GenContext:
+    """The per-function compilation context of a :class:`CodeGen`.
+
+    Every attribute the generator mutates while compiling one function body
+    is enumerated here, in one place, shared by its two consumers --
+    :meth:`CodeGen.instantiate`'s save/restore around a monomorphized body
+    and the pending generic-arm snapshot (:class:`PendingArm`) -- so a
+    future fact set added to the generator cannot silently miss either.
+
+    A field whose ``fork`` metadata carries a copier is a mutable container
+    that :meth:`fork` detaches (so a snapshot is immune to later in-place
+    mutation); a field without one is a value or an object shared by
+    reference on purpose (the builder is re-pointed by the consumer).
+    """
+
+    builder: "ir.IRBuilder | None"
+    locals: dict = dataclass_field(metadata={"fork": dict})
+    ret_type: LangType = dataclass_field(metadata={})
+    loops: list = dataclass_field(metadata={"fork": list})
+    current_variadic: bool = dataclass_field(metadata={})
+    current_noreturn: "str | None" = dataclass_field(metadata={})
+    scope_names: set = dataclass_field(metadata={"fork": set})
+    defer_stack: list = dataclass_field(metadata={"fork": _fork_defer_stack})
+    block_exprs: list = dataclass_field(metadata={"fork": list})
+    const_locals: set = dataclass_field(metadata={"fork": set})
+    mut_locals: set = dataclass_field(metadata={"fork": set})
+    nonnull_locals: set = dataclass_field(metadata={"fork": set})
+    narrowed_nonnull: set = dataclass_field(metadata={"fork": set})
+    narrowed_paths: set = dataclass_field(metadata={"fork": set})
+    addr_taken: set = dataclass_field(metadata={"fork": set})
+    type_bindings: dict = dataclass_field(metadata={"fork": dict})
+    current_source: "str | None" = dataclass_field(metadata={})
+
+    @classmethod
+    def capture(cls, cg: "CodeGen") -> "GenContext":
+        """Snapshot every context attribute off ``cg``, by reference."""
+        return cls(**{f.name: getattr(cg, f.name) for f in dataclass_fields(cls)})
+
+    def restore(self, cg: "CodeGen") -> None:
+        """Write every captured attribute back onto ``cg``."""
+        for f in dataclass_fields(self):
+            setattr(cg, f.name, getattr(self, f.name))
+
+    def fork(self) -> "GenContext":
+        """A copy whose mutable containers are detached from the originals.
+
+        ``capture`` alone shares containers with the live generator, which is
+        fine for an immediate save/restore pair but not for a snapshot
+        consumed later (the enclosing function keeps compiling and mutates
+        them in place). Each fork also detaches from previous forks, so one
+        snapshot can seed many independent restorations (one per boxed tag).
+        """
+        return dataclasses_replace(
+            self,
+            **{
+                f.name: f.metadata["fork"](getattr(self, f.name))
+                for f in dataclass_fields(self)
+                if "fork" in f.metadata
+            },
+        )
+
+
+@dataclass
+class PendingArm:
+    """A generic ``case type`` arm awaiting per-tag monomorphization.
+
+    A ``when T* ptr:``/``when T v:`` arm cannot lower where it appears --
+    the tags it matches are the whole program's boxed set, which grows as
+    long as bodies are being generated. Initial lowering leaves an LLVM
+    ``switch`` (defaulting to the next arm) at the arm's chain position and
+    enqueues this record; :meth:`CodeGen.finalize_generic_arms` later
+    compiles one body copy per matching boxed tag into fresh blocks of
+    ``fn`` and adds each as a switch case.
+
+    The record is shaped as a tag predicate (``pointer_only``) plus a body
+    strategy (the per-tag monomorphized ``body``), so a future interface
+    arm -- one body over a fat pointer, no per-tag copies -- can ride the
+    same pending/finalize machinery with a different pair.
+
+    Attributes:
+        switch: The dispatch instruction cases are added to.
+        fn: The enclosing LLVM function (late blocks append here).
+        payload_ptr: The subject's payload slot, computed at case entry (it
+            dominates every switch case).
+        end_bb: The case's join block; a non-diverging body copy branches
+            to it.
+        param: The arm-scoped type parameter's name (the ``T``).
+        binding: The value binding's name (the ``v``/``ptr``).
+        body: The arm body's statement list (shared AST, one compile per
+            tag).
+        when_line: The arm's source line, for the per-tag failure note.
+        pointer_only: The tag predicate -- ``True`` for ``T*`` (pointer
+            tags only, ``T`` bound to the pointee), ``False`` for ``T v``
+            (every tag, ``T`` bound to the boxed type itself).
+        claimed: Tags this arm must not take: the case's ``seen`` set,
+            shared with its concrete arms and any earlier generic arm
+            (first-match-wins textual order); tags emitted here are added
+            back into it.
+        ctx: The per-function context snapshot at the arm's chain position
+            (see :meth:`GenContext.fork`); each tag's compile restores a
+            fresh fork of it.
+    """
+
+    switch: ir.Instruction
+    fn: ir.Function
+    payload_ptr: ir.Value
+    end_bb: ir.Block
+    param: str
+    binding: str
+    body: list
+    when_line: int
+    pointer_only: bool
+    claimed: set
+    ctx: GenContext
+
+
 # Builtin struct templates, available in every program with no import: the
 # shared `iterator<T>` cursor behind the `_it`/`_next` protocol, and the
 # `pair<K, V>` element the keyed containers yield from `_next`. They are
@@ -414,6 +538,16 @@ class CodeGen:
         # one tag would corrupt every `case type`; recording each tag's name
         # turns a collision into a compile error at the second type's site.
         self.any_tags: dict[int, str] = {}
+        # The boxed-only tag registry: tag -> LangType for every type a value
+        # actually boxes under somewhere in the program (any_tags above also
+        # records mere `case type` arm mentions, so it cannot serve). Generic
+        # case-type arms monomorphize over exactly this set; it grows for as
+        # long as bodies are generated, hence the finalize fixpoint below.
+        self.boxed_types: dict[int, LangType] = {}
+        # Generic case-type arms awaiting per-tag monomorphization, in
+        # creation order (textual order within one case, so an earlier arm
+        # claims a tag first). Drained to fixpoint by finalize_generic_arms.
+        self.pending_arms: list[PendingArm] = []
         # name -> (private, source file); for @private access checks
         self.func_privacy: dict[str, tuple[bool, str | None]] = {}
         # @deprecated("msg") on concrete functions: resolved symbol -> the
@@ -2275,6 +2409,11 @@ class CodeGen:
             self.check_boxable(tv.decayed, line)
         boxed = self.check_boxable(tv.type, line)
         tag = self.any_tag(boxed, line)
+        # Feed the boxed-only registry. Every boxing site funnels through
+        # this method (the coerce choke point and the variadic-extras
+        # collection are its only callers), so the registry records exactly
+        # the types a generic case-type arm can ever see at runtime.
+        self.boxed_types.setdefault(tag, boxed)
         slot = self.entry_alloca(ANY.ir, "any.box")
         self.builder.store(ir.Constant(ANY.ir, None), slot)  # zero-fill first
         tag_ptr = self.builder.gep(slot, [I32_ZERO, I32_ZERO], inbounds=True)
@@ -3181,6 +3320,10 @@ class CodeGen:
                 )
                 ret, params, _ = self.signatures[symbol]
                 self.gen_function(func, self.funcs[symbol], ret, params)
+        # Every body is generated, so the boxed-tag registry is complete
+        # (modulo what the copies themselves box -- the fixpoint's job):
+        # monomorphize the deferred generic case-type arms.
+        self.finalize_generic_arms()
         return self.module
 
     def initializer_names_function(self, expr, names: set[str]) -> bool:
@@ -4293,6 +4436,66 @@ class CodeGen:
         else:
             raise LangError(f"cannot compile statement {stmt!r}", stmt.line)
 
+    def type_name_resolves(self, name: str) -> bool:
+        """Whether a bare name resolves as a type in the current context.
+
+        The generic-arm detection predicate: a builtin, a (generic) struct,
+        an enum, a type alias, a reserved builtin type name, or an active
+        enclosing type-parameter binding. Mirrors :meth:`lang_type`'s
+        resolution order without instantiating anything.
+
+        Args:
+            name: The bare type name as written.
+
+        Returns:
+            ``True`` when :meth:`lang_type` would resolve the name.
+        """
+        return (
+            name in self.type_bindings
+            or name in TYPES
+            or name in RESERVED_TYPE_NAMES
+            or (self.current_source, name) in self.static_structs
+            or name in self.struct_templates
+            or self.lookup_enum(name) is not None
+            or self.lookup_alias(name) is not None
+        )
+
+    def generic_arm_pattern(self, type_refs: list) -> "tuple[str, bool] | None":
+        """Detect whether a ``case type`` arm introduces a generic pattern.
+
+        The rule (no new syntax): in arm-type position, a bare name that
+        resolves is a concrete arm, and an *unresolved* bare name with no
+        generic arguments, array dimensions, or function shape, no ``const``
+        qualifier, and zero or one ``*`` introduces an arm-scoped type
+        parameter -- ``when T v:`` (every tag) or ``when T* ptr:`` (pointer
+        tags). Inside a generic function, ``when T v:`` therefore stays a
+        concrete arm per instantiation: the enclosing binding resolves. A
+        generic arm binds exactly one pattern, so a multi-type list never
+        matches (its unresolved members keep the ``unknown type`` error).
+        Any other unresolved shape (e.g. two stars) falls through to that
+        same error in :meth:`lang_type`.
+
+        Args:
+            type_refs: The arm's parsed type list.
+
+        Returns:
+            ``(type-parameter name, pointer_only)`` for a generic arm, else
+            ``None``.
+        """
+        if len(type_refs) != 1:
+            return None
+        ref = type_refs[0]
+        if (
+            ref.params is None
+            and not ref.args
+            and not ref.dims
+            and not ref.const
+            and ref.stars <= 1
+            and not self.type_name_resolves(ref.name)
+        ):
+            return ref.name, ref.stars == 1
+        return None
+
     def gen_case_type(self, stmt: CaseType):
         """Lower a ``case type`` type-switch over an ``any`` subject.
 
@@ -4311,14 +4514,32 @@ class CodeGen:
         type claims its own tag, so a duplicate within one list and a
         duplicate across arms both hit the same hard error.
 
+        A generic arm -- ``when T* ptr:`` (every boxed pointer tag, ``T``
+        bound to the pointee) or ``when T v:`` (every remaining boxed tag,
+        ``T`` bound to the boxed type; pointer tags included) -- cannot
+        lower here: its tag set is the whole program's boxed set, still
+        growing. It leaves a ``switch`` defaulting to the next arm and
+        enqueues a :class:`PendingArm` with a context snapshot;
+        :meth:`finalize_generic_arms` monomorphizes the body per matching
+        tag after the top-level body loop. Dispatch stays first-match-wins
+        textual order, so an arm a generic arm above it subsumes (a
+        concrete arm after ``T v``, a concrete pointer arm or a second
+        ``T*`` after ``T*``, anything after ``T v``) is a hard
+        unreachable-arm error. Because the pending body compiles out of
+        band, flow-narrowed facts it could invalidate are dropped at the
+        chain position (the :meth:`loop_kill_set` walk plus the blanket
+        path kill), and the case is assumed to reach its end block for
+        missing-return analysis.
+
         Args:
             stmt: The ``CaseType`` node.
 
         Raises:
             LangError: When the subject is not an ``any`` (or ``any*``), an
                 arm's type can never be boxed, two arms name the same type
-                (or one arm lists it twice), or a listed type's body copy
-                fails to compile.
+                (or one arm lists it twice), an arm is unreachable behind a
+                generic arm, or a body copy fails to compile for one of its
+                types.
         """
         subject = self.gen_expr(stmt.subject)
         if is_pointer(subject.type) and is_any(subject.type.pointee):
@@ -4345,7 +4566,67 @@ class CodeGen:
         end_bb = self.builder.append_basic_block("casetype.end")
         reaches_end = False
         seen: set[int] = set()
+        # The generic patterns seen so far (their source spelling), for the
+        # first-match-wins reachability hard errors below.
+        generic_any: "str | None" = None  # a `when T v:` arm's pattern
+        generic_ptr: "str | None" = None  # a `when T* ptr:` arm's pattern
         for type_refs, name, body, when_line in stmt.arms:
+            pattern = self.generic_arm_pattern(type_refs)
+            if pattern is not None:
+                param, pointer_only = pattern
+                spelling = str(type_refs[0])
+                if generic_any is not None:
+                    raise LangError(
+                        f"case type arm '{spelling}' is unreachable: the "
+                        f"generic arm '{generic_any}' above it matches "
+                        "every type",
+                        when_line,
+                    )
+                if pointer_only and generic_ptr is not None:
+                    raise LangError(
+                        f"case type arm '{spelling}' is unreachable: the "
+                        f"generic pointer arm '{generic_ptr}*' above it "
+                        "matches every pointer type",
+                        when_line,
+                    )
+                # Snapshot BEFORE the fact kills: facts entering the arm are
+                # sound (the runtime path into it flows through their
+                # establishment); only code compiled after this point must
+                # not rely on facts the deferred body could invalidate.
+                ctx = GenContext.capture(self).fork()
+                next_bb = self.builder.append_basic_block("casetype.next")
+                switch = self.builder.switch(tag, next_bb)
+                self.pending_arms.append(
+                    PendingArm(
+                        switch=switch,
+                        fn=self.builder.block.parent,
+                        payload_ptr=payload_ptr,
+                        end_bb=end_bb,
+                        param=param,
+                        binding=name,
+                        body=body,
+                        when_line=when_line,
+                        pointer_only=pointer_only,
+                        claimed=seen,
+                        ctx=ctx,
+                    )
+                )
+                self.builder.position_at_end(next_bb)
+                # The deferred body compiles after this function's facts are
+                # long gone, so its invalidations cannot fire during normal
+                # generation: drop, at the chain position, every name fact
+                # the body could kill (the loop pre-scan walker) and every
+                # path fact (the call-site blanket-kill precedent).
+                self.narrowed_nonnull -= self.loop_kill_set(body)
+                self.narrowed_paths.clear()
+                # Deferred bodies are assumed to reach the end block (the
+                # accepted missing-return conservatism).
+                reaches_end = True
+                if pointer_only:
+                    generic_ptr = param
+                else:
+                    generic_any = param
+                continue
             # A multi-type arm is the concrete lowering looped over its list:
             # one tag test and one body copy per listed type, sharing the AST.
             for type_ref in type_refs:
@@ -4354,6 +4635,20 @@ class CodeGen:
                         self.lang_type(type_ref, when_line), when_line
                     )
                 )
+                if generic_any is not None:
+                    raise LangError(
+                        f"case type arm for {arm_type} is unreachable: the "
+                        f"generic arm '{generic_any}' above it matches "
+                        "every type",
+                        when_line,
+                    )
+                if generic_ptr is not None and is_pointer(arm_type):
+                    raise LangError(
+                        f"case type arm for {arm_type} is unreachable: the "
+                        f"generic pointer arm '{generic_ptr}*' above it "
+                        "matches every pointer type",
+                        when_line,
+                    )
                 arm_tag = self.any_tag(arm_type, when_line)
                 if arm_tag in seen:
                     raise LangError(
@@ -4408,6 +4703,100 @@ class CodeGen:
         # Every arm and the else diverged: the type-switch diverges too.
         if not reaches_end:
             self.builder.unreachable()
+
+    def finalize_generic_arms(self):
+        """Monomorphize every pending generic ``case type`` arm, to fixpoint.
+
+        Runs after the top-level body loop, when the boxed-tag registry
+        holds every type the already-generated bodies box. For each pending
+        arm, each boxed tag its predicate matches and no earlier arm of its
+        case has claimed gets one body copy compiled into fresh blocks of
+        the enclosing function and added as a switch case. Compiling a copy
+        can box new types and instantiate new generics (whose bodies may
+        contain further generic arms) -- both feed back into the registry
+        and the pending list, so the loop repeats until a full pass adds
+        nothing. Arms are visited in creation order each pass, so within
+        one case an earlier arm always claims a newly boxed tag first
+        (first-match-wins textual order). Termination has parity with
+        recursive generic instantiation: a body boxing a derived type
+        forever diverges the same way ``f<T>`` calling ``f<T*>`` does.
+        """
+        progress = True
+        while progress:
+            progress = False
+            # Both lists grow while compiling copies; iterate snapshots and
+            # let the next pass pick up whatever appeared.
+            for pending in list(self.pending_arms):
+                for arm_tag, boxed in list(self.boxed_types.items()):
+                    if arm_tag in pending.claimed:
+                        continue
+                    if pending.pointer_only and not is_pointer(boxed):
+                        continue
+                    pending.claimed.add(arm_tag)
+                    self.gen_pending_arm_case(pending, arm_tag, boxed)
+                    progress = True
+
+    def gen_pending_arm_case(
+        self, pending: PendingArm, arm_tag: int, boxed: LangType
+    ):
+        """Compile one generic-arm body copy for one boxed tag.
+
+        Restores a fresh fork of the arm's context snapshot (so ``defer``,
+        loops, locals, and narrowing facts behave exactly as at the arm's
+        chain position), compiles the body into late-appended blocks of the
+        enclosing function under a ``type_bindings`` overlay -- the arm's
+        type parameter bound to the pointee for a ``T*`` arm (the binding
+        typed as the boxed pointer) or to the boxed type itself for a
+        ``T v`` arm -- and adds the tag to the arm's dispatch switch. The
+        copy is fully type-checked; a failure gains a note naming the
+        offending type, keeping the primary error head intact.
+
+        Args:
+            pending: The pending arm record.
+            arm_tag: The boxed tag this copy handles.
+            boxed: The tag's boxed type.
+
+        Raises:
+            LangError: When the body does not compile for ``boxed`` (e.g. a
+                call with no viable overload or instantiation for it).
+        """
+        outer = GenContext.capture(self)
+        pending.ctx.fork().restore(self)
+        arm_bb = pending.fn.append_basic_block("casetype.generic")
+        self.builder = ir.IRBuilder(arm_bb)
+        self.type_bindings = {
+            **self.type_bindings,
+            pending.param: boxed.pointee if pending.pointer_only else boxed,
+        }
+        try:
+            # The binding is a fresh copy of the payload, exactly as in the
+            # concrete lowering above.
+            typed_ptr = self.builder.bitcast(
+                pending.payload_ptr, boxed.ir.as_pointer()
+            )
+            var_slot = self.entry_alloca(boxed.ir, pending.binding)
+            self.builder.store(self.builder.load(typed_ptr), var_slot)
+            self.scope_names = set()
+            self.bind_local(pending.binding, var_slot, boxed)
+            self.gen_block(pending.body)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(pending.end_bb)
+        except LangError as err:
+            # The error belongs to the case's file (the snapshot's source is
+            # live again here); the note names the type the copy failed for.
+            if err.source is None:
+                err.source = self.current_source
+            err.notes.append(
+                Note(
+                    f"in case type arm for {boxed}",
+                    pending.when_line,
+                    pending.ctx.current_source,
+                )
+            )
+            raise
+        finally:
+            outer.restore(self)
+        pending.switch.add_case(ir.Constant(UINT64.ir, arm_tag), arm_bb)
 
     def gen_compound_assign(self, stmt: CompoundAssign):
         """Lower ``target op= value`` to a load, an ``op``, and a store back.
@@ -8804,25 +9193,7 @@ class CodeGen:
         )
         bindings_str = ", ".join(str(bindings[t]) for t in func.type_params)
         mangled = f"{base}<{bindings_str}>"
-        outer_bindings = self.type_bindings
-        outer_source = self.current_source
-        saved = (
-            self.builder,
-            self.locals,
-            self.ret_type,
-            self.loops,
-            self.current_variadic,
-            self.current_noreturn,
-            self.scope_names,
-            self.defer_stack,
-            self.block_exprs,
-            self.const_locals,
-            self.mut_locals,
-            self.nonnull_locals,
-            self.narrowed_nonnull,
-            self.narrowed_paths,
-            self.addr_taken,
-        )
+        saved = GenContext.capture(self)
         self.type_bindings = bindings
         self.current_source = func.source  # the signature may name private structs
         try:
@@ -8873,30 +9244,12 @@ class CodeGen:
                 Note(
                     f"in instantiation of {func.name}<{bindings_str}>",
                     line,
-                    outer_source,
+                    saved.current_source,
                 )
             )
             raise
         finally:
-            (
-                self.builder,
-                self.locals,
-                self.ret_type,
-                self.loops,
-                self.current_variadic,
-                self.current_noreturn,
-                self.scope_names,
-                self.defer_stack,
-                self.block_exprs,
-                self.const_locals,
-                self.mut_locals,
-                self.nonnull_locals,
-                self.narrowed_nonnull,
-                self.narrowed_paths,
-                self.addr_taken,
-            ) = saved
-            self.type_bindings = outer_bindings
-            self.current_source = outer_source
+            saved.restore(self)
         return fn, ret, params
 
     def gen_binary(self, expr: Binary) -> TypedValue:

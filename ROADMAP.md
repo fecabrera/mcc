@@ -389,7 +389,7 @@ already do).
           checked-failure mechanism exists to hang the tag mismatch on;
           the generic-arms item below parks its else-optional carve-out
           behind the same mechanism (both want the same trap)
-    - [ ] generic arms in `case type` — `when T* ptr:` matches any
+    - [x] generic arms in `case type` — `when T* ptr:` matches any
           boxed pointer type, the pointer fallback after concrete pointer
           arms (in the stdlib formatter,
           `when T* ptr: l = snprintf(buf, MAX_BUF_LEN, "%p", ptr);` after
@@ -589,7 +589,8 @@ already do).
           `test_no_multi_type_arms` in `tests/test_any.py` flips (its
           comment documents the superseded v1 rule), and the parse-time
           mandatory-`else` test survives if the check moves to codegen
-          with the message kept verbatim. Staged:
+          with the message kept verbatim; implemented, see
+          [The any type](docs/language.md#the-any-type). Staged:
       - [x] stage 1: multi-type arms — S-sized, zero deferral
             machinery (the check set is written in source): a comma
             list in `parse_case_type`, the existing concrete-arm
@@ -598,7 +599,7 @@ already do).
             unreachable diagnostics, per-type failures Note-wrapped;
             flips the pinned no-multi-type-arms test by design;
             implemented, see [The any type](docs/language.md#the-any-type)
-      - [ ] stage 2: `when T* ptr:` and `when T v:` together — L-sized,
+      - [x] stage 2: `when T* ptr:` and `when T v:` together — L-sized,
             both riding the same machinery (the boxed-only tag
             registry, the snapshot/pending worklist, the finalize
             fixpoint, the detection rule, the hard-error reachability
@@ -607,7 +608,8 @@ already do).
             future fact sets cannot silently miss either snapshot, and
             starts with a spike compiling one concrete arm body twice
             under two `type_bindings` overlays, validating the core
-            before the deferral machinery
+            before the deferral machinery; implemented, see
+            [The any type](docs/language.md#the-any-type)
   - [ ] global/`@static` union initializers — teach the const-initializer
         path to emit a union constant (zero-fill plus the one written member).
         Until then a global/`@static` union initializer is rejected with an

@@ -61,5 +61,7 @@ fn main() -> int32 {
 }
 
 // See also: any.mc for the box itself and the single-type arms this extends;
+// generic_case_arms.mc for the fully generic arms, `when T v:` and
+// `when T* ptr:`, that this explicit grouping is the halfway point to;
 // functions/overloading.mc for how an overload set like width is declared
 // and resolved.

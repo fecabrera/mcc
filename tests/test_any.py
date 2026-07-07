@@ -56,6 +56,19 @@ def test_parses_a_multi_type_arm():
     assert [t.name for t in type_refs] == ["int32", "int16"] and name == "n"
 
 
+def test_generic_arm_needs_no_new_syntax():
+    # `when T* ptr:` parses like any other arm: one TypeRef, one binding.
+    # Whether `T` is a concrete type or an arm-scoped type parameter is
+    # decided at codegen by name resolution (see tests/test_generic_arms.py).
+    (func,) = parse(
+        "fn f(a: any) { case type (a) { when T* ptr: g(); else: h(); } }"
+    ).functions
+    (node,) = func.body
+    ((type_refs, name, _body, _line),) = node.arms
+    (type_ref,) = type_refs
+    assert type_ref.name == "T" and type_ref.stars == 1 and name == "ptr"
+
+
 def test_multi_type_arm_still_needs_a_binding():
     with pytest.raises(LangError, match="a case type arm needs a binding name"):
         parse(

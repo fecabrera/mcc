@@ -2630,6 +2630,7 @@ fn show(a: any) {
         when float64 f:     println("float %f", f);
         when char* s:       println("string %s", s);
         when slice<char> t: println("slice of %llu", t.length);
+        when T* ptr:        println("pointer %p", ptr);  // every other boxed pointer
         else:               println("something else");
     }
 }
@@ -2649,8 +2650,37 @@ evaluated once, arms run without fall-through — with the type-mode specifics:
   offending type. An explicit list doesn't close the universe, so `else` (or
   later arms) is still required. See
   [examples/types/case_type_groups.mc](../examples/types/case_type_groups.mc).
+- An arm may be **generic**: `when T* ptr:` matches every boxed *pointer*
+  tag not claimed by an earlier arm (`T` bound to the pointee, the binding
+  typed as the pointer), and `when T v:` matches every remaining boxed tag
+  (`T` bound to the boxed type itself — pointer tags included, so a lone
+  `when T v:` sees `v: char*` with `T = char*`). No new syntax: a bare
+  arm-type name that resolves (a builtin, struct, alias, enum, or an
+  enclosing generic's active binding — so inside `fn g<T>`, `when T v:`
+  stays a concrete arm per instantiation) is a concrete arm, and an
+  *unresolved* bare name with at most one `*` introduces an arm-scoped type
+  parameter. The accepted trade-off, worth knowing: a typo like
+  `when in32 n:` silently becomes a fully generic arm (later arms turning
+  unreachable and per-tag type checks usually catch it). The arm is a real
+  generic context, monomorphized once per matching tag drawn from the
+  **whole program's boxed set** — every type a value actually boxes under
+  anywhere — each copy fully type-checked, so
+  `when T* ptr: handle(ptr);` dispatches into a generic `handle<T>(p: T*)`
+  or an overload set per tag, and a boxed type with no viable overload or
+  instantiation is a compile error at the `case type` site naming the
+  offending type. Dispatch is **first-match-wins textual order** (`when
+  char* s:` ahead of `when T* ptr:` keeps strings out of the fallback); an
+  arm a generic arm above it subsumes — any arm after `when T v:`, a
+  concrete pointer arm or a second `T*` arm after `when T* ptr:` — is a
+  hard unreachable-arm error. One conservatism falls out of the deferred
+  compilation: the case is assumed to reach its end, so a value-returning
+  function whose every arm and `else` return still needs a statement (e.g.
+  a `return`) after the `case type`. See
+  [examples/types/generic_case_arms.mc](../examples/types/generic_case_arms.mc).
 - `else:` is **mandatory**: the set of types an `any` can hold is open, so a
-  type-switch is never exhaustive without it.
+  type-switch is never exhaustive without it — and it stays required beside
+  a trailing `when T v:` arm (a zero-filled `any`, tag 0, matches no arm
+  and lands in `else`).
 - The subject must be an `any`; an `any*` subject auto-dereferences, like
   member access through a pointer.
 - Two arms naming the same type are a compile error — one arm listing a type

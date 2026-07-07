@@ -715,7 +715,10 @@ class CaseType:
     bind a name, and ``else`` is required -- the set of types an ``any`` can
     hold is open. A multi-type arm's binding is an implicit generic: the
     shared body compiles once per listed type, the binding typed as that
-    type per copy.
+    type per copy. An arm whose single bare type name does not resolve is a
+    *generic arm* (decided at codegen, not here): ``when T* ptr:`` matches
+    every boxed pointer tag and ``when T v:`` every remaining boxed tag,
+    the body monomorphized once per matching tag.
 
     Attributes:
         subject: The matched expression; must be an ``any`` (an ``any*``

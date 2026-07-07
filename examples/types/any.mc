@@ -78,5 +78,7 @@ fn main() -> int32 {
 // See also: unions.mc for the raw untagged union `any` is the safe, tagged
 // counterpart to; control-flow/case_when.mc for the value form of case/when;
 // case_type_groups.mc for multi-type arms, several types sharing one body
-// over one binding; functions/native_variadics.mc for the box's headline
-// consumer, native variadic collection.
+// over one binding; generic_case_arms.mc for generic arms, `when T* ptr:`
+// and `when T v:` fallbacks over every tag no concrete arm claims;
+// functions/native_variadics.mc for the box's headline consumer, native
+// variadic collection.
