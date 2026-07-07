@@ -356,7 +356,9 @@ def test_disjoint_groups_partition_a_same_pattern_set():
 
 
 def test_deduction_outside_every_group_is_no_overload():
-    with pytest.raises(LangError, match="no overload of 'show' matches"):
+    with pytest.raises(
+        LangError, match=r"no overload of 'show' with signature show\(float64\)"
+    ):
         compile_ir(
             SHOW_PAIR
             + """

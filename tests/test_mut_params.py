@@ -297,7 +297,7 @@ def test_rvalue_failing_several_mut_overloads_is_no_match():
     # Both candidates fit the shape but need an lvalue, and a struct rvalue
     # is no pointer, so it cannot decay in either; with more than one such
     # near-miss the general no-overload error is reported.
-    message = "no overload of 'f' matches argument types"
+    message = r"no overload of 'f' with signature f\(box<int32>\)"
     with pytest.raises(LangError, match=message):
         compile_ir(
             "struct box<T> { value: T; }\n"

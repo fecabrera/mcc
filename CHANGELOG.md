@@ -185,6 +185,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **No-overload errors show the call signature** — when no overload of a
+  name fits a call, the error now renders the attempted call as a
+  signature, `no overload of 'format' with signature format(char*)`,
+  instead of `no overload of 'format' matches argument types (char*)`.
+  Same information, but an arity mismatch is now visible at a glance: a
+  one-argument call against three-argument overloads reads as the
+  one-argument signature nothing declares, rather than a seemingly
+  matching type list.
+
 - **Order-independent template symbol bases** — generic templates now link
   their instances by a signature-derived base spelled from the declaration
   alone: type parameters alpha-rename to positional `$i` placeholders (a

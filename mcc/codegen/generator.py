@@ -8846,7 +8846,8 @@ class CodeGen:
                     )
                 arg_types = ", ".join(str(tv.type) for tv in arg_tvs)
                 raise LangError(
-                    f"no overload of {expr.name!r} matches argument types ({arg_types})",
+                    f"no overload of {expr.name!r} with signature "
+                    f"{expr.name}({arg_types})",
                     expr.line,
                 )
             viable.sort(key=lambda entry: entry[0], reverse=True)

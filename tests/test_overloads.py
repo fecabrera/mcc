@@ -56,7 +56,9 @@ def test_struct_pattern_beats_bare_parameter():
 
 
 def test_no_matching_overload():
-    with pytest.raises(LangError, match="no overload of 'describe' matches"):
+    with pytest.raises(
+        LangError, match=r"no overload of 'describe' with signature describe\(int32\)"
+    ):
         compile_ir(
             "fn describe<T>(x: T*) -> int32 { return 1; }\n"
             "fn describe<T>(x: T**) -> int32 { return 2; }\n"
@@ -719,12 +721,25 @@ def test_type_args_on_an_overloaded_concrete_name():
 
 def test_no_overload_matches_concrete_set():
     with pytest.raises(
-        LangError, match="no overload of 'f' matches argument types"
+        LangError, match=r"no overload of 'f' with signature f\(float64\)"
     ):
         compile_ir(
             "fn f(x: int32) -> int32 { return 1; }\n"
             "fn f(p: char*) -> int32 { return 2; }\n"
             "fn main() -> int32 { return f(1.5); }"
+        )
+
+
+def test_no_overload_on_arity_shows_the_call_signature():
+    # Every candidate takes two arguments; the error renders the one-argument
+    # call as a signature, so the arity mismatch is visible at a glance.
+    with pytest.raises(
+        LangError, match=r"no overload of 'f' with signature f\(int32\)"
+    ):
+        compile_ir(
+            "fn f(x: int32, y: int32) -> int32 { return x; }\n"
+            "fn f(p: char*, q: char*) -> int32 { return 0; }\n"
+            "fn main() -> int32 { return f(1); }"
         )
 
 
