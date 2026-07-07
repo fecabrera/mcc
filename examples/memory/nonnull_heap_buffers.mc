@@ -14,8 +14,16 @@ import "hashing/crc32";
 // diverging null guard after the allocation. The narrowed fact carries
 // through every later call, including calls inside loops, because a loop
 // only drops the facts it could invalidate and these loops never touch buf.
+// The tail section puts the same buffer behind a struct field, where the
+// call write-effect analysis lets the guarded field survive a write-free
+// callee like crc32.
 // Prerequisites: pointers.mc (alloc/dealloc) and the functions/nonnull.mc
 // family.
+
+struct view {
+    data: uint8*;
+    size: uint64;
+}
 
 fn main() -> int32 {
     // alloc<T> returns a plain uint8*: no proof, so no @nonnull call
@@ -45,6 +53,23 @@ fn main() -> int32 {
     fill(buf, 0x11 as uint8, 16);
     println("crc32 after the refill: %u", crc32(buf, 16));
 
+    // The same heap buffer behind a struct field. A guarded field like
+    // v.data is a choosier fact than the bare name buf: it dies at any call
+    // that might write memory (see functions/nonnull_projections.mc). Calls
+    // the compiler proves transitively write-free are the exception, and
+    // crc32 is one (it stores only to its own scalar locals), so the guarded
+    // field survives its own call and the second call reuses the proof:
+    let v = struct view { data = buf, size = 16 };
+    if (v.data == null) return 1;
+    let head = crc32(v.data, 8);       // the write-free call keeps the fact
+    let whole = crc32(v.data, v.size); // so this call needs no new proof
+    println("field crc32: first half %u, whole %u", head, whole);
+
+    // println is a writing call (it bottoms out in @extern printf), so past
+    // this point v.data would need re-proving. When a checked field must
+    // cross a writing call or a loop, bind it while the fact is alive:
+    // `let q = v.data;` under the guard carries a name fact like buf's.
+
     // dealloc keeps the plain T* on purpose: null is meaningful there (a
     // no-op), so it needs no proof.
     dealloc(buf);
@@ -53,7 +78,9 @@ fn main() -> int32 {
 
 // See also: functions/nonnull_narrowing.mc for the guard shapes and the
 // exact rules on when facts die; functions/nonnull_loops.mc for narrowed
-// facts crossing loops; functions/nonnull_assert.mc for the `!` assertion
+// facts crossing loops; functions/nonnull_projections.mc for field facts
+// and the write-effect rules on which calls kill them;
+// functions/nonnull_assert.mc for the `!` assertion
 // where no guard fits; pointers.mc for alloc/dealloc; lists.mc for the
 // container APIs, whose mut/const self receivers accept a heap pointer
 // through the same one-line guard (see functions/pointer_decay.mc).

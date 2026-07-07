@@ -421,6 +421,17 @@ class CodeGen:
         # (Generic templates carry the message on the Func node instead and
         # are checked when overload resolution picks them.)
         self.deprecated_syms: dict[str, str] = {}
+        # Per-function transitive write-effect bits, keyed by id(Func) for
+        # every function with a body (a generic template takes ONE bit for
+        # all its instances -- the candidate union); True means the function
+        # may write memory a caller's projection fact could live in. Computed
+        # once by analyze_write_effects, before any body is generated.
+        self.effect_bits: dict[int, bool] = {}
+        # The concrete symbols (generic instances included, added as they are
+        # stamped out) whose write-effect bit is clear: a call to one
+        # preserves projection facts instead of the blanket kill -- the same
+        # symbol-set pattern as noreturn_syms below.
+        self.fact_safe_syms: set[str] = set()
         # @noreturn functions, by resolved symbol: a direct call to one
         # terminates the caller's block (an `unreachable` right after the
         # call), so no dummy return is needed past it. Function-pointer
@@ -1018,6 +1029,306 @@ class CodeGen:
                     f"static assertion failed: {directive.message}",
                     directive.line,
                 )
+
+    def analyze_write_effects(self):
+        """Compute every function's transitive **write-effect bit**.
+
+        Runs once per compilation, after ``@if`` flattening and the
+        declaration pass (so the name tables exist) and before any body is
+        generated. A function's bit is SET when it may write memory a
+        caller's projection fact could live in, under the strict recorded
+        rule -- any through-memory store counts, a store to the function's
+        own local struct included:
+
+        - a ``StoreDeref``/``StoreIndex``/``StoreMember`` statement, or a
+          compound assignment whose target is not a bare name;
+        - an assignment to a ``mut`` parameter (a store through the hidden
+          reference into the caller's storage) or to a global;
+        - anything opaque: ``@asm``, a call through a function-pointer
+          value (a ``CallExpr``, or a ``Call`` whose name is locally bound
+          or a ``const``), ``va_start``/``va_end``, a bodyless callee
+          (``@extern``, an unpaired prototype), a protocol ``for`` loop
+          (its ``_it``/``_next`` callee names depend on the iterable's
+          type, which a syntactic pass cannot see -- the builtin
+          ``range``/``enumerate`` counting loops emit no call and do not
+          count), or -- when any struct in the program declares a
+          call-bearing field default -- a struct literal or bare
+          annotated ``let`` (defaults evaluate at the application site,
+          outside the body's own AST);
+        - a call edge to any same-name candidate whose bit is set. Edges
+          are a **candidate union** over templates, overloads, concrete
+          declarations, and file-scoped ``@static``\\ s per (source, name),
+          so a generic template takes one bit for all its instances.
+
+        The bits are the least fixpoint of that system, seeded optimistic
+        (clear): a write-free recursion cycle stays clear, while any base
+        condition anywhere in a cycle propagates to the whole cycle.
+        Results land in :attr:`effect_bits` (every body-owning ``Func`` by
+        id, templates included) and :attr:`fact_safe_syms` (the clear
+        concrete symbols; :meth:`instantiate` adds each clear template's
+        instance symbols as they are stamped out). Call emission consults
+        them to skip the blanket projection-fact kill (:meth:`emit_call`);
+        name facts were never killed by calls and are unaffected.
+        """
+        global_names = {v.name for v in self.program.globals}
+        # A struct field default is an ordinary expression evaluated at each
+        # application site (a literal omitting the field, or a bare
+        # annotated `let` of a defaulted struct), so a call inside one is a
+        # call the body walk cannot see. Rare enough to gate coarsely: when
+        # any struct in the program declares a call-bearing default, every
+        # struct literal and bare annotated `let` counts as opaque.
+        defaults_call = any(
+            contains_call(expr)
+            for decl in self.program.structs
+            for expr in decl.defaults.values()
+        )
+        live = [f for f in self.program.functions if f.removed_msg is None]
+        # A prototype paired with a definition in this program is covered by
+        # the definition's candidacy; pairing is per signature (matched here
+        # by the parameter types' spelling -- a spelling mismatch only keeps
+        # the prototype, which reads as bodyless/opaque: conservative).
+        def spelling(f: Func) -> tuple[str, ...]:
+            return tuple(str(t) for _, t in f.params)
+
+        defined = {
+            (f.name, spelling(f))
+            for f in live
+            if not f.proto and not f.extern and not f.static and not f.type_params
+        }
+        by_name: dict[str, list[Func]] = {}
+        by_static: dict[tuple[str | None, str], list[Func]] = {}
+        for f in live:
+            if (
+                f.proto
+                and not f.static
+                and not f.type_params
+                and (f.name, spelling(f)) in defined
+            ):
+                continue
+            if f.static:
+                by_static.setdefault((f.source, f.name), []).append(f)
+            else:
+                by_name.setdefault(f.name, []).append(f)
+        analyzed = [f for f in live if not f.extern and not f.proto]
+        bits: dict[int, bool] = {}
+        edges: dict[int, set[int]] = {}
+        outer_source = self.current_source
+        try:
+            for func in analyzed:
+                self.current_source = func.source
+                writes, calls = self.scan_write_effects(
+                    func, global_names, defaults_call
+                )
+                callees: set[int] = set()
+                if not writes:
+                    for name in calls:
+                        cands = by_static.get(
+                            (func.source, name), []
+                        ) + by_name.get(name, [])
+                        if not cands or any(c.proto or c.extern for c in cands):
+                            # Bodyless (or undefined -- an error at the call
+                            # site later): opaque.
+                            writes = True
+                            break
+                        callees.update(id(c) for c in cands)
+                bits[id(func)] = writes
+                edges[id(func)] = callees
+        finally:
+            self.current_source = outer_source
+        # Optimistic-clear least fixpoint over the call graph.
+        changed = True
+        while changed:
+            changed = False
+            for fid, callees in edges.items():
+                if not bits[fid] and any(bits.get(c, True) for c in callees):
+                    bits[fid] = True
+                    changed = True
+        self.effect_bits = bits
+        for func in analyzed:
+            if func.type_params or bits[id(func)]:
+                continue
+            # The same symbol choice the body-generation loop makes.
+            symbol = self.overload_symbols.get(
+                id(func),
+                self.static_funcs.get((func.source, func.name), func.name),
+            )
+            self.fact_safe_syms.add(symbol)
+
+    def scan_write_effects(
+        self, func: Func, global_names: set[str], defaults_call: bool = False
+    ):
+        """Scan one function body for write-effect base conditions.
+
+        The syntactic half of :meth:`analyze_write_effects`: a recursive
+        walk over the statement and expression AST, tracking block scopes
+        so a name's binding kind is known where it is used -- a ``let``
+        shadow ends with its block, after which an assignment to the name
+        hits the global again (whole-body tracking would miss that write).
+        Compile-time ``@if`` statements contribute only their live branch
+        (the dead branch is never emitted); ``defer`` bodies and block
+        expressions are ordinary children and are walked like any other.
+
+        Args:
+            func: The function whose body to scan.
+            global_names: Every global variable name in the program.
+            defaults_call: Some struct in the program declares a
+                call-bearing field default, so struct literals and bare
+                annotated ``let``\\ s may evaluate a hidden call and count
+                as opaque.
+
+        Returns:
+            A ``(writes, calls)`` pair: whether a base condition sets the
+            bit outright, and the named calls needing candidate resolution.
+        """
+        writes = False
+        calls: set[str] = set()
+
+        def name_write(name: str, bound: dict):
+            # An assignment's target by name: a store through a mut
+            # parameter's hidden reference or to a global sets the bit; a
+            # plain local, by-value parameter, or shadowing let is private
+            # to this frame under the name-fact rules and stays clear.
+            nonlocal writes
+            kind = bound.get(name)
+            if kind == "param" and name in func.mut_params:
+                writes = True
+            elif kind is None and name in global_names:
+                writes = True
+
+        def scan_expr(node, bound: dict):
+            nonlocal writes
+            if isinstance(node, Call):
+                if node.name in ("va_start", "va_end") and not node.type_args:
+                    writes = True  # the va intrinsics stay opaque
+                elif node.name in bound or node.name in self.consts:
+                    # May be an indirect call through a local or const
+                    # function pointer (variables and consts shadow
+                    # function names at the call site).
+                    writes = True
+                else:
+                    calls.add(node.name)
+                for arg in node.args:
+                    scan_expr(arg, bound)
+                return
+            if isinstance(node, (CallExpr, Asm)):
+                writes = True  # opaque: fn-pointer call / inline asm
+            elif isinstance(node, BlockExpr):
+                scan_stmts(node.body, bound)
+                return
+            elif isinstance(node, StructLit) and defaults_call:
+                writes = True  # an omitted field may evaluate a calling default
+            if isinstance(node, (list, tuple)):
+                for item in node:
+                    scan_expr(item, bound)
+            elif is_dataclass(node) and not isinstance(node, TypeRef):
+                for f in dataclass_fields(node):
+                    scan_expr(getattr(node, f.name), bound)
+
+        def scan_iterable(it, bound: dict):
+            # The builtin range/enumerate counting loops emit no call (a
+            # user-defined function of the name takes precedence, exactly
+            # as in gen_for). Any other iterable may lower to the
+            # <struct>_it/<struct>_next protocol, whose callee names
+            # depend on the iterable's type: opaque. (A slice iterates
+            # natively and is over-tainted here -- a recorded limitation
+            # of the syntactic pass.)
+            nonlocal writes
+            if (
+                isinstance(it, Call)
+                and it.name == "range"
+                and not self.callable_exists("range")
+            ):
+                for arg in it.args:
+                    scan_expr(arg, bound)
+                return
+            if (
+                isinstance(it, Call)
+                and it.name == "enumerate"
+                and not self.callable_exists("enumerate")
+            ):
+                for arg in it.args:
+                    scan_iterable(arg, bound)
+                return
+            writes = True
+            scan_expr(it, bound)
+
+        def scan_stmts(stmts: list, bound: dict):
+            bound = dict(bound)  # a fresh block scope
+            for stmt in stmts:
+                scan_stmt(stmt, bound)
+
+        def scan_stmt(stmt, bound: dict):
+            nonlocal writes
+            if isinstance(stmt, Let):
+                if stmt.value is not None:
+                    scan_expr(stmt.value, bound)
+                elif defaults_call:
+                    # `let s: T;` default-initializes a defaulted struct,
+                    # which may evaluate a calling default.
+                    writes = True
+                bound[stmt.name] = "local"
+            elif isinstance(stmt, Assign):
+                scan_expr(stmt.value, bound)
+                name_write(stmt.name, bound)
+            elif isinstance(stmt, CompoundAssign):
+                scan_expr(stmt.value, bound)
+                if isinstance(stmt.target, Var):
+                    name_write(stmt.target.name, bound)
+                else:
+                    writes = True  # a through-memory store form
+                    scan_expr(stmt.target, bound)
+            elif isinstance(stmt, (StoreDeref, StoreIndex, StoreMember)):
+                writes = True
+                for f in dataclass_fields(stmt):
+                    scan_expr(getattr(stmt, f.name), bound)
+            elif isinstance(stmt, If):
+                scan_expr(stmt.cond, bound)
+                scan_stmts(stmt.then, bound)
+                scan_stmts(stmt.otherwise, bound)
+            elif isinstance(stmt, While):
+                scan_expr(stmt.cond, bound)
+                scan_stmts(stmt.body, bound)
+            elif isinstance(stmt, For):
+                scan_iterable(stmt.iterable, bound)
+                body_scope = dict(bound)
+                body_scope[stmt.var] = "local"
+                scan_stmts(stmt.body, body_scope)
+            elif isinstance(stmt, (Block, Defer)):
+                scan_stmts(stmt.body, bound)
+            elif isinstance(stmt, Case):
+                scan_expr(stmt.subject, bound)
+                for values, body in stmt.arms:
+                    scan_expr(values, bound)
+                    scan_stmts(body, bound)
+                scan_stmts(stmt.otherwise, bound)
+            elif isinstance(stmt, CaseType):
+                scan_expr(stmt.subject, bound)
+                for _type_ref, name, body, _line in stmt.arms:
+                    arm_scope = dict(bound)
+                    arm_scope[name] = "local"
+                    scan_stmts(body, arm_scope)
+                scan_stmts(stmt.otherwise, bound)
+            elif isinstance(stmt, Conditional):
+                # Only the live branch is ever emitted; its statements run
+                # inline in the current scope (matching gen_statement).
+                taken = (
+                    stmt.then
+                    if self.eval_static_cond(stmt.cond)
+                    else stmt.otherwise
+                )
+                for inner in taken:
+                    scan_stmt(inner, bound)
+            elif isinstance(stmt, (Return, Emit)):
+                scan_expr(stmt.value, bound)
+            elif isinstance(stmt, ExprStmt):
+                scan_expr(stmt.expr, bound)
+            elif isinstance(stmt, (Break, Continue, Unreachable)):
+                pass
+            else:
+                scan_expr(stmt, bound)  # conservative catch-all
+
+        scan_stmts(func.body, {name: "param" for name, _ in func.params})
+        return writes, calls
 
     def param_irs(self, params, hidden: frozenset[int] = frozenset()) -> list:
         """Map a function's parameter types to their LLVM argument types.
@@ -2849,6 +3160,10 @@ class CodeGen:
         # and const/enum references; before function bodies, so a failed layout
         # assertion aborts the build without wasting work on codegen.
         self.check_directives()
+        # Every declaration is registered and @if arms are resolved: compute
+        # the per-function write-effect bits the call-emission sites consult
+        # (a call to a proven write-free callee preserves projection facts).
+        self.analyze_write_effects()
         for func in self.program.functions:
             if (
                 not func.type_params
@@ -4250,7 +4565,7 @@ class CodeGen:
                 f"'<struct>_next' functions, not {iterable.type}",
                 stmt.line,
             )
-        it_slot, next_fn, element = self.setup_protocol_loop(
+        it_slot, next_fn, element, preserves = self.setup_protocol_loop(
             stmt, iterable, struct_t, "'for ... in'"
         )
 
@@ -4269,7 +4584,8 @@ class CodeGen:
             end_bb = self.builder.append_basic_block("for.end")
             self.builder.branch(cond_bb)
             self.builder.position_at_end(cond_bb)
-            more = self.emit_call(next_fn, [it_slot, x_slot])  # next(&_it, &x)
+            # next(&_it, &x); a write-free _next preserves projection facts
+            more = self.emit_call(next_fn, [it_slot, x_slot], preserves=preserves)
             self.builder.cbranch(more, body_bb, end_bb)
             self.builder.position_at_end(body_bb)
             self.loops.append((cond_bb, end_bb, len(self.defer_stack)))
@@ -4305,9 +4621,11 @@ class CodeGen:
                 ``"enumerate()"``).
 
         Returns:
-            ``(iterator slot, next function, element type)``: the alloca
-            holding the ``<struct>_it`` cursor, the instantiated
-            ``<struct>_next``, and the element type its out-parameter yields.
+            ``(iterator slot, next function, element type, preserves)``: the
+            alloca holding the ``<struct>_it`` cursor, the instantiated
+            ``<struct>_next``, the element type its out-parameter yields,
+            and whether calling ``_next`` preserves projection facts (its
+            write-effect bit is clear; see :meth:`emit_call`).
 
         Raises:
             LangError: When ``<struct>_it`` or a matching ``<struct>_next`` is
@@ -4340,10 +4658,10 @@ class CodeGen:
         it_slot = self.builder.alloca(iterator.type.ir, name="for.iter")
         self.builder.store(iterator.value, it_slot)
 
-        next_fn, element = self.resolve_protocol_next(
+        next_fn, element, preserves = self.resolve_protocol_next(
             iterator.type, next_name, stmt.line
         )
-        return it_slot, next_fn, element
+        return it_slot, next_fn, element, preserves
 
     def gen_for_slice(
         self,
@@ -4655,7 +4973,7 @@ class CodeGen:
                 f"'<struct>_next' functions, not {iterable.type}",
                 stmt.line,
             )
-        it_slot, next_fn, element = self.setup_protocol_loop(
+        it_slot, next_fn, element, preserves = self.setup_protocol_loop(
             stmt, iterable, struct_t, "enumerate()"
         )
         elem_struct, index_pos, value_pos = self.enumerated_type(element, stmt.line)
@@ -4687,7 +5005,7 @@ class CodeGen:
             self.builder.branch(cond_bb)
             self.builder.position_at_end(cond_bb)
             # next(&_it, &e.value) fills the value field in place.
-            more = self.emit_call(next_fn, [it_slot, value_ptr])
+            more = self.emit_call(next_fn, [it_slot, value_ptr], preserves=preserves)
             self.builder.cbranch(more, body_bb, end_bb)
             self.builder.position_at_end(body_bb)
             # The position is claimed as soon as the element is yielded, so a
@@ -4742,8 +5060,10 @@ class CodeGen:
             line: Source line for diagnostics.
 
         Returns:
-            A ``(function, element type)`` pair: the instantiated ``next`` and
-            the element type it yields (its out-parameter's pointee).
+            A ``(function, element type, preserves)`` triple: the instantiated
+            ``next``, the element type it yields (its out-parameter's
+            pointee), and whether its write-effect bit is clear (so calling
+            it preserves projection facts; see :meth:`emit_call`).
 
         Raises:
             LangError: When no viable ``next`` exists, the choice is ambiguous,
@@ -4781,7 +5101,11 @@ class CodeGen:
             # `_next` is resolved here, outside gen_call, so the deprecation
             # check must ride along (`_it` goes through gen_call as usual).
             self.warn_deprecated(next_name, self.deprecated_syms.get(symbol), line)
-            return self.funcs[symbol], params[1].pointee
+            return (
+                self.funcs[symbol],
+                params[1].pointee,
+                symbol in self.fact_safe_syms,
+            )
         candidates = list(self.templates.get(next_name, []))
         static = self.static_templates.get(key)
         if static is not None:
@@ -4826,7 +5150,7 @@ class CodeGen:
                 f"{next_name!r} second parameter must be an out-pointer", line
             )
         self.warn_deprecated(next_name, func.deprecated_msg, line)
-        return fn, params[1].pointee
+        return fn, params[1].pointee, self.effect_bits.get(id(func)) is False
 
     def gen_cond(self, expr) -> ir.Value:
         """Evaluate an expression as an ``i1`` condition.
@@ -6729,27 +7053,34 @@ class CodeGen:
             self.funcs[symbol], function_type(ret, tuple(params), variadic)
         )
 
-    def emit_call(self, callee, args: list) -> ir.Value:
-        """Emit a call instruction and drop every projection fact.
+    def emit_call(self, callee, args: list, preserves: bool = False) -> ir.Value:
+        """Emit a call instruction, dropping projection facts unless proven safe.
 
         A callee can reach any non-local memory -- a global pointer, an
         address that escaped earlier, its own statics -- so a store to a
         guarded field cannot be ruled out: every ``narrowed_paths`` fact
-        dies at the call. Name facts are untouched (an eligible local is
-        unreachable from a callee; the ``mut``-lend channel invalidates at
-        its own site). Every runtime call funnels through here -- direct,
-        function-pointer, generic-instance, the ``for ... in`` protocol's
-        ``_next``, ``@asm``, and the ``va_*`` intrinsics.
+        dies at the call, **unless** the write-effect analysis proved the
+        callee transitively write-free (``preserves``; see
+        :meth:`analyze_write_effects`). Name facts are untouched either way
+        (an eligible local is unreachable from a callee; the ``mut``-lend
+        channel invalidates at its own site). Every runtime call funnels
+        through here -- direct, function-pointer, generic-instance, the
+        ``for ... in`` protocol's ``_next``, ``@asm``, and the ``va_*``
+        intrinsics; only the resolved-callee paths (direct, generic, and
+        protocol ``_next``) ever pass ``preserves``.
 
         Args:
             callee: The LLVM function or callable value.
             args: The marshalled LLVM argument values.
+            preserves: The callee's write-effect bit is proven clear, so
+                projection facts survive the call.
 
         Returns:
             The call instruction's result value.
         """
         result = self.builder.call(callee, args)
-        self.narrowed_paths.clear()
+        if not preserves:
+            self.narrowed_paths.clear()
         return result
 
     def gen_direct_call(self, expr: Call, symbol: str) -> TypedValue:
@@ -6786,7 +7117,12 @@ class CodeGen:
             collecting=self.collecting_params(params)
             and len(params) - 1 not in mut,
         )
-        result = TypedValue(self.emit_call(self.funcs[symbol], args), ret)
+        result = TypedValue(
+            self.emit_call(
+                self.funcs[symbol], args, preserves=symbol in self.fact_safe_syms
+            ),
+            ret,
+        )
         if symbol in self.noreturn_syms:
             # The callee never returns: terminate the block, so the statement
             # diverges (no dummy return needed past it, dead code after it is
@@ -7509,11 +7845,15 @@ class CodeGen:
             )
         # Lending the storage as mut lets the callee store null through the
         # reference: any flow-narrowed fact for the name dies here, with
-        # every projection fact rooted at it (redundant with the blanket
-        # call kill, but keeps point invalidation uniform). The point
-        # invalidation is sound because & of a mut parameter is banned and a
-        # function with mut parameters cannot become a function value, so the
-        # callee cannot leak the address past the call.
+        # every projection fact rooted at it. This point kill is load-bearing
+        # for the lent base: a mut callee writes through the hidden
+        # reference, so its write-effect bit is set and the call kills all
+        # path facts anyway today -- but the lend itself is the mut hand-off,
+        # and the point invalidation must not depend on the blanket kill
+        # staying blanket. The point invalidation is sound because & of a mut
+        # parameter is banned and a function with mut parameters cannot
+        # become a function value, so the callee cannot leak the address past
+        # the call.
         if isinstance(arg_expr, Var):
             self.narrowed_nonnull.discard(arg_expr.name)
             self.kill_paths_rooted(arg_expr.name)
@@ -7934,7 +8274,12 @@ class CodeGen:
                     args.append(self.spill_to_temp(tv, p, expr.line, context))
             else:
                 args.append(self.coerce(tv, p, expr.line, context).value)
-        result = TypedValue(self.emit_call(fn, args), ret)
+        result = TypedValue(
+            self.emit_call(
+                fn, args, preserves=self.effect_bits.get(id(func)) is False
+            ),
+            ret,
+        )
         if func.noreturn:
             # The resolved candidate (generic instance or concrete set
             # member) never returns: terminate the block, exactly as in
@@ -8466,6 +8811,10 @@ class CodeGen:
             self.mark_noreturn(fn, func)
             if func.noreturn:
                 self.noreturn_syms.add(mangled)
+            if self.effect_bits.get(id(func)) is False:
+                # The template's write-effect bit is per-template (candidate
+                # union), so every instance of a clear template is clear.
+                self.fact_safe_syms.add(mangled)
             # Register before generating the body so recursive calls resolve
             # (a failed instantiation therefore stays memoized -- harmless
             # while compilation aborts on the first error).

@@ -10,6 +10,32 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Call write-effect analysis** — projection facts (a guarded `b->data`)
+  now survive calls to callees the compiler proves transitively
+  write-free, refining the blanket rule that every call kills every path
+  fact. The proof is a per-function **write-effect bit**, computed
+  bottom-up over the whole program's call graph before any body is
+  emitted: a function is write-free when its body has no through-memory
+  store (`*p = v`, `a[i] = v`, `s.f = v`, compound forms included; the
+  strict v1 rule counts a store to the function's own local struct too),
+  no assignment to a `mut` parameter or a global, nothing opaque
+  (`@asm`, a call through a function-pointer value, `va_start`/`va_end`,
+  a bodyless callee such as `@extern` or an unpaired prototype, or a
+  protocol/slice `for` loop; the builtin `range`/`enumerate` counting
+  loops are exempt), and only write-free callees. Call edges union every
+  same-name candidate, a generic template takes one bit for all its
+  instances, and recursion resolves by an optimistic-clear fixpoint, so
+  a write-free cycle stays clear; at an emission site where resolution
+  picked the winner, the winner's own bit is consulted. The upshot: a
+  pure math leaf between a null guard and a `@nonnull` call no longer
+  forces a rebind or a `!` hatch, while `println` (wrapping `@extern
+  printf`) still kills. Name facts are unaffected (they always survived
+  calls), loop-entry and store kills are unchanged, and
+  `let q = b->data;` remains the idiom for crossing a writing call or a
+  loop. See [@nonnull parameters](docs/language.md#nonnull-parameters)
+  and
+  [examples/functions/nonnull_projections.mc](examples/functions/nonnull_projections.mc).
+
 - **`-Wdead-code`** — a new opt-in warning class reporting the statements
   the generator has always silently dropped as unreachable: everything
   after a `return`, `break`, `continue`, `unreachable`, or `emit`, after a

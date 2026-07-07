@@ -1450,14 +1450,18 @@ def test_projection_fact_dies_on_compound_member_store():
         )
 
 
-def test_projection_fact_dies_at_any_call():
-    # A callee can reach the field through any escaped or global pointer.
+def test_projection_fact_dies_at_writing_call():
+    # A writing callee can reach the field through any escaped or global
+    # pointer, so its call still kills. (A callee the write-effect analysis
+    # proves write-free preserves instead: see the write-effect battery
+    # below.)
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
-            BUF + FIRST + "fn noop() { }\n"
+            BUF + FIRST + "@static let g: int32 = 0;\n"
+            "fn bump() { g = 1; }\n"
             "fn peek(b: Buf*) -> int32 {\n"
             "    if (b == null or b->data == null) { return 0; }\n"
-            "    noop();\n"
+            "    bump();\n"
             "    return first(b->data);\n"
             "}\n"
             "fn main() -> int32 { return 0; }"
@@ -1481,11 +1485,13 @@ def test_projection_before_call_argument_accepted():
 
 def test_projection_after_call_argument_rejected():
     # In the other order g() runs first and may null the field before the
-    # projection is loaded.
+    # projection is loaded. (g writes a global so its call kills; a
+    # write-free g would preserve the fact in either order.)
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
             BUF + "fn two(n: int32, @nonnull p: int32*) -> int32 { return *p + n; }\n"
-            "fn g() -> int32 { return 1; }\n"
+            "@static let counter: int32 = 0;\n"
+            "fn g() -> int32 { counter = counter + 1; return 1; }\n"
             "fn main() -> int32 {\n"
             "    let x: int32 = 4;\n"
             "    let b = struct Buf { data = &x };\n"
@@ -1514,7 +1520,8 @@ def test_projection_after_call_argument_rejected_generic():
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
             BUF + "fn two<T>(n: int32, @nonnull p: T*) -> T { return *p + n; }\n"
-            "fn g() -> int32 { return 1; }\n"
+            "@static let counter: int32 = 0;\n"
+            "fn g() -> int32 { counter = counter + 1; return 1; }\n"
             "fn main() -> int32 {\n"
             "    let x: int32 = 4;\n"
             "    let b = struct Buf { data = &x };\n"
@@ -1643,6 +1650,285 @@ def test_assign_to_aliased_struct_kills_path_facts():
             "    return 0;\n"
             "}"
         )
+
+
+# ------------------------------------------------- call write-effect analysis
+#
+# The blanket call kill is refined by a per-function, transitive write-effect
+# bit: a call to a callee the compiler proves transitively write-free (no
+# through-memory stores, no mut-parameter or global writes, nothing opaque,
+# all callees likewise) preserves projection facts; everything else keeps the
+# kill. Name facts always survived calls and are unaffected throughout.
+
+
+def test_pure_leaf_call_preserves_projection_fact():
+    # The motivating pair: the fact survives a call to a pure math leaf and
+    # then feeds a second @nonnull call -- no rebinding, no hatch.
+    assert run(
+        BUF + FIRST + "fn leaf(n: int32) -> int32 { return n * 2; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 21;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    let n = leaf(1);\n"
+        "    return first(b.data) + n;\n"
+        "}"
+    ) == 23
+
+
+def test_pure_generic_leaf_call_preserves_projection_fact():
+    # A generic instance takes its template's (per-template) bit.
+    assert run(
+        BUF + FIRST + "fn same<T>(x: T) -> T { return x; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 5;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    let n = same(2);\n"
+        "    return first(b.data) + n;\n"
+        "}"
+    ) == 7
+
+
+def test_println_call_kills_projection_fact():
+    # println wraps @extern printf: opaque, transitively -- the roadmap's
+    # canonical const-laundering case.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        run(
+            'import "std";\n'
+            + BUF + FIRST + "fn peek(b: Buf*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            '    println("checking");\n'
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_transitive_taint_through_clean_intermediary():
+    # middle() performs no write of its own, but calls a global-writing
+    # leaf: the bit propagates bottom-up through the call graph.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "@static let g: int32 = 0;\n"
+            "fn deep() { g = 1; }\n"
+            "fn middle() -> int32 { deep(); return 0; }\n"
+            "fn peek(b: Buf*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    middle();\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_write_free_recursion_cycle_preserves():
+    # The fixpoint is optimistic-clear: a mutually recursive, write-free
+    # cycle settles clear rather than defaulting to tainted.
+    assert run(
+        BUF + FIRST + "fn even(n: int32) -> int32 {\n"
+        "    if (n == 0) { return 1; }\n"
+        "    return odd(n - 1);\n"
+        "}\n"
+        "fn odd(n: int32) -> int32 {\n"
+        "    if (n == 0) { return 0; }\n"
+        "    return even(n - 1);\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 4;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    let e = even(6);\n"
+        "    return first(b.data) + e;\n"
+        "}"
+    ) == 5
+
+
+def test_tainted_recursion_cycle_kills():
+    # A base condition anywhere in the cycle taints the whole cycle.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "@static let g: int32 = 0;\n"
+            "fn ping(n: int32) { if (n > 0) { pong(n - 1); } }\n"
+            "fn pong(n: int32) { g = 1; if (n > 0) { ping(n - 1); } }\n"
+            "fn peek(b: Buf*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    ping(2);\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_mut_param_assignment_taints():
+    # `n = 0` on a mut parameter stores through the hidden reference into
+    # the caller's storage: a swap-shaped helper is never write-free.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn reset(mut n: int32) { n = 0; }\n"
+            "fn peek(b: Buf*) -> int32 {\n"
+            "    let k: int32 = 1;\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    reset(k);\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_store_inside_defer_taints():
+    # A defer body is an ordinary child of the function's AST: the store
+    # through q counts even though it runs at scope exit.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn sneaky(q: int32*) { defer { *q = 1; } }\n"
+            "fn peek(b: Buf*, q: int32*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    sneaky(q);\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_candidate_union_taints_caller_of_mixed_set():
+    # The analysis is syntactic, so a call edge unions every same-name
+    # candidate: wrap() would resolve h(1) to the write-free template, but
+    # the tainted concrete overload sharing the name taints wrap anyway.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "@static let g: int32 = 0;\n"
+            "fn h<T>(x: T) -> T { return x; }\n"
+            "fn h(x: int32, y: int32) -> int32 { g = 1; return x; }\n"
+            "fn wrap() -> int32 { return h(1); }\n"
+            "fn peek(b: Buf*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    wrap();\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_resolved_call_site_uses_winning_candidate_bit():
+    # At an emission site the winner is in hand, so the same mixed set is
+    # judged precisely: h(1) resolves to the write-free template and the
+    # fact survives (contrast the union-tainted wrap() above).
+    assert run(
+        BUF + FIRST + "@static let g: int32 = 0;\n"
+        "fn h<T>(x: T) -> T { return x; }\n"
+        "fn h(x: int32, y: int32) -> int32 { g = 1; return x; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 9;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    let n = h(1);\n"
+        "    return first(b.data) + n;\n"
+        "}"
+    ) == 10
+
+
+def test_bodyless_prototype_call_kills():
+    # An unpaired prototype (an imported .mci stub's shape) has no body to
+    # analyze: bodyless means opaque, exactly like @extern.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn helper(n: int32) -> int32;\n"
+            "fn peek(b: Buf*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    helper(1);\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_paired_prototype_takes_definition_bit():
+    # A forward declaration pairs with its same-signature definition; the
+    # definition's (clear) bit stands in for the prototype.
+    assert run(
+        BUF + FIRST + "fn leaf(n: int32) -> int32;\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 3;\n"
+        "    let b = struct Buf { data = &x };\n"
+        "    if (b.data == null) { return 0; }\n"
+        "    let n = leaf(1);\n"
+        "    return first(b.data) + n;\n"
+        "}\n"
+        "fn leaf(n: int32) -> int32 { return n + 1; }"
+    ) == 5
+
+
+def test_function_pointer_call_still_kills():
+    # An indirect call drops the callee's identity -- and with it the bit:
+    # even a pointer to a proven write-free function kills.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "fn pure(n: int32) -> int32 { return n; }\n"
+            "fn main() -> int32 {\n"
+            "    let x: int32 = 1;\n"
+            "    let b = struct Buf { data = &x };\n"
+            "    let fp: fn(int32) -> int32 = pure;\n"
+            "    if (b.data == null) { return 0; }\n"
+            "    fp(1);\n"
+            "    return first(b.data);\n"
+            "}"
+        )
+
+
+def test_calling_struct_default_taints_literal():
+    # A field default is evaluated at each application site, outside the
+    # body's own AST: once a call-bearing default exists in the program,
+    # a struct literal counts as opaque.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "@static let g: int32 = 0;\n"
+            "fn next_id() -> int32 { g = g + 1; return g; }\n"
+            "struct Tagged { id: int32 = next_id(); }\n"
+            "fn peek(b: Buf*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    let t = struct Tagged { };\n"
+            "    return first(b->data) + t.id;\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_protocol_for_loop_taints():
+    # A protocol `for` lowers to <struct>_it/<struct>_next calls whose
+    # names the syntactic pass cannot see: the looping caller is opaque,
+    # and a call to it kills. (The builtin range loop is exempt: see
+    # test_pure_leaf_call_preserves_projection_fact's leaf shape plus the
+    # range-based loops throughout this file.)
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            BUF + FIRST + "struct box { n: int32; }\n"
+            "fn box_it(b: box*) -> int32 { return 0; }\n"
+            "fn box_next(it: int32*, out: int32*) -> bool { return false; }\n"
+            "fn walk(bx: box*) { for v in *bx { } }\n"
+            "fn peek(b: Buf*, bx: box*) -> int32 {\n"
+            "    if (b == null or b->data == null) { return 0; }\n"
+            "    walk(bx);\n"
+            "    return first(b->data);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_name_fact_survives_writing_call():
+    # The refinement never touches name facts: an eligible local is
+    # unreachable from any callee, writing or not.
+    assert run(
+        FIRST + "@static let g: int32 = 0;\n"
+        "fn bump() { g = 1; }\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 6;\n"
+        "    let p: int32* = &x;\n"
+        "    if (p == null) { return 0; }\n"
+        "    bump();\n"
+        "    return first(p);\n"
+        "}"
+    ) == 6
 
 
 # ------------------------------------------------ projection fact consumers

@@ -422,10 +422,29 @@ never elided or reordered.
 Because the field itself lives in memory that other code can reach, a
 projection fact dies far more eagerly than a name fact:
 
-- **at every function call**: any callee could store to the field
-  through an escaped or global pointer (this includes calls in a later
-  argument: `f(b->data, g())` compiles, since arguments check and load
-  left to right, while `f(g(), b->data)` does not);
+- **at every function call, unless the compiler proves the callee,
+  transitively, writes no non-local memory**: any writing callee could
+  store to the field through an escaped or global pointer. The proof is
+  a per-function, whole-program **write-effect bit**, computed
+  bottom-up over the call graph before bodies are emitted: a function
+  is write-free when its body has no through-memory store (`*p = v`,
+  `a[i] = v`, `s.f = v`, compound forms included -- a store to its own
+  local struct counts too, under the strict rule), no assignment to a
+  `mut` parameter or a global, nothing opaque (`@asm`, a call through
+  a function-pointer value, `va_start`/`va_end`, a bodyless callee
+  such as `@extern` or an unpaired prototype, a protocol/slice
+  `for` loop -- the builtin `range`/`enumerate` counting loops are
+  fine -- and, in a program where some struct declares a call-bearing
+  field default, any struct literal or bare annotated `let`, since
+  defaults evaluate at the application site), and every callee is
+  likewise write-free (candidate sets union
+  over a name's overloads, and a generic template takes one bit for
+  all its instances; write-free recursion cycles resolve as
+  write-free). So a pure math leaf no longer kills, while `println`
+  still does (it wraps `@extern printf`). Calls in a later argument
+  follow the same rule: `f(b->data, g())` always compiles, since
+  arguments check and load left to right, while `f(g(), b->data)`
+  compiles only when `g` is proven write-free;
 - **at every through-memory store**: `*p = ...`, `arr[i] = ...`, and
   `s.f = ...` (any base, any field: a write through one base may alias
   another's field, and a union member store hits its siblings), plus
@@ -440,11 +459,13 @@ One asymmetry in guard chains: when a *later* operand of the chain can
 call (`if (b->data != null and check())`), the projection fact does not
 form, because `check()` runs after the null test and could null the
 field before the branch; a bare local has no such window, so name facts
-still form there. Taking `&b->data` is not itself an event (unlike `&p`
-for a name fact): only an actual aliasing write can null the field, and
-every channel for one (a store or a call) already kills the fact.
+still form there. This formation ban is syntactic and does not consult
+the write-effect bit -- a write-free `check()` still blocks formation.
+Taking `&b->data` is not itself an event (unlike `&p` for a name
+fact): only an actual aliasing write can null the field, and every
+channel for one (a store or a killing call) already drops the fact.
 
-Where a checked field must cross a call or a loop, bind it:
+Where a checked field must cross a writing call or a loop, bind it:
 `let q = b->data;` under the guard seeds a *name* fact for `q` that
 survives both, and `b->data!` remains the explicit hatch.
 

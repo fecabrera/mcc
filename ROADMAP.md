@@ -1156,21 +1156,34 @@ already do).
           (`a->xs[0]`), global bases, and the blanket call kill's
           refinement (the item below); implemented, see
           [@nonnull parameters](docs/language.md#nonnull-parameters)
-    - [ ] call write-effect analysis — refine projection facts' blanket
+    - [x] call write-effect analysis — refine projection facts' blanket
           rule above (every call kills all path facts) with a
           per-function, transitive **write-effect bit**: a call to a
           bit-clear callee preserves path facts, everything else keeps
           the shipped kill. A function's bit is set if it performs any
           through-memory store (the `StoreDeref`/`StoreIndex`/
           `StoreMember` statement forms or their compound-assignment
-          arms), writes any global, calls anything opaque (`@extern`,
-          `@asm`, a call through a function-pointer value), or calls a
+          arms — the strict rule shipped in v1: a store to the
+          function's own local struct counts too), assigns a `mut`
+          parameter (a store through the hidden reference into the
+          caller's storage) or a global, calls anything opaque
+          (`@extern`, `@asm`, a call through a function-pointer value,
+          the `va_*` intrinsics, a bodyless prototype, or a
+          protocol/slice `for` loop, whose `_it`/`_next` callees a
+          syntactic pass cannot name — the builtin `range`/`enumerate`
+          counting loops emit no call and are exempt), or calls a
           function whose bit is set; computed bottom-up over the whole
           program's call graph (whole-program compilation makes this
           closed-world, the same property the projection kills already
-          lean on), recursion cycles resolving conservatively (assume
-          set unless a fixpoint proves otherwise), and generic
-          functions taking their bit per monomorphized instance.
+          lean on), recursion cycles resolving by an optimistic-clear
+          least fixpoint (a write-free cycle stays clear; any base
+          condition taints its whole cycle), call edges unioning every
+          same-name candidate (templates, overloads, concrete and
+          `@static` declarations), and generic functions taking their
+          bit per-template with candidate-union in v1, a per-instance
+          refinement if measurement demands it. At an emission site
+          where resolution already picked the winner (direct, generic,
+          protocol `_next`), the winner's own bit is consulted.
           Parameter signatures can never be the trigger, recorded here
           so `const`-argument-based skipping is not re-proposed:
           (1) a path fact lives in the struct's storage (`a->ptr`
@@ -1190,7 +1203,21 @@ already do).
           math helper stops killing. Name facts are unaffected either
           way (they already survive calls), and `let q = a->ptr;`
           remains the practical idiom for carrying a checked field
-          across consecutive calls meanwhile
+          across writing calls and loops; implemented, see
+          [@nonnull parameters](docs/language.md#nonnull-parameters).
+          Recorded follow-ups: (1) the **two-effect refinement** —
+          split the strict bit so only caller-reachable writes count
+          (`mut`-parameter, global, and through-pointer stores), while
+          writes to a function's own locals stay clear. Pre-measured
+          delta: under the strict rule 20/106 libmc functions come out
+          clear but only ~6% of libmc-internal call sites preserve
+          (vs ~39% of functions and ~19% of sites in example code);
+          the two-effect rule lifts that to ~27% usable functions and
+          ~15% of libmc sites, unlocking the hashing chain and the
+          getters. (2) a `.mci` effect-bit — a supplier-promise
+          annotation (`@pure`-shaped, per the annotation taxonomy) so
+          an imported stub's prototypes can carry a clear bit instead
+          of reading as bodyless/opaque
     - [ ] first-class `T!` type — non-null on return types, locals, struct
           fields, and function-pointer types, which needs a real distinct type
           rather than a per-binding fact (a larger blast radius). Optional and

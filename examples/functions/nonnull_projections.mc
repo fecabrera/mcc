@@ -6,9 +6,10 @@ import "std";
 // postfix `!` assertion. The fact is keyed by the access path, not by its
 // spelling: `(*b).data` and `b->data` are one fact, and deeper paths like
 // `o->buf->data` prove the same way. Because the field itself lives in
-// memory that other code can reach, a projection fact dies far more eagerly
-// than a name fact; binding the field to a local is the idiom that carries
-// the proof across calls and loops.
+// memory that other code can reach, a projection fact dies more eagerly
+// than a name fact: stores, loops, and calls that might write memory all
+// kill it. Calls the compiler proves write-free are the exception, shown
+// below; binding the field to a local is the idiom everywhere else.
 // Prerequisites: nonnull.mc, nonnull_narrowing.mc, nonnull_loops.mc, and
 // struct field access (types/structs.mc).
 struct buffer {
@@ -39,27 +40,58 @@ fn read(b: struct buffer*) -> int32 {
         return -1;
     }
 
-    // A projection fact dies at EVERY function call: any callee could reach
-    // the field through an escaped or global pointer and null it. (It also
-    // dies at every through-memory store such as `*p = v`, `a[i] = v`, or
-    // `s.f = v`, wholesale at loop entry, and when the base is reassigned,
-    // shadowed, or lent as a mut argument.) So the first crossing below is
-    // fine, and a second would not be:
-    let a = first(b->data);        // ok: the fact is alive at this call
-    // return a + first(b->data); // error: cannot pass a possibly-null
-    //                            // pointer (the call above killed the fact)
-    return a;
+    // Calls used to kill every projection fact, since any callee could reach
+    // the field through an escaped or global pointer and null it. Now the
+    // compiler computes a per-function write effect, transitively through
+    // the call graph: a call to a callee proven write-free preserves
+    // projection facts, and every other call still kills them. first's whole
+    // body is `return *p;`, a load and no store, so it is write-free and the
+    // guarded field crosses it as many times as needed:
+    let a = first(b->data);    // ok: the fact is alive at this call
+    return a + first(b->data); // still ok: the write-free call preserved it
 }
 
-// The idiom for a checked field that must cross calls or loops: bind it
-// while the fact is alive. `let q = b->data;` under the guard seeds a *name*
-// fact for q (see nonnull_narrowing.mc), and name facts survive calls and
-// any loop that leaves q alone (see nonnull_loops.mc).
+// "Write-free" is strict and transitive. A function is tainted by any
+// through-memory store (`*p = v`, `a[i] = v`, `s.f = v`, or their compound
+// forms; even a store to the function's own local struct counts), by
+// assigning a mut parameter or a global, by anything opaque (@asm, a call
+// through a function-pointer value, va_start, a bodyless @extern callee, a
+// `for ... in` protocol loop; the builtin range/enumerate counting loops are
+// fine), and by calling any name with a tainted same-name candidate. tally
+// writes a global, so calling it kills the fact. println is the same story:
+// it bottoms out in @extern printf.
+@static let calls: int32 = 0;
+
+fn tally() -> int32 {
+    calls += 1;
+    return calls;
+}
+
+fn audit(b: struct buffer*) -> int32 {
+    if (b == null or b->data == null) {
+        return -1;
+    }
+    let a = first(b->data);       // ok: the fact is alive at this call
+    let n = tally();              // a writing call: the fact dies here
+    // return a + n + first(b->data); // error: cannot pass a possibly-null
+    //                                // pointer (tally() killed the fact)
+    return a + n;
+}
+
+// The idiom for a checked field that must cross a writing call or a loop:
+// bind it while the fact is alive. `let q = b->data;` under the guard seeds
+// a *name* fact for q (see nonnull_narrowing.mc), and name facts survive
+// every call and any loop that leaves q alone (see nonnull_loops.mc). Loops
+// are the sharper motivation now: loop entry still drops projection facts
+// wholesale, so `first(b->data)` inside this loop would not compile even
+// though first is write-free. (A projection fact also still dies at the
+// caller's own through-memory stores and when the base is reassigned,
+// shadowed, or lent as a mut argument; only the call kill was refined.)
 fn sum(b: struct buffer*) -> int32 {
     if (b == null or b->data == null) {
         return -1;
     }
-    let q = b->data;         // bound before any call, so q starts proven
+    let q = b->data;         // bound while the fact is alive, so q starts proven
     let total: int32 = 0;
     let i: int32 = 0;
     while (i < b->size) {
@@ -76,6 +108,7 @@ fn main() -> int32 {
 
     println("peek(buf) = %d, peek(none) = %d", peek(buf), peek(none));
     println("read(&buf) = %d, read(&none) = %d", read(&buf), read(&none));
+    println("audit(&buf) = %d, audit(&none) = %d", audit(&buf), audit(&none));
     println("sum(&buf) = %d", sum(&buf));
     return 0;
 }
@@ -87,9 +120,12 @@ fn main() -> int32 {
 // and a @volatile owner anywhere along the path never does either (the field
 // could change between the check and the use). A guard whose later operand
 // contains a call, as in `if (b->data != null and check())`, forms no fact
-// for the same reason calls kill facts: check() runs after the null test and
-// could null the field before the branch. Where no guard fits, `b->data!` is
-// still the hatch (see nonnull_assert.mc).
+// even when check() is provably write-free: formation is a syntactic rule,
+// conservative about anything that runs after the null test. The write-effect
+// analysis refines only where facts die at calls, never where they form.
+// Where no guard fits, `b->data!` is still the hatch (see nonnull_assert.mc).
 // See also: nonnull_narrowing.mc for the guard shapes and name facts;
 // nonnull_loops.mc for name facts crossing loops; nonnull_assert.mc for the
-// `!` escape hatch; types/structs.mc for struct field access.
+// `!` escape hatch; memory/nonnull_heap_buffers.mc for a guarded field
+// surviving the stdlib's write-free crc32; types/structs.mc for struct
+// field access.
