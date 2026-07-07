@@ -475,6 +475,12 @@ class CodeGen:
         # by parameter patterns (e.g. hash<T>(T) vs hash<T>(T*)).
         self.templates: dict[str, list[Func]] = {}
         self.template_bases: dict[int, str] = {}  # id(Func) -> mangle base
+        # Closed type groups (`fn f<T: int64 | int32>`), resolved once at the
+        # template's declaration: id(Func) -> {type parameter: member types}.
+        # group_templates lists every grouped template (@static ones included)
+        # for the eager end-of-codegen member check.
+        self.group_types: dict[int, dict[str, list[LangType]]] = {}
+        self.group_templates: list[Func] = []
         # (id(template Func), bound types) -> mangled instance name
         self.instances: dict[tuple[int, tuple[str, ...]], str] = {}
         self.struct_templates: dict[str, StructDecl] = {}
@@ -940,7 +946,7 @@ class CodeGen:
         self.used_symbols.add(candidate)
         return candidate
 
-    def template_base(self, func: Func) -> str:
+    def template_base(self, func: Func, groups: bool = True) -> str:
         """Spell a generic template's order-independent symbol base.
 
         The base is derived from the declaration alone --
@@ -955,18 +961,24 @@ class CodeGen:
 
         A defaulted parameter spells ``$i = <default>`` with the default
         rendered through the same substitution (defaults may reference
-        earlier parameters). Patterns are the source spelling of each value
-        parameter's type; a ``mut`` parameter keeps its marker (``mut $0``)
-        because a same-shape mut/by-value template pair is a genuine,
-        resolvable overload -- an rvalue argument filters out the mut
-        candidate -- unlike the concrete case, where the pair is uncallable
-        and banned. ``const`` markers and the return type never distinguish
-        template overloads (the concrete mangle's rules), so neither
-        appears -- two templates of one name spelling one base are
-        duplicates, caught at declaration.
+        earlier parameters), and a closed type group spells
+        ``$i: member|member`` before the default: two same-pattern templates
+        with disjoint groups are distinct, resolvable overloads, so the
+        group is part of the template's identity and collision key. Patterns
+        are the source spelling of each value parameter's type; a ``mut``
+        parameter keeps its marker (``mut $0``) because a same-shape
+        mut/by-value template pair is a genuine, resolvable overload -- an
+        rvalue argument filters out the mut candidate -- unlike the concrete
+        case, where the pair is uncallable and banned. ``const`` markers and
+        the return type never distinguish template overloads (the concrete
+        mangle's rules), so neither appears -- two templates of one name
+        spelling one base are duplicates, caught at declaration.
 
         Args:
             func: The generic function template.
+            groups: When ``False``, omit the type groups from the spelling --
+                the group-blind *pattern* base the declare-time overlap check
+                compares (see :meth:`check_group_overlap`).
 
         Returns:
             The mangle base, e.g. ``alloc<$0>(uint64)`` or ``hash<$0>($0*)``.
@@ -988,16 +1000,221 @@ class CodeGen:
 
         head = []
         for tparam in func.type_params:
+            piece = index[tparam]
+            members = func.type_param_groups.get(tparam)
+            if groups and members:
+                piece += ": " + "|".join(str(subst(m)) for m in members)
             default = func.type_param_defaults.get(tparam)
-            if default is None:
-                head.append(index[tparam])
-            else:
-                head.append(f"{index[tparam]} = {subst(default)}")
+            if default is not None:
+                piece += f" = {subst(default)}"
+            head.append(piece)
         patterns = ", ".join(
             ("mut " if pname in func.mut_params else "") + str(subst(ptype))
             for pname, ptype in func.params
         )
         return f"{func.name}<{', '.join(head)}>({patterns})"
+
+    def check_group_decl(self, func: Func):
+        """Resolve and validate a template's closed type groups at declaration.
+
+        Each group member must be a resolvable concrete type (the parser
+        already rejected members referencing type parameters; an unknown name
+        errors here), listed once (resolved comparison, so an alias
+        duplicating a member is caught -- the ``case type`` duplicate-arm
+        stance), and a grouped parameter's default must name a member.
+        The resolved groups are cached for the call-site viability filter
+        and the eager end-of-codegen member check; resolving here, where
+        no instantiation's ``type_bindings`` are live, keeps a member name
+        from ever meaning a binding.
+
+        Args:
+            func: The generic template being declared (``current_source`` is
+                already its file, so members may name its private types).
+
+        Raises:
+            LangError: On an unresolvable member, a duplicate member, or a
+                default outside its parameter's group.
+        """
+        if not func.type_param_groups:
+            return
+        resolved: dict[str, list[LangType]] = {}
+        for tparam, members in func.type_param_groups.items():
+            types: list[LangType] = []
+            for ref in members:
+                member = self.lang_type(ref, func.line)
+                if member in types:
+                    raise LangError(
+                        f"duplicate type group member {member} for type "
+                        f"parameter {tparam} of {func.name!r}",
+                        func.line,
+                    )
+                types.append(member)
+            resolved[tparam] = types
+            default = func.type_param_defaults.get(tparam)
+            if default is not None:
+                bound = self.lang_type(default, func.line)
+                if bound not in types:
+                    raise LangError(
+                        f"default for type parameter {tparam} of "
+                        f"{func.name!r} must be a member of its type group "
+                        f"({' | '.join(str(m) for m in types)}), got {bound}",
+                        func.line,
+                    )
+        self.group_types[id(func)] = resolved
+        self.group_templates.append(func)
+
+    def check_group_overlap(self, func: Func, base: str, overloads: list[Func]):
+        """Reject same-pattern templates whose type groups share a member.
+
+        Same-pattern templates with **disjoint** groups are a resolvable
+        overload set -- deduction plus the group filter picks one -- so they
+        deliberately pass the duplicate-base check (the group is in the
+        base). But a shared member leaves a deduction both accept, at one
+        rank tier and specificity: an ambiguity at every such call, so it
+        collides at declaration, cross-module like the duplicate rule. Two
+        templates whose groups constrain *different* parameters overlap too
+        (each leaves the other's parameter unconstrained). A fully unbounded
+        same-pattern template beside bounded ones is fine -- it ranks a tier
+        below, catching whatever the groups exclude.
+
+        Args:
+            func: The template being declared (its groups already resolved).
+            base: ``func``'s full symbol base, for the error message.
+            overloads: The already-declared same-name templates.
+
+        Raises:
+            LangError: When a same-pattern sibling's groups overlap
+                ``func``'s.
+        """
+        if not func.type_param_groups:
+            return
+        pattern = self.template_base(func, groups=False)
+        groups = self.group_types[id(func)]
+        for prior in overloads:
+            if not prior.type_param_groups:
+                continue
+            if self.template_base(prior, groups=False) != pattern:
+                continue
+            prior_groups = self.group_types[id(prior)]
+            # The pair is resolvable only if some parameter position is
+            # constrained to disjoint sets by both; an unbounded position
+            # (no group) constrains nothing, so it intersects everything.
+            for own, other in zip(func.type_params, prior.type_params):
+                mine, theirs = groups.get(own), prior_groups.get(other)
+                if mine is None or theirs is None:
+                    continue
+                if not any(m == t for m in mine for t in theirs):
+                    break  # disjoint here: every call resolves
+            else:
+                raise LangError(
+                    f"function '{base}' overlaps "
+                    f"'{self.template_bases[id(prior)]}'; same-pattern "
+                    "overloads need disjoint type groups",
+                    func.line,
+                )
+
+    def group_violation(
+        self, func: Func, bindings: dict[str, LangType]
+    ) -> "tuple[LangType, str] | None":
+        """Check a candidate's deduced bindings against its type groups.
+
+        Deduction is unchanged by groups; this is the post-deduction
+        viability filter. A ``const``-qualified binding is compared bare
+        too, matching how unification sheds the qualifier.
+
+        Args:
+            func: The candidate template.
+            bindings: The deduced ``{type parameter: type}`` map (may be
+                partial during a lenient trial; unbound parameters pass).
+
+        Returns:
+            ``None`` when every grouped parameter's binding is a member,
+            else the offending bound type and its group's spelling (for the
+            not-in-group error).
+        """
+        groups = self.group_types.get(id(func))
+        if not groups:
+            return None
+        for tparam in func.type_params:
+            members = groups.get(tparam)
+            bound = bindings.get(tparam)
+            if members is None or bound is None:
+                continue
+            bare = strip_const(bound)
+            if all(m != bound and m != bare for m in members):
+                return bound, " | ".join(str(m) for m in members)
+        return None
+
+    @staticmethod
+    def group_error(name: str, bound: LangType, group: str) -> str:
+        """The error message for a deduced type outside a closed type group."""
+        return f"{bound} is not in the type group of {name!r} ({group})"
+
+    def group_member_combos(self, func: Func) -> list[dict[str, LangType]]:
+        """Enumerate a grouped template's eager-check binding combinations.
+
+        The cartesian product over the grouped parameters' members, with the
+        remaining parameters filled from their declared defaults. A template
+        with a non-grouped, non-defaulted parameter cannot be enumerated --
+        that parameter has no closed set of types -- so it is checked at its
+        call sites only, like an ordinary generic.
+
+        Args:
+            func: A template with at least one closed type group.
+
+        Returns:
+            One complete ``{type parameter: type}`` map per combination
+            (empty when the template cannot be enumerated).
+        """
+        groups = self.group_types[id(func)]
+        combos: list[dict[str, LangType]] = [{}]
+        for tparam in func.type_params:
+            members = groups.get(tparam)
+            if members is None:
+                if tparam not in func.type_param_defaults:
+                    return []
+                continue
+            combos = [{**c, tparam: m} for c in combos for m in members]
+        for bindings in combos:
+            self.fill_default_bindings(func, bindings, func.line)
+        return combos
+
+    def eager_group_instances(self) -> bool:
+        """Instantiate every not-yet-checked type-group member combination.
+
+        Group checking is **eager**: at the end of codegen every listed
+        member of every grouped template is instantiated and fully
+        type-checked whether or not it was ever called, so a member the
+        body does not compile for errors at the declaration (the
+        multi-type ``case type`` arm precedent). Never-called member
+        instances are ordinary emitted functions -- dead code the linker
+        strips in object mode, harmless under the JIT. Compiling a member
+        body can box new types (feeding pending generic ``case type``
+        arms), so the caller loops this against
+        :meth:`finalize_generic_arms` until both are quiet.
+
+        Returns:
+            ``True`` when at least one new instance was generated.
+        """
+        progress = False
+        for func in self.group_templates:
+            for bindings in self.group_member_combos(func):
+                key = (
+                    id(func),
+                    tuple(str(bindings[t]) for t in func.type_params),
+                )
+                if key in self.instances:
+                    continue
+                # The instantiation is requested by the declaration itself:
+                # attribute the backtrace note to the template's file/line.
+                outer = self.current_source
+                self.current_source = func.source
+                try:
+                    self.instantiate(func, bindings, func.line)
+                finally:
+                    self.current_source = outer
+                progress = True
+        return progress
 
     def valist(self, line: int) -> LangType:
         """Return the platform's ``va_list`` type, built once per target.
@@ -3034,6 +3251,10 @@ class CodeGen:
                 self.symbol_bases[key] = self.static_base(func.name, func.source)
                 if func.type_params:
                     self.check_template_collecting(func)
+                    # A @static template is file-scoped and never joins an
+                    # overload set, so no overlap check -- but its groups
+                    # still resolve, filter calls, and get the eager check.
+                    self.check_group_decl(func)
                     self.static_templates[key] = func
                     continue
                 symbol = self.symbol_bases[key]
@@ -3072,6 +3293,7 @@ class CodeGen:
                 # one defining module -- as does sharing a name with an
                 # @extern (its C symbol is fixed).
                 self.check_template_collecting(func)
+                self.check_group_decl(func)
                 members = self.concrete_decls.get(func.name)
                 if members:
                     self.check_mixed_set(func, members)
@@ -3106,6 +3328,11 @@ class CodeGen:
                         "differ in parameter patterns",
                         func.line,
                     )
+                # Disjoint type groups make same-pattern templates a
+                # resolvable set (distinct bases above); overlapping ones
+                # would be ambiguous at every shared deduction, so they
+                # collide at declaration, cross-module included.
+                self.check_group_overlap(func, base, overloads)
                 self.template_bases[id(func)] = base
                 overloads.append(func)
                 continue
@@ -3326,8 +3553,15 @@ class CodeGen:
                 self.gen_function(func, self.funcs[symbol], ret, params)
         # Every body is generated, so the boxed-tag registry is complete
         # (modulo what the copies themselves box -- the fixpoint's job):
-        # monomorphize the deferred generic case-type arms.
-        self.finalize_generic_arms()
+        # monomorphize the deferred generic case-type arms, then eagerly
+        # instantiate every closed-type-group member that no call reached.
+        # A member body can box new types (new pending-arm tags) and a new
+        # arm copy can instantiate new generics, so the two finalizers loop
+        # against each other until both are quiet.
+        progress = True
+        while progress:
+            self.finalize_generic_arms()
+            progress = self.eager_group_instances()
         return self.module
 
     def initializer_names_function(self, expr, names: set[str]) -> bool:
@@ -7315,8 +7549,9 @@ class CodeGen:
         generic = self.templates.get(expr.name)
         if generic is not None or expr.name in self.overloads:
             # An overload set -- generic, concrete, or mixed -- resolves in
-            # one order (viability, then the (is-concrete, specificity)
-            # rank) through the same pre-evaluate path. A mixed set's
+            # one order (viability, group filter, then the
+            # (tier, specificity) rank) through the same pre-evaluate path.
+            # A mixed set's
             # concrete side is either the mangled set or a single plain
             # function sharing the name (same module, by construction).
             candidates = list(generic) if generic is not None else []
@@ -8572,10 +8807,17 @@ class CodeGen:
             # An rvalue argument (no address was formed) rules out any
             # candidate that is mut at its position; an lvalue rules nothing
             # out, so a same-shape mut/non-mut pair stays ambiguous.
-            viable, mut_failures = [], []
+            viable, mut_failures, group_failures = [], [], []
             for func in candidates:
                 bindings = self.resolve_bindings(func, expr, arg_tvs, lenient=True)
                 if bindings is None:
+                    continue
+                # The post-deduction group filter: a candidate whose group
+                # excludes the deduced binding is simply not viable -- this
+                # is what partitions same-pattern disjoint-group templates.
+                violation = self.group_violation(func, bindings)
+                if violation is not None:
+                    group_failures.append(violation)
                     continue
                 unaddressed = [i for i in self.mut_indices(func) if i not in addrs]
                 if unaddressed:
@@ -8593,6 +8835,14 @@ class CodeGen:
                     # mut position: report that, not a generic mismatch.
                     raise LangError(
                         self.not_assignable(mut_failures[0], expr.name), expr.line
+                    )
+                if len(group_failures) == 1 and not mut_failures:
+                    # Exactly one candidate matched but for the group filter:
+                    # report the deduced type against the group, not a
+                    # generic shape mismatch.
+                    bound, group = group_failures[0]
+                    raise LangError(
+                        self.group_error(expr.name, bound, group), expr.line
                     )
                 arg_types = ", ".join(str(tv.type) for tv in arg_tvs)
                 raise LangError(
@@ -8783,6 +9033,8 @@ class CodeGen:
             )
             if bindings is None:
                 continue
+            if self.group_violation(func, bindings) is not None:
+                continue  # the decayed deduction is outside the group
             params = self.try_param_types(func, bindings)
             if params is None:
                 continue
@@ -9138,14 +9390,20 @@ class CodeGen:
             return True
         return resolved == RAWPTR and is_pointer(peeled)
 
-    def rank(self, func: Func) -> tuple[bool, int]:
-        """An overload candidate's sort key: (is-concrete, specificity).
+    def rank(self, func: Func) -> tuple[int, int]:
+        """An overload candidate's sort key: (tier, specificity).
 
-        The leading tier makes "a fully concrete signature is maximally
-        specific" exactly true: without it, a generic whose effective
-        parameter list is all-concrete (its type parameter appearing only in
-        the return type, or filled by a declared default) would tie an
-        identical concrete overload under the pattern-specificity score.
+        Three tiers: a concrete signature (2) beats a **bounded** generic --
+        one with a closed type group (1) -- which beats an unbounded generic
+        (0). The concrete tier makes "a fully concrete signature is
+        maximally specific" exactly true: without it, a generic whose
+        effective parameter list is all-concrete (its type parameter
+        appearing only in the return type, or filled by a declared default)
+        would tie an identical concrete overload under the
+        pattern-specificity score. The bounded tier extends the same idea a
+        step down: a group is a written, closed commitment to a type set, so
+        it beats the fully open pattern (a bounded candidate whose group
+        excludes the deduced type was already filtered out as non-viable).
         Same-tier candidates fall back to :meth:`specificity`, and an equal
         rank stays the ambiguity error.
 
@@ -9155,7 +9413,13 @@ class CodeGen:
         Returns:
             The sort key, greater meaning preferred.
         """
-        return (not func.type_params, self.specificity(func))
+        if not func.type_params:
+            tier = 2
+        elif func.type_param_groups:
+            tier = 1
+        else:
+            tier = 0
+        return (tier, self.specificity(func))
 
     def specificity(self, func: Func) -> int:
         """Rank an overload by how specific its parameter patterns are.
@@ -9201,7 +9465,17 @@ class CodeGen:
 
         Returns:
             A ``(function, return type, param types)`` tuple for the instance.
+
+        Raises:
+            LangError: When a binding falls outside the parameter's closed
+                type group -- the backstop for every resolution path
+                (single-candidate calls, explicit type arguments, the
+                ``for ... in`` protocol's ``_next``); overload sets filter
+                group violations during candidate trials instead.
         """
+        violation = self.group_violation(func, bindings)
+        if violation is not None:
+            raise LangError(self.group_error(func.name, *violation), line)
         key = (id(func), tuple(str(bindings[t]) for t in func.type_params))
         if key in self.instances:
             mangled = self.instances[key]

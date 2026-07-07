@@ -67,4 +67,5 @@ fn main() -> int32 {
     return 0;
 }
 
-// See also: generics.mc, struct_literals.mc.
+// See also: generics.mc, struct_literals.mc, type_groups.mc (a closed type
+// group composing with a default that must name a group member).

@@ -219,7 +219,8 @@ already do).
         (a struct and its `extends` specializations); the explicit-set form,
         once sketched here as `T in (t1, t2, ...)`, is settled under a
         different spelling as the closed-type-groups sub-item below
-    - [ ] closed type groups — a pipe-separated closed group of types after
+    - [x] [closed type groups](docs/language.md#closed-type-groups) — a
+          pipe-separated closed group of types after
           the parameter name, `fn f<T: int64 | int32>(x: T)`, constrains
           what `T` may instantiate to. The pipe over a comma is deliberate:
           a comma list is ambiguous against multiple parameters and

@@ -300,6 +300,12 @@ class Func:
             neither given explicitly nor inferred from a *typed* argument.
             Defaults are trailing-only and may reference only earlier type
             parameters (both enforced at parse time).
+        type_param_groups: ``{type parameter: [TypeRef, ...]}`` for parameters
+            declared with a closed type group (``<T: int64 | int32>``): the
+            pipe-separated members are the only types the parameter may
+            instantiate to. Members are concrete types (never type
+            parameters -- enforced at parse time); a grouped parameter's
+            default must name a member (checked at declaration).
     """
 
     name: str
@@ -324,6 +330,7 @@ class Func:
     deprecated_msg: str | None = None
     removed_msg: str | None = None
     type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
+    type_param_groups: dict[str, list[TypeRef]] = field(default_factory=dict)
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 

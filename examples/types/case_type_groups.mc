@@ -64,4 +64,6 @@ fn main() -> int32 {
 // generic_case_arms.mc for the fully generic arms, `when T v:` and
 // `when T* ptr:`, that this explicit grouping is the halfway point to;
 // functions/overloading.mc for how an overload set like width is declared
-// and resolved.
+// and resolved; type_groups.mc for the function-declaration counterpart,
+// closed type groups partitioning an overload set with no box and no
+// `case type` needed.

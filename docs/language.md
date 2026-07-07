@@ -615,11 +615,15 @@ String literals keep adapting when a function becomes overloaded: a literal
 
 **Mixed generic/concrete sets.** A generic template may share its name with
 concrete functions from the same module; the candidates join one set and
-resolve under a leading (is-concrete, specificity) rank: a concrete overload
-beats a generic on an exact match — including a generic whose *effective*
-parameter list ties the concrete one — and the generic covers everything
-else. Explicit type arguments (`f<int32>(...)`) select among the generic
-candidates only. Two same-tier candidates of equal specificity stay the
+resolve under a leading (tier, specificity) rank with three tiers: a
+**concrete** overload beats a **bounded** generic (one with a
+[closed type group](#closed-type-groups)) beats an **unbounded** generic.
+The concrete tier wins on an exact match — including against a generic
+whose *effective* parameter list ties the concrete one — the bounded tier's
+written, closed commitment to a type set beats the fully open pattern, and
+the unbounded generic covers everything else. Explicit type arguments
+(`f<int32>(...)`) select among the generic candidates only. Two same-tier
+candidates of equal specificity stay the
 ambiguity error, which is also the enforced collision rule between the
 classes (a generic whose substituted parameter list duplicates a concrete
 one is not statically detectable in general). The concrete side of a mixed
@@ -845,13 +849,84 @@ wherever it is declared, same module or another (see
 [Template symbols](#template-symbols) below). Two equally specific viable
 variants make the call ambiguous — a compile error.
 
+### Closed type groups
+
+A type parameter may declare a **closed type group** — a pipe-separated
+list of types after its name — the only types it may instantiate to:
+
+```c
+fn show<T: int32 | int16 | int8>(x: T) -> int32 { ... }     // signed
+fn show<T: uint32 | uint16 | uint8>(x: T) -> int32 { ... }  // unsigned
+```
+
+Deduction is unchanged; the group is a **post-deduction viability filter**.
+A call whose deduced `T` falls outside the group is a compile error at the
+call site naming both — `int8 is not in the type group of 'f'
+(int64 | int32)` — and an explicit type argument (`f<char>(...)`) is checked
+the same way. Members are **concrete types only**: no `T*`-style patterns
+and no referencing other type parameters, each member resolvable where the
+template is declared and listed once (membership compares *resolved* types,
+so an alias respelling a member is a duplicate, and a call deducing the
+alias matches its member). The pipe over a comma is deliberate: a comma list
+is ambiguous against multiple parameters and defaults, while the pipe
+composes cleanly — `<T: int64 | int32 = int32, U>`, where a grouped
+parameter's [default](#type-parameter-defaults) must name a group member
+(checked at declaration; the priority order is otherwise unchanged, so the
+default still anchors an untyped literal to a member).
+
+Checking is **eager**: at the end of codegen, every listed member of every
+grouped template is instantiated and fully type-checked whether or not it
+was ever called, so a member the body does not compile for errors at the
+*declaration* — the [instantiation backtrace](#instantiation-backtraces)
+note names the member (`in instantiation of g<int64>`) at the template's
+line. This matches the multi-type [`case type` arm](#the-any-type)
+precedent and the general stance that an undefined use is a compile error.
+Never-called member instances are ordinary emitted functions — dead code
+the linker strips in object mode, harmless under the JIT, and groups are
+small by nature. One enumeration limit: a grouped template whose *other*
+parameters have neither a group nor a default cannot be enumerated (that
+parameter has no closed set of types) and is checked at its call sites
+only, like an ordinary generic.
+
+The payoff is **overload partitioning**: same-pattern templates with
+**disjoint** groups form a resolvable overload set — deduction plus the
+group filter picks one — deliberately relaxing the same-pattern
+declare-time collision above. The `show` pair is the motivating shape: a
+signed/unsigned formatter split at the function level, no `case type`
+needed. Same-pattern templates whose groups **overlap** (sharing any
+member — a pair whose groups constrain *different* parameters overlaps
+too, since each leaves the other's parameter unconstrained) still collide
+at declaration, cross-module like the duplicate rule:
+`function 'h<$0: int64|char>($0)' overlaps 'h<$0: int32|int64>($0)';
+same-pattern overloads need disjoint type groups`. An unbounded
+same-pattern template may coexist with bounded ones: overload ranking
+gains a middle tier — **concrete beats bounded generic beats unbounded
+generic** (see [Function overloading](#function-overloading)) — so it
+ranks below the groups and catches whatever they exclude. A bounded
+candidate whose group excludes the deduced type is simply not viable.
+
+Consequently the group is part of the template's
+[symbol base](#template-symbols) and collision key
+(`show<$0: int32|int16|int8>($0)`): two disjoint-group same-pattern
+templates are distinct symbols. `.mci` interfaces carry the group (a
+generic template travels as source), so a re-imported group enforces,
+partitions, and collides exactly like the original. Closed type groups are
+the function-declaration counterpart of multi-type
+[`case type` arms](#the-any-type) — the same bounded genericity without
+interfaces, the check set written in source with no action at a distance —
+and `typename(T)` composes as usual. See
+[examples/types/type_groups.mc](../examples/types/type_groups.mc).
+
 ### Template symbols
 
 Every generic template links its instances by a signature-derived symbol
 base spelled from the declaration alone: the name, the type parameters
 alpha-renamed to positional `$i` placeholders in declaration order (a
-defaulted parameter spells `$i = <default>`), and the parameter patterns —
-`alloc<$0>(uint64)`, `hash<$0>($0*)`, `parse<$0 = int64>(uint8*)`. An
+defaulted parameter spells `$i = <default>`, a
+[closed type group](#closed-type-groups) spells `$i: member|member` before
+the default), and the parameter patterns — `alloc<$0>(uint64)`,
+`hash<$0>($0*)`, `parse<$0 = int64>(uint8*)`,
+`show<$0: int32|int16|int8>($0)`. An
 instance appends its bindings: `hash<$0>($0*)<char>`. Because the base
 depends on nothing but the declaration — not on how many templates share
 the name or the order imports merged them — separately compiled objects

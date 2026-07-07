@@ -834,7 +834,9 @@ class Parser:
             return
         self.expect(">")
 
-    def parse_type_params(self) -> tuple[list[str], dict[str, TypeRef]]:
+    def parse_type_params(
+        self,
+    ) -> tuple[list[str], dict[str, TypeRef], dict[str, list[TypeRef]]]:
         """Parse an optional generic parameter list ``<A, B = type, ...>``.
 
         A parameter may declare a default type (``<T = int64>``), used when a
@@ -845,21 +847,37 @@ class Parser:
         errors, so a later parameter's name can never fall through to a
         same-named global type.
 
+        A parameter may also declare a **closed type group** -- a
+        pipe-separated list of types after a ``:`` (``<T: int64 | int32>``),
+        the only types the parameter may instantiate to. Group members must be
+        concrete types: a member may not reference any of the declaration's
+        type parameters. The group composes with a default
+        (``<T: int64 | int32 = int32>``), which must then name a group member
+        (membership is checked at declaration, where members resolve).
+
         Returns:
-            The type-parameter names, and the ``{name: TypeRef}`` defaults.
+            The type-parameter names, the ``{name: TypeRef}`` defaults, and
+            the ``{name: [TypeRef, ...]}`` closed type groups.
 
         Raises:
-            LangError: On a non-trailing default, or a default referencing the
-                parameter itself or a later parameter.
+            LangError: On a non-trailing default, a default referencing the
+                parameter itself or a later parameter, a group member or a
+                grouped parameter's default referencing a type parameter.
         """
         type_params: list[str] = []
         defaults: dict[str, TypeRef] = {}
+        groups: dict[str, list[TypeRef]] = {}
         lines: dict[str, int] = {}
         if self.accept("<"):
             while True:
                 tok = self.expect("IDENT")
                 type_params.append(tok.text)
                 lines[tok.text] = tok.line
+                if self.accept(":"):
+                    members = [self.parse_type_ref()]
+                    while self.accept("|"):
+                        members.append(self.parse_type_ref())
+                    groups[tok.text] = members
                 if self.accept("="):
                     defaults[tok.text] = self.parse_type_ref()
                 elif defaults:
@@ -884,7 +902,36 @@ class Parser:
                         f"{min(bad)!r}, which is not declared before it",
                         lines[pname],
                     )
-        return type_params, defaults
+            for pname, members in groups.items():
+                # Group members are concrete types only: a member referencing
+                # a type parameter (any of them -- there is no earlier-only
+                # allowance) is not a closed set of types.
+                for member in members:
+                    bad = type_ref_names(member) & set(type_params)
+                    if bad:
+                        raise LangError(
+                            f"type group member {member} for parameter "
+                            f"{pname!r} references type parameter "
+                            f"{min(bad)!r}; group members must be concrete "
+                            "types",
+                            lines[pname],
+                        )
+                # A grouped parameter's default must name a group member, and
+                # members are concrete -- so a default referencing an earlier
+                # parameter can never qualify. Rejecting it here keeps the
+                # declaration-time membership check (which resolves types)
+                # from reporting a confusing unknown-type error.
+                ref = defaults.get(pname)
+                if ref is not None:
+                    bad = type_ref_names(ref) & set(type_params)
+                    if bad:
+                        raise LangError(
+                            f"default for type parameter {pname!r} references "
+                            f"{min(bad)!r}; a grouped parameter's default "
+                            "must name a group member",
+                            lines[pname],
+                        )
+        return type_params, defaults, groups
 
     def parse_struct(
         self,
@@ -918,7 +965,15 @@ class Parser:
         """
         line = self.expect("union" if union else "struct").line
         name = self.expect("IDENT").text
-        type_params, type_param_defaults = self.parse_type_params()
+        type_params, type_param_defaults, groups = self.parse_type_params()
+        if groups:
+            # Closed type groups are a function-level constraint (they drive
+            # call viability, overload partitioning, and eager instantiation
+            # checks); a struct has no call site to filter.
+            raise LangError(
+                "type groups are only supported on function type parameters",
+                line,
+            )
         base = None
         if self.cur.kind == "extends":
             if union:
@@ -1081,7 +1136,9 @@ class Parser:
         """
         line = self.expect("fn").line
         name = self.expect("IDENT").text
-        type_params, type_param_defaults = self.parse_type_params()
+        type_params, type_param_defaults, type_param_groups = (
+            self.parse_type_params()
+        )
         if extern and type_params:
             raise LangError("extern functions cannot be generic", line)
         self.expect("(")
@@ -1204,6 +1261,7 @@ class Parser:
                 deprecated_msg=deprecated,
                 removed_msg=removed,
                 type_param_defaults=type_param_defaults,
+                type_param_groups=type_param_groups,
             )
         if asm:
             # `@asm fn` is sugar for a function whose body is one @asm(...)
@@ -1254,6 +1312,7 @@ class Parser:
                 noreturn=noreturn,
                 deprecated_msg=deprecated,
                 type_param_defaults=type_param_defaults,
+                type_param_groups=type_param_groups,
             )
         if self.cur.kind == ";":
             # A bodyless prototype: a concrete mcc function defined in another
@@ -1301,6 +1360,7 @@ class Parser:
                 deprecated_msg=deprecated,
                 removed_msg=removed,
                 type_param_defaults=type_param_defaults,
+                type_param_groups=type_param_groups,
             )
         return Func(
             name,
@@ -1321,6 +1381,7 @@ class Parser:
             deprecated_msg=deprecated,
             removed_msg=removed,
             type_param_defaults=type_param_defaults,
+            type_param_groups=type_param_groups,
         )
 
     def parse_asm(self):

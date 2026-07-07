@@ -10,6 +10,28 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Closed type groups** — a pipe-separated closed group of types after a
+  generic parameter name, `fn f<T: int64 | int32>(x: T)`, constrains what
+  `T` may instantiate to. Deduction is unchanged; the group is a
+  post-deduction viability filter — a call whose deduced `T` falls outside
+  it is a call-site error naming the type and the group, explicit type
+  arguments included. Members are concrete types only (resolved and
+  validated at declaration: unknown or duplicate members and a grouped
+  parameter's default outside the group all error there), and checking is
+  **eager**: every listed member is instantiated and fully type-checked at
+  end of codegen whether or not it is ever called, so a member the body
+  does not compile for errors at the declaration. Same-pattern templates
+  with **disjoint** groups now form a resolvable overload set (deduction
+  plus the group filter picks one — the signed/unsigned formatter split at
+  the function level), while **overlapping** groups collide at declaration,
+  cross-module like the duplicate-template rule. Overload ranking gains a
+  middle tier — concrete beats bounded generic beats unbounded generic —
+  and the group joins the template's symbol base and collision key
+  (`show<$0: int32|int16|int8>($0)`). `.mci` interfaces carry the group, so
+  a re-imported template enforces and partitions identically. See
+  [Closed type groups](docs/language.md#closed-type-groups) and
+  [examples/types/type_groups.mc](examples/types/type_groups.mc).
+
 - **`typename` builtin** — `typename(...)` recovers the canonical name of a
   type as a string, mirroring `sizeof` in every surface respect: it takes a
   type or an expression (`typename(int64)`, `typename(x)`, `typename(T)` in

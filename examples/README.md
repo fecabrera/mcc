@@ -109,6 +109,7 @@ on legal-but-unproven code.
 | [unchecked_dereference.mc](types/unchecked_dereference.mc) | the opt-in warning-class framework via its first class: `-Wunchecked-dereference` reporting possibly-null `*p` / `p->field` / `p[i]` sites in legal code, each silencer (null-check guards, proven `let`s, `@nonnull` params, postfix `!`), `-Wall`, unknown-class hard error, and the `[-Werror=<name>]` promotion |
 | [generics.mc](types/generics.mc) | type inference, generic recursion, multiple type parameters |
 | [generic_defaults.mc](types/generic_defaults.mc) | `<T = int64>` type-parameter defaults: the priority order (explicit > typed inference > default > untyped anchoring), a `U = T*` default referencing an earlier parameter, bare `span` / `pair<int32>` omitting a defaulted tail, struct literals filling from the default |
+| [type_groups.mc](types/type_groups.mc) | closed type groups `<T: int32 \| int16 \| int8>`: the pipe-separated closed set a parameter may instantiate to as a post-deduction call-site filter, disjoint-group same-pattern templates partitioning into an overload set (the signed/unsigned formatter with no `case type`), the concrete > bounded > unbounded rank, eager checking of every member, a default naming a group member |
 
 ## memory/
 

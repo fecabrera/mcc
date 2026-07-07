@@ -194,6 +194,12 @@ class InterfaceWriter:
             # references to earlier parameters, e.g. the T in <T, U = T*>.
             for t in decl.type_param_defaults.values():
                 _collect_refs(t, names)
+            # Closed type group members likewise: `<T: color | int32>` must
+            # pull the struct `color` into the stub. (The template itself
+            # travels verbatim, group included, from its source span.)
+            for members in decl.type_param_groups.values():
+                for t in members:
+                    _collect_refs(t, names)
             names -= set(decl.type_params)
         elif isinstance(decl, StructDecl):
             for _, t in decl.fields:
