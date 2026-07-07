@@ -10,6 +10,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **The `format` module** — the formatting protocol's baseline overload
+  set: every member of `import "format";`'s
+  `format(mut str: string, value: X, const modifier: string)` set appends
+  `value`'s rendering to `str`, steered by `modifier` (`""` for the
+  default). Closed signed and unsigned integer groups render decimal
+  (the narrow signed widths sign-extend into a concrete `int64` worker,
+  so `-4` renders `-4` at every width) with `":x"`/`":X"`/`":p"` hex and
+  pointer modifiers; concretes cover `float64` (fixed-point), `bool`
+  (`true`/`false`, with `":y"` and `":yes"` spellings), and
+  `char`/`char*`/`slice<char>` as text; a generic `slice<T>` member
+  renders a bracketed list whose elements recurse through the set (the
+  modifier applies per element, so nesting works); and an unbounded
+  `format<T>` fallback renders `<typename>` for anything uncovered. The
+  set is the first of the overload-set protocols riding open overload
+  sets (below): one `format` overload in your own module makes your type
+  printable. See [Formatting](docs/language.md#formatting) and
+  [examples/systems/formatting.mc](examples/systems/formatting.mc).
 - **Open overload sets** — overload sets are open by default (a minor
   version bump, pre-1.0): any module may add overloads to an existing
   name — concrete, generic, or mixed — and the set is the whole-program

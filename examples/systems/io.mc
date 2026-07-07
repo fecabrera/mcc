@@ -25,3 +25,6 @@ fn main() -> int32 {
     // example runs without input).
     return 0;
 }
+
+// See also: formatting.mc (the stdlib `format` protocol, the native
+// counterpart to these raw printf specifiers).

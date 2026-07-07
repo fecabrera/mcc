@@ -672,8 +672,9 @@ closed-group template, a user's concrete overload at `int32` simply wins
 the exact match. This is the language's protocol story — make a type
 appendable (see
 [examples/functions/open_overloads.mc](../examples/functions/open_overloads.mc))
-and, once the planned stdlib formatting and iteration protocols land,
-printable or iterable, by writing one overload for it in your own module.
+or printable (the stdlib [formatting protocol](#formatting)), and, once the
+planned iteration protocol lands, iterable, by writing one overload for it
+in your own module.
 Only *same-pattern* replacement (swapping out a library's concrete `bool`
 member, say) still collides; a planned `@override` annotation covers that
 last case.
@@ -3362,6 +3363,78 @@ fn digit_value(c: char) -> char {
     return c - '0';      // '7' - '0' == 7
 }
 ```
+
+## Formatting
+
+`import "format";` provides the **formatting protocol**: one
+[overload set](#function-overloading),
+
+```c
+format(mut str: string, value: X, const modifier: string)
+```
+
+where every member appends `value`'s rendering to a
+[`string`](../libmc/string.mc) and `modifier` steers the spelling (an empty
+string picks the default). The baseline members cover the built-in types:
+
+- **Signed integers**: decimal. One [closed-group](#closed-type-groups)
+  template takes `int32 | int16 | int8` and sign-extends into the concrete
+  `int64` worker, so `-4` renders `-4` at every width.
+- **Unsigned integers**: unsigned decimal, one group for
+  `uint64 | uint32 | uint16 | uint8`.
+- Integer modifiers: `":x"` lowercase hex, `":X"` uppercase hex, `":p"`
+  pointer-style (`0x2a`). A negative narrow value was already sign-extended
+  when the modifier applies, so its hex is the full 64-bit two's-complement
+  pattern (`-4 as int32` with `":x"` is `fffffffffffffffc`).
+- **`float64`**: fixed-point (`3.5` renders `3.500000`).
+- **`bool`**: `true`/`false`; `":y"` renders `y`/`n`, and `":yes"` renders
+  `yes`/`no`.
+- **`char`**, **`char*`**, **`slice<char>`**: appended as text (the
+  modifier is ignored). A string literal decays to `char*` and lands on
+  that member.
+- **`slice<T>`**: a bracketed list, `[1, 2, 3]`. Each element formats back
+  through the overload set, so the modifier applies per element
+  (`":x"` gives `[a, ff]`), nesting recurses (`slice<slice<int32>>` renders
+  `[[1, 2], [3]]`), and `slice<char>` never lands here (its concrete member
+  above wins).
+- **Everything else**: an unbounded `format<T>` fallback renders the type's
+  name in angle brackets (`<uint8*>`) instead of a value.
+
+```c
+import "format";
+import "string";
+
+let mode: struct string;
+string_init(mode, ":x");     // the modifier is a string value
+let s: struct string;
+string_init(s);
+format(s, 255 as int32, mode);   // s is now "ff"
+```
+
+Two sharp edges, both consequences of the signature: the modifier is a
+`string` *value*, so it must be built with `string_init` (a bare `":x"`
+literal stays a `char*` and no member matches), and an untyped integer
+literal is ambiguous between the `int64` and `char` members, so type the
+value (`42 as int32`).
+
+Overload sets are open, so **making your own type printable is writing one
+`format` overload for it in your own module**: a concrete member outranks
+the closed-group templates and the unbounded fallback, and it may recurse
+back into the set for its fields:
+
+```c
+struct point { x: int32; y: int32; }
+
+fn format(mut str: string, value: struct point*, const modifier: string) {
+    string_push(str, '(');
+    format(str, value->x, modifier);
+    string_append(str, ", ");
+    format(str, value->y, modifier);
+    string_push(str, ')');
+}
+```
+
+See [examples/systems/formatting.mc](../examples/systems/formatting.mc).
 
 ## Reaching libc
 

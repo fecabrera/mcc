@@ -243,9 +243,11 @@ fn main() -> int32 {
 }
 ```
 
-Alongside `std` are `memory` (typed `alloc`/`dealloc`), the
-`list`/`stack`/`queue`/`set`/`dict` containers, the `range` iterable, and the
-`hashing/*` functions.
+Alongside `std` are `format` (the
+[formatting protocol](docs/language.md#formatting): a `format` overload set
+rendering values into a `string`, extensible one overload at a time), `memory`
+(typed `alloc`/`dealloc`), the `list`/`stack`/`queue`/`set`/`dict` containers,
+the `range` iterable, and the `hashing/*` functions.
 
 The [`libc/`](libmc/libc/) modules are instead `@extern` bindings for the C
 library itself (`printf`, `malloc`, the `str*`/`mem*` functions, `FILE*`

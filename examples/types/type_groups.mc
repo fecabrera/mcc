@@ -91,4 +91,6 @@ fn main() -> int32 {
 // See also: case_type_groups.mc (the `case type` counterpart of this
 // grouping), generic_defaults.mc (the default priority order a grouped
 // default follows), functions/mixed_overloads.mc (the two-tier rank the
-// bounded tier slots into). Full rules: docs/language.md.
+// bounded tier slots into), systems/formatting.mc (the stdlib formatter
+// shipping this exact signed/unsigned partition). Full rules:
+// docs/language.md, "Closed type groups".

@@ -607,9 +607,10 @@ already do).
           the generic arm body written against genuinely generic
           operations. The motivating end-state is the stdlib formatter:
           concrete arms for bespoke types, `when T* ptr:` printing `%p`
-          as the pointer fallback, `when T v:` dispatching into a
-          generic formatter (an `else` still present until the deferred
-          carve-out above lands), and every boxed type without a
+          as the pointer fallback, `when T v:` dispatching into the
+          shipped `format` overload set of `libmc/format.mc` (an `else`
+          still present until the deferred carve-out above lands), and
+          every boxed type without a
           viable formatting path a compile error instead of a runtime
           gap. Settled in the same discussion: multi-type arms in type
           mode, `when int32, int16, int8 n: printf("%d", n);`, a
@@ -1082,7 +1083,9 @@ already do).
       [template symbol bases](docs/language.md#template-symbols) are
       what make the union linkable and order-independent, so this
       item was only sound because they shipped. The driving use case
-      is the formatting protocol: the stdlib format module declares
+      is the formatting protocol: the stdlib format module, now
+      shipped as `libmc/format.mc` (the baseline stage of
+      [formatted `{}` print](#strings-and-formatting)), declares
       the baseline
       `format(mut str: string, value: X, const modifier: string)`
       overload family (closed signed/unsigned groups, concretes, a
@@ -2010,7 +2013,10 @@ already do).
 - [ ] Formatted `print`/`println` — Rust/Python-style `{}` placeholders,
       type-driven (no `%`-letters), written in mcc over the
       [native variadic](#functions-and-methods) `slice<const any>`; enables
-      compile-time format checking and per-struct `format` methods later. The
+      compile-time format checking later. Per-type rendering is not
+      per-struct `format` methods but the shipped stdlib `format` overload
+      set below, per the [open overload sets](#functions-and-methods)
+      rule that protocols are free-function overload sets. The
       signature is `fn println(format: slice<const uint8>, args: slice<const any>)`:
       a string literal adapts to `format` at the call site (so `println("{}", a)`
       works directly), and an owned `struct string` borrows in with
@@ -2019,11 +2025,29 @@ already do).
   - [x] printf-style `%` formatting — today's `print`/`println` in the
         [standard library](README.md#standard-library), which the `{}` model
         will supersede
+  - [x] the stdlib `format` overload-set module — `libmc/format.mc`, the
+        type-driven per-type rendering layer the placeholder stages below
+        dispatch into: a
+        `format(mut str: string, value: X, const modifier: string)`
+        baseline set with a closed signed group sign-extending into an
+        `int64` worker, a closed unsigned group, concretes for
+        `float64`/`bool`/`char`/`char*`/`slice<char>`, a generic
+        `slice<T>` list-renderer, and an unbounded `<typename>` fallback
+        rendering the type's name in angle brackets; integer modifiers
+        `:x`/`:X`/`:p`, bool `:y`/`:yes`, and slices apply the modifier
+        per element. The formatting member of the overload-set protocol
+        family, riding the shipped
+        [open overload sets](#functions-and-methods): the set is open,
+        so making a type printable is one `format` overload written in
+        the user's own module
   - [ ] formatting over the `slice<const uint8>` format with bare/sequential and
         positional placeholders (`"{d} {f} {x} {s}"`, `"{0:d} {1:f} {2:x} {3:s}"`),
         parsed at runtime
   - [ ] format modifiers — precision and zero-padded width (`.Nf`, `Nx`, `0Nx`,
-        `0x0Nx`, `Ns`, and `sN`), e.g. `{.8f}`, `{08x}`, `{0x08x}`, `{20s}`, `{s20}`
+        `0x0Nx`, `Ns`, and `sN`), e.g. `{.8f}`, `{08x}`, `{0x08x}`, `{20s}`,
+        `{s20}`; the per-type channel these travel through (the `format`
+        set's `modifier` parameter, already routing `:x`/`:X`/`:p` and
+        `:y` per type) shipped with the baseline module above
 - [ ] String interpolation — `println("x = {x}")`: a string literal with
       `{expr}` holes desugars at compile time into the formatted
       `println("{}", ...)` call above (`{{`/`}}` escape a literal brace), so it

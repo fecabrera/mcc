@@ -11,8 +11,8 @@ import "libc/stdio";
 // module, a different file, makes its own struct appendable by adding one
 // more. Before sets were open, this exact join was rejected as a duplicate
 // definition of 'string_append'; now declaring the overload is joining.
-// The planned stdlib format protocol (a `format` set every module will add
-// its own types to) is the driving use case for this openness.
+// The stdlib format protocol (the `format` set any module adds its own
+// types to; see systems/formatting.mc) is the headline use of this openness.
 // Builds on overloading.mc (concrete sets) and mixed_overloads.mc (mixed
 // sets and their rank). Uses the string type and struct literals, covered
 // later in the tour (memory/lists.mc, types/struct_literals.mc).
