@@ -386,14 +386,17 @@ already do).
     - [ ] struct boxing — lift the v1 struct/array rejection once the
           by-value-vs-by-pointer payload and lifetime questions are settled
     - [ ] checked `as` unwrap — recover a value outside `case type`, once a
-          checked-failure mechanism exists to hang the tag mismatch on
+          checked-failure mechanism exists to hang the tag mismatch on;
+          the generic-arms item below parks its else-optional carve-out
+          behind the same mechanism (both want the same trap)
     - [ ] generic arms in `case type` — `when T* ptr:` matches any
           boxed pointer type, the pointer fallback after concrete pointer
           arms (in the stdlib formatter,
           `when T* ptr: l = snprintf(buf, MAX_BUF_LEN, "%p", ptr);` after
           `when char* s:`; that fallback lands with the
-          [native variadics](#functions-and-methods) item's stage 3). The
-          lowering family is the one the
+          [native variadics](#functions-and-methods) item's stage 3,
+          which consumes this item: formatter adoption is deliberately
+          not a stage below). The lowering family is the one the
           [`case type` over interfaces](#functions-and-methods) sub-item
           records: a set-membership test over the compile-time FNV-1a
           tags of every pointer type that boxes into `any` anywhere in
@@ -403,9 +406,14 @@ already do).
           (the monomorphize-everything stance, one instantiation per
           matching tag, the whole-program tag set bounding the
           duplication), so genuinely generic bodies work
-          (`when T* p: h = fnv1a(p);`), while an address-only body like
-          the `%p` one never uses `T` and its identical instantiations
-          collapse. The arm is a real generic context, which is the
+          (`when T* p: h = fnv1a(p);`). An address-only body like the
+          `%p` one never uses `T`, and its identical instantiations are
+          expected to collapse under optimization (LLVM tail-merging),
+          a non-normative expectation rather than a compiler guarantee:
+          reliably proving `T`-independence at source level is fragile,
+          nothing in the semantics depends on collapse, and a spike
+          measures a synthetic many-tag program before stage 2 commits.
+          The arm is a real generic context, which is the
           strongest argument for per-tag monomorphization over an
           erased, address-only binding: `when T* ptr: handle(ptr);`
           dispatching into a generic `handle<T>(p: T*)` (or an overload
@@ -422,39 +430,61 @@ already do).
           pointer arms, so it rides the same first-match-wins
           textual-order rule the
           interface arm establishes (`when char* s:` stays ahead of the
-          fallback), the unreachable-later-arm diagnostic applying the
-          same way; a lone `T*` arm widens over pointers only, so
-          non-pointer tags still need arms or `else`. Unlike the
-          interface arm this depends only on the shipped
-          `any`/`case type` machinery above, which is why it lives here
-          and not under interfaces. Settled: the fully generic
-          `when T v:` arm is admitted too, riding the identical
+          fallback). The reachability diagnostics (an unreachable later
+          arm, firing per listed type for multi-type arms, and a
+          `when T v:` arm ahead of `when T* ptr:` making the latter
+          dead) are **hard errors** like the shipped duplicate-arm
+          error, never warnings: arm order is statically wrong or
+          right, never environment-dependent. A lone `T*` arm widens
+          over pointers only, so non-pointer tags still need arms or
+          `else`. Unlike the interface arm this depends only on the
+          shipped `any`/`case type` machinery above, which is why it
+          lives here and not under interfaces. Settled: the fully
+          generic `when T v:` arm is admitted too, riding the identical
           machinery (the closed whole-program boxed-tag set, the same
           set-membership test over the compile-time FNV-1a tags, the
           arm body monomorphized once per matching tag with `T` bound
           to that tag's type, each instantiation fully type-checked
           with the same no-viable-overload compile error at the
-          `case type` site naming the offending type, and
-          `T`-unused instantiations collapsing). It is not redundant
-          with a binding `else`, which is exactly the argument for
-          admitting it: an `else` binding would hand over the erased
-          `any` itself, through which nothing type-specific can be
-          called, while `when T v:` hands over the unwrapped typed
+          `case type` site naming the offending type). It is not
+          redundant with a binding `else`, which is exactly the
+          argument for admitting it: an `else` binding would hand over
+          the erased `any` itself, through which nothing type-specific
+          can be called, while `when T v:` hands over the unwrapped typed
           value. Composition with the pointer arm stays
           first-match-wins textual order, no overload-style specificity
           ranking between `T*` and `T` arms: `when T* ptr:` first
           consumes every pointer tag (binding `T` to the pointee type),
           then `when T v:` consumes every remaining tag (binding `T` to
           the boxed type itself), and a `T v` arm written before a `T*`
-          arm makes the latter unreachable, caught by the same
-          unreachable-later-arm diagnostic (a lone `when T v:` does
-          match pointer tags too, binding e.g. `v: char*` with
-          `T = char*`). Exhaustiveness follows: a trailing `when T v:`
-          arm covers the closed tag set by construction (alone, or with
-          a `T*` arm in front), so `else` becomes optional exactly when
-          such an arm is present, a deliberate carve-out from the
-          otherwise mandatory `else`, and an `else` written anyway is
-          unreachable and gets the same diagnostic. The accepted trade
+          arm makes the latter unreachable, the hard error above (a
+          lone `when T v:` does match pointer tags too, binding e.g.
+          `v: char*` with `T = char*`). `else` stays **mandatory** in
+          v1 even beside a trailing `when T v:` arm. The else-optional
+          carve-out (a trailing fully generic arm covers the closed tag
+          set by
+          construction, alone or with a `T*` arm in front, so `else`
+          could be dropped and one written anyway flagged unreachable)
+          is not retracted but deferred behind the checked `as`
+          sub-item above and its checked-failure mechanism: tag-0 `any`
+          values are defined behavior today (a struct literal omitting
+          an `any` field zero-fills it, and that value flows into
+          `case type` and lands in `else`), so making the unmatched
+          edge `unreachable` would turn a defined shape into UB; the
+          carve-out waits for a trap to hang that edge on, the same
+          trap checked `as` wants. Generic-arm detection needs no new
+          syntax: a bare name in arm position that resolves (builtin,
+          struct, alias, enum, or an enclosing generic's active type
+          binding) is a concrete arm, and an unresolved bare name with
+          no args, dims, or fn shape and zero or one stars introduces
+          an arm-scoped type parameter. The accepted trade-off, to be
+          documented loudly: a typo like `when in32 n:` silently
+          becomes a fully generic arm, though the failure is partially
+          self-catching (later arms become unreachable and error, and
+          per-tag type checks fire). The rule preserves verified
+          behavior: inside `fn g<T>(...)`, `when T v:` is a concrete
+          arm per instantiation today, and stays one because the
+          enclosing binding resolves. The accepted trade
           is action at a distance, the same trade the pointer arm
           already accepted but wider: the generic arm is type-checked
           against every type boxed anywhere in the program, so a new
@@ -465,7 +495,8 @@ already do).
           operations. The motivating end-state is the stdlib formatter:
           concrete arms for bespoke types, `when T* ptr:` printing `%p`
           as the pointer fallback, `when T v:` dispatching into a
-          generic formatter, no `else`, and every boxed type without a
+          generic formatter (an `else` still present until the deferred
+          carve-out above lands), and every boxed type without a
           viable formatting path a compile error instead of a runtime
           gap. Settled in the same discussion: multi-type arms in type
           mode, `when int32, int16, int8 n: printf("%d", n);`, a
@@ -489,7 +520,7 @@ already do).
           making it the most predictable arm of the family, bounded
           genericity without interfaces. Ordering and reachability are
           uniform with the rest: first-match-wins textual order, the
-          unreachable-later-arm diagnostic firing per listed type
+          unreachable-later-arm hard error firing per listed type
           (after `when char* s:`, an arm `when char*, int32 n:` has a
           dead `char*` member and is flagged). List hygiene: a
           duplicate type within one list is a compile error, and v1
@@ -497,9 +528,8 @@ already do).
           like `T*` as list members (what `T` would bind to per member
           is unresolved and nothing needs it). Exhaustiveness is
           unchanged: an explicit list does not close the universe, so
-          `else` or later arms are still required unless a trailing
-          fully generic arm is present. The motivating use is
-          formatter-style grouping: `when int32, int16, int8 n:`
+          `else` or later arms are still required. The motivating use
+          is formatter-style grouping: `when int32, int16, int8 n:`
           shares one `%d` body, mechanically sound because the
           narrower instantiations pass through C default argument
           promotions at the varargs `printf` call, and
@@ -509,7 +539,74 @@ already do).
           ptr:` (every pointer tag), `when T v:` (every tag), and the
           future [interface arm](#functions-and-methods) (the tags
           implementing the interface), all lowering to the same tag
-          set-membership test with per-tag monomorphized bodies
+          set-membership test with per-tag monomorphized bodies.
+          Mechanics settled by exploration: single-pass compilation
+          holds via deferred lowering with an end-of-codegen fixpoint
+          worklist (a pre-scan is rejected: boxing is type-driven at
+          the coerce choke point, and generics box types discovered
+          only during instantiation). A generic arm lowers to a pending
+          block plus a snapshot of the per-function compilation context
+          (the same state `instantiate` already saves and restores);
+          after the top-level body loop a worklist compiles arm copies
+          per boxed tag, feeding back new boxing and instantiations
+          until fixpoint. The llvmlite mechanics are probe-verified
+          (late block appends, late `switch.add_case`, and late entry
+          allocas all verify and JIT correctly), and `defer` semantics
+          fall out correct via the snapshot. Termination has parity
+          with recursive generic instantiation (a body boxing `T*`
+          derives forever, same as `f<T>` calling `f<T*>`; no guard
+          today, a depth cap is a cheap later add). Arm bodies
+          monomorphize inline: the statement list compiles once per tag
+          in fresh blocks of the enclosing function under a
+          `type_bindings` overlay; outlining is rejected (closure
+          conversion in a language without closures, and
+          `return`/`break`/`defer` crossing the boundary need protocols
+          that don't exist). Per-tag compile failures wrap in a Note
+          ("in case type arm for {type}"), keeping the exact
+          `file: error: line N: message` head. The boxed-tag registry
+          must be boxed-only: today `any_tag` conflates boxing sites
+          with arm mentions, and the generic arms need the set fed only
+          from `gen_box_any`'s two callers (the coerce choke point and
+          variadic extras collection). Fact soundness at generic-arm
+          sites: at initial lowering, run the existing `loop_kill_set`
+          walker over the arm bodies against `narrowed_nonnull` and
+          blanket-drop `narrowed_paths` (the call-site blanket-kill
+          precedent); facts entering arms are sound as-is. Accepted v1
+          conservatisms: deferred arms are assumed to reach the end
+          block for missing-return analysis (a finalize-time recheck is
+          a clean follow-up), and warnings inside deferred bodies fire
+          once per tag instantiation, matching generic function bodies
+          (dedupe later if noisy). Precompiled-stdlib constraint, held
+          from day one because it is cheap now and expensive to
+          retrofit: a function containing generic arms closes over the
+          compiling program's boxed set, so any stdlib function using
+          them (the formatter) must be generic or `@inline` so it
+          travels in `.mci` and monomorphizes in the consumer program.
+          The pending-arm record is shaped as (tag-predicate,
+          body-strategy) so the future interface arm (a single body
+          over a fat pointer, no per-tag monomorphization) rides the
+          same machinery. Two pinned tests are affected by design:
+          `test_no_multi_type_arms` in `tests/test_any.py` flips (its
+          comment documents the superseded v1 rule), and the parse-time
+          mandatory-`else` test survives if the check moves to codegen
+          with the message kept verbatim. Staged:
+      - [ ] stage 1: multi-type arms — S-sized, zero deferral
+            machinery (the check set is written in source): a comma
+            list in `parse_case_type`, the existing concrete-arm
+            lowering looped over the listed types sharing one body AST,
+            per-listed-type seen entries giving the duplicate and
+            unreachable diagnostics, per-type failures Note-wrapped;
+            flips the pinned no-multi-type-arms test by design
+      - [ ] stage 2: `when T* ptr:` and `when T v:` together — L-sized,
+            both riding the same machinery (the boxed-only tag
+            registry, the snapshot/pending worklist, the finalize
+            fixpoint, the detection rule, the hard-error reachability
+            diagnostics); folds in factoring the `instantiate`
+            save/restore tuple into a shared context dataclass, so
+            future fact sets cannot silently miss either snapshot, and
+            starts with a spike compiling one concrete arm body twice
+            under two `type_bindings` overlays, validating the core
+            before the deferral machinery
   - [ ] global/`@static` union initializers — teach the const-initializer
         path to emit a union constant (zero-fill plus the one written member).
         Until then a global/`@static` union initializer is rejected with an
