@@ -216,8 +216,56 @@ already do).
         omitted from an explicit type-argument list, and a bare defaulted
         struct name is a complete written type
   - [ ] bounds — constrain a parameter with `fn myfunc<T extends mystruct>(x: T)`
-        (a struct and its `extends` specializations) or
-        `fn myfunc<T in (t1, t2, ...)>(x: T)` (an explicit set of types)
+        (a struct and its `extends` specializations); the explicit-set form,
+        once sketched here as `T in (t1, t2, ...)`, is settled under a
+        different spelling as the closed-type-groups sub-item below
+    - [ ] closed type groups — a pipe-separated closed group of types after
+          the parameter name, `fn f<T: int64 | int32>(x: T)`, constrains
+          what `T` may instantiate to. The pipe over a comma is deliberate:
+          a comma list is ambiguous against multiple parameters and
+          defaults (`<T: int64, U, V: char*>` cannot be parsed), while the
+          pipe composes cleanly (`<T: int64 | int32 = int32, U>`, and a
+          default must name a group member); group members are concrete
+          types only in v1, no patterns like `T*`. Deduction is unchanged,
+          the group is a post-deduction viability filter: a call whose
+          deduced `T` falls outside the group is a compile error at the
+          call site naming the offending type and the group. Checking is
+          **eager**: every listed member is instantiated and fully
+          type-checked at end of codegen whether or not it is ever called
+          (the finalize hook that shipped with
+          [generic arms in `case type`](#structs-arrays-and-data-layout)
+          is the natural place), so a group member the body does not
+          compile for errors at the declaration, matching the
+          multi-type-arm precedent and the same stance that an undefined
+          use is a compile error; never-called member instantiations are
+          dead code the linker strips in object mode, and groups are
+          small by nature. The big payoff is overload partitioning:
+          same-pattern templates with **disjoint** groups become a
+          resolvable overload set, `fn show<T: int32 | int16 | int8>(x: T)`
+          and `fn show<T: uint32 | uint16 | uint8>(x: T)` coexist with
+          deduction plus the group filter picking one, deliberately
+          relaxing the shipped same-pattern declare-time template
+          collision; same-pattern templates with **overlapping** groups
+          still collide at declare time (the marker-collision philosophy
+          of the shipped
+          [function overloading](docs/language.md#function-overloading)
+          duplicate rule, cross-module like today's template collision).
+          Overload ranking gains a middle tier, concrete beats bounded
+          generic beats unbounded generic, extending the shipped
+          concrete-beats-generic rule; consequently the group becomes
+          part of the template's
+          [symbol base](docs/language.md#template-symbols) and collision
+          key, since two disjoint-group same-pattern templates are
+          distinct symbols, and `.mci` prototypes render the group. This
+          is the function-declaration counterpart of the shipped
+          multi-type `case type` arms, the same bounded genericity
+          without interfaces: the check set is written in source, with no
+          action at a distance. It is complementary to the planned
+          [interfaces](#functions-and-methods), an identity-enumerated
+          constraint beside their behavioral one, not a substitute;
+          `typename(T)` composes trivially. The motivating example is the
+          signed/unsigned formatter grouping at the function level, with
+          no `case type` needed
     - [ ] interface bounds — `fn myfunc<T implements I>(x: T)`, asserting
           that `T` implements interface `I`: checked at each monomorphized
           instantiation (the concrete type must define every method `I`
@@ -518,7 +566,11 @@ already do).
           the arm type-checked against precisely the listed types
           whether or not each is ever boxed anywhere in the program,
           making it the most predictable arm of the family, bounded
-          genericity without interfaces. Ordering and reachability are
+          genericity without interfaces (the planned closed type groups
+          on generic parameters, in
+          [Types and generics](#types-and-generics), are the
+          function-declaration counterpart). Ordering and reachability
+          are
           uniform with the rest: first-match-wins textual order, the
           unreachable-later-arm hard error firing per listed type
           (after `when char* s:`, an arm `when char*, int32 n:` has a
