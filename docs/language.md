@@ -3446,11 +3446,16 @@ string picks the default). The baseline members cover the built-in types:
 - **`char`**, **`char*`**, **`slice<char>`**: appended as text (the
   modifier is ignored). A string literal decays to `char*` and lands on
   that member.
+- **`slice<char*>`**: a quoted, bracketed list of the C strings,
+  `["ls", "cat"]` (the modifier is ignored; elements must not be null).
+  Being concrete, this member beats the generic `slice<T>` one below, so a
+  bare `slice<char*>` no longer falls to the list-renderer (which would
+  render the elements unquoted through the `char*` member).
 - **`slice<T>`**: a bracketed list, `[1, 2, 3]`. Each element formats back
   through the overload set, so the modifier applies per element
   (`":x"` gives `[a, ff]`), nesting recurses (`slice<slice<int32>>` renders
-  `[[1, 2], [3]]`), and `slice<char>` never lands here (its concrete member
-  above wins).
+  `[[1, 2], [3]]`), and `slice<char>` / `slice<char*>` never land here
+  (their concrete members above win).
 - **Everything else**: an unbounded `format<T>` fallback renders the type's
   name in angle brackets (`<uint8*>`) instead of a value.
 

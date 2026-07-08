@@ -133,9 +133,9 @@ fn format(mut str: string, value: bool, const modifier: string) {
  *
  * Each element formats through the overload set again, so nesting works
  * (`slice<slice<int32>>` renders `[[..], [..]]`) and elements with no
- * formatter fall back to `<typename>`. `slice<char>` never lands here:
- * its concrete overload below beats this generic one and renders the
- * bytes as text.
+ * formatter fall back to `<typename>`. `slice<char>` and `slice<char*>`
+ * never land here: their concrete overloads below beat this generic one
+ * and render text and a quoted list respectively.
  *
  * @param str:      destination string
  * @param value:    slice whose elements to render
@@ -161,6 +161,28 @@ fn format<T>(mut str: string, value: slice<T>, const modifier: string) {
 @inline
 fn format(mut str: string, value: slice<char>, const modifier: string) {
     string_append(str, value);
+}
+
+/**
+ * Appends a slice of C strings as a quoted, bracketed list, `["ls", "cat"]`.
+ *
+ * Concrete, so it beats the generic slice list-renderer above, which
+ * would render the elements unquoted through the char* member.
+ *
+ * @param str:      destination string
+ * @param value:    slice of NUL-terminated strings; elements must not be
+ *                  null (asserted with the `!` hatch, undefined if one is)
+ * @param modifier: ignored
+ */
+fn format(mut str: string, value: slice<char*>, const modifier: string) {
+    string_push(str, '[');
+    for item in enumerate(value) {
+        if (item.index > 0) string_append(str, ", ");
+        string_push(str, '"');
+        string_append(str, item.value!);
+        string_push(str, '"');
+    }
+    string_push(str, ']');
 }
 
 /**

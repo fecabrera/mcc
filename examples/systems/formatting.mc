@@ -99,6 +99,12 @@ fn main() -> int32 {
     format(line, rows as slice<slice<int32>>, plain);    // [[1, 2, 3], [4, 5]]
     show("nested:", line);
 
+    // slice<char*> has its own concrete member that beats the generic list
+    // renderer, quoting each C string (argv-style).
+    let cmd: char*[3] = ["cp", "-r", "src"];
+    format(line, cmd as slice<char*>, plain);    // ["cp", "-r", "src"]
+    show("argv:", line);
+
     // A type with no member lands on the unbounded format<T> fallback,
     // which renders the type's name instead of a value.
     let b: uint8 = 7;

@@ -3,8 +3,8 @@
 Every member appends `value`'s rendering to a `string`, steered by a
 `modifier` string: an unbounded `format<T>` typename fallback, closed
 signed/unsigned integer groups funneling into concrete workers, concretes
-for float64/bool/char/char*/slice<char>, and a generic slice<T> bracketed
-list-renderer. Open overload sets make the protocol extensible: one
+for float64/bool/char/char*/slice<char>/slice<char*>, and a generic
+slice<T> bracketed list-renderer. Open overload sets make the protocol extensible: one
 `format` overload in a user module makes that type printable.
 """
 
@@ -257,6 +257,65 @@ def test_slice_of_char_renders_as_text(capfd):
         """
     )
     assert capfd.readouterr().out == "|hi|\n"
+
+
+def test_slice_of_c_strings_renders_quoted_list(capfd):
+    # The concrete slice<char*> member beats the generic list-renderer, so
+    # C strings render as a quoted bracketed list rather than unquoted
+    # through the char* member. The modifier is ignored (":x" changes
+    # nothing), and a single element gets no separator.
+    run(
+        PRELUDE
+        + """
+        fn main() -> int32 {
+            let none: struct string;
+            string_init(none);
+            let hex: struct string;
+            string_init(hex, ":x");
+            let s: struct string;
+            string_init(s);
+            let cmds: char*[2] = ["ls", "cat"];
+            format(s, cmds as slice<char*>, none); string_push(s, ' ');
+            format(s, cmds as slice<char*>, hex);  string_push(s, ' ');
+            let one: char*[1] = ["rm"];
+            format(s, one as slice<char*>, none);
+            show(s);
+            string_destroy(s);
+            string_destroy(none);
+            string_destroy(hex);
+            return 0;
+        }
+        """
+    )
+    expected = '["ls", "cat"] ["ls", "cat"] ["rm"]'
+    assert capfd.readouterr().out == f"|{expected}|\n"
+
+
+def test_nested_c_string_slices_compose_with_generic_renderer(capfd):
+    # slice<slice<char*>> lands on the generic list-renderer, whose per
+    # element calls re-enter the set and hit the concrete slice<char*>
+    # member: quoted lists nest inside a plain bracketed list.
+    run(
+        PRELUDE
+        + """
+        fn main() -> int32 {
+            let none: struct string;
+            string_init(none);
+            let s: struct string;
+            string_init(s);
+            let a: char*[2] = ["ls", "cat"];
+            let b: char*[1] = ["rm"];
+            let rows: slice<char*>[2] = [a as slice<char*>, b as slice<char*>];
+            format(s, rows as slice<slice<char*>>, none);
+            show(s);
+            string_destroy(s);
+            string_destroy(none);
+            return 0;
+        }
+        """
+    )
+    expected = '[["ls", "cat"], ["rm"]]'
+    assert capfd.readouterr().out == f"|{expected}|\n"
 
 
 def test_typename_fallback_for_unformattable_types(capfd):

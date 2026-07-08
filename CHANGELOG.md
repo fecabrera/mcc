@@ -10,6 +10,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`format` renders `slice<char*>` as a quoted list** — a new concrete
+  member of the `format` overload set appends a slice of C strings as a
+  quoted, bracketed list (`["ls", "cat"]`; the modifier is ignored, and
+  elements must not be null). Being concrete, it beats the generic
+  `slice<T>` list-renderer, which used to render the elements unquoted
+  through the `char*` member. See
+  [Formatting](docs/language.md#formatting).
 - **Array literals adapt to `slice<T>`** — an array literal now borrows
   directly to a slice, backed by a hidden array in the enclosing function's
   frame: explicitly in any expression slot (`[1, 2, 3] as slice<int32>`,
