@@ -167,7 +167,7 @@ def test_string_has_and_at_through_the_wrappers():
             if (string_has(s, 3)) return 2;    // length itself is not
             string_at(s, 0) = '/';             // write through the wrapper
             string_at(s, 2) += 1;              // compound: 'c' -> 'd'
-            if (!string_eq(s, "/bd")) return 3;
+            if (!equals(s, "/bd")) return 3;
             let c = string_at(s, 1);           // value context copies out
             string_destroy(s);
             return (c == 'b') ? 0 : 4;
@@ -176,10 +176,10 @@ def test_string_has_and_at_through_the_wrappers():
     ) == 0
 
 
-def test_string_eq_and_init_copy():
-    # string_eq and the slice<char> overload of string_init take their
-    # right-hand side as a slice<char>: a string borrows in with `as`, and a
-    # literal adapts directly (Stage 4), so string_eq(a, "hi") needs no
+def test_string_equals_and_init_copy():
+    # The string members of the equality protocol take their right-hand side
+    # as a slice<const char> (or another string): a string borrows in with
+    # `as`, and a literal adapts directly, so equals(a, "hi") needs no
     # ceremony.
     assert run(
         """
@@ -187,14 +187,14 @@ def test_string_eq_and_init_copy():
         fn main() -> int32 {
             let a: struct string;
             string_init(a, "hi");
-            if (!string_eq(a, "hi")) return 4;   // a literal compares directly
+            if (!equals(a, "hi")) return 4;      // a literal compares directly
             let b: struct string;
             string_init(b, a as slice<char>);
-            if (!string_eq(a, b as slice<char>)) return 1;  // equal after the deep copy
+            if (!equals(a, b)) return 1;         // string-vs-string, equal after the deep copy
             string_push(b, '!');
-            if (string_eq(a, b as slice<char>)) return 2;   // lengths differ now
+            if (equals(a, b)) return 2;          // lengths differ now
             string_push(a, '?');                 // a = "hi?", b = "hi!"
-            if (string_eq(a, b as slice<char>)) return 3;   // same length, bytes differ
+            if (equals(a, b)) return 3;          // same length, bytes differ
             string_destroy(a);
             string_destroy(b);
             return 0;

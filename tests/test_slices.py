@@ -1036,14 +1036,11 @@ def test_format_renders_adapted_literal(capfd):
         import "string";
         import "libc/stdio";
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
             let s: struct string;
             string_init(s);
-            format(s, [0x10, 0x1F] as slice<const int32>, none);
+            format(s, [0x10, 0x1F] as slice<const int32>, "");
             printf("|%.*s|\\n", s.length as int32, s.data);
             string_destroy(s);
-            string_destroy(none);
             return 0;
         }
         """
@@ -1226,15 +1223,12 @@ def test_format_renders_sub_slice(capfd):
         import "string";
         import "libc/stdio";
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
             let s: struct string;
             string_init(s);
             let nums = [1, 2, 3, 4] as slice<const int32>;
-            format(s, nums[1:3], none);
+            format(s, nums[1:3], "");
             printf("|%.*s|\\n", s.length as int32, s.data);
             string_destroy(s);
-            string_destroy(none);
             return 0;
         }
         """

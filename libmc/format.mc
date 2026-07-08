@@ -1,11 +1,13 @@
 import "string";
+import "equality";
 import "libc/stdio";
 
 // The formatting protocol's baseline overload set: every member appends
 // `value`'s rendering to `str`, steered by `modifier` (`""` for the
-// default). Overload sets are open, so making a type printable is adding
-// one `format` overload for it in your own module — a concrete member
-// outranks the closed-group templates and the unbounded fallback here.
+// default; a string literal adapts directly, so `format(s, 255, "x")`
+// works as-is). Overload sets are open, so making a type printable is
+// adding one `format` overload for it in your own module — a concrete
+// member outranks the closed-group templates and the unbounded fallback.
 
 // Scratch space for one snprintf-rendered value.
 @private const MAX_BUF_LEN = 256;
@@ -21,7 +23,7 @@ import "libc/stdio";
  * @param value:    unused; only its type is rendered
  * @param modifier: ignored
  */
-fn format<T>(mut str: string, value: T, const modifier: string) {
+fn format<T>(mut str: string, value: T, const modifier: slice<char>) {
     string_push(str, '<');
     string_append(str, typename(T)!);
     string_push(str, '>');
@@ -37,11 +39,11 @@ fn format<T>(mut str: string, value: T, const modifier: string) {
  *
  * @param str:      destination string
  * @param value:    signed integer to render
- * @param modifier: ":p" pointer-style, ":x" lowercase hex, ":X" uppercase
+ * @param modifier: "p" pointer-style, "x" lowercase hex, "X" uppercase
  *                  hex; anything else renders signed decimal
  */
 @inline
-fn format<T: int32 | int16 | int8>(mut str: string, value: T, const modifier: string) {
+fn format<T: int32 | int16 | int8>(mut str: string, value: T, const modifier: slice<char>) {
     format(str, value as int64, modifier);
 }
 
@@ -53,17 +55,17 @@ fn format<T: int32 | int16 | int8>(mut str: string, value: T, const modifier: st
  *
  * @param str:      destination string
  * @param value:    signed integer to render
- * @param modifier: ":p" pointer-style, ":x" lowercase hex, ":X" uppercase
+ * @param modifier: "p" pointer-style, "x" lowercase hex, "X" uppercase
  *                  hex; anything else renders signed decimal
  */
-fn format(mut str: string, value: int64, const modifier: string) {
+fn format(mut str: string, value: int64, const modifier: slice<char>) {
     let buf: char[MAX_BUF_LEN];
     
-    if (string_eq(modifier, ":p"))
+    if (equals(modifier, "p"))
         snprintf(buf, MAX_BUF_LEN, "%p", value);
-    else if (string_eq(modifier, ":x"))
+    else if (equals(modifier, "x"))
         snprintf(buf, MAX_BUF_LEN, "%llx", value);
-    else if (string_eq(modifier, ":X"))
+    else if (equals(modifier, "X"))
         snprintf(buf, MAX_BUF_LEN, "%llX", value);
     else
         snprintf(buf, MAX_BUF_LEN, "%lld", value);
@@ -80,17 +82,17 @@ fn format(mut str: string, value: int64, const modifier: string) {
  *
  * @param str:      destination string
  * @param value:    unsigned integer to render
- * @param modifier: ":p" pointer-style, ":x" lowercase hex, ":X" uppercase
+ * @param modifier: "p" pointer-style, "x" lowercase hex, "X" uppercase
  *                  hex; anything else renders unsigned decimal
  */
-fn format<T: uint64 | uint32 | uint16 | uint8>(mut str: string, value: T, const modifier: string) {
+fn format<T: uint64 | uint32 | uint16 | uint8>(mut str: string, value: T, const modifier: slice<char>) {
     let buf: char[MAX_BUF_LEN];
 
-    if (string_eq(modifier, ":p"))
+    if (equals(modifier, "p"))
         snprintf(buf, MAX_BUF_LEN, "%p", value);
-    else if (string_eq(modifier, ":x"))
+    else if (equals(modifier, "x"))
         snprintf(buf, MAX_BUF_LEN, "%llx", value);
-    else if (string_eq(modifier, ":X"))
+    else if (equals(modifier, "X"))
         snprintf(buf, MAX_BUF_LEN, "%llX", value);
     else
         snprintf(buf, MAX_BUF_LEN, "%llu", value);
@@ -105,7 +107,7 @@ fn format<T: uint64 | uint32 | uint16 | uint8>(mut str: string, value: T, const 
  * @param value:    value to render
  * @param modifier: ignored
  */
-fn format(mut str: string, value: float64, const modifier: string) {
+fn format(mut str: string, value: float64, const modifier: slice<char>) {
     let buf: char[MAX_BUF_LEN];
     snprintf(buf, MAX_BUF_LEN, "%f", value);
     string_append(str, buf);
@@ -116,13 +118,13 @@ fn format(mut str: string, value: float64, const modifier: string) {
  *
  * @param str:      destination string
  * @param value:    value to render
- * @param modifier: ":y" renders y/n, ":yes" renders yes/no; anything else
+ * @param modifier: "y" renders y/n, "yes" renders yes/no; anything else
  *                  renders true/false
  */
-fn format(mut str: string, value: bool, const modifier: string) {
-    if (string_eq(modifier, ":y"))
+fn format(mut str: string, value: bool, const modifier: slice<char>) {
+    if (equals(modifier, "y"))
         string_append(str, value ? "y" : "n");
-    else if (string_eq(modifier, ":yes"))
+    else if (equals(modifier, "yes"))
         string_append(str, value ? "yes" : "no");
     else
         string_append(str, value ? "true" : "false");
@@ -139,10 +141,10 @@ fn format(mut str: string, value: bool, const modifier: string) {
  *
  * @param str:      destination string
  * @param value:    slice whose elements to render
- * @param modifier: applied to every element (e.g. ":x" renders each
+ * @param modifier: applied to every element (e.g. "x" renders each
  *                  integer as hex)
  */
-fn format<T>(mut str: string, value: slice<T>, const modifier: string) {
+fn format<T>(mut str: string, value: slice<T>, const modifier: slice<char>) {
     string_push(str, '[');
     for item in enumerate(value) {
         if (item.index > 0) string_append(str, ", ");
@@ -159,7 +161,7 @@ fn format<T>(mut str: string, value: slice<T>, const modifier: string) {
  * @param modifier: ignored
  */
 @inline
-fn format(mut str: string, value: slice<char>, const modifier: string) {
+fn format(mut str: string, value: slice<char>, const modifier: slice<char>) {
     string_append(str, value);
 }
 
@@ -174,7 +176,7 @@ fn format(mut str: string, value: slice<char>, const modifier: string) {
  *                  null (asserted with the `!` hatch, undefined if one is)
  * @param modifier: ignored
  */
-fn format(mut str: string, value: slice<char*>, const modifier: string) {
+fn format(mut str: string, value: slice<char*>, const modifier: slice<char>) {
     string_push(str, '[');
     for item in enumerate(value) {
         if (item.index > 0) string_append(str, ", ");
@@ -194,7 +196,7 @@ fn format(mut str: string, value: slice<char*>, const modifier: string) {
  * @param modifier: ignored
  */
 @inline
-fn format(mut str: string, value: char*, const modifier: string) {
+fn format(mut str: string, value: char*, const modifier: slice<char>) {
     string_append(str, value!);
 }
 
@@ -206,6 +208,6 @@ fn format(mut str: string, value: char*, const modifier: string) {
  * @param modifier: ignored
  */
 @inline
-fn format(mut str: string, value: char, const modifier: string) {
+fn format(mut str: string, value: char, const modifier: slice<char>) {
     string_push(str, value);
 }

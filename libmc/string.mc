@@ -1,4 +1,5 @@
 import "list";
+import "equality";
 
 /**
  * Default slot count reserved by string_init before the first growth.
@@ -213,26 +214,37 @@ fn string_append(mut self: string, @nonnull str: char*) {
 }
 
 /**
- * Compares the string against a run of bytes for byte-for-byte equality.
- * Different lengths are never equal; empty runs compare equal.
+ * Compares a string against a run of bytes for byte-for-byte equality, a
+ * string member of the equality protocol. Re-lends `self` into the generic
+ * slice `equals` in `equality`. Different lengths are never equal; empty
+ * runs compare equal.
  *
  * @param self: string to compare
  * @param str:  bytes to compare against -- another string borrows in
- *              (`b as slice<char>`); a literal adapts, so
- *              `string_eq(s, "hi")` works directly
+ *              (`b as slice<const char>`); a literal adapts, so
+ *              `equals(s, "hi")` works directly
  *
  * @return true if both sides have the same length and bytes, false otherwise
  */
-fn string_eq(const self: string, const str: slice<char>) -> bool {
-    if (self.length != str.length)
-        return false;
+@inline
+fn equals(const self: string, const str: slice<const char>) -> bool {
+    return equals(self as slice<const char>, str);
+}
 
-    for i in range(self.length) {
-        if (self.data[i] != str.data[i])
-            return false;
-    }
-
-    return true;
+/**
+ * Compares two strings for byte-for-byte equality, the string-vs-string
+ * member of the equality protocol. Borrows both sides into the generic
+ * slice `equals`, so neither string is copied.
+ *
+ * @param self: string to compare
+ * @param str:  string to compare against
+ *
+ * @return true if both strings have the same length and bytes, false
+ *         otherwise
+ */
+@inline
+fn equals(const self: string, const str: string) -> bool {
+    return equals(self as slice<const char>, str as slice<const char>);
 }
 
 /***************************************

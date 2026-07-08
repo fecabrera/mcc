@@ -1,11 +1,13 @@
 """libmc/format.mc: the formatting protocol's baseline overload set.
 
 Every member appends `value`'s rendering to a `string`, steered by a
-`modifier` string: an unbounded `format<T>` typename fallback, closed
-signed/unsigned integer groups funneling into concrete workers, concretes
-for float64/bool/char/char*/slice<char>/slice<char*>, and a generic
-slice<T> bracketed list-renderer. Open overload sets make the protocol extensible: one
-`format` overload in a user module makes that type printable.
+`slice<char>` modifier (a string literal adapts directly, so
+`format(s, 255 as int32, "x")` works as-is): an unbounded `format<T>`
+typename fallback, closed signed/unsigned integer groups funneling into
+concrete workers, concretes for float64/bool/char/char*/slice<char>/
+slice<char*>, and a generic slice<T> bracketed list-renderer. Open overload
+sets make the protocol extensible: one `format` overload in a user module
+makes that type printable.
 """
 
 import pytest
@@ -33,18 +35,15 @@ def test_signed_integers_render_decimal(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
             let s: struct string;
             string_init(s);
-            format(s, -4 as int8, none);   string_push(s, ' ');
-            format(s, -4 as int16, none);  string_push(s, ' ');
-            format(s, -4 as int32, none);  string_push(s, ' ');
-            format(s, -4 as int64, none);  string_push(s, ' ');
-            format(s, 123456789 as int32, none);
+            format(s, -4 as int8, "");   string_push(s, ' ');
+            format(s, -4 as int16, "");  string_push(s, ' ');
+            format(s, -4 as int32, "");  string_push(s, ' ');
+            format(s, -4 as int64, "");  string_push(s, ' ');
+            format(s, 123456789 as int32, "");
             show(s);
             string_destroy(s);
-            string_destroy(none);
             return 0;
         }
         """
@@ -59,16 +58,13 @@ def test_unsigned_integers_render_decimal(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
             let s: struct string;
             string_init(s);
-            format(s, 250 as uint8, none);   string_push(s, ' ');
-            format(s, 65535 as uint16, none); string_push(s, ' ');
-            format(s, 18446744073709551615 as uint64, none);
+            format(s, 250 as uint8, "");   string_push(s, ' ');
+            format(s, 65535 as uint16, ""); string_push(s, ' ');
+            format(s, 18446744073709551615 as uint64, "");
             show(s);
             string_destroy(s);
-            string_destroy(none);
             return 0;
         }
         """
@@ -77,30 +73,21 @@ def test_unsigned_integers_render_decimal(capfd):
 
 
 def test_integer_modifiers(capfd):
-    # ":x"/":X" render hex, ":p" pointer-style. A negative int32 was already
-    # sign-extended to int64 by the group overload, so its ":x" is the full
+    # "x"/"X" render hex, "p" pointer-style. A negative int32 was already
+    # sign-extended to int64 by the group overload, so its "x" is the full
     # 64-bit two's-complement pattern -- pinned as the intended behavior.
     run(
         PRELUDE
         + """
         fn main() -> int32 {
-            let hex: struct string;
-            string_init(hex, ":x");
-            let hexup: struct string;
-            string_init(hexup, ":X");
-            let ptr: struct string;
-            string_init(ptr, ":p");
             let s: struct string;
             string_init(s);
-            format(s, 255 as uint8, hex);   string_push(s, ' ');
-            format(s, 255 as int64, hexup); string_push(s, ' ');
-            format(s, -4 as int32, hex);    string_push(s, ' ');
-            format(s, 42 as int64, ptr);
+            format(s, 255 as uint8, "x");   string_push(s, ' ');
+            format(s, 255 as int64, "X"); string_push(s, ' ');
+            format(s, -4 as int32, "x");    string_push(s, ' ');
+            format(s, 42 as int64, "p");
             show(s);
             string_destroy(s);
-            string_destroy(hex);
-            string_destroy(hexup);
-            string_destroy(ptr);
             return 0;
         }
         """
@@ -108,19 +95,38 @@ def test_integer_modifiers(capfd):
     assert capfd.readouterr().out == "|ff FF fffffffffffffffc 0x2a|\n"
 
 
+def test_modifier_from_a_string_borrows_in(capfd):
+    # A modifier built at runtime is a `string`; it borrows into the
+    # slice<char> parameter explicitly, `m as slice<char>`.
+    run(
+        PRELUDE
+        + """
+        fn main() -> int32 {
+            let m: struct string;
+            string_init(m, "x");
+            let s: struct string;
+            string_init(s);
+            format(s, 255 as int32, m as slice<char>);
+            show(s);
+            string_destroy(s);
+            string_destroy(m);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "|ff|\n"
+
+
 def test_float64_renders_fixed_point(capfd):
     run(
         PRELUDE
         + """
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
             let s: struct string;
             string_init(s);
-            format(s, 3.5, none);
+            format(s, 3.5, "");
             show(s);
             string_destroy(s);
-            string_destroy(none);
             return 0;
         }
         """
@@ -129,30 +135,21 @@ def test_float64_renders_fixed_point(capfd):
 
 
 def test_bool_modifiers(capfd):
-    # Default true/false; ":y" renders y/n, ":yes" renders yes/no.
+    # Default true/false; "y" renders y/n, "yes" renders yes/no.
     run(
         PRELUDE
         + """
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
-            let y: struct string;
-            string_init(y, ":y");
-            let yes: struct string;
-            string_init(yes, ":yes");
             let s: struct string;
             string_init(s);
-            format(s, true, none);  string_push(s, ' ');
-            format(s, false, none); string_push(s, ' ');
-            format(s, true, y);     string_push(s, ' ');
-            format(s, false, y);    string_push(s, ' ');
-            format(s, true, yes);   string_push(s, ' ');
-            format(s, false, yes);
+            format(s, true, "");  string_push(s, ' ');
+            format(s, false, ""); string_push(s, ' ');
+            format(s, true, "y");     string_push(s, ' ');
+            format(s, false, "y");    string_push(s, ' ');
+            format(s, true, "yes");   string_push(s, ' ');
+            format(s, false, "yes");
             show(s);
             string_destroy(s);
-            string_destroy(none);
-            string_destroy(y);
-            string_destroy(yes);
             return 0;
         }
         """
@@ -161,22 +158,20 @@ def test_bool_modifiers(capfd):
 
 
 def test_char_and_c_string(capfd):
-    # A bare string literal decays to char* and lands on the char* member --
-    # pinned: it renders its bytes rather than colliding with slice<char>.
+    # A bare string literal as the VALUE decays to char* and lands on the
+    # char* member -- pinned: it renders its bytes rather than colliding
+    # with slice<char>.
     run(
         PRELUDE
         + """
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
             let s: struct string;
             string_init(s);
-            format(s, 'Z', none);
-            format(s, "-hello" as char*, none);
-            format(s, "-lit", none);
+            format(s, 'Z', "");
+            format(s, "-hello" as char*, "");
+            format(s, "-lit", "");
             show(s);
             string_destroy(s);
-            string_destroy(none);
             return 0;
         }
         """
@@ -191,19 +186,13 @@ def test_slice_renders_bracketed_list(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
-            let hex: struct string;
-            string_init(hex, ":x");
             let s: struct string;
             string_init(s);
             let a: int32[3] = [10, 255, 3];
-            format(s, a as slice<int32>, none); string_push(s, ' ');
-            format(s, a as slice<int32>, hex);
+            format(s, a as slice<int32>, ""); string_push(s, ' ');
+            format(s, a as slice<int32>, "x");
             show(s);
             string_destroy(s);
-            string_destroy(none);
-            string_destroy(hex);
             return 0;
         }
         """
@@ -218,17 +207,14 @@ def test_nested_slices_render_nested_lists(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
             let s: struct string;
             string_init(s);
             let a: int32[3] = [1, 2, 3];
             let b: int32[2] = [4, 5];
             let rows: slice<int32>[2] = [a as slice<int32>, b as slice<int32>];
-            format(s, rows as slice<slice<int32>>, none);
+            format(s, rows as slice<slice<int32>>, "");
             show(s);
             string_destroy(s);
-            string_destroy(none);
             return 0;
         }
         """
@@ -243,15 +229,12 @@ def test_slice_of_char_renders_as_text(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
             let s: struct string;
             string_init(s);
             let word = "hi";
-            format(s, word as slice<char>, none);
+            format(s, word as slice<char>, "");
             show(s);
             string_destroy(s);
-            string_destroy(none);
             return 0;
         }
         """
@@ -262,27 +245,21 @@ def test_slice_of_char_renders_as_text(capfd):
 def test_slice_of_c_strings_renders_quoted_list(capfd):
     # The concrete slice<char*> member beats the generic list-renderer, so
     # C strings render as a quoted bracketed list rather than unquoted
-    # through the char* member. The modifier is ignored (":x" changes
+    # through the char* member. The modifier is ignored ("x" changes
     # nothing), and a single element gets no separator.
     run(
         PRELUDE
         + """
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
-            let hex: struct string;
-            string_init(hex, ":x");
             let s: struct string;
             string_init(s);
             let cmds: char*[2] = ["ls", "cat"];
-            format(s, cmds as slice<char*>, none); string_push(s, ' ');
-            format(s, cmds as slice<char*>, hex);  string_push(s, ' ');
+            format(s, cmds as slice<char*>, ""); string_push(s, ' ');
+            format(s, cmds as slice<char*>, "x");  string_push(s, ' ');
             let one: char*[1] = ["rm"];
-            format(s, one as slice<char*>, none);
+            format(s, one as slice<char*>, "");
             show(s);
             string_destroy(s);
-            string_destroy(none);
-            string_destroy(hex);
             return 0;
         }
         """
@@ -299,17 +276,14 @@ def test_nested_c_string_slices_compose_with_generic_renderer(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
             let s: struct string;
             string_init(s);
             let a: char*[2] = ["ls", "cat"];
             let b: char*[1] = ["rm"];
             let rows: slice<char*>[2] = [a as slice<char*>, b as slice<char*>];
-            format(s, rows as slice<slice<char*>>, none);
+            format(s, rows as slice<slice<char*>>, "");
             show(s);
             string_destroy(s);
-            string_destroy(none);
             return 0;
         }
         """
@@ -325,15 +299,12 @@ def test_typename_fallback_for_unformattable_types(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
             let s: struct string;
             string_init(s);
             let p: uint8* = null;
-            format(s, p, none);
+            format(s, p, "");
             show(s);
             string_destroy(s);
-            string_destroy(none);
             return 0;
         }
         """
@@ -350,34 +321,9 @@ def test_untyped_integer_literal_is_ambiguous():
             PRELUDE
             + """
             fn main() -> int32 {
-                let none: struct string;
-                string_init(none);
                 let s: struct string;
                 string_init(s);
-                format(s, 42, none);
-                return 0;
-            }
-            """
-        )
-
-
-def test_bare_literal_modifier_is_rejected():
-    # Pinned ergonomics quirk (current behavior, not a promise): the modifier
-    # is a `const string` (a struct), and only slices adapt from a bare
-    # literal, so `":x"` stays a char* and no member matches -- modifiers
-    # must be built with string_init.
-    with pytest.raises(
-        LangError,
-        match=r"no overload of 'format' with signature "
-        r"format\(list<char>, int32, char\*\)",
-    ):
-        compile_ir(
-            PRELUDE
-            + """
-            fn main() -> int32 {
-                let s: struct string;
-                string_init(s);
-                format(s, 1 as int32, ":x");
+                format(s, 42, "");
                 return 0;
             }
             """
@@ -386,8 +332,9 @@ def test_bare_literal_modifier_is_rejected():
 
 def test_user_overload_joins_the_set_cross_module(tmp_path, capfd):
     # The open-sets protocol move: a user module makes its own type printable
-    # by declaring one format overload, and it joins the stdlib set at import
-    # merge -- including recursing back into the set for its fields.
+    # by declaring one format overload -- taking the protocol's slice<char>
+    # modifier -- and it joins the stdlib set at import merge, including
+    # recursing back into the set for its fields.
     (tmp_path / "point.mc").write_text(
         """
         import "format";
@@ -395,7 +342,7 @@ def test_user_overload_joins_the_set_cross_module(tmp_path, capfd):
 
         struct point { x: int32; y: int32; }
 
-        fn format(mut str: string, value: struct point*, const modifier: string) {
+        fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
             string_push(str, '(');
             format(str, value->x, modifier);
             string_append(str, ", ");
@@ -417,19 +364,13 @@ def test_user_overload_joins_the_set_cross_module(tmp_path, capfd):
         }
 
         fn main() -> int32 {
-            let none: struct string;
-            string_init(none);
-            let hex: struct string;
-            string_init(hex, ":x");
             let s: struct string;
             string_init(s);
             let p = struct point { x = 3, y = 255 };
-            format(s, &p, none); string_push(s, ' ');
-            format(s, &p, hex);
+            format(s, &p, ""); string_push(s, ' ');
+            format(s, &p, "x");
             show(s);
             string_destroy(s);
-            string_destroy(none);
-            string_destroy(hex);
             return 0;
         }
         """

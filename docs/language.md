@@ -3564,24 +3564,26 @@ fn digit_value(c: char) -> char {
 [overload set](#function-overloading),
 
 ```c
-format(mut str: string, value: X, const modifier: string)
+format(mut str: string, value: X, const modifier: slice<char>)
 ```
 
 where every member appends `value`'s rendering to a
 [`string`](../libmc/string.mc) and `modifier` steers the spelling (an empty
-string picks the default). The baseline members cover the built-in types:
+string picks the default). Because the modifier is a `slice<char>`, a bare
+string literal adapts to it at the call, so modifiers are written inline.
+The baseline members cover the built-in types:
 
 - **Signed integers**: decimal. One [closed-group](#closed-type-groups)
   template takes `int32 | int16 | int8` and sign-extends into the concrete
   `int64` worker, so `-4` renders `-4` at every width.
 - **Unsigned integers**: unsigned decimal, one group for
   `uint64 | uint32 | uint16 | uint8`.
-- Integer modifiers: `":x"` lowercase hex, `":X"` uppercase hex, `":p"`
+- Integer modifiers: `"x"` lowercase hex, `"X"` uppercase hex, `"p"`
   pointer-style (`0x2a`). A negative narrow value was already sign-extended
   when the modifier applies, so its hex is the full 64-bit two's-complement
-  pattern (`-4 as int32` with `":x"` is `fffffffffffffffc`).
+  pattern (`-4 as int32` with `"x"` is `fffffffffffffffc`).
 - **`float64`**: fixed-point (`3.5` renders `3.500000`).
-- **`bool`**: `true`/`false`; `":y"` renders `y`/`n`, and `":yes"` renders
+- **`bool`**: `true`/`false`; `"y"` renders `y`/`n`, and `"yes"` renders
   `yes`/`no`.
 - **`char`**, **`char*`**, **`slice<char>`**: appended as text (the
   modifier is ignored). A string literal decays to `char*` and lands on
@@ -3593,7 +3595,7 @@ string picks the default). The baseline members cover the built-in types:
   render the elements unquoted through the `char*` member).
 - **`slice<T>`**: a bracketed list, `[1, 2, 3]`. Each element formats back
   through the overload set, so the modifier applies per element
-  (`":x"` gives `[a, ff]`), nesting recurses (`slice<slice<int32>>` renders
+  (`"x"` gives `[a, ff]`), nesting recurses (`slice<slice<int32>>` renders
   `[[1, 2], [3]]`), and `slice<char>` / `slice<char*>` never land here
   (their concrete members above win).
 - **Everything else**: an unbounded `format<T>` fallback renders the type's
@@ -3603,16 +3605,12 @@ string picks the default). The baseline members cover the built-in types:
 import "format";
 import "string";
 
-let mode: struct string;
-string_init(mode, ":x");     // the modifier is a string value
 let s: struct string;
 string_init(s);
-format(s, 255 as int32, mode);   // s is now "ff"
+format(s, 255 as int32, "x");    // s is now "ff" — the literal adapts
 ```
 
-Two sharp edges, both consequences of the signature: the modifier is a
-`string` *value*, so it must be built with `string_init` (a bare `":x"`
-literal stays a `char*` and no member matches), and an untyped integer
+One sharp edge, a consequence of open overloading: an untyped integer
 literal is ambiguous between the `int64` and `char` members, so type the
 value (`42 as int32`).
 
@@ -3624,7 +3622,7 @@ back into the set for its fields:
 ```c
 struct point { x: int32; y: int32; }
 
-fn format(mut str: string, value: struct point*, const modifier: string) {
+fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
     string_push(str, '(');
     format(str, value->x, modifier);
     string_append(str, ", ");

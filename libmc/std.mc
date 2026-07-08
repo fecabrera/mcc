@@ -1,5 +1,59 @@
 import "string";
-import "libc/stdio";
+import "format";
+
+@if (NATIVE_PRINTLN) {
+    @private
+    fn format_args(mut str: string, const fmt: slice<const char>, args...) {
+        let i: uint64 = 0;
+        let bracket_open = false;
+        let bracket_closed = false;
+
+        let modifier: string;
+        string_init(modifier);
+        defer string_destroy(modifier);
+
+        for c in fmt {
+            case (c) {
+            when '{':
+                if (bracket_open) {
+                    string_push(str, c);
+                    bracket_open = false;
+                    continue;
+                }
+
+                bracket_open = true;
+            when '}':
+                if (bracket_closed) {
+                    string_push(str, c);
+                    bracket_closed = false;
+                    continue;
+                }
+
+                if (!bracket_open) {
+                    bracket_closed = true;
+                    continue;
+                }
+
+                bracket_open = false;
+
+                if (i < args.length) {
+                    with (t = args[i] as T) {
+                        format(str, t, (modifier as slice<char>)[1:]);
+                    }
+
+                    string_reset(modifier);
+                    i += 1;
+                }
+            else:
+                if (bracket_open) {
+                    string_push(modifier, c);
+                } else {
+                    string_push(str, c);
+                }
+            }
+        }
+    }
+}
 
 /**
  * Formats according to format and writes the result to standard output (no
@@ -10,11 +64,21 @@ import "libc/stdio";
  * @param format: printf-style format string (stb_sprintf grammar; floats disabled)
  * @param ...:    variadic arguments matching the format specifiers
  */
-fn print(format: char*, ...) {
-    let args: va_list;
-    va_start(args, format);
-    vprintf(format, args);
-    va_end(args);
+@if (NATIVE_PRINTLN) {
+    fn print(const format: slice<const char>, args...) {
+        let str: string;
+        string_init(str);
+        defer string_destroy(str);
+        format_args(str, format, args);
+        writestr(str as slice<char>);
+    }
+} @else {
+    fn print(format: char*, ...) {
+        let args: va_list;
+        va_start(args, format);
+        vprintf(format, args);
+        va_end(args);
+    }
 }
 
 /**
@@ -25,12 +89,23 @@ fn print(format: char*, ...) {
  * @param format: printf-style format string (stb_sprintf grammar; floats disabled)
  * @param ...:    variadic arguments matching the format specifiers
  */
-fn println(format: char*, ...) {
-    let args: va_list;
-    va_start(args, format);
-    vprintf(format, args);
-    va_end(args);
-    putchar('\n' as int32);   // char literals are char; putchar takes int32
+@if (NATIVE_PRINTLN) {
+    fn println(const fmt: slice<const char>, args...) {
+        let str: string;
+        string_init(str);
+        defer string_destroy(str);
+        format_args(str, fmt, args);
+        string_push(str, '\n');
+        writestr(str as slice<char>);
+    }
+} @else {
+    fn println(format: char*, ...) {
+        let args: va_list;
+        va_start(args, format);
+        vprintf(format, args);
+        va_end(args);
+        putchar('\n' as int32);   // char literals are char; putchar takes int32
+    }
 }
 
 /**

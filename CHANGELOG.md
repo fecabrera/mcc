@@ -98,21 +98,33 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   [examples/memory/slice_literals.mc](examples/memory/slice_literals.mc).
 - **The `format` module** — the formatting protocol's baseline overload
   set: every member of `import "format";`'s
-  `format(mut str: string, value: X, const modifier: string)` set appends
-  `value`'s rendering to `str`, steered by `modifier` (`""` for the
-  default). Closed signed and unsigned integer groups render decimal
-  (the narrow signed widths sign-extend into a concrete `int64` worker,
-  so `-4` renders `-4` at every width) with `":x"`/`":X"`/`":p"` hex and
-  pointer modifiers; concretes cover `float64` (fixed-point), `bool`
-  (`true`/`false`, with `":y"` and `":yes"` spellings), and
-  `char`/`char*`/`slice<char>` as text; a generic `slice<T>` member
-  renders a bracketed list whose elements recurse through the set (the
-  modifier applies per element, so nesting works); and an unbounded
-  `format<T>` fallback renders `<typename>` for anything uncovered. The
-  set is the first of the overload-set protocols riding open overload
-  sets (below): one `format` overload in your own module makes your type
-  printable. See [Formatting](docs/language.md#formatting) and
+  `format(mut str: string, value: X, const modifier: slice<char>)` set
+  appends `value`'s rendering to `str`, steered by `modifier` (`""` for the
+  default). Because the modifier is a `slice<char>`, a bare string literal
+  adapts to it at the call (`format(s, 255 as int32, "x")`). Closed signed
+  and unsigned integer groups render decimal (the narrow signed widths
+  sign-extend into a concrete `int64` worker, so `-4` renders `-4` at every
+  width) with `"x"`/`"X"`/`"p"` hex and pointer modifiers; concretes cover
+  `float64` (fixed-point), `bool` (`true`/`false`, with `"y"` and `"yes"`
+  spellings), and `char`/`char*`/`slice<char>` as text; a generic
+  `slice<T>` member renders a bracketed list whose elements recurse through
+  the set (the modifier applies per element, so nesting works); and an
+  unbounded `format<T>` fallback renders `<typename>` for anything
+  uncovered. The set is the first of the overload-set protocols riding open
+  overload sets (below): one `format` overload in your own module makes your
+  type printable. See [Formatting](docs/language.md#formatting) and
   [examples/systems/formatting.mc](examples/systems/formatting.mc).
+- **The `equality` module** — `import "equality";` provides the equality
+  protocol's baseline overload set: a generic
+  `equals<T>(const self: slice<T>, const str: slice<T>) -> bool` compares
+  two slices element by element (different lengths are never equal, empty
+  slices compare equal; `T` must support `!=`). A string borrows in and a
+  string literal adapts, so `equals(s, "hi")` works directly. Like the
+  `format` set, it is open: a type joins the protocol by adding an `equals`
+  overload in its own module. **Breaking** (pre-1.0): `string`'s comparison
+  is now the `equals` members of this protocol (string-vs-slice and
+  string-vs-string) rather than the standalone `string_eq` from 0.6.0, which
+  is removed — `string_eq(s, x)` becomes `equals(s, x)`.
 - **Open overload sets** — overload sets are open by default (a minor
   version bump, pre-1.0): any module may add overloads to an existing
   name — concrete, generic, or mixed — and the set is the whole-program
