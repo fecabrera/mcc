@@ -100,12 +100,19 @@ class TypedValue:
             pointer an array decayed to (see :meth:`CodeGen.value_at`), else
             ``None``. Boxing into an ``any`` consults it so a decayed array is
             rejected by its array type instead of silently boxing the pointer.
+        lvalue: For the result of a ``mut``-returning call, the returned
+            storage address (the raw pointer the call yielded; ``value``
+            holds the eagerly loaded pointee). ``None`` for everything else.
+            The lvalue surfaces -- assignment, projection, re-lending as a
+            ``mut`` argument -- consume it; value contexts use ``value`` and
+            the unused load folds away.
     """
 
     value: ir.Value
     type: LangType
     adaptable: bool = False
     decayed: "LangType | None" = None
+    lvalue: "ir.Value | None" = None
 
 
 @dataclass

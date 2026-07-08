@@ -75,6 +75,8 @@ fn main() -> int32 {
     return 0;
 }
 
-// See also: const_params.mc (read-only, the dual of mut); mut_overloads.mc
-// for overloads of one generic name mixing mut and non-mut positions;
-// pointer_decay.mc for a proven-non-null T* decaying into a mut slot.
+// See also: const_params.mc (read-only, the dual of mut); mut_returns.mc
+// for the return-side counterpart, `-> mut T` functions returning lvalues;
+// mut_overloads.mc for overloads of one generic name mixing mut and
+// non-mut positions; pointer_decay.mc for a proven-non-null T* decaying
+// into a mut slot.

@@ -114,10 +114,10 @@ fn main() -> int32 {
 The argument must be the caller's own writable storage — a variable, a field,
 an array element, or a dereference — of **exactly** the parameter's type (the
 callee writes through the reference, so nothing can adapt or widen; `int32`
-and `uint32` may share bits, but not a `mut` reference). A literal, a call
-result, a `const` parameter, a read-only `const T` lvalue, `@volatile`
-storage, and a `@packed` field (whose alignment is not guaranteed) are all
-rejected.
+and `uint32` may share bits, but not a `mut` reference). A literal, a plain
+call result (a [`mut` return](#mut-returns) re-lends instead), a `const`
+parameter, a read-only `const T` lvalue, `@volatile` storage, and a
+`@packed` field (whose alignment is not guaranteed) are all rejected.
 
 Inside the body a `mut` parameter behaves like the variable it references:
 assignment and compound assignment write through, a struct's fields project
@@ -169,6 +169,90 @@ the convention (the same liftable limitation as `const`, see above).
 See [examples/functions/mut_params.mc](../examples/functions/mut_params.mc)
 and, for overloads mixing `mut`,
 [examples/functions/mut_overloads.mc](../examples/functions/mut_overloads.mc).
+
+### mut returns
+
+A function declared `-> mut T` returns an **lvalue**: a reference to
+caller-reachable storage of type `T`, rather than a copy of the value. The
+call expression is then usable on both sides of `=` — it is the accessor
+shape (`_at`-style element access without handing out a raw `T*`):
+
+```c
+struct buf { data: char*; length: uint64; }
+
+fn buf_at(mut self: struct buf, i: uint64) -> mut char {
+    return self.data[i];       // formed from the mut receiver: legal
+}
+
+fn bump(mut c: char) { c += 1; }
+
+fn main() -> int32 {
+    let bytes: char[4];
+    bytes[0] = 'a'; bytes[1] = 'b'; bytes[2] = 'c'; bytes[3] = '\0';
+    let b = struct buf { data = &bytes[0], length = 3 };
+    buf_at(b, 0) = '/';         // assignment through the returned lvalue
+    buf_at(b, 1) += 1;          // compound assignment (addressed once)
+    bump(buf_at(b, 2));         // re-lent as a mut argument
+    let c = buf_at(b, 0);       // value context: loads the current value
+    return c == '/' ? 0 : 1;
+}
+```
+
+There are no reference locals: a `mut` return is **consumed at the call
+expression**. In value position it loads; on the lvalue side it is an
+assignment or compound-assignment target, a base for projections
+(`f(s).field = v`, and `f(s)[i] = v` through a `-> mut T*` result), and
+re-lendable as another call's `mut` argument on both call paths (concrete
+and generic/overloaded). `&f(...)` is rejected — the reference must not
+outlive the full expression, the same non-escape guarantee a `mut`
+parameter carries.
+
+**The formation rule.** Without a lifetime system, what keeps the reference
+from dangling is a strict, checkable rule at the callee's `return`: the
+returned lvalue may only be formed from a **`mut` or pointer parameter or a
+global**, traced through member accesses (`.`/`->`), elements,
+dereferences, and calls that themselves return `mut` (composition:
+`return buf_at(self, 0);` is fine). Everything rooted in the call's own
+frame is rejected:
+
+- a **local** — even a provably-safe alias like `let d = self.data;
+  return d[i];` is rejected (inline the chain into the return expression);
+- a **by-value parameter** (its storage is the call's frame copy);
+- a **`const` parameter** (read-only, wherever the chain crosses);
+- the **pointer parameter itself**: `return p` would reference the
+  parameter's own frame slot and is rejected, while `return *p`,
+  `return p[i]`, and `return p->f` reach the storage the caller handed in
+  and are legal. A `mut` parameter *is* legal as the returned lvalue itself
+  (`return x;`) — it already names the caller's storage.
+
+Casts, arithmetic, `null`, and calls without a `mut` return are never part
+of a legal chain. The storage rules `mut` arguments obey apply at the
+`return` too: `@volatile` storage, `@packed` fields, and read-only
+`const T` lvalues are rejected, and the lvalue's type must match the
+declared return **exactly** (the caller writes through the reference, so
+nothing adapts or widens).
+
+`-> mut` works on generics (`fn pick<T>(mut a: T, mut b: T, f: bool) ->
+mut T`), with the formation and void rules checked per instance. It is
+rejected on `@extern` and `@asm` functions (the pointer-typed return would
+change the C calling convention), on `main`, and on `void` (there is no
+storage to reference); a `-> mut` function cannot become a [function
+value](#function-pointers) (the plain `fn(...) -> T` type cannot express
+it), and overloads differing only in `-> mut` collide as duplicates, like
+any return-type-only pair. In an [interface file](#interface-files) the
+marker is re-emitted on the prototype and must match the definition
+exactly.
+
+One programmer's-problem caveat, the same one [container
+cursors](#control-flow) have: a `mut` return that points into a
+container's heap storage is a borrow of that storage — an operation that
+reallocates it (a growing `list_push`, `string_cat`, ...) within the same
+full expression, or between forming the reference and the surrounding
+statement's store, invalidates the reference. The formation rule prevents
+frame escapes, not heap staleness; keep the access and the mutation in
+separate statements, exactly as with an in-flight cursor.
+
+See [examples/functions/mut_returns.mc](../examples/functions/mut_returns.mc).
 
 ### Pointer decay into const/mut parameters
 
@@ -1713,7 +1797,9 @@ rvalue is iterable: `for x in make_iter() { ... }` works, where `&` could not
 take its address. For value types the two forms are indistinguishable; the
 reference form matters when the body mutates the container as it goes (and, as
 in C, growing a container mid-iteration invalidates an in-flight cursor either
-way).
+way — the same staleness a [`mut` return](#mut-returns) into container
+storage suffers when a growing push lands between forming the reference and
+using it).
 
 ```c
 for v in nums  { ... }   // by value: iterate a snapshot of nums
@@ -3305,7 +3391,8 @@ fn main() -> int32 {
 }
 ```
 
-Every signature marker (`const`, `mut`, `@noalias`, `@nonnull`) means exactly
+Every signature marker (`const`, `mut`, `@noalias`, `@nonnull`, and a
+[`-> mut` return](#mut-returns)) means exactly
 what it does on a definition, and the prototype must match the definition's
 signature — the convention is derived from the signature on each side
 independently. Generic, `@inline`, `@asm`, and `@static` functions cannot be
@@ -3321,7 +3408,8 @@ parameter list is not a mismatch — it joins the name's overload set as its
 own member. Identical prototypes collapse onto one declaration (like repeated
 `@extern` declarations), and a prototype arriving after its definition is
 discarded the same way. Matching within one signature is strict: the return
-type, the derived `const`-struct/`mut` hidden-reference positions, the
+type (its `mut` marker included), the derived `const`-struct/`mut`
+hidden-reference positions, the
 `@noalias` and `@nonnull` markers, and the `@private` flag must all agree —
 parameter names
 may differ, and an `@inline` definition never pairs with a prototype (a

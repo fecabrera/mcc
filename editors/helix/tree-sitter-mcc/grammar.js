@@ -200,7 +200,9 @@ module.exports = grammar({
         field('name', $.identifier),
         optional($.type_parameters),
         $.parameter_list,
-        optional(seq('->', field('return_type', $._type))),
+        // `-> mut T` marks a mut return (a function returning an lvalue);
+        // the fn(...) -> T pointer *type* below stays closed to it.
+        optional(seq('->', optional('mut'), field('return_type', $._type))),
         field('body', choice($.block, $.asm_block)),
       ),
 
@@ -217,7 +219,8 @@ module.exports = grammar({
         field('name', $.identifier),
         optional($.type_parameters),
         $.parameter_list,
-        optional(seq('->', field('return_type', $._type))),
+        // Interface stubs re-emit `-> mut` on prototypes, so it parses here.
+        optional(seq('->', optional('mut'), field('return_type', $._type))),
         ';',
       ),
 

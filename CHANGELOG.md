@@ -10,6 +10,27 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`mut` returns** — a function declared `-> mut T` returns an lvalue: a
+  reference to caller-reachable storage, so
+  `fn buf_at(mut self: struct buf, i: uint64) -> mut char` makes
+  `buf_at(b, 0) = '/'` legal. The call expression is assignable,
+  compound-assignable (addressed once), a base for projections
+  (`f(s).field = v`, `f(s)[i] = v`), and re-lendable as a `mut` argument on
+  both call paths; in value context it loads the current value. To keep the
+  reference from dangling, the callee's `return` obeys a strict formation
+  rule: the lvalue must be formed from a `mut`/pointer parameter or a
+  global, traced through members, elements, dereferences, and other
+  `mut`-returning calls — every local root is rejected (as are by-value and
+  `const` parameter roots, and returning a pointer parameter itself), the
+  lvalue's type must match the declared return exactly, and
+  `@volatile`/`@packed`/read-only storage is refused, like a `mut`
+  argument. `&f(...)` is banned, `-> mut` is rejected on `@extern`, `@asm`,
+  `main`, `void`, and function values, overloads differing only in `-> mut`
+  collide, `.mci` stubs re-emit the marker (prototype pairing checks it),
+  and stores through a returned reference are tracked by the write-effect
+  analysis. Generics declare `-> mut T` per instance. See
+  [mut returns](docs/language.md#mut-returns) and
+  [examples/functions/mut_returns.mc](examples/functions/mut_returns.mc).
 - **stdlib: `fnv1a` gains a `slice<T>` member** — length-bounded hashing
   beside the zero-terminated pointer member: the new overload folds exactly
   `length` elements, so zeros in the data are hashed (the right member for

@@ -297,6 +297,14 @@ class Func:
             needed past it), falling off the end of the body is undefined
             behavior (an auto-``unreachable``, C11 ``_Noreturn`` semantics),
             and a ``return`` statement in the body is a compile error.
+        mut_return: ``-> mut T`` -- the function returns an lvalue: a
+            reference to caller-reachable storage of type ``T``, lowered as
+            a pointer return. The call expression is assignable, a base for
+            projections, and re-lendable as a ``mut`` argument; in value
+            context it loads. The body's ``return`` may only form the
+            reference from a ``mut``/pointer parameter or a global (never
+            this call's own frame). A flag on the function, not part of the
+            return ``TypeRef`` -- ``mut`` is not a type.
         deprecated_msg: The ``@deprecated("...")`` migration message, or
             ``None``. Every call site (and function-value use) emits a
             warning carrying it; the function stays callable.
@@ -337,6 +345,7 @@ class Func:
     noalias_params: set[str] = field(default_factory=set)
     nonnull_params: set[str] = field(default_factory=set)
     noreturn: bool = False
+    mut_return: bool = False
     deprecated_msg: str | None = None
     removed_msg: str | None = None
     type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
@@ -822,6 +831,26 @@ class StoreMember:
     base: object
     field: str
     arrow: bool
+    value: object
+    line: int
+
+
+@dataclass
+class StoreCall:
+    """A store through a ``mut``-returning call: ``f(s, i) = value;``.
+
+    The call's ``-> mut T`` result is the target lvalue: the callee's
+    returned reference is addressed once and the value is stored through
+    it. A call to a function without a ``mut`` return is rejected at
+    codegen (a plain result is not assignable).
+
+    Attributes:
+        call: The ``Call`` whose ``mut`` return is the assignment target.
+        value: The expression to store.
+        line: Source line for diagnostics.
+    """
+
+    call: object
     value: object
     line: int
 

@@ -67,6 +67,7 @@ from mcc.nodes import (
     Return,
     SizeOf,
     StaticAssert,
+    StoreCall,
     StoreDeref,
     StoreIndex,
     StoreMember,
@@ -268,6 +269,8 @@ class GenContext:
     builder: "ir.IRBuilder | None"
     locals: dict = dataclass_field(metadata={"fork": dict})
     ret_type: LangType = dataclass_field(metadata={})
+    ret_mut: bool = dataclass_field(metadata={})
+    formation_params: dict = dataclass_field(metadata={"fork": dict})
     loops: list = dataclass_field(metadata={"fork": list})
     current_variadic: bool = dataclass_field(metadata={})
     current_noreturn: "str | None" = dataclass_field(metadata={})
@@ -470,6 +473,12 @@ class CodeGen:
         # must prove the argument non-null (a checked refinement, unlike the
         # unchecked @noalias promise).
         self.nonnull_ref: dict[str, frozenset[int]] = {}
+        # Symbols declared `-> mut T`: the LLVM return type is a pointer to
+        # the returned storage, and a call to one is an lvalue expression
+        # (assignable, projectable, re-lendable as a mut argument). Fed by
+        # the same four registration sites as mut_ref: @static, overload-set
+        # member, plain concrete, and generic instance.
+        self.mut_ret: set[str] = set()
         # Names of the current function's const (read-only) parameters.
         self.const_locals: set[str] = set()
         # Names of the current function's mut (write-through) parameters.
@@ -623,6 +632,17 @@ class CodeGen:
         # last); each runs in LIFO order when its block exits.
         self.defer_stack: list[list[list]] = []
         self.ret_type: LangType = VOID
+        # Whether the function being generated returns mut (`-> mut T`): its
+        # `return` statements hand back an address under the formation rule
+        # instead of a value. Set per body by gen_function, like ret_type.
+        self.ret_mut: bool = False
+        # The current function's plain (non-mut, non-const) parameters:
+        # name -> whether the parameter's type is a pointer. The mut-return
+        # formation walk consults this to tell a pointer parameter (a legal
+        # root behind at least one hop) from a by-value parameter or local
+        # (this call's frame, never a legal root). A shadowing let drops the
+        # name (see bind_local).
+        self.formation_params: dict[str, bool] = {}
         # The enclosing @noreturn function's name, or None: set per body by
         # gen_function, so the Return arm can reject `return` inside one.
         self.current_noreturn: str | None = None
@@ -907,6 +927,53 @@ class CodeGen:
                 f"{ret} (a call never yields a value)",
                 func.line,
             )
+
+    def check_mut_return_decl(self, func: Func, ret: LangType):
+        """Validate a ``-> mut`` declaration once its return type resolves.
+
+        A ``mut`` return references existing storage, so ``void`` (no
+        storage) is rejected -- for a generic per instance, since the
+        return type may name a binding. ``main`` is rejected too: the C
+        runtime receives its result by value. ``@extern`` and ``@asm`` are
+        already banned at parse time (the pointer-typed return would change
+        the C calling convention).
+
+        Args:
+            func: The declared function.
+            ret: Its resolved return type.
+
+        Raises:
+            LangError: When a ``-> mut`` function is ``main`` or void.
+        """
+        if not func.mut_return:
+            return
+        if func.name == "main":
+            raise LangError(
+                "function 'main' cannot return mut (the C runtime receives "
+                "its result by value)",
+                func.line,
+            )
+        if ret is VOID:
+            raise LangError(
+                f"function {func.name!r} cannot return mut void (there is "
+                "no storage to reference)",
+                func.line,
+            )
+
+    def ret_ir(self, func: Func, ret: LangType) -> ir.Type:
+        """The LLVM return type for a declaration.
+
+        A ``-> mut T`` function returns a pointer to the caller-reachable
+        storage it formed; everything else returns its value.
+
+        Args:
+            func: The declared function.
+            ret: Its resolved return type.
+
+        Returns:
+            The IR return type.
+        """
+        return ret.ir.as_pointer() if func.mut_return else ret.ir
 
     def mark_noreturn(self, fn: ir.Function, func: Func):
         """Apply ``@noreturn`` by attaching LLVM's ``noreturn`` attribute.
@@ -1477,8 +1544,9 @@ class CodeGen:
         rule -- any through-memory store counts, a store to the function's
         own local struct included:
 
-        - a ``StoreDeref``/``StoreIndex``/``StoreMember`` statement, or a
-          compound assignment whose target is not a bare name;
+        - a ``StoreDeref``/``StoreIndex``/``StoreMember``/``StoreCall``
+          statement, or a compound assignment whose target is not a bare
+          name;
         - an assignment to a ``mut`` parameter (a store through the hidden
           reference into the caller's storage) or to a global;
         - anything opaque: ``@asm``, a call through a function-pointer
@@ -1714,7 +1782,13 @@ class CodeGen:
                 else:
                     writes = True  # a through-memory store form
                     scan_expr(stmt.target, bound)
-            elif isinstance(stmt, (StoreDeref, StoreIndex, StoreMember)):
+            elif isinstance(
+                stmt, (StoreDeref, StoreIndex, StoreMember, StoreCall)
+            ):
+                # StoreCall included: a store through a returned reference
+                # reaches caller-visible memory, so a function assigning
+                # through a mut-returning call is never write-free (the
+                # catch-all below would scan the call but record no write).
                 writes = True
                 for f in dataclass_fields(stmt):
                     scan_expr(getattr(stmt, f.name), bound)
@@ -1908,6 +1982,11 @@ class CodeGen:
             or prior.private != func.private
             or prior.inline != func.inline
             or prior.noreturn != func.noreturn
+            # The resolved return types compare equal for `-> T` vs
+            # `-> mut T` (mut is not part of the type), so the flag is
+            # checked on its own: a mismatch would let a stub and its
+            # definition disagree on the call's lvalue-ness and ABI.
+            or prior.mut_return != func.mut_return
         ):
             if func.proto and prior.proto:
                 message = f"conflicting prototypes for {name!r}"
@@ -3364,9 +3443,12 @@ class CodeGen:
                 params = [self.lang_type(t, func.line) for _, t in func.params]
                 self.check_collecting_decl(func, params)
                 self.check_noreturn_decl(func, ret)
+                self.check_mut_return_decl(func, ret)
                 hidden = self.hidden_ref_indices(func, params)
                 fnty = ir.FunctionType(
-                    ret.ir, self.param_irs(params, hidden), var_arg=func.variadic
+                    self.ret_ir(func, ret),
+                    self.param_irs(params, hidden),
+                    var_arg=func.variadic,
                 )
                 fn = ir.Function(self.module, fnty, name=symbol)
                 self.link_shared(fn, func.source)
@@ -3381,6 +3463,8 @@ class CodeGen:
                 self.hidden_ref[symbol] = hidden
                 self.mut_ref[symbol] = self.mut_indices(func)
                 self.nonnull_ref[symbol] = self.nonnull_indices(func)
+                if func.mut_return:
+                    self.mut_ret.add(symbol)
                 self.static_funcs[key] = symbol
                 if func.deprecated_msg is not None:
                     self.deprecated_syms[symbol] = func.deprecated_msg
@@ -3487,6 +3571,7 @@ class CodeGen:
                     )
                 ret = self.lang_type(func.ret_type, func.line)
                 self.check_noreturn_decl(func, ret)
+                self.check_mut_return_decl(func, ret)
                 salt = (
                     self.overload_salt(func.source) if func.private else None
                 )
@@ -3602,7 +3687,9 @@ class CodeGen:
                         )
                     raise err
                 hidden = self.hidden_ref_indices(func, params)
-                fnty = ir.FunctionType(ret.ir, self.param_irs(params, hidden))
+                fnty = ir.FunctionType(
+                    self.ret_ir(func, ret), self.param_irs(params, hidden)
+                )
                 fn = ir.Function(self.module, fnty, name=symbol)
                 if not func.proto:
                     # A prototype emits an LLVM declaration (no body);
@@ -3620,6 +3707,8 @@ class CodeGen:
                 self.hidden_ref[symbol] = hidden
                 self.mut_ref[symbol] = self.mut_indices(func)
                 self.nonnull_ref[symbol] = self.nonnull_indices(func)
+                if func.mut_return:
+                    self.mut_ret.add(symbol)
                 members = self.overloads.setdefault(func.name, [])
                 if plain_member is not None and not any(
                     m is plain_member for m in members
@@ -3704,9 +3793,12 @@ class CodeGen:
                 set_members.append(func)
             ret = self.lang_type(func.ret_type, func.line)
             self.check_noreturn_decl(func, ret)
+            self.check_mut_return_decl(func, ret)
             hidden = self.hidden_ref_indices(func, params)
             fnty = ir.FunctionType(
-                ret.ir, self.param_irs(params, hidden), var_arg=func.variadic
+                self.ret_ir(func, ret),
+                self.param_irs(params, hidden),
+                var_arg=func.variadic,
             )
             fn = ir.Function(self.module, fnty, name=func.name)
             if not func.proto:
@@ -3724,6 +3816,8 @@ class CodeGen:
             self.hidden_ref[func.name] = hidden
             self.mut_ref[func.name] = self.mut_indices(func)
             self.nonnull_ref[func.name] = self.nonnull_indices(func)
+            if func.mut_return:
+                self.mut_ret.add(func.name)
             if func.deprecated_msg is not None:
                 # A proto registers too: @deprecated on an interface stub's
                 # prototype warns the importer's call sites.
@@ -3872,6 +3966,7 @@ class CodeGen:
                 end without returning.
         """
         self.ret_type = ret
+        self.ret_mut = func.mut_return
         self.current_source = func.source
         self.current_variadic = func.variadic  # gates va_start
         self.current_noreturn = func.name if func.noreturn else None
@@ -3885,6 +3980,14 @@ class CodeGen:
         self.const_locals = set(func.const_params)
         self.mut_locals = set(func.mut_params)
         self.nonnull_locals = set(func.nonnull_params)
+        # Plain parameters, for the mut-return formation walk: a pointer
+        # parameter is a legal root behind at least one hop, a by-value one
+        # never is (its storage is this call's frame).
+        self.formation_params = {
+            pname: is_pointer(ptype)
+            for (pname, _), ptype in zip(func.params, params)
+            if pname not in func.mut_params and pname not in func.const_params
+        }
         self.narrowed_nonnull = set()
         self.narrowed_paths = set()
         self.addr_taken = set()
@@ -4279,6 +4382,9 @@ class CodeGen:
         self.nonnull_locals.discard(name)
         self.narrowed_nonnull.discard(name)
         self.kill_paths_rooted(name)
+        # A shadowing let over a plain parameter is a local: it must not
+        # keep qualifying as a mut-return formation root.
+        self.formation_params.pop(name, None)
 
     def coerce(
         self, tv: TypedValue, expected: LangType, line: int, context: str
@@ -4460,6 +4566,8 @@ class CodeGen:
                 self.run_defers_through(0)  # all enclosing blocks
                 if not self.builder.block.is_terminated:
                     self.builder.ret_void()
+            elif self.ret_mut:
+                self.gen_mut_return(stmt)
             else:
                 # A direct `return [...] as slice<T>` hands out a view into
                 # this call's hidden backing array, which dies with the
@@ -4917,6 +5025,22 @@ class CodeGen:
             # The stored-to field (or a union sibling, or an alias through
             # another base) may be a guarded one: every projection fact dies.
             self.narrowed_paths.clear()
+        elif isinstance(stmt, StoreCall):
+            # `f(s, i) = v;` -- the call's mut return is the target: address
+            # it once (gen_addr's Call arm checks the resolved callee
+            # actually returns mut), coerce, store through it.
+            addr, t, _, _ = self.gen_addr(stmt.call, stmt.line)
+            value = self.coerce(
+                self.gen_expr(stmt.value),
+                t,
+                stmt.line,
+                "assignment through a mut return",
+            )
+            self.gen_store(value.value, addr)
+            # A store through a returned reference can land in any guarded
+            # field (the reference may alias one): every projection fact
+            # dies, as at any through-memory store.
+            self.narrowed_paths.clear()
         elif isinstance(stmt, ExprStmt):
             self.gen_expr(stmt.expr)
         else:
@@ -5332,14 +5456,14 @@ class CodeGen:
     ) -> tuple[ir.Value, LangType, int | None, bool]:
         """Address a compound-assignment target, enforcing read-only rules.
 
-        Mirrors the four assignment-statement forms (``Assign``,
-        ``StoreDeref``, ``StoreIndex``, ``StoreMember``): it rejects the same
+        Mirrors the assignment-statement forms (``Assign``, ``StoreDeref``,
+        ``StoreIndex``, ``StoreMember``, ``StoreCall``): it rejects the same
         const/read-only targets with the same diagnostics, so ``x op= y`` is
         writable exactly where ``x = y`` is.
 
         Args:
-            target: The lvalue expression (``Var``, ``*ptr``, ``Index``, or
-                ``Member``).
+            target: The lvalue expression (``Var``, ``*ptr``, ``Index``,
+                ``Member``, or a ``mut``-returning ``Call``).
             line: Source line for diagnostics.
 
         Returns:
@@ -5408,6 +5532,13 @@ class CodeGen:
                 )
             self.narrowed_paths.clear()
             return self.gen_member_addr(target.base, target.field, target.arrow, line)
+        if isinstance(target, Call):
+            # `f(s, i) op= v` -- the call's mut return is the target, exactly
+            # as in a plain assignment through it (a through-memory store:
+            # every projection fact dies).
+            entry = self.gen_addr(target, line)
+            self.narrowed_paths.clear()
+            return entry
         raise LangError("invalid assignment target", line)
 
     def gen_for(self, stmt: For):
@@ -6490,6 +6621,182 @@ class CodeGen:
                 return self.roots_in_mut(target.base)
         return False
 
+    # The mut-return formation error's fixed head; each rejection appends a
+    # per-root-kind tail naming the offender.
+    MUT_RETURN_FORMATION = (
+        "a mut return must be formed from a mut or pointer parameter or a "
+        "global"
+    )
+
+    def gen_mut_return(self, stmt):
+        """Emit ``return expr;`` in a ``-> mut`` function: the address returns.
+
+        Three checks precede the ``ret``: the formation rule (the lvalue's
+        root must be caller-reachable -- see
+        :meth:`check_mut_return_formation`), storage legality (reusing the
+        ``mut``-argument rules: no ``const``, ``@volatile``, ``@packed``, or
+        ``@nonnull``-parameter storage), and the exact-type rule every
+        ``mut`` reference obeys (the caller writes through it, so nothing
+        can adapt or widen).
+
+        Args:
+            stmt: The ``Return`` node (``stmt.value`` is not ``None``).
+
+        Raises:
+            LangError: When the expression violates the formation rule, the
+                storage rules, or the exact-type rule.
+        """
+        self.check_mut_return_formation(stmt.value, stmt.line)
+        # Address the lvalue before the defers run, so a defer cannot
+        # redirect what is being returned (the same clobber rule as a value
+        # return).
+        addr, t, align, volatile = self.gen_addr(stmt.value, stmt.line)
+        self.check_mut_storage(
+            stmt.value, t, align, volatile, stmt.line, what="a mut return"
+        )
+        if t != self.ret_type:
+            raise LangError(
+                f"mut return: expected a {self.ret_type} lvalue, got {t}",
+                stmt.line,
+            )
+        self.run_defers_through(0)
+        if not self.builder.block.is_terminated:
+            self.builder.ret(addr)
+
+    def check_mut_return_formation(self, expr, line: int, crossed=False,
+                                   top=True):
+        """Enforce the mut-return formation rule on a ``return`` expression.
+
+        The returned lvalue's storage must be reachable by the caller after
+        this call's frame dies, without a lifetime system -- so the rule is
+        strict and syntactic: the expression must be a chain of member
+        accesses, element accesses, dereferences, and ``mut``-returning
+        calls, rooted at
+
+        - a ``mut`` parameter (the caller's own storage; legal even as the
+          returned lvalue itself),
+        - a pointer parameter behind **at least one** hop (``*p``, ``p[i]``,
+          ``p->f`` reach storage the caller handed in; ``return p`` itself
+          would reference the parameter's frame slot and is rejected), or
+        - a global.
+
+        Everything else is rejected: locals and by-value parameters (this
+        call's frame -- even a provably-safe alias like ``let d = self.data;
+        return d[i];``, which must be inlined into the return expression),
+        ``const`` parameters (read-only), casts, arithmetic, calls without a
+        ``mut`` return, and literals. A chain through a call requires every
+        candidate behind the name to return ``mut``; the whole returned
+        expression being one call defers to :meth:`gen_addr`'s post-
+        resolution check instead.
+
+        Args:
+            expr: The (sub)expression being traced.
+            line: Source line for diagnostics.
+            crossed: Whether at least one pointer hop was taken between the
+                returned lvalue and ``expr``.
+            top: Whether ``expr`` is the whole returned expression.
+
+        Raises:
+            LangError: When the expression violates the formation rule.
+        """
+        base = self.MUT_RETURN_FORMATION
+        if isinstance(expr, Var):
+            name = expr.name
+            if name in self.mut_locals:
+                return
+            if name in self.const_locals:
+                raise LangError(
+                    f"{base}; {name!r} is a const parameter (read-only)", line
+                )
+            pointer_param = self.formation_params.get(name)
+            if pointer_param:
+                if crossed:
+                    return
+                raise LangError(
+                    f"{base}; returning the pointer parameter {name!r} "
+                    "itself would reference this call's frame slot -- "
+                    f"return what it points at (e.g. *{name})",
+                    line,
+                )
+            if pointer_param is not None:
+                raise LangError(
+                    f"{base}; {name!r} is a by-value parameter (its storage "
+                    "is this call's frame)",
+                    line,
+                )
+            if name in self.locals:
+                raise LangError(
+                    f"{base}; {name!r} is a local (its storage dies with "
+                    "this call; inline its chain into the return expression)",
+                    line,
+                )
+            return  # a global, constant, or undefined name: gen_addr judges it
+        if isinstance(expr, Member):
+            self.check_mut_return_formation(
+                expr.base, line, crossed=crossed or expr.arrow, top=False
+            )
+            return
+        if isinstance(expr, Index):
+            # Indexing a fixed-size array stays in the base's own storage;
+            # a pointer or slice element lives behind a pointer hop.
+            base_t = self.lvalue_type(expr.base)
+            in_storage = base_t is not None and is_array(base_t)
+            self.check_mut_return_formation(
+                expr.base, line, crossed=crossed or not in_storage, top=False
+            )
+            return
+        if isinstance(expr, Unary) and expr.op == "*":
+            self.check_mut_return_formation(
+                expr.operand, line, crossed=True, top=False
+            )
+            return
+        if isinstance(expr, Call):
+            # The whole expression being one call is judged after overload
+            # resolution (gen_addr's Call arm knows the winner); a call in
+            # chain position must be a certain mut return -- its formation
+            # rule then vouches for the storage the chain continues into.
+            if top or self.known_mut_return_call(expr):
+                return
+            raise LangError(
+                f"{base}; the chain passes through a call to "
+                f"{expr.name!r} that does not return mut",
+                line,
+            )
+        raise LangError(
+            f"{base}; the returned expression must be an lvalue chain "
+            "(members, elements, dereferences, and calls that return mut)",
+            line,
+        )
+
+    def known_mut_return_call(self, call: Call) -> bool:
+        """Whether a chain-position call certainly resolves to a mut return.
+
+        Judged by name, before overload resolution: every candidate behind
+        the name must carry ``-> mut`` (a mixed set is conservatively
+        rejected -- the winner is not known while the formation rule is
+        being enforced). A variable or const shadowing the name is an
+        indirect call, and a function-pointer type cannot express a ``mut``
+        return.
+
+        Args:
+            call: The ``Call`` node in chain position.
+
+        Returns:
+            ``True`` when the call is certainly a ``mut`` return.
+        """
+        if self.var_type_of(call.name) is not None or call.name in self.consts:
+            return False
+        key = (self.current_source, call.name)
+        static_template = self.static_templates.get(key)
+        if static_template is not None:
+            return static_template.mut_return
+        static_symbol = self.static_funcs.get(key)
+        if static_symbol is not None:
+            return static_symbol in self.mut_ret
+        candidates = list(self.templates.get(call.name, ()))
+        candidates += self.concrete_decls.get(call.name, {}).values()
+        return bool(candidates) and all(f.mut_return for f in candidates)
+
     def lvalue_type(self, expr) -> "LangType | None":
         """Best-effort static type of a simple lvalue, without emitting code.
 
@@ -6609,6 +6916,22 @@ class CodeGen:
             # the array type, while reading it as a value decays to uint8*.
             glob = self.string_global(expr.value)
             return glob, self.string_array_type(expr.value), None, False
+        if isinstance(expr, Call):
+            # A mut-returning call is an lvalue: the raw pointer result is
+            # its address, vouched for by the callee's formation rule --
+            # which also rejected @packed and @volatile storage, so the
+            # address is naturally aligned and non-volatile. This one arm
+            # backs every lvalue surface: assignment (StoreCall), compound
+            # assignment, member/element projections, and & (banned before
+            # it gets here).
+            tv = self.gen_call(expr)
+            if tv.lvalue is None:
+                raise LangError(
+                    f"the call to {expr.name!r} does not return mut, so "
+                    "its result is not assignable",
+                    line,
+                )
+            return tv.lvalue, tv.type, None, False
         raise LangError("expression is not addressable", line)
 
     def gen_index_addr(
@@ -6731,6 +7054,17 @@ class CodeGen:
         if expr.op == "-" and isinstance(expr.operand, FloatLit):
             return TypedValue(ir.Constant(FLOAT64.ir, -expr.operand.value), FLOAT64)
         if expr.op == "&":
+            if isinstance(expr.operand, (Call, CallExpr)):
+                # Load-bearing for mut returns: gen_addr can address a
+                # mut-returning call, but the reference is consumed at the
+                # call expression -- letting & capture it would break the
+                # non-escape guarantee every mut reference carries. A plain
+                # call result was never addressable, so nothing is lost.
+                raise LangError(
+                    "cannot take the address of a call result; a mut "
+                    "return must not escape its full expression",
+                    expr.line,
+                )
             if self.writes_const(expr.operand):
                 raise LangError(
                     "cannot take the address of a const parameter; it is read-only",
@@ -8121,6 +8455,15 @@ class CodeGen:
                 "parameters, which a plain function type cannot express",
                 line,
             )
+        if symbol in self.mut_ret:
+            # The pointer-typed return (and the lvalue-ness of a call) is
+            # invisible to a plain fn(...) -> T type; a call through the
+            # pointer would read the address as the value.
+            raise LangError(
+                f"cannot take a function value of {name!r}: it returns mut, "
+                "which a plain function type cannot express",
+                line,
+            )
         # A function value is a call site in waiting: warn here, since calls
         # through the pointer are indirect and can no longer be attributed.
         self.warn_deprecated(name, self.deprecated_syms.get(symbol), line)
@@ -8193,12 +8536,16 @@ class CodeGen:
             collecting=self.collecting_params(params)
             and len(params) - 1 not in mut,
         )
-        result = TypedValue(
-            self.emit_call(
-                self.funcs[symbol], args, preserves=symbol in self.fact_safe_syms
-            ),
-            ret,
+        raw = self.emit_call(
+            self.funcs[symbol], args, preserves=symbol in self.fact_safe_syms
         )
+        if symbol in self.mut_ret:
+            # A mut return arrives as a pointer to the vouched storage: load
+            # eagerly for value contexts (folded away when unused) and carry
+            # the address for the lvalue surfaces.
+            result = TypedValue(self.gen_load(raw), ret, lvalue=raw)
+        else:
+            result = TypedValue(raw, ret)
         if symbol in self.noreturn_syms:
             # The callee never returns: terminate the block, so the statement
             # diverges (no dummy return needed past it, dead code after it is
@@ -8863,6 +9210,12 @@ class CodeGen:
             tv = TypedValue(self.gen_load(addr), t)
         else:
             tv = self.gen_expr(arg_expr)
+            if tv.lvalue is not None and tv.type.ir is ptype.ir:
+                # A mut-returning call's storage is shared as the hidden
+                # reference directly -- the same no-copy path an addressable
+                # argument takes (a const parameter promises not to write
+                # through it).
+                return tv.lvalue
             if self.decays_to(tv.type, ptype, mut=False):
                 self.check_decay_arg(
                     arg_expr, tv.type, "const", ptype, context, line
@@ -8871,14 +9224,18 @@ class CodeGen:
         return self.spill_to_temp(tv, ptype, line, context)
 
     def check_mut_storage(
-        self, arg_expr, t: LangType, align: int | None, volatile: bool, line: int
+        self, arg_expr, t: LangType, align: int | None, volatile: bool,
+        line: int, what: str = "a mut argument",
     ):
         """Check that already-addressed storage may be lent as a ``mut`` argument.
 
         The legality half of :meth:`mut_ref_arg`, kept IR-free so a generic
         call can defer it until after overload resolution: ``writes_const`` is
         syntactic, and the const/volatile/alignment facts are the flags
-        :meth:`gen_addr` already returned when the address was formed.
+        :meth:`gen_addr` already returned when the address was formed. A
+        ``mut`` return hands out the same kind of reference, so its
+        ``return`` site runs the same checks (``what`` labels the site in
+        the diagnostics).
 
         Args:
             arg_expr: The argument expression (for the const-parameter check).
@@ -8886,6 +9243,8 @@ class CodeGen:
             align: The guaranteed alignment, as returned by :meth:`gen_addr`.
             volatile: The volatility flag, as returned by :meth:`gen_addr`.
             line: Source line for diagnostics.
+            what: What the storage is being lent as, for the messages --
+                ``"a mut argument"`` (the default) or ``"a mut return"``.
 
         Raises:
             LangError: When the storage is read-only, is ``@volatile``, sits
@@ -8894,28 +9253,28 @@ class CodeGen:
         """
         if self.writes_const(arg_expr):
             raise LangError(
-                "cannot pass a const parameter as a mut argument; it is read-only",
+                f"cannot pass a const parameter as {what}; it is read-only",
                 line,
             )
         if isinstance(arg_expr, Var) and arg_expr.name in self.nonnull_locals:
             raise LangError(
-                "cannot pass a @nonnull parameter as a mut argument; "
+                f"cannot pass a @nonnull parameter as {what}; "
                 "null could be stored through the reference",
                 line,
             )
         if t.const:
             raise LangError(
-                f"cannot pass a read-only {t} as a mut argument", line
+                f"cannot pass a read-only {t} as {what}", line
             )
         if volatile:
             raise LangError(
-                "cannot pass @volatile storage as a mut argument; accesses "
+                f"cannot pass @volatile storage as {what}; accesses "
                 "through the reference would not be volatile",
                 line,
             )
         if align is not None and align < type_align(t):
             raise LangError(
-                "cannot pass a @packed field as a mut argument; its "
+                f"cannot pass a @packed field as {what}; its "
                 "alignment is not guaranteed",
                 line,
             )
@@ -8986,6 +9345,18 @@ class CodeGen:
                     arg_expr, tv.type, "mut", ptype, context, line
                 )
                 return tv.value
+            if tv.lvalue is not None:
+                # A mut-returning call re-lends: the callee's formation rule
+                # vouched for the storage (and rejected const/@volatile/
+                # @packed at the return site), so no caller-side storage
+                # re-check -- just the exact-type rule every mut reference
+                # obeys.
+                if tv.type != ptype:
+                    raise LangError(
+                        f"{context}: expected a {ptype} lvalue, got {tv.type}",
+                        line,
+                    )
+                return tv.lvalue
         raise LangError(
             f"{context} is not assignable; a mut parameter needs a "
             "variable, field, element, or dereference",
@@ -9220,7 +9591,14 @@ class CodeGen:
                 if violation is not None:
                     group_failures.append(violation)
                     continue
-                unaddressed = [i for i in self.mut_indices(func) if i not in addrs]
+                # A mut-returning call argument formed no address up front
+                # (it is not an addressable form), but its carried lvalue
+                # re-lends, so it keeps mut candidates viable.
+                unaddressed = [
+                    i
+                    for i in self.mut_indices(func)
+                    if i not in addrs and arg_tvs[i].lvalue is None
+                ]
                 if unaddressed:
                     mut_failures.append(min(unaddressed))
                     continue
@@ -9320,7 +9698,8 @@ class CodeGen:
                     )
                 continue
             # No address was formed (an rvalue): only a proven-non-null
-            # pointer to the parameter's type may decay in. A string
+            # pointer to the parameter's type may decay in, or a
+            # mut-returning call may re-lend its carried lvalue. A string
             # literal's bytes live in a constant global, so it never does.
             tv = arg_tvs[i]
             if self.decays_to(tv.type, p, mut=True) and not isinstance(
@@ -9331,6 +9710,17 @@ class CodeGen:
                     proven=proofs[i],
                 )
                 decayed.add(i)
+                continue
+            if tv.lvalue is not None:
+                # A mut-return re-lend: the callee's formation rule vouched
+                # for the storage, so only the exact-type rule applies (as
+                # on the direct path, see mut_ref_arg).
+                if tv.type != p:
+                    raise LangError(
+                        f"{context}: expected a {p} lvalue, got {tv.type}",
+                        expr.line,
+                    )
+                addrs[i] = (tv.lvalue, tv.type, None, False)
                 continue
             raise LangError(self.not_assignable(i, expr.name), expr.line)
         # The proof is syntactic, so it runs on the argument expressions even
@@ -9380,12 +9770,15 @@ class CodeGen:
                     args.append(self.spill_to_temp(tv, p, expr.line, context))
             else:
                 args.append(self.coerce(tv, p, expr.line, context).value)
-        result = TypedValue(
-            self.emit_call(
-                fn, args, preserves=self.effect_bits.get(id(func)) is False
-            ),
-            ret,
+        raw = self.emit_call(
+            fn, args, preserves=self.effect_bits.get(id(func)) is False
         )
+        if func.mut_return:
+            # As in gen_direct_call: the eager load serves value contexts,
+            # the carried address serves the lvalue surfaces.
+            result = TypedValue(self.gen_load(raw), ret, lvalue=raw)
+        else:
+            result = TypedValue(raw, ret)
         if func.noreturn:
             # The resolved candidate (generic instance or concrete set
             # member) never returns: terminate the block, exactly as in
@@ -9458,6 +9851,11 @@ class CodeGen:
             for i in self.mut_indices(func):
                 if i in addrs and addrs[i][1] == params[i]:
                     continue  # a direct lend of the caller's storage
+                if (
+                    arg_tvs[i].lvalue is not None
+                    and arg_tvs[i].type == params[i]
+                ):
+                    continue  # a mut-return re-lend of the exact type
                 if self.decays_to(
                     arg_tvs[i].type, params[i], mut=True
                 ) and not isinstance(expr.args[i], StrLit):
@@ -9908,11 +10306,16 @@ class CodeGen:
         try:
             ret = self.lang_type(func.ret_type, func.line)
             # A generic @noreturn is validated per instance: void-ness may
-            # depend on the bindings (e.g. a return type naming T).
+            # depend on the bindings (e.g. a return type naming T). Ditto a
+            # generic `-> mut T`, whose void-ness depends on the bindings
+            # (though T itself can never bind to void).
             self.check_noreturn_decl(func, ret)
+            self.check_mut_return_decl(func, ret)
             params = [self.lang_type(t, func.line) for _, t in func.params]
             hidden = self.hidden_ref_indices(func, params)
-            fnty = ir.FunctionType(ret.ir, self.param_irs(params, hidden))
+            fnty = ir.FunctionType(
+                self.ret_ir(func, ret), self.param_irs(params, hidden)
+            )
             fn = ir.Function(self.module, fnty, name=mangled)
             # A generic instance is emitted in every object that uses it, so it
             # merges like an imported definition rather than colliding.
@@ -9935,6 +10338,8 @@ class CodeGen:
             self.hidden_ref[mangled] = hidden
             self.mut_ref[mangled] = self.mut_indices(func)
             self.nonnull_ref[mangled] = self.nonnull_indices(func)
+            if func.mut_return:
+                self.mut_ret.add(mangled)
             self.instances[key] = mangled
             self.gen_function(func, fn, ret, params)
         except LangError as err:

@@ -52,6 +52,7 @@ from mcc.nodes import (
     Return,
     SizeOf,
     StaticAssert,
+    StoreCall,
     StoreDeref,
     StoreIndex,
     StoreMember,
@@ -153,7 +154,9 @@ def is_lvalue(expr) -> bool:
     """Whether an expression is a valid assignment target.
 
     The forms an assignment accepts: a variable, ``*ptr``, an index
-    ``base[i]``, or a member ``base.field``/``base->field``.
+    ``base[i]``, a member ``base.field``/``base->field``, or a named call
+    ``f(...)`` -- assignable when the callee returns ``mut`` (checked at
+    codegen, where the callee is resolved).
 
     Args:
         expr: The parsed target expression.
@@ -162,7 +165,7 @@ def is_lvalue(expr) -> bool:
         ``True`` when ``expr`` is an assignable lvalue.
     """
     return (
-        isinstance(expr, (Var, Index, Member))
+        isinstance(expr, (Var, Index, Member, Call))
         or (isinstance(expr, Unary) and expr.op == "*")
     )
 
@@ -1225,7 +1228,12 @@ class Parser:
             params.append((pname, self.parse_type_ref()))
         self.expect(")")
         ret_type = TypeRef("void")
+        mut_return = False
         if self.accept("->"):
+            # `-> mut T`: the function returns an lvalue (a reference to
+            # caller-reachable storage). A flag on the declaration, not part
+            # of the type -- a fn(...) -> T pointer type stays closed to it.
+            mut_return = bool(self.accept("mut"))
             ret_type = self.parse_type_ref()
         if variadic and type_params:
             raise LangError("a generic function cannot be variadic", line)
@@ -1239,6 +1247,12 @@ class Parser:
             raise LangError(
                 "mut parameters are not allowed on @extern functions "
                 "(they would change the C calling convention)",
+                line,
+            )
+        if mut_return and extern:
+            raise LangError(
+                "a mut return is not allowed on @extern functions "
+                "(it would change the C calling convention)",
                 line,
             )
         if extern:  # a declaration: signature only, no body
@@ -1282,6 +1296,12 @@ class Parser:
             if mut_params:
                 raise LangError(
                     "mut parameters are not allowed on @asm functions", line
+                )
+            if mut_return:
+                raise LangError(
+                    "a mut return is not allowed on @asm functions "
+                    "(the template computes a value, not a reference)",
+                    line,
                 )
             if noalias_params:
                 raise LangError(
@@ -1357,6 +1377,7 @@ class Parser:
                 noalias_params=noalias_params,
                 nonnull_params=nonnull_params,
                 noreturn=noreturn,
+                mut_return=mut_return,
                 deprecated_msg=deprecated,
                 removed_msg=removed,
                 type_param_defaults=type_param_defaults,
@@ -1378,6 +1399,7 @@ class Parser:
             noalias_params=noalias_params,
             nonnull_params=nonnull_params,
             noreturn=noreturn,
+            mut_return=mut_return,
             deprecated_msg=deprecated,
             removed_msg=removed,
             type_param_defaults=type_param_defaults,
@@ -1588,6 +1610,11 @@ class Parser:
                 return StoreIndex(expr.base, expr.index, value, tok.line)
             if isinstance(expr, Member):
                 return StoreMember(expr.base, expr.field, expr.arrow, value, tok.line)
+            if isinstance(expr, Call):
+                # `f(s, i) = v;` -- assignment through a mut-returning call.
+                # Whether the callee actually returns mut is a codegen check
+                # (the callee resolves there).
+                return StoreCall(expr, value, tok.line)
             raise LangError("invalid assignment target", tok.line)
         if self.cur.kind in COMPOUND_ASSIGN_OPS:
             op = COMPOUND_ASSIGN_OPS[self.cur.kind]

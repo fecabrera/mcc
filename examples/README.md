@@ -50,7 +50,8 @@ diverging constructs make unreachable.
 ## functions/
 
 Defining and calling functions: void/recursion, forward declarations, the
-parameter modifiers (`const`, `mut`, `@noalias`, `@nonnull`), overload sets
+parameter modifiers (`const`, `mut`, `@noalias`, `@nonnull`), `mut` returns
+(functions returning lvalues), overload sets
 (concrete, generic, mixed, and open across modules), never-returning
 functions (`@noreturn`),
 variadics (C `...` and native collecting), and function pointers.
@@ -61,6 +62,7 @@ variadics (C `...` and native collecting), and function pointers.
 | [forward_declarations.mc](functions/forward_declarations.mc) | bodyless `fn` prototypes as forward declarations: a header-style prototype block with the definitions below, identical prototypes collapsing onto one declaration, the strict signature-match error; never required for ordering, but lets an imported `.mci` stub coexist with the `.mc` source |
 | [const_params.mc](functions/const_params.mc) | `const` read-only parameters, structs passed by hidden reference (no copy), `const` on pointers vs values |
 | [mut_params.mc](functions/mut_params.mc) | `mut` write-through parameters: out-params with no pointer in the signature, re-lending, struct field projection, a generic `swap<T>` |
+| [mut_returns.mc](functions/mut_returns.mc) | `-> mut T` functions returning lvalues: an `_at`-style accessor whose call is assignable, compound-assignable (addressed once), projectable, re-lendable as a `mut` argument, and auto-loading in value context, plus the formation rule rooting the reference in a mut/pointer parameter or a global |
 | [mut_overloads.mc](functions/mut_overloads.mc) | generic overloads mixing `mut` and non-`mut` positions: a `mut` overload next to a pointer one, rvalues dropping `mut` candidates, writability judged against the chosen overload, single argument evaluation |
 | [overloading.mc](functions/overloading.mc) | concrete function overloading: a constructor-flavored `counter_init` family dispatched by arity and by argument type, a string literal still adapting to a `slice<const char>` member, the must-differ-in-parameter-types rule |
 | [mixed_overloads.mc](functions/mixed_overloads.mc) | a generic template and concrete functions sharing one name: the (is-concrete, specificity) rank, concrete fast paths winning exact matches, the generic catch-all covering the rest, explicit type args selecting among the generic candidates only |

@@ -40,7 +40,8 @@ different tool at each end.
   drop to raw pointers and manual memory when you need to. Safety is
   **encouraged through syntax, never enforced by the compiler**: constructs like
   [`const`](docs/language.md#const-parameters) parameters, [slices](docs/language.md#slices),
-  and planned `mut` references make the safe path the natural, ergonomic one,
+  and [`mut`](docs/language.md#mut-parameters) references (parameters and
+  [returns](docs/language.md#mut-returns)) make the safe path the natural, ergonomic one,
   while the language never forbids the low-level one.
 - **Familiar to C programmers.** The syntax, type system, and
   [C ABI](#c-abi-compatibility) stay close to C, so a C programmer can read mcc

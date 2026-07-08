@@ -46,8 +46,11 @@ def test_store_targets():
 
 
 def test_invalid_assignment_target():
+    # A call target parses now (mut returns make `f(s) = v;` a statement;
+    # whether the callee returns mut is checked at codegen), so a binary
+    # expression is the still-invalid parse-level target.
     with pytest.raises(LangError, match="invalid assignment target"):
-        parse("fn main() { f(1) = 2; }")
+        parse("fn main() { 1 + 2 = 3; }")
 
 
 def test_import_directive():

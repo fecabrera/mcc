@@ -1015,8 +1015,8 @@ already do).
           `const`; `duplicate`'s `dst` and the `format_arg`/`format_args`
           accumulator in `std` become `mut`). The accessor families flip
           to `const self` here and **stay read-only**: the mutable element
-          accessor the [`mut` returns](#functions-and-methods) item
-          sketches must form its return from a `mut`/pointer parameter,
+          accessor the now-shipped [`mut` returns](#functions-and-methods)
+          item allows must form its return from a `mut`/pointer parameter,
           and overloads differing only in markers are banned under
           concrete overloading, so one name cannot serve both; mutable
           access arrives as the `_at` half of the `_get`/`_has`/`_at`
@@ -1101,30 +1101,41 @@ already do).
         and the element delivered without an out-pointer, which is
         what makes the protocol shapes work; either way this stays a
         coordinated compiler + stdlib change
-  - [ ] `mut` returns — a function that returns an lvalue:
+  - [x] `mut` returns — a function that returns an lvalue:
         `fn string_at(mut self: string, i: uint64) -> mut char` makes
         `string_at(str, 0) = '/'` legal (as well as comparing it or copying it
-        out with `let c = string_at(str, 0)`). A call returning `mut T` is a
-        new assignable expression category. To keep the reference from dangling
+        out with `let c = string_at(str, 0)`). A call returning `mut T` is an
+        assignable expression: pointer-lowered, loaded eagerly in value
+        contexts, and on the lvalue side an assignment or
+        compound-assignment target, a base for projections, and re-lendable
+        as a `mut` argument on both call paths. To keep the reference from dangling
         without a lifetime system, a `mut` return may only be **formed from a
         `mut`/pointer parameter or a global — never from a local or a by-value
-        parameter**; this conservative, checkable rule fits the `string_at`
+        parameter** (roots traced through projections, derefs, and
+        `mut`-returning calls; returning a pointer parameter itself or
+        forming from a `const` receiver is rejected); this conservative,
+        checkable rule fits the `string_at`
         case (the result derives from `self`) and preserves the non-escape
-        guarantee. The example is deliberately a **separate name** beside
+        guarantee, with `&` of a `mut`-returning call banned and the marker
+        rejected on `@extern`, `main`, `void` returns, and `fn(...)`
+        values. The example is deliberately a **separate name** beside
         the `const self` `_get` accessors of the `libmc` receiver
         migration above: a `mut` return cannot form from a `const`
         receiver, and overloads differing only in markers are banned
         under concrete overloading (an lvalue receiver keeps both
         candidates in a same-shape tie), so one name cannot serve checked
         `const` reads and mutable access both; stdlib adoption ships as
-        the accessor triad nested below once this lands, which also owns
+        the accessor triad nested below (nothing in `libmc` forms a `mut`
+        return yet), which also owns
         the consequence that a `-> mut T` accessor has no `bool` failure
-        channel. The groundwork has shipped: generic overloads mixing
-        `mut` (above) already defer the lvalue/value decision past
-        overload resolution — the exact decision point an assignable call
-        expression needs — and a `-> mut T` stub in a `.mci` is pure
-        return-type rendering on the shipped
-        [bodyless prototypes](docs/language.md#bodyless-fn-prototypes):
+        channel. The implementation landed on groundwork that had already
+        shipped: generic overloads mixing `mut` (above) defer the
+        lvalue/value decision past overload resolution, exactly where an
+        assignable call expression decides, and a `-> mut T` stub in a
+        `.mci` is rendered and prototype-paired over the shipped
+        [bodyless prototypes](docs/language.md#bodyless-fn-prototypes),
+        with stores through a `mut` return tracked by the write effect;
+        implemented, see [mut returns](docs/language.md#mut-returns):
     - [ ] stdlib accessor triad: `_get` / `_has` / `_at` — the settled
           shape of container element access, three names with three
           distinct jobs (supersedes the earlier `_ref`-style sketch:
@@ -1170,14 +1181,14 @@ already do).
           signature (`const self -> T` by value), so it flips to
           `mut self -> mut T` while `ring` gains `ring_get`/`ring_has`,
           keeping `const` rings readable. Lands **staged** (`_has` rides
-          only shipped machinery; `_at` cannot exist before the parent):
+          only shipped machinery; `_at` rides the now-shipped parent):
       - [ ] stage 1: `_has` — `dict`/`set` membership plus the sequence
             index predicates; independent of `mut` returns, shippable
             today
       - [ ] stage 2: `_at` — the `mut self -> mut T` family across
             `list`/`string`/`dict`/`ring`, plus the
-            `ring_get`/`ring_has` reconciliation; strictly after `mut`
-            returns land
+            `ring_get`/`ring_has` reconciliation; unblocked now that
+            `mut` returns shipped
   - [ ] motivating use case: method receivers — once methods / OOP (the item
         below) land, `const`/`mut`/by-value on `self` express
         read-only / mutating / consuming methods directly, replacing today's raw
@@ -1785,8 +1796,8 @@ already do).
           rather than a per-binding fact (a larger blast radius). Optional and
           deferred; pursue only if demand for non-null returns or fields
           appears. A non-null return type extends return types the same way
-          [`mut` returns](#functions-and-methods) does, so sequence it after
-          that work if it happens
+          the now-shipped [`mut` returns](#functions-and-methods) did, whose
+          plumbing is the precedent to follow if this happens
 - [ ] Native variadic arguments — `fn f(args: slice<const any>)` (with
       `fn f(args...)` as sugar): a trailing `slice<const any>` parameter collects
       the call's extra arguments, so `f(x, a, b, c)` (after `f`'s fixed
