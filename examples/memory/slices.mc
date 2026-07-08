@@ -4,6 +4,9 @@ import "list";
 // A tour of slice<T>: a builtin, non-owning view { ptr: T*; length: uint64 }
 // over a contiguous run of T. A slice borrows storage it does not own -- it
 // never allocates -- so the thing it views must outlive it.
+//
+// See also: memory/slice_literals.mc -- an array literal borrows straight
+// into a slice too, over a hidden backing array, no named array needed.
 
 // A slice is a normal value, so it passes to functions by value (two words: a
 // pointer and a length). One function works over any borrowed run, whether the

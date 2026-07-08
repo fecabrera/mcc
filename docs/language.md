@@ -2316,6 +2316,10 @@ let primes: int32[] = [2, 3, 5, 7, 11];          // length inferred as 5
 let grid: int32[2][2] = [[1, 2], [3, 4]];        // nested
 ```
 
+An array literal can also initialize (or be `as`-borrowed into) a
+[`slice<T>`](#slices), backed by a hidden array in the function frame — see
+[Slices](#slices) for the positions and rules.
+
 A local literal's elements may be any expressions; a `@static` one must be a
 constant expression — literals, `const` references, `sizeof`, `as` casts, or
 arithmetic — so a lookup table lives in read-only data:
@@ -2381,6 +2385,53 @@ casts are rejected). A slice is a plain value: it passes to and returns from
 functions by value (two words). Because it is two words it is **not** C-ABI by
 value — across a C boundary, pass a `T*` and a length separately instead. See
 [examples/memory/slices.mc](../examples/memory/slices.mc).
+
+An **[array literal](#arrays)** can be borrowed directly — no named array
+needed. The literal materializes a hidden backing array in the enclosing
+function's frame (so the storage lives for the whole call) and the slice views
+it: `[16, 31, 255] as slice<int32>` is `{ &backing[0], 3 }`. Like a string
+literal, it also **adapts** from context with no `as`: at an annotated `let`,
+and at an array or slice element whose element type is a slice (nested literals
+recurse, so one `as` covers a whole `slice<slice<int32>>`). See
+[examples/memory/slice_literals.mc](../examples/memory/slice_literals.mc):
+
+```c
+let nums: slice<int32> = [0x10, 0x1F, 0xFF];    // adapts from the annotation
+let view = [1, 2, 3] as slice<int32>;           // or borrow explicitly, anywhere
+let m: slice<int32>[2] = [[1, 2], [3, 4]];      // elements adapt too
+let nested = [[5, 6], [7]] as slice<slice<int32>>;
+let empty: slice<int32> = [];                   // { null, 0 } — no storage at all
+```
+
+The length is the **exact element count** — an array literal carries no NUL, so
+`['h', 'i'] as slice<char>` has `length == 2`. That differs from the two-step
+form: bind `let cs: char[2] = ['h', 'i'];` first and `cs as slice<char>` has
+`length == 1`, because a named `char[N]` is presumed NUL-terminated
+[text](#strings) and its borrow drops the trailing byte. The empty literal `[]`
+builds no backing array at all: it is the `{ null, 0 }` empty view. A
+[ternary](#operators) whose arms are all array literals adapts as a whole, each
+arm borrowing its own backing array in its own branch. A **mutable** `slice<T>`
+target is fine — the backing storage is fresh and nothing else names it, so
+writes go through (`let s: slice<int32> = [1, 2]; s[0] = 9;`), and copies of
+the view alias the one backing array. Each literal *occurrence* owns one slot,
+re-stored per execution — a view captured on one loop pass observes a later
+pass's elements, like any loop local.
+
+Two positions do not take the shortcut. `return [1, 2] as slice<int32>;` is a
+compile error — the view would point into the returning call's hidden backing
+array, which dies with the return and is named by nothing else (a *named*
+local's borrow, `return xs as slice<int32>`, still compiles, with the usual
+care returning a borrow of a local demands). And a **bare argument**
+(`sum([1, 2, 3])`) does not adapt yet — write the `as`
+(`sum([1, 2, 3] as slice<const int32>)` works in any argument slot). In a
+`@static` initializer the elements must be constant expressions and land in
+read-only data, so only the read-only form is allowed:
+`@static let g: slice<const int32> = [1, 2];` becomes a constant
+`{pointer, length}` view over an anonymous constant array, exactly as a
+`@static` [string-literal view](#strings) borrows its string constant; a
+mutable `@static slice<int32>` is rejected —
+it would open a write path into read-only data — with a message pointing at
+`slice<const T>`.
 
 ### Read-only slices
 
@@ -3330,6 +3381,9 @@ the borrow **drops the terminator**: the slice spans the text, with `length` one
 less than `len` (`"hi" as slice<char>` has `length == 2`, the buffer keeps its
 NUL). A `uint8[N]`, by contrast, is a raw byte buffer: its `slice<uint8>` keeps
 **every** byte (`['a','b','c'] as a uint8[3]` borrows to `length == 3`). The
+NUL presumption is a property of the named `char[N]` *array*: a char [array
+literal](#slices) borrowed directly (`['h','i'] as slice<char>`) has no NUL and
+keeps its exact count, `length == 2`. The
 `char*` form keeps the pointer-to-constant behavior. An explicit `char[M]`/
 `uint8[M]` must be large enough to hold the bytes (NUL included). A string
 literal can also be borrowed directly — `"hi" as slice<char>` — since it carries

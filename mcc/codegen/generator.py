@@ -141,6 +141,29 @@ from mcc.codegen.types import (
 )
 
 
+def borrows_array_literal(expr) -> bool:
+    """Whether an expression is a non-empty array literal, ternary arms included.
+
+    The syntactic side of the ``return [...] as slice<T>`` rejection: a
+    literal's hidden backing array lives in the returning frame, so a view
+    over it would dangle. A ternary borrows arm by arm, so any literal arm
+    dangles the same way. The *empty* literal is exempt -- ``[] as slice<T>``
+    is a ``{ null, 0 }`` view with no backing storage at all.
+
+    Args:
+        expr: The cast operand to inspect.
+
+    Returns:
+        ``True`` when ``expr`` is (or any ternary arm of it is) a non-empty
+        array literal.
+    """
+    if isinstance(expr, Ternary):
+        return borrows_array_literal(expr.then) or borrows_array_literal(
+            expr.otherwise
+        )
+    return isinstance(expr, ArrayLit) and bool(expr.elements)
+
+
 def collect_addr_taken(obj, names: set[str]) -> None:
     """Accumulate every name whose address is taken (``&name``) into ``names``.
 
@@ -612,6 +635,9 @@ class CodeGen:
         # One rodata global per distinct string contents; identical literals
         # (source strings and `typename` results alike) share bytes.
         self.string_globals: dict[str, ir.GlobalVariable] = {}
+        # Anonymous rodata globals backing `@static` slice-of-array-literal
+        # views (`.arr.N`), counted separately from the string pool.
+        self.arr_count = 0
 
     def warn(self, message: str, line: int, wclass: str | None = None) -> None:
         """Record a non-fatal diagnostic on the warning channel.
@@ -4435,6 +4461,25 @@ class CodeGen:
                 if not self.builder.block.is_terminated:
                     self.builder.ret_void()
             else:
+                # A direct `return [...] as slice<T>` hands out a view into
+                # this call's hidden backing array, which dies with the
+                # return and is named by nothing else -- always a dangling
+                # slice, so it is rejected up front. A named local's borrow
+                # (`return xs as slice<T>`) stays legal: the caller can at
+                # least reason about the local's storage.
+                if (
+                    isinstance(stmt.value, Cast)
+                    and borrows_array_literal(stmt.value.value)
+                    and is_slice(self.lang_type(stmt.value.type_name, stmt.line))
+                ):
+                    raise LangError(
+                        "cannot return an array literal borrowed as a slice: "
+                        "the view would point into this call's hidden backing "
+                        "array, which dies with the return; bind the literal "
+                        "to a named array or an owned list<T> that outlives "
+                        "the call",
+                        stmt.line,
+                    )
                 # Evaluate the result before the defers run, so a defer that
                 # frees a buffer cannot clobber what is being returned.
                 if self.str_literal_adapts(stmt.value, self.ret_type):
@@ -4509,6 +4554,15 @@ class CodeGen:
                         stmt.line,
                     )
                 declared = self.list_type_for(stmt.type_name, stmt.value, stmt.line)
+                if is_slice(declared):
+                    # `let s: slice<int32> = [0x10, 0x1F, 0xFF];`: the literal
+                    # adapts to the annotated slice (Stage 1), borrowing a
+                    # hidden backing array in this frame (see gen_borrow_slice).
+                    tv = self.gen_borrow_slice(stmt.value, declared, stmt.line)
+                    slot = self.builder.alloca(declared.ir, name=stmt.name)
+                    self.builder.store(tv.value, slot)
+                    self.bind_local(stmt.name, slot, declared)
+                    return
                 if not is_array(declared):
                     raise LangError(
                         f"an array literal cannot initialize a {declared}", stmt.line
@@ -4548,10 +4602,14 @@ class CodeGen:
                     return
             if isinstance(stmt.value, Ternary) and stmt.type_name is not None:
                 declared = self.lang_type(stmt.type_name, stmt.line)
-                if self.str_literal_adapts(stmt.value, declared):
+                if self.str_literal_adapts(stmt.value, declared) or (
+                    self.array_literal_adapts(stmt.value, declared)
+                ):
                     # `let s: slice<char> = cond ? "a" : "b";`: every arm is a
                     # string literal, so the ternary adapts arm by arm (Stage
                     # 4), each arm borrowing its constant's bytes (NUL dropped).
+                    # An all-array-literal ternary adapts the same way, each
+                    # arm borrowing its own backing array (Stage 1).
                     tv = self.gen_borrow_slice(stmt.value, declared, stmt.line)
                     slot = self.builder.alloca(declared.ir, name=stmt.name)
                     self.builder.store(tv.value, slot)
@@ -6210,7 +6268,11 @@ class CodeGen:
             return self.gen_string(expr.value)
         if isinstance(expr, ArrayLit):
             raise LangError(
-                "an array literal is only allowed as a variable initializer", expr.line
+                "an array literal is only allowed where an array or slice "
+                "type receives it: an array or slice<T> variable "
+                "initializer, an array/slice element, or an `as slice<T>` "
+                "borrow",
+                expr.line,
             )
         if isinstance(expr, StructLit):
             return self.gen_struct_lit(expr)
@@ -7007,6 +7069,34 @@ class CodeGen:
             and strip_const(expected.args[0]) == CHAR
         )
 
+    def array_literal_adapts(self, expr, expected: LangType) -> bool:
+        """Whether an array literal adapts to ``expected`` without an ``as``.
+
+        The array sibling of :meth:`str_literal_adapts` (Stage 1): an array
+        literal implicitly adapts to a ``slice<T>`` from an annotated ``let``
+        or an array/slice element slot, borrowing a hidden backing array in
+        the enclosing frame (see the ``ArrayLit`` arm of
+        :meth:`gen_borrow_slice`). Argument positions and ``return`` do not
+        adapt yet -- an argument needs the collection and overload paths
+        together, and a returned view would dangle.
+
+        A ternary adapts when both of its arms do, exactly as for string
+        literals: each arm borrows in its own branch.
+
+        Args:
+            expr: The initializer/element expression.
+            expected: The type the context expects.
+
+        Returns:
+            ``True`` if ``expr`` is an array literal (or a ternary of
+            adapting arms) and ``expected`` is a ``slice<T>``.
+        """
+        if isinstance(expr, Ternary):
+            return self.array_literal_adapts(
+                expr.then, expected
+            ) and self.array_literal_adapts(expr.otherwise, expected)
+        return isinstance(expr, ArrayLit) and is_slice(expected)
+
     def gen_borrow_slice(self, value_expr, target: LangType, line: int) -> TypedValue:
         """Lower a borrow ``value as slice<T>`` into a non-owning view.
 
@@ -7023,6 +7113,14 @@ class CodeGen:
         lowers in its own branch and the views merge in a phi -- so
         ``flag ? "y" : "yes"`` is a ``slice<char>`` carrying the chosen
         literal's own length.
+
+        An array literal borrows to a view over a hidden backing array
+        materialized in the enclosing function's frame (an entry-block
+        alloca, so the storage lives for the whole call): ``[1, 2, 3] as
+        slice<int32>`` is ``{ &backing[0], 3 }``. The length is the exact
+        element count -- no NUL logic, even for ``char`` elements. The empty
+        literal ``[] as slice<T>`` builds no array at all: it is the
+        ``{ null, 0 }`` empty view.
 
         A mutable source may borrow to its read-only ``slice<const T>`` form
         (adding ``const`` is safe); a read-only source -- a ``const`` element or
@@ -7065,6 +7163,26 @@ class CodeGen:
             phi.add_incoming(else_tv.value, else_end)
             return TypedValue(phi, target)
         element = target.fields[0][1].pointee
+        if isinstance(value_expr, ArrayLit):
+            # An array literal: materialize a hidden backing array in the
+            # function frame (an entry alloca, so it lives for the whole
+            # call; a literal inside a loop reuses one slot, re-stored per
+            # pass) and view it. Element coercion, nested literals, and
+            # string-literal elements all ride store_list_literal. The
+            # length is the exact element count -- a char literal has no
+            # NUL to drop. A mutable target is fine: the backing storage is
+            # fresh and nothing else names it.
+            if not value_expr.elements:
+                # `[] as slice<T>`: no storage to view -- the { null, 0 }
+                # empty slice, as zero variadic extras synthesize.
+                data = ir.Constant(target.fields[0][1].ir, None)
+                return self.make_slice(target, data, ir.Constant(UINT64.ir, 0))
+            arr_type = list_of(strip_const(element), len(value_expr.elements))
+            slot = self.entry_alloca(arr_type.ir, "arr.lit")
+            self.store_list_literal(slot, value_expr, arr_type, line)
+            ptr = self.builder.gep(slot, [I32_ZERO, I32_ZERO], inbounds=True)
+            length = ir.Constant(UINT64.ir, len(value_expr.elements))
+            return self.make_slice(target, ptr, length)
         # T[N] (or a string literal, a uint8[N]): take the first-element pointer
         # and the static length, which would otherwise decay away once the value
         # is read. Reached through the address, so the array type survives.
@@ -7281,6 +7399,14 @@ class CodeGen:
                 # needs no per-element `as`.
                 tv = self.gen_borrow_slice(element, arr_type.element, line)
                 self.gen_store(tv.value, slot)
+            elif self.array_literal_adapts(element, arr_type.element):
+                # An array-literal element adapts to a slice<T> element the
+                # same way (Stage 1): each element borrows its own hidden
+                # backing array, so `let m: slice<int32>[2] = [[1], [2, 3]];`
+                # needs no per-element `as` -- and a slice<slice<T>> target's
+                # nested literals recurse through here.
+                tv = self.gen_borrow_slice(element, arr_type.element, line)
+                self.gen_store(tv.value, slot)
             else:
                 tv = self.coerce(
                     self.gen_expr(element), arr_type.element, line, "array element"
@@ -7290,9 +7416,11 @@ class CodeGen:
     def const_initializer(self, expr, expected: LangType, line: int) -> ir.Constant:
         """Build a constant of a given type for a ``@static`` initializer.
 
-        Arrays use nested literals; scalars may be any compile-time constant
-        expression -- a literal, a ``const`` reference, an ``as`` cast,
-        ``sizeof``, or arithmetic -- folded via :meth:`eval_const`.
+        Arrays use nested literals; a ``slice<const T>`` may view an array
+        literal (an anonymous constant global backs it) or a string literal;
+        scalars may be any compile-time constant expression -- a literal, a
+        ``const`` reference, an ``as`` cast, ``sizeof``, or arithmetic --
+        folded via :meth:`eval_const`.
 
         Args:
             expr: The initializer expression.
@@ -7320,6 +7448,51 @@ class CodeGen:
                 "a global any initializer is not supported yet; "
                 "assign the value at runtime instead",
                 line,
+            )
+        if isinstance(expr, ArrayLit) and is_slice(expected):
+            # A slice<const T> initialized from an array literal: the Stage 1
+            # adaptation in constant form -- the elements go into an anonymous
+            # private constant global (as a string literal's bytes do) and the
+            # slice is a constant {pointer, length} view over it. The pointee
+            # is a true constant, so a read-only view is safe even for a
+            # global; a *mutable* slice<T> would open a write path into
+            # rodata, so it is rejected. Reached per element through the
+            # ArrayLit array recursion below, this also covers a @static
+            # array of slices; a nested literal recurses through here for a
+            # @static slice<const slice<const T>>.
+            element = expected.fields[0][1].pointee
+            if not element.const:
+                raise LangError(
+                    f"a @static {expected} cannot view an array literal: the "
+                    f"backing array is a read-only constant; declare it "
+                    f"slice<{const_of(strip_const(element))}>",
+                    line,
+                )
+            if not expr.elements:
+                # `[]`: the { null, 0 } empty view, no backing global at all.
+                data = ir.Constant(expected.fields[0][1].ir, None)
+                return ir.Constant(
+                    expected.ir, [data, ir.Constant(UINT64.ir, 0)]
+                )
+            elem = strip_const(element)
+            arr_ir = ir.ArrayType(elem.ir, len(expr.elements))
+            glob = ir.GlobalVariable(
+                self.module, arr_ir, name=f".arr.{self.arr_count}"
+            )
+            self.arr_count += 1
+            glob.linkage = "private"
+            glob.global_constant = True
+            glob.unnamed_addr = True
+            glob.initializer = ir.Constant(
+                arr_ir,
+                [self.const_initializer(e, elem, line) for e in expr.elements],
+            )
+            return ir.Constant(
+                expected.ir,
+                [
+                    glob.gep([I32_ZERO, I32_ZERO]),
+                    ir.Constant(UINT64.ir, len(expr.elements)),
+                ],
             )
         if isinstance(expr, ArrayLit):
             if not is_array(expected):

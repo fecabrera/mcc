@@ -840,15 +840,44 @@ already do).
         a deferred-evaluation restructure of the struct-literal path first
   - [ ] array literals — the generalization: `let dirs: slice<char*> = ["/bin"];`
         (or `["/bin", "/usr/bin"]` passed to a `slice<T>` parameter)
-        materializes a hidden fixed-size backing array in the enclosing scope
-        and borrows it, replacing today's two-step
-        `let dirs: char*[2] = [...]; let view = dirs as slice<char*>;`. Design
-        points: a global/`@static` slice needs the backing array promoted to a
-        global constant (or is rejected initially); `slice<const T>` is the
-        safe default target — adapting to a mutable `slice<T>` hands out a
-        writable view of a compiler-materialized temporary and may be
-        rejected; a bare `let v = [1, 2];` stays an ambiguous error (the
-        annotation picks the storage: array = owned, slice = borrowed view)
+        materializes a hidden fixed-size backing array, entry-alloca'd in the
+        enclosing frame, and borrows it, replacing today's two-step
+        `let dirs: char*[2] = [...]; let view = dirs as slice<char*>;`. The
+        view's length is the exact element count (a documented seam beside
+        the two-step `char[N]` borrow, which keeps the NUL that direct
+        string-literal adaptation drops); an empty `[]` produces the
+        `{null, 0}` slice, varargs-style; mutable `slice<T>` targets are
+        allowed (the backing storage is fresh, the existing borrow rules
+        apply, zero new policy), except toward `@static`, which stays
+        const-only. Two rejections stand: the direct
+        `return [..] as slice<T>;` spelling (nothing else names the backing
+        array, so the returned view is a guaranteed dangle), and the bare
+        `let v = [1, 2];`, which stays an ambiguous error (the annotation
+        picks the storage: array = owned, slice = borrowed view). Out of
+        scope: struct-literal fields (the same `gen_struct_lit`
+        evaluation-order blocker as the string-literal sibling above; both
+        ride the future deferred-evaluation restructure) and assignment
+        statements (the family-wide gap recorded in the intro). Lands staged
+        (this box ticks when the last stage lands):
+    - [x] stage 1: cast, `let`, element, and `@static` positions — explicit
+          `as slice<T>` anywhere an expression goes, the annotation-driven
+          `let` (`let nums: slice<int32> = [0x10, 0x1F, 0xFF];`), array
+          element position (`let m: slice<int32>[2] = [[1, 2], [3, 4]];`),
+          and the const-only `@static` route (an anonymous constant global
+          backs the view; a mutable `@static` target is rejected toward
+          `slice<const T>`); implemented, see
+          [Slices](docs/language.md#slices)
+    - [ ] stage 2: bare argument position — `f([1, 2, 3])` against a
+          `slice<T>` parameter. Must land on the direct call path
+          (`marshal_args`) and the overload-set path (the pre-evaluation
+          carve-out, `literal_adapts_to_pattern`, winner emission)
+          **together**: open overload sets mean a second overload flips a
+          name onto the set path, the parity trap the string-literal family
+          already hit once. Open decision: bare-argument mutability (uniform
+          allow, for family consistency, vs const-only implicit with the
+          explicit `as`-cast escape). Recorded: literal elements contribute
+          nothing to generic inference in this design (element anchoring is
+          a possible later extension)
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:

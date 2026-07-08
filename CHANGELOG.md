@@ -10,6 +10,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Array literals adapt to `slice<T>`** — an array literal now borrows
+  directly to a slice, backed by a hidden array in the enclosing function's
+  frame: explicitly in any expression slot (`[1, 2, 3] as slice<int32>`,
+  argument positions included), and implicitly from an annotated `let`
+  (`let nums: slice<int32> = [0x10, 0x1F, 0xFF];`) or an array/slice
+  element slot (`let m: slice<int32>[2] = [[1, 2], [3, 4]];`, nested
+  `slice<slice<T>>` literals, string elements in `slice<slice<char>>`).
+  The length is the exact element count (no NUL logic — `['h','i'] as
+  slice<char>` has length 2, unlike a named `char[2]`'s borrow), the empty
+  literal `[]` is the `{ null, 0 }` view with no backing storage, ternaries
+  of literals adapt arm by arm, and mutable slice targets are allowed (the
+  backing storage is fresh, so writes go through). `@static let g:
+  slice<const int32> = [1, 2];` becomes a constant view over an anonymous
+  rodata array (the mutable form is rejected, pointing at
+  `slice<const T>`). The direct `return [...] as slice<T>` is rejected up
+  front — the view would dangle — and bare literal arguments
+  (`f([1, 2, 3])`) stay a later stage. See
+  [Slices](docs/language.md#slices) and
+  [examples/memory/slice_literals.mc](examples/memory/slice_literals.mc).
 - **The `format` module** — the formatting protocol's baseline overload
   set: every member of `import "format";`'s
   `format(mut str: string, value: X, const modifier: string)` set appends

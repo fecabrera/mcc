@@ -296,7 +296,11 @@ def test_list_literal_needs_a_type_annotation():
 
 
 def test_list_literal_only_as_initializer():
-    with pytest.raises(LangError, match="only allowed as a variable initializer"):
+    # A bare literal in a position with no array/slice context (here an int32*
+    # parameter) enumerates where a literal is legal.
+    with pytest.raises(
+        LangError, match="only allowed where an array or slice type receives it"
+    ):
         compile_ir("fn f(p: int32*) {}\nfn main() -> int32 { f([1, 2, 3]); return 0; }")
 
 

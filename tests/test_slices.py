@@ -713,3 +713,339 @@ def test_string_literal_element_does_not_adapt_to_uint8_slice():
             }
             """
         )
+
+
+# --- Array literals adapt to slice<T> (Stage 1) ---
+
+
+def test_array_literal_borrows_with_as():
+    # The explicit spelling: `[...] as slice<T>` materializes a hidden
+    # backing array in the frame and views it -- {&backing[0], count}.
+    source = """
+    fn main() -> int32 {
+        let s = [0x10, 0x1F, 0xFF] as slice<int32>;
+        return (s.length as int32) + s[0] - 16;   // 3 + 16 - 16
+    }
+    """
+    assert run(source) == 3
+
+
+def test_array_literal_adapts_in_annotated_let():
+    # The implicit spelling: a slice<T> annotation adapts the literal, the
+    # way a string literal adapts to slice<char>.
+    source = """
+    fn main() -> int32 {
+        let nums: slice<int32> = [0x10, 0x1F, 0xFF];
+        let total: int32 = 0;
+        for v in nums { total = total + v; }
+        return total - 47;   // 16 + 31 + 255 - 47 == 255
+    }
+    """
+    assert run(source) == 255
+
+
+def test_mutable_write_through_bound_slice():
+    # A mutable slice<T> target is allowed: the backing storage is fresh and
+    # nothing else names it. Two copies of the view alias one backing array.
+    source = """
+    fn main() -> int32 {
+        let s: slice<int32> = [1, 2, 3];
+        let t = s;
+        t[0] = 40;            // writes the shared backing array
+        return s[0] + s[2];   // 40 + 3
+    }
+    """
+    assert run(source) == 43
+
+
+def test_array_literal_to_const_slice():
+    # A read-only view over the fresh storage; writes are rejected as for
+    # any slice<const T>.
+    source = """
+    fn main() -> int32 {
+        let s: slice<const int32> = [7, 8];
+        return s[0] + (s.length as int32);   // 7 + 2
+    }
+    """
+    assert run(source) == 9
+
+
+def test_array_literal_cast_in_argument_position():
+    # A bare literal argument does not adapt (later stage), but the explicit
+    # `as` works in an argument slot -- including a const slice parameter,
+    # which travels by hidden reference.
+    source = """
+    fn sum(s: slice<const int32>) -> int32 {
+        let total: int32 = 0;
+        for v in s { total = total + v; }
+        return total;
+    }
+    fn main() -> int32 { return sum([1, 2, 3] as slice<const int32>); }
+    """
+    assert run(source) == 6
+
+
+def test_bare_argument_still_rejected():
+    # Argument adaptation is a later stage: without the `as`, the literal has
+    # no receiving array/slice context.
+    with pytest.raises(
+        LangError, match="only allowed where an array or slice type receives it"
+    ):
+        compile_ir(
+            """
+            fn sum(s: slice<const int32>) -> int32 { return 0; }
+            fn main() -> int32 { return sum([1, 2, 3]); }
+            """
+        )
+
+
+def test_assignment_from_literal_still_rejected():
+    # `s = [1, 2];` is a later stage too; only initializers adapt today.
+    with pytest.raises(
+        LangError, match="only allowed where an array or slice type receives it"
+    ):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let s: slice<int32> = [];
+                s = [1, 2];
+                return 0;
+            }
+            """
+        )
+
+
+def test_empty_literal_both_spellings():
+    # `[]` builds no backing array at all: the { null, 0 } view (the same
+    # empty slice zero variadic extras synthesize). No zero-length array
+    # type is ever constructed.
+    source = """
+    fn main() -> int32 {
+        let a: slice<int32> = [];
+        let b = [] as slice<int32>;
+        return (a.length + b.length) as int32;
+    }
+    """
+    assert run(source) == 0
+
+
+def test_array_literal_elements_adapt_to_slice_elements():
+    # Element position: a slice<int32>[2] array fills from nested literals,
+    # each element borrowing its own backing array.
+    source = """
+    fn main() -> int32 {
+        let m: slice<int32>[2] = [[1, 2], [3, 4]];
+        return m[0][1] * 10 + m[1][0];   // 23
+    }
+    """
+    assert run(source) == 23
+
+
+def test_nested_slice_of_slices():
+    # slice<slice<T>>: the outer literal's elements adapt to slice<int32>
+    # through the same element gate, so the whole shape needs one `as`.
+    source = """
+    fn main() -> int32 {
+        let n = [[5, 6], [7]] as slice<slice<int32>>;
+        return (n.length as int32) * 100 + n[0][1] * 10 + n[1][0];   // 267
+    }
+    """
+    assert run(source) == 267
+
+
+def test_string_elements_in_slice_of_char_slices():
+    # String-literal elements keep adapting inside an adapted outer literal:
+    # slice<slice<char>> from plain strings, lengths NUL-free.
+    source = """
+    fn main() -> int32 {
+        let names = ["ab", "cde"] as slice<slice<char>>;
+        return (names.length + names[0].length + names[1].length) as int32;
+    }
+    """
+    assert run(source) == 7
+
+
+def test_element_type_mismatch_rejected():
+    # Elements coerce one by one through the usual array-element rule.
+    with pytest.raises(LangError, match="array element: expected int32, got float64"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let s: slice<int32> = [1, 2.5];
+                return 0;
+            }
+            """
+        )
+
+
+def test_ternary_of_array_literals_adapts():
+    # A ternary adapts arm by arm (each arm borrows its own backing array in
+    # its own branch), in both the let and the `as` spellings.
+    source = """
+    fn pick(flag: bool) -> int32 {
+        let s: slice<int32> = flag ? [1] : [2, 3];
+        let t = (flag ? [9] : [8, 7, 6]) as slice<int32>;
+        return (s.length * 10 + t.length) as int32;
+    }
+    fn main() -> int32 { return pick(false) * 100 + pick(true); }
+    """
+    assert run(source) == 2311   # false: 23, true: 11
+
+
+def test_char_literal_slice_keeps_exact_count():
+    # The char asymmetry, pinned from both sides: a char array literal has no
+    # NUL, so its borrow keeps every element (length 2)...
+    source = """
+    fn main() -> int32 {
+        let s = ['h', 'i'] as slice<char>;
+        return s.length as int32;
+    }
+    """
+    assert run(source) == 2
+
+
+def test_char_array_two_step_borrow_drops_presumed_nul():
+    # ...while the two-step form binds a char[2] first, and a char[N] *array*
+    # borrow presumes NUL-terminated text, dropping one trailing byte.
+    source = """
+    fn main() -> int32 {
+        let cs: char[2] = ['h', 'i'];
+        let s = cs as slice<char>;
+        return s.length as int32;
+    }
+    """
+    assert run(source) == 1
+
+
+def test_literal_in_loop_reuses_one_slot():
+    # One entry-block backing slot per literal occurrence, re-stored each
+    # pass: a view captured in iteration N observes iteration N+1's store,
+    # like any loop local.
+    source = """
+    fn main() -> int32 {
+        let captured: slice<int32> = [];
+        let i: int32 = 0;
+        while (i < 3) {
+            let s: slice<int32> = [i, i * 10];
+            if (i == 0) { captured = s; }
+            i = i + 1;
+        }
+        return captured[1];   // the last pass stored [2, 20]
+    }
+    """
+    assert run(source) == 20
+
+
+def test_return_of_literal_borrow_rejected():
+    # `return [...] as slice<T>` would view this frame's dead backing array;
+    # nothing else names it, so it is always dangling and rejected up front.
+    with pytest.raises(LangError, match="cannot return an array literal borrowed"):
+        compile_ir(
+            """
+            fn f() -> slice<int32> { return [1, 2] as slice<int32>; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_return_of_ternary_literal_borrow_rejected():
+    # A ternary arm dangles the same way.
+    with pytest.raises(LangError, match="cannot return an array literal borrowed"):
+        compile_ir(
+            """
+            fn f(flag: bool) -> slice<int32> {
+                return (flag ? [1] : [2, 3]) as slice<int32>;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_return_of_named_array_borrow_still_legal():
+    # Only the direct literal spelling is rejected; a named local's borrow
+    # keeps compiling as before (the caller can reason about the local).
+    source = """
+    fn f() -> slice<int32> {
+        let xs: int32[2] = [4, 5];
+        return xs as slice<int32>;   // still dangles at runtime, but named
+    }
+    fn main() -> int32 { return 0; }
+    """
+    compile_ir(source)
+
+
+def test_static_const_slice_from_array_literal():
+    # The @static route: the elements land in an anonymous private constant
+    # global and the slice is a constant {pointer, length} view over it.
+    source = """
+    @static let g: slice<const int32> = [10, 20, 30];
+    fn main() -> int32 {
+        return g[2] + (g.length as int32);   // 30 + 3
+    }
+    """
+    assert run(source) == 33
+
+
+def test_static_slice_initializer_is_constant_view():
+    # No runtime code: a getelementptr into the .arr global plus the count.
+    ir_text = compile_ir(
+        """
+        @static let g: slice<const int32> = [1, 2];
+        fn main() -> int32 { return g.length as int32; }
+        """
+    )
+    assert (
+        'getelementptr ([2 x i32], [2 x i32]* @".arr.0", i32 0, i32 0), i64 2'
+        in ir_text
+    )
+
+
+def test_static_mutable_slice_from_literal_rejected():
+    # The backing constant is rodata: a mutable @static view would open a
+    # write path into it, so the message points at slice<const T>.
+    with pytest.raises(LangError, match="declare it slice<const int32>"):
+        compile_ir(
+            """
+            @static let g: slice<int32> = [1, 2];
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_static_empty_const_slice():
+    source = """
+    @static let g: slice<const int32> = [];
+    fn main() -> int32 { return g.length as int32; }
+    """
+    assert run(source) == 0
+
+
+def test_unannotated_let_of_array_literal_stays_ambiguous():
+    # No inference from elements yet (a later stage): a bare let still asks
+    # for the annotation.
+    with pytest.raises(LangError, match="array literal needs a type annotation"):
+        compile_ir("fn main() -> int32 { let v = [1, 2]; return 0; }")
+
+
+def test_format_renders_adapted_literal(capfd):
+    # Protocol composition: the format module's generic slice<T> renderer
+    # receives an adapted literal like any other slice.
+    run(
+        """
+        import "format";
+        import "string";
+        import "libc/stdio";
+        fn main() -> int32 {
+            let none: struct string;
+            string_init(none);
+            let s: struct string;
+            string_init(s);
+            format(s, [0x10, 0x1F] as slice<const int32>, none);
+            printf("|%.*s|\\n", s.length as int32, s.data);
+            string_destroy(s);
+            string_destroy(none);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "|[16, 31]|\n"

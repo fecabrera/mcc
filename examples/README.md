@@ -122,6 +122,7 @@ Pointers and the builtin container/view types built on them.
 |---------|-------|
 | [pointers.mc](memory/pointers.mc) | `import`, heap allocation, `&` `*` `[]`, `sizeof`, `as` casts |
 | [slices.mc](memory/slices.mc) | the builtin `slice<T>` view: borrowing a `list<T>` or `T[N]` with `as`, `.length`, indexing, `for x in`, passing by value, writing through |
+| [slice_literals.mc](memory/slice_literals.mc) | array literals borrowed straight into a `slice<T>` over a hidden backing array: the explicit `as` (argument slots included), implicit adaptation at an annotated `let` and in slice-typed elements (nesting recurses), the exact no-NUL length vs a named `char[N]`, the `{null, 0}` empty literal, writes through a mutable target, and the `@static slice<const T>` rodata view |
 | [lists.mc](memory/lists.mc) | `list<T>`, a growable random-access sequence: `push`, `get` (mut out-param), `from_array`, `append`, `duplicate` |
 | [stacks.mc](memory/stacks.mc) | `stack<T>`, a growable LIFO: push and pop at the top |
 | [queues.mc](memory/queues.mc) | `queue<T>`, a linked-list FIFO: push at the back, pop from the front, walk it with `for … in` |
