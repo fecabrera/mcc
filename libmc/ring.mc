@@ -15,7 +15,7 @@ struct ring<T> {
  * @param self:     ring to initialise
  * @param capacity: initial slot count
  */
-fn ring_init<T>(mut self: struct ring<T>, capacity: uint64) {
+fn ring_init<T>(mut self: ring<T>, capacity: uint64) {
     self.data = alloc<T>(capacity);
     self.head = 0;
     self.length = 0;
@@ -27,7 +27,7 @@ fn ring_init<T>(mut self: struct ring<T>, capacity: uint64) {
  *
  * @param self: ring to destroy
  */
-fn ring_destroy<T>(mut self: struct ring<T>) {
+fn ring_destroy<T>(mut self: ring<T>) {
     dealloc(self.data);
 
     self.data = null;
@@ -42,7 +42,7 @@ fn ring_destroy<T>(mut self: struct ring<T>) {
  * @param self:  ring to push onto
  * @param value: value to append
  */
-fn ring_push<T>(mut self: struct ring<T>, value: T) {
+fn ring_push<T>(mut self: ring<T>, value: T) {
     if (self.length == self.capacity)
         ring_grow(self);
 
@@ -60,7 +60,7 @@ fn ring_push<T>(mut self: struct ring<T>, value: T) {
  *
  * @return the popped value
  */
-fn ring_pop<T>(mut self: struct ring<T>) -> T {
+fn ring_pop<T>(mut self: ring<T>) -> T {
     let pos = self.head;
 
     self.head = (self.head + 1) % self.capacity;
@@ -70,16 +70,31 @@ fn ring_pop<T>(mut self: struct ring<T>) -> T {
 }
 
 /**
- * Returns the element at a logical index without removing it; index 0 is the
- * front. The caller must ensure index < self.length; behaviour is undefined
- * otherwise.
+ * Reports whether a logical index is in bounds — whether ring_at is defined
+ * for it; index 0 is the front.
  *
- * @param self:  ring to index into
+ * @param self:  ring to test against
  * @param index: logical position from the front
  *
- * @return the value at that position
+ * @return true if index < self.length
  */
-fn ring_at<T>(const self: struct ring<T>, index: uint64) -> T {
+fn ring_has<T>(const self: ring<T>, index: uint64) -> bool {
+    return index < self.length;
+}
+
+/**
+ * Unchecked mutable access at a logical index; index 0 is the front. Returns
+ * the element as an lvalue, so `ring_at(r, 0) = v` writes in place and
+ * `let x = ring_at(r, 0)` copies out. Undefined if index is out of bounds —
+ * guard with ring_has. The lvalue points into the ring's storage: consume it
+ * before any call that can grow the ring.
+ *
+ * @param self:  ring to access
+ * @param index: logical position from the front; must be < self.length
+ *
+ * @return the element at that position, as an assignable lvalue
+ */
+fn ring_at<T>(mut self: ring<T>, index: uint64) -> mut T {
     let pos = (self.head + index) % (self.capacity);
     return self.data[pos];
 }
@@ -93,7 +108,7 @@ fn ring_at<T>(const self: struct ring<T>, index: uint64) -> T {
  *
  * @return the front value
  */
-fn ring_peek<T>(const self: struct ring<T>) -> T {
+fn ring_peek<T>(const self: ring<T>) -> T {
     return self.data[self.head];
 }
 
@@ -104,7 +119,7 @@ fn ring_peek<T>(const self: struct ring<T>) -> T {
  *
  * @return the live element count
  */
-fn ring_len<T>(const self: struct ring<T>) -> uint64 {
+fn ring_len<T>(const self: ring<T>) -> uint64 {
     return self.length;
 }
 
@@ -115,7 +130,7 @@ fn ring_len<T>(const self: struct ring<T>) -> uint64 {
  *
  * @return true if the ring is empty, false otherwise
  */
-fn ring_is_empty<T>(const self: struct ring<T>) -> bool {
+fn ring_is_empty<T>(const self: ring<T>) -> bool {
     return self.length == 0;
 }
 
@@ -127,7 +142,7 @@ fn ring_is_empty<T>(const self: struct ring<T>) -> bool {
  * @param self: ring whose buffer to grow
  */
 @private
-fn ring_grow<T>(mut self: struct ring<T>) {
+fn ring_grow<T>(mut self: ring<T>) {
     let new_capacity: uint64 = self.capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;

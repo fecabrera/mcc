@@ -34,7 +34,7 @@ struct dict_entry<V> extends set_entry<char*, V>;
  * @field capacity: total number of allocated slots
  */
 struct dict<V> {
-    entries: struct dict_entry<V>*;
+    entries: dict_entry<V>*;
     length: uint64;
     capacity: uint64;
 }
@@ -79,7 +79,7 @@ fn str_clone(@nonnull s: char*) -> char* {
  * @param self:     dict to initialise
  * @param capacity: initial slot count; must be > 0
  */
-fn dict_init<V>(mut self: struct dict<V>, capacity: uint64) {
+fn dict_init<V>(mut self: dict<V>, capacity: uint64) {
     self.entries = alloc<struct dict_entry<V>>(capacity);
     self.length = 0;
     self.capacity = capacity;
@@ -95,7 +95,7 @@ fn dict_init<V>(mut self: struct dict<V>, capacity: uint64) {
  *
  * @param self: dict to destroy
  */
-fn dict_destroy<V>(mut self: struct dict<V>) {
+fn dict_destroy<V>(mut self: dict<V>) {
     for i in range(self.capacity) {
         if (self.entries[i].state == dict_entry_state::OCCUPIED)
             dealloc(self.entries[i].key);
@@ -116,7 +116,7 @@ fn dict_destroy<V>(mut self: struct dict<V>) {
  * @param key:   string key; the caller keeps ownership
  * @param value: value to associate with key
  */
-fn dict_set<V>(mut self: struct dict<V>, @nonnull key: char*, value: V) {
+fn dict_set<V>(mut self: dict<V>, @nonnull key: char*, value: V) {
     if (self.length * 10 >= self.capacity * 7)
         dict_grow(self);
 
@@ -157,7 +157,7 @@ fn dict_set<V>(mut self: struct dict<V>, @nonnull key: char*, value: V) {
  *
  * @return true if key was found, false otherwise
  */
-fn dict_get<V>(const self: struct dict<V>, @nonnull key: char*, mut out: V) -> bool {
+fn dict_get<V>(const self: dict<V>, @nonnull key: char*, mut out: V) -> bool {
     let slot = hash(key) % self.capacity;
 
     while (self.entries[slot].state != dict_entry_state::EMPTY) {
@@ -181,7 +181,7 @@ fn dict_get<V>(const self: struct dict<V>, @nonnull key: char*, mut out: V) -> b
  * @param self: dict to remove from
  * @param key:  string key to remove
  */
-fn dict_remove<V>(mut self: struct dict<V>, @nonnull key: char*) {
+fn dict_remove<V>(mut self: dict<V>, @nonnull key: char*) {
     let slot = hash(key) % self.capacity;
 
     while (self.entries[slot].state != dict_entry_state::EMPTY) {
@@ -207,7 +207,7 @@ fn dict_remove<V>(mut self: struct dict<V>, @nonnull key: char*) {
  * @param self: dict to grow
  */
 @private
-fn dict_grow<V>(mut self: struct dict<V>) {
+fn dict_grow<V>(mut self: dict<V>) {
     let old_capacity = self.capacity;
     let old_entries = self.entries;
 
@@ -250,7 +250,7 @@ fn dict_grow<V>(mut self: struct dict<V>) {
  *
  * @return an iterator positioned before the first occupied entry
  */
-fn dict_it<V>(self: struct dict<V>*) -> struct iterator<struct dict<V>> {
+fn dict_it<V>(self: dict<V>*) -> struct iterator<struct dict<V>> {
     return struct iterator<struct dict<V>> { obj = self, idx = 0 };
 }
 

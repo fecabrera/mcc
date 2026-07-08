@@ -73,6 +73,34 @@ fn list_reset<T>(mut self: list<T>) {
 }
 
 /**
+ * Reports whether index is in bounds — whether list_at is defined for it.
+ *
+ * @param self:  list to test against
+ * @param index: zero-based index
+ *
+ * @return true if index < self.length
+ */
+fn list_has<T>(const self: list<T>, index: uint64) -> bool {
+    return index < self.length;
+}
+
+/**
+ * Unchecked mutable access: returns the element at index as an lvalue, so
+ * `list_at(xs, i) = v` writes in place and `let x = list_at(xs, i)` copies
+ * out. Undefined if index is out of bounds — guard with list_has, or use
+ * list_get for the checked read. The lvalue points into the list's storage:
+ * consume it before any call that can grow the list.
+ *
+ * @param self:  list to access
+ * @param index: zero-based index; must be < self.length
+ *
+ * @return the element at index, as an assignable lvalue
+ */
+fn list_at<T>(mut self: list<T>, index: uint64) -> mut T {
+    return self.data[index];
+}
+
+/**
  * Reads the element at index into out.
  *
  * @param self:  list to read from
@@ -82,7 +110,7 @@ fn list_reset<T>(mut self: list<T>) {
  * @return true on success, false if index is out of bounds
  */
 fn list_get<T>(const self: list<T>, index: uint64, mut out: T) -> bool {
-    if (index >= self.length)
+    if (!list_has(self, index))
         return false;
 
     out = self.data[index];
@@ -99,7 +127,7 @@ fn list_get<T>(const self: list<T>, index: uint64, mut out: T) -> bool {
  * @return true on success, false if index is out of bounds
  */
 fn list_set<T>(mut self: list<T>, index: uint64, value: T) -> bool {
-    if (index >= self.length)
+    if (!list_has(self, index))
         return false;
 
     self.data[index] = value;

@@ -152,6 +152,30 @@ def test_direct_receiver_through_the_alias(capfd):
     assert capfd.readouterr().out == "i len=2\nreset len=0\n"
 
 
+def test_string_has_and_at_through_the_wrappers():
+    # string_has/string_at are @inline wrappers over list_has/list_at through
+    # the `type string = list<char>` alias; string_at composes the mut return
+    # (`return list_at(self, i)`), so string_at(s, 0) = '/' writes into the
+    # string's bytes.
+    assert run(
+        """
+        import "string";
+        fn main() -> int32 {
+            let s: struct string;
+            string_init(s, "abc");
+            if (!string_has(s, 2)) return 1;   // last byte is in bounds
+            if (string_has(s, 3)) return 2;    // length itself is not
+            string_at(s, 0) = '/';             // write through the wrapper
+            string_at(s, 2) += 1;              // compound: 'c' -> 'd'
+            if (!string_eq(s, "/bd")) return 3;
+            let c = string_at(s, 1);           // value context copies out
+            string_destroy(s);
+            return (c == 'b') ? 0 : 4;
+        }
+        """
+    ) == 0
+
+
 def test_string_eq_and_init_copy():
     # string_eq and the slice<char> overload of string_init take their
     # right-hand side as a slice<char>: a string borrows in with `as`, and a

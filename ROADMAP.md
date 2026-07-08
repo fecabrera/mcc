@@ -1004,7 +1004,8 @@ already do).
     - [ ] `libmc` receiver migration — flip the standard library's struct
           functions from raw pointer selves to receiver markers: read-only
           accessors become `const self` (the
-          `get`/`at`/`peek`/`len`/`is_empty`/`eq` families), mutators become
+          `get`/`peek`/`len`/`is_empty`/`eq` families; `at` settled as
+          `mut self` in the accessor triad below), mutators become
           `mut self`
           (`init`/`from_*`/`destroy`/`reset`/`set`/`push`/`pop`/`append`/
           `remove`/`grow`), across `list`, `string` (a transparent alias of
@@ -1125,8 +1126,9 @@ already do).
         under concrete overloading (an lvalue receiver keeps both
         candidates in a same-shape tie), so one name cannot serve checked
         `const` reads and mutable access both; stdlib adoption ships as
-        the accessor triad nested below (nothing in `libmc` forms a `mut`
-        return yet), which also owns
+        the accessor triad nested below (its first stage landed the first
+        live `mut` returns in `libmc`: `list_at`, `string_at`, and the
+        flipped `ring_at`), which also owns
         the consequence that a `-> mut T` accessor has no `bool` failure
         channel. The implementation landed on groundwork that had already
         shipped: generic overloads mixing `mut` (above) defer the
@@ -1176,19 +1178,22 @@ already do).
           the honest cost is that the guarded idiom hashes twice where
           `operator[]` hashes once, accepted for v1 with a find/entry-style
           API lending the slot as the recorded future escape valve.
-          `ring` reconciles in the same pass: `ring_at` is the naming
-          precedent (unchecked, documented UB) but carries the pre-triad
-          signature (`const self -> T` by value), so it flips to
-          `mut self -> mut T` while `ring` gains `ring_get`/`ring_has`,
-          keeping `const` rings readable. Lands **staged** (`_has` rides
-          only shipped machinery; `_at` rides the now-shipped parent):
-      - [ ] stage 1: `_has` — `dict`/`set` membership plus the sequence
-            index predicates; independent of `mut` returns, shippable
-            today
-      - [ ] stage 2: `_at` — the `mut self -> mut T` family across
-            `list`/`string`/`dict`/`ring`, plus the
-            `ring_get`/`ring_has` reconciliation; unblocked now that
-            `mut` returns shipped
+          `ring` reconciles in the same pass: `ring_at` was the naming
+          precedent (unchecked, documented UB) but carried the pre-triad
+          signature (`const self -> T` by value), so it flipped to
+          `mut self -> mut T` and `ring` gained `ring_has`, with
+          `ring_get` still owed to keep `const` rings readable (until it
+          lands, a `const` ring's only read is the front-only
+          `ring_peek`). Lands **staged** (adoption split by what shipped
+          together, not the earlier `_has`-everywhere-then-`_at` plan):
+      - [x] stage 1: sequence adoption — `list_has`/`list_at`,
+            `string_has`/`string_at` (`@inline` wrappers re-lending into
+            the `list` pair), `ring_has`, and the `ring_at` flip to
+            `mut self -> mut T`, the first live `mut` returns in `libmc`
+      - [ ] stage 2: keyed containers and the `const`-ring read —
+            `dict_has`/`set_has` (the load-bearing membership case) with
+            `dict_at`, plus `ring_get` to close the `const`-ring read
+            gap the stage-1 flip opened
   - [ ] motivating use case: method receivers — once methods / OOP (the item
         below) land, `const`/`mut`/by-value on `self` express
         read-only / mutating / consuming methods directly, replacing today's raw

@@ -10,6 +10,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **stdlib: the accessor triad lands in `list`, `string`, and `ring`** —
+  the containers grow the settled `_get`/`_has`/`_at` accessor shape.
+  `list_has`/`string_has`/`ring_has` are the domain predicates: `const
+  self`, true exactly when the index is in bounds (`ring_has` takes the
+  logical index from the front). `list_at`/`string_at`/`ring_at` are the
+  unchecked mutable accessors — the first `mut` returns in libmc: each is
+  `(mut self, index) -> mut T`, so `list_at(xs, i) = v`,
+  `string_at(s, 0) = '/'`, and `ring_at(r, i) += 1` write in place
+  (`ring_at` through the head-offset modular position), while value
+  context copies out. Out of bounds is undefined — guard with `_has`, or
+  use the checked `_get`; the returned lvalue points into the container's
+  heap storage, so consume it before anything that can grow the
+  container. The string members are `@inline` wrappers over the list
+  ones, and `list_get`/`list_set` now route their bounds checks through
+  `list_has` (behavior unchanged). **Breaking** (pre-1.0): `ring_at`
+  flips from `(const self, index) -> T` to `(mut self, index) -> mut T`
+  — read-only call sites keep working (value context loads a copy), but
+  a `const ring<T>` receiver no longer re-lends into it. See
+  [mut returns](docs/language.md#mut-returns).
 - **`mut` returns** — a function declared `-> mut T` returns an lvalue: a
   reference to caller-reachable storage, so
   `fn buf_at(mut self: struct buf, i: uint64) -> mut char` makes

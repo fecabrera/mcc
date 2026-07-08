@@ -103,6 +103,36 @@ fn string_reset(mut self: string) {
 }
 
 /**
+ * Reports whether index is in bounds — whether string_at is defined for it.
+ *
+ * @param self:  string to test against
+ * @param index: zero-based byte position
+ *
+ * @return true if index < the string's length
+ */
+@inline
+fn string_has(const self: string, index: uint64) -> bool {
+    return list_has(self, index);
+}
+
+/**
+ * Unchecked mutable access: returns the byte at index as an lvalue, so
+ * `string_at(s, 0) = '/'` writes in place. Undefined if index is out of
+ * bounds — guard with string_has, or use string_get for the checked read.
+ * The lvalue points into the string's storage: consume it before any call
+ * that can grow the string.
+ *
+ * @param self:  string to access
+ * @param index: zero-based byte position; must be in bounds
+ *
+ * @return the byte at index, as an assignable lvalue
+ */
+@inline
+fn string_at(mut self: string, index: uint64) -> mut char {
+    return list_at(self, index);
+}
+
+/**
  * Reads the byte at index into out.
  *
  * @param self:  string to read from

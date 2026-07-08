@@ -33,8 +33,8 @@ def test_fifo_with_direct_receiver():
 
 
 def test_wraps_around_head():
-    # Pops move head forward, so later pushes reuse freed slots; ring_at
-    # (const self) reads through the wrap without disturbing the ring.
+    # Pops move head forward, so later pushes reuse freed slots; ring_at in
+    # value context reads through the wrap without disturbing the ring.
     assert run(
         """
         import "ring";
@@ -79,6 +79,64 @@ def test_grow_relays_wrapped_elements():
         }
         """
     ) == 9
+
+
+def test_has_and_at_write_through_the_wrap():
+    # ring_has is the triad's domain predicate (logical index < length);
+    # ring_at is its unchecked mutable half: at a wrapped position the
+    # returned lvalue lands on the physical slot behind the logical index.
+    assert run(
+        """
+        import "ring";
+        fn main() -> int32 {
+            let r: struct ring<int32>;
+            ring_init(r, 4);
+            ring_push(r, 1);
+            ring_push(r, 2);
+            ring_push(r, 3);
+            ring_pop(r);
+            ring_pop(r);           // head = 2, length = 1
+            ring_push(r, 4);       // slot 3
+            ring_push(r, 5);       // physically wraps into slot 0
+            if (!ring_has(r, 2)) return 100;   // last logical index
+            if (ring_has(r, 3)) return 101;    // length itself is not
+            ring_at(r, 2) = 50;    // logical back = wrapped slot 0
+            ring_at(r, 0) += 1;    // logical front, slot 2: 3 -> 4
+            let back = ring_at(r, 2);          // value context copies out
+            ring_pop(r);
+            ring_pop(r);
+            let last = ring_pop(r);            // drains the wrapped slot
+            ring_destroy(r);
+            return (back == 50 and last == 50) ? 0 : 1;
+        }
+        """
+    ) == 0
+
+
+def test_has_and_at_track_a_grow():
+    # ring_grow re-lays wrapped elements in logical order and resets head,
+    # so lvalues formed after the reallocation address the new buffer and
+    # ring_has tracks the grown length.
+    assert run(
+        """
+        import "ring";
+        fn main() -> int32 {
+            let r: struct ring<int32>;
+            ring_init(r, 2);
+            ring_push(r, 1);
+            ring_push(r, 2);
+            ring_pop(r);           // head = 1
+            ring_push(r, 3);       // wraps into slot 0; ring is full
+            ring_push(r, 4);       // ring_grow re-lays [2, 3], resets head
+            if (!ring_has(r, 2) or ring_has(r, 3)) return 100;
+            ring_at(r, 0) = 20;    // front, in the new buffer: 2 -> 20
+            ring_at(r, 2) += 6;    // back: 4 -> 10
+            let sum = ring_at(r, 0) + ring_at(r, 1) + ring_at(r, 2);
+            ring_destroy(r);
+            return sum;             // 20 + 3 + 10
+        }
+        """
+    ) == 33
 
 
 def test_amp_call_sites_still_compile():

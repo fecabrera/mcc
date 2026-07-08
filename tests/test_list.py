@@ -31,6 +31,73 @@ def test_direct_receiver_with_growth():
     ) == 79
 
 
+def test_has_is_true_strictly_below_length():
+    # list_has is the triad's domain predicate: true for the last element
+    # (length - 1), false at length itself.
+    assert run(
+        """
+        import "list";
+        fn main() -> int32 {
+            let xs: struct list<int32>;
+            list_init(xs, 2);
+            list_push(xs, 7);
+            list_push(xs, 8);
+            list_push(xs, 9);
+            if (!list_has(xs, 2)) return 1;   // last index is in bounds
+            if (list_has(xs, 3)) return 2;    // length itself is not
+            list_destroy(xs);
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_at_is_an_assignable_lvalue():
+    # list_at is the triad's unchecked mutable half (list_get is the checked
+    # read): plain assignment writes into the list's storage, compound
+    # assignment addresses the element once, and value context copies out.
+    assert run(
+        """
+        import "list";
+        fn main() -> int32 {
+            let xs: struct list<int32>;
+            list_init(xs, 4);
+            list_push(xs, 10);
+            list_push(xs, 20);
+            list_at(xs, 0) = 11;              // write-through
+            list_at(xs, 1) += 1;              // compound: 21
+            let a = list_at(xs, 0);           // value context copies out
+            let b: int32 = 0;
+            list_get(xs, 1, b);               // the checked read agrees
+            list_destroy(xs);
+            return a + b;                     // 11 + 21
+        }
+        """
+    ) == 32
+
+
+def test_has_guards_at():
+    # The guard idiom: list_at is undefined out of bounds, so a list_has
+    # test brackets the access; the out-of-range write never runs.
+    assert run(
+        """
+        import "list";
+        fn main() -> int32 {
+            let xs: struct list<int32>;
+            list_init(xs, 2);
+            list_push(xs, 1);
+            list_push(xs, 2);
+            if (list_has(xs, 1)) list_at(xs, 1) = 5;   // in bounds: writes
+            if (list_has(xs, 9)) list_at(xs, 9) = 5;   // out: never accessed
+            let v: int32 = 0;
+            list_get(xs, 1, v);
+            list_destroy(xs);
+            return v;
+        }
+        """
+    ) == 5
+
+
 def test_amp_call_sites_still_compile():
     # Pre-migration `&x` call shapes keep working via pointer decay.
     assert run(
