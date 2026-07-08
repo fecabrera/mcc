@@ -1019,9 +1019,9 @@ already do).
           sketches must form its return from a `mut`/pointer parameter,
           and overloads differing only in markers are banned under
           concrete overloading, so one name cannot serve both; mutable
-          access arrives as a separate refactor once `mut` returns land,
-          leaning on a new name (`list_ref`-style), and is explicitly not
-          part of this migration. Strictly depends on the
+          access arrives as the `_at` half of the `_get`/`_has`/`_at`
+          accessor triad nested under `mut` returns below, and is
+          explicitly not part of this migration. Strictly depends on the
           pointer decay above: callers holding a heap `string*`/`list<T>*`
           keep one call shape only because the pointer decays into the new
           slots (an always-non-null `&s` keeps compiling unchanged; an
@@ -1102,26 +1102,82 @@ already do).
         what makes the protocol shapes work; either way this stays a
         coordinated compiler + stdlib change
   - [ ] `mut` returns — a function that returns an lvalue:
-        `fn string_ref(mut self: string, i: uint64) -> mut char` makes
-        `string_ref(str, 0) = '/'` legal (as well as comparing it or copying it
-        out with `let c = string_ref(str, 0)`). A call returning `mut T` is a
+        `fn string_at(mut self: string, i: uint64) -> mut char` makes
+        `string_at(str, 0) = '/'` legal (as well as comparing it or copying it
+        out with `let c = string_at(str, 0)`). A call returning `mut T` is a
         new assignable expression category. To keep the reference from dangling
         without a lifetime system, a `mut` return may only be **formed from a
         `mut`/pointer parameter or a global — never from a local or a by-value
-        parameter**; this conservative, checkable rule fits the `string_ref`
+        parameter**; this conservative, checkable rule fits the `string_at`
         case (the result derives from `self`) and preserves the non-escape
-        guarantee. The example is deliberately a **new name** beside the
-        `const self` accessors of the `libmc` receiver migration above:
-        a `mut` return cannot form from a `const` receiver, and overloads
-        differing only in markers are banned under concrete overloading,
-        so the migrated `get`/`at` families stay read-only and mutable
-        access ships as a separate `_ref`-style refactor once this lands.
-        The groundwork has shipped: generic overloads mixing `mut`
-        (above) already defer the lvalue/value decision past overload
-        resolution — the exact decision point an assignable call expression
-        needs — and a `-> mut T` stub in a `.mci` is pure return-type
-        rendering on the shipped
-        [bodyless prototypes](docs/language.md#bodyless-fn-prototypes)
+        guarantee. The example is deliberately a **separate name** beside
+        the `const self` `_get` accessors of the `libmc` receiver
+        migration above: a `mut` return cannot form from a `const`
+        receiver, and overloads differing only in markers are banned
+        under concrete overloading (an lvalue receiver keeps both
+        candidates in a same-shape tie), so one name cannot serve checked
+        `const` reads and mutable access both; stdlib adoption ships as
+        the accessor triad nested below once this lands, which also owns
+        the consequence that a `-> mut T` accessor has no `bool` failure
+        channel. The groundwork has shipped: generic overloads mixing
+        `mut` (above) already defer the lvalue/value decision past
+        overload resolution — the exact decision point an assignable call
+        expression needs — and a `-> mut T` stub in a `.mci` is pure
+        return-type rendering on the shipped
+        [bodyless prototypes](docs/language.md#bodyless-fn-prototypes):
+    - [ ] stdlib accessor triad: `_get` / `_has` / `_at` — the settled
+          shape of container element access, three names with three
+          distinct jobs (supersedes the earlier `_ref`-style sketch:
+          `_ref` is dropped as a name, the mutable accessor is `_at`).
+          `_get` is the shipped checked read and does not move:
+          `const self`, `bool` failure channel, `mut out` element.
+          `_has` is the domain predicate,
+          `fn dict_has<V>(const self: struct dict<V>, key: char*) -> bool`
+          and friends: it answers exactly "is `_at` defined here", so on
+          keyed containers it is key membership (the load-bearing case;
+          today `dict_get` doubles as the membership test and forces an
+          out-copy) and on sequences it is index-in-range (thin sugar
+          over `i < len`, kept for the uniform guard idiom and generic
+          code). Value containment is deliberately **not** `_has`: a
+          search needs equality over a generic `T`, which the language
+          has no protocol for, so that is a separate future family, not
+          an overload of this one. `_at` is the unchecked lvalue
+          accessor and the reason this nests here:
+          `fn list_at<T>(mut self: list<T>, i: uint64) -> mut T`, usable
+          on both sides of `=`. A `-> mut T` accessor has **no failure
+          channel** (the return slot is the element; there is no `bool`
+          half), so out-of-range must be UB, abort, or clamp: settled as
+          **documented UB**, matching `ring_at`'s contract today, slice
+          indexing (bounds carried, reads and writes go straight
+          through), and pointer indexing. The checked story is not
+          "later", it already ships as `_get`/`_has`; the genuine later
+          is an opt-in checked `_at` mode (a debug bounds check landing
+          on the planned stdlib `panic(msg)` under `@noreturn` below).
+          The marker ban decides the receiver: overloads of one name
+          differing only in `const`/`mut` are uncallable, so `_at` is
+          `mut self` only, `const` code reads through `_get`/`_has`, and
+          future method sugar changes nothing (`c.at(i)` resolves to the
+          one `mut self` overload; a `const` receiver simply cannot call
+          it). `dict` settles as guard-then-access: `dict_has` then
+          `dict_at`, UB on a missing key, and **no insert-if-missing**
+          (C++ `operator[]`'s implicit insert means a hidden allocation
+          plus a default-constructed `V`, neither of which exists here);
+          the honest cost is that the guarded idiom hashes twice where
+          `operator[]` hashes once, accepted for v1 with a find/entry-style
+          API lending the slot as the recorded future escape valve.
+          `ring` reconciles in the same pass: `ring_at` is the naming
+          precedent (unchecked, documented UB) but carries the pre-triad
+          signature (`const self -> T` by value), so it flips to
+          `mut self -> mut T` while `ring` gains `ring_get`/`ring_has`,
+          keeping `const` rings readable. Lands **staged** (`_has` rides
+          only shipped machinery; `_at` cannot exist before the parent):
+      - [ ] stage 1: `_has` — `dict`/`set` membership plus the sequence
+            index predicates; independent of `mut` returns, shippable
+            today
+      - [ ] stage 2: `_at` — the `mut self -> mut T` family across
+            `list`/`string`/`dict`/`ring`, plus the
+            `ring_get`/`ring_has` reconciliation; strictly after `mut`
+            returns land
   - [ ] motivating use case: method receivers — once methods / OOP (the item
         below) land, `const`/`mut`/by-value on `self` express
         read-only / mutating / consuming methods directly, replacing today's raw
