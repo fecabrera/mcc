@@ -10,6 +10,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **stdlib: `fnv1a` gains a `slice<T>` member** — length-bounded hashing
+  beside the zero-terminated pointer member: the new overload folds exactly
+  `length` elements, so zeros in the data are hashed (the right member for
+  binary buffers), and an empty slice hashes to the FNV offset basis. Both
+  members agree on the same bytes.
 - **`format` renders `slice<char*>` as a quoted list** — a new concrete
   member of the `format` overload set appends a slice of C strings as a
   quoted, bracketed list (`["ls", "cat"]`; the modifier is ignored, and

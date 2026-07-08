@@ -8,12 +8,29 @@
  * @return hash of the buffer's contents
  */
 fn fnv1a<T>(key: T*) -> uint64 {
-    // should key be a `slice<T>` instead?
     let hash: uint64 = 14695981039346656037;
     let i: uint64 = 0;
-    while (key[i]) { // this would turn to `for k in key { ... }`
+    while (key[i]) {
         fnv1a_k(hash, key[i] as uint64);
         i += 1;
+    }
+    return hash;
+}
+
+/**
+ * FNV-1a content hash of a slice: folds exactly `length` elements into the
+ * hash. The length-bounded sibling of the zero-terminated overload above —
+ * elements may be anything, zero included, so this is the right member for
+ * binary data; an empty slice hashes to the FNV offset basis.
+ *
+ * @param key: slice whose elements to hash
+ *
+ * @return hash of the slice's contents
+ */
+fn fnv1a<T>(key: slice<T>) -> uint64 {
+    let hash: uint64 = 14695981039346656037;
+    for k in key {
+        fnv1a_k(hash, k as uint64);
     }
     return hash;
 }

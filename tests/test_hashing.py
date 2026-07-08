@@ -1,4 +1,4 @@
-"""lib/hashing/: murmur3, crc32, and md5 against authoritative references."""
+"""lib/hashing/: murmur3, crc32, md5, and fnv1a against authoritative references."""
 
 import hashlib
 import zlib
@@ -36,6 +36,13 @@ def murmur3_32(data: bytes, seed: int = 0) -> int:
     h ^= h >> 13
     h = (h * 0xC2B2AE35) & m
     h ^= h >> 16
+    return h
+
+
+def fnv1a64(elems) -> int:
+    h = 0xCBF29CE484222325
+    for k in elems:
+        h = ((h ^ k) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
     return h
 
 
@@ -110,3 +117,34 @@ def test_md5(tmp_path, capfd):
              b"The quick brown fox jumps over the lazy dog"]
     expected = "".join(hashlib.md5(b).hexdigest() + "\n" for b in cases)
     assert capfd.readouterr().out == expected
+
+
+def test_fnv1a_slice(tmp_path, capfd):
+    # The slice member folds exactly .length elements, so zeros in the data
+    # are hashed; the zero-terminated pointer member stops at the first zero.
+    run_program(
+        tmp_path,
+        'import "hashing/fnv1a";\n'
+        "fn main() -> int32 {\n"
+        "    let buf = alloc<uint8>(3);\n"
+        "    if (buf == null) return 1;\n"
+        "    buf[0] = 97; buf[1] = 0; buf[2] = 98;\n"
+        "    let bytes: slice<uint8> = [97, 0, 98];\n"
+        "    let empty: slice<uint8> = [];\n"
+        "    let ints: slice<int32> = [3, 65536, 2026];\n"
+        '    printf("%llu %llu %llu %llu %llu %llu\\n",\n'
+        '        fnv1a("hi"), fnv1a("hi" as slice<const char>),\n'
+        "        fnv1a(bytes), fnv1a(buf), fnv1a(empty), fnv1a(ints));\n"
+        "    dealloc(buf);\n"
+        "    return 0;\n"
+        "}\n",
+    )
+    expected = " ".join(str(x) for x in (
+        fnv1a64(b"hi"),           # pointer member over "hi"...
+        fnv1a64(b"hi"),           # ...agrees with the slice member, same bytes
+        fnv1a64([97, 0, 98]),     # the slice hashes a zero mid-data...
+        fnv1a64([97]),            # ...where the pointer member truncates
+        0xCBF29CE484222325,       # empty slice: the FNV offset basis
+        fnv1a64([3, 65536, 2026]),  # non-char elements instantiate too
+    ))
+    assert capfd.readouterr().out == expected + "\n"

@@ -40,7 +40,7 @@ import needed (see [Control flow](../docs/language.md#control-flow)).
 | ---------------------------------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
 | [hash.mc](hash.mc)                             | `import "hash";`               | `hash<T>` overload set: integer keys by value (splitmix64), pointer keys by content (FNV-1a). The hook the containers use. |
 | [hashing/splitmix64.mc](hashing/splitmix64.mc) | `import "hashing/splitmix64";` | `splitmix64<T>` — fast integer mix.                                                                                        |
-| [hashing/fnv1a.mc](hashing/fnv1a.mc)           | `import "hashing/fnv1a";`      | `fnv1a<T>` — content hash of a NUL-terminated buffer.                                                                      |
+| [hashing/fnv1a.mc](hashing/fnv1a.mc)           | `import "hashing/fnv1a";`      | `fnv1a<T>` — content hash of a NUL-terminated buffer, or of exactly `length` elements via the `slice<T>` member.           |
 | [hashing/murmur3.mc](hashing/murmur3.mc)       | `import "hashing/murmur3";`    | `murmur3` — 32-bit MurmurHash3.                                                                                            |
 | [hashing/crc32.mc](hashing/crc32.mc)           | `import "hashing/crc32";`      | `crc32` — CRC-32 checksum.                                                                                                 |
 | [hashing/md5.mc](hashing/md5.mc)               | `import "hashing/md5";`        | `md5` — MD5 digest into a 16-byte buffer.                                                                                  |
