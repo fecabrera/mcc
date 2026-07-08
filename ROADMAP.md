@@ -743,6 +743,58 @@ already do).
       pairs with the [C struct-passing ABI](#tooling-and-c-interop) work; the
       read-modify-write granularity under a `@volatile` struct must be
       specified
+- [ ] Pointer arithmetic — pointers join the shipped binary and compound
+      operator surface, no bespoke syntax: `p + n` and `p - n` advance by
+      elements, the compound forms `p += n` / `p -= n` follow, `p - q` is
+      the pointer difference, and the relational comparisons
+      `<` `<=` `>` `>=` extend to pointers (equality, the `!= null`
+      checks, and the ternary already work). This deliberately reverses
+      the reference's documented exclusion ("there is no pointer
+      arithmetic; use `&p[1]`"), on the finding that the exclusion buys
+      no safety: `&p[i]` already compiles to the exact typed
+      `getelementptr` that `p + i` would emit, for any `i`, so the
+      capability exists today and only two things lack a spelling,
+      pointer difference and pointer ordering (the `while (p < end)`
+      scan loop). Semantics are C's, element-scaled, one semantics under
+      two spellings: `p + n` is exactly `&p[n]` (`n` any integer type,
+      scaled by `sizeof(pointee)`; `uint8*`, the raw-memory pointer,
+      gives byte arithmetic, and there is no `void*` to make that
+      ambiguous), `p - q` requires identical pointer types and yields
+      the signed element distance as an `int64` (byte distance is
+      `uint8*` arithmetic or the shipped pointer/integer `as` casts),
+      and the relationals likewise require identical pointer types.
+      Everything else keeps today's exact rejections: `p + q`, `*` `/`
+      `%`, bitwise and shifts (tag-bit tricks keep the explicit
+      `as uint64` round-trip), any arithmetic on function pointers
+      (they keep `==`/`!=` only), and any `null` operand. Mechanically
+      small and parser-free: the forms already parse and are rejected in
+      `apply_binary`'s operand unification, so the work is a
+      pointer/integer arm ahead of coercion (emitting the same GEP as
+      indexing), widening the pointer comparison carve-out past
+      `==`/`!=`, and a `ptrtoint`/`sub`/exact-division lowering for the
+      difference; the compound forms fall out of compound assignment's
+      existing `apply_binary` reuse. Composition with the shipped
+      [`@nonnull` machinery](docs/language.md#nonnull-parameters)
+      mirrors `&p[n]` exactly: the result is an always-non-null source
+      just as `&p[n]` is today, `p += n` is an ordinary reassignment (it
+      kills a narrowed local's fact, and stays rejected on a `@nonnull`
+      parameter, which cannot be reassigned), and
+      [`-Wunchecked-dereference`](docs/language.md#-wunchecked-dereference)
+      is untouched, since arithmetic never dereferences (the deref of a
+      derived pointer warns or proves by the existing rules). Not a
+      posture change: [slices](docs/language.md#slices) remain the
+      bounds-carrying view and the preferred API over runs of elements,
+      the [libmc receiver migration](#functions-and-methods) to
+      `mut`/`const` selves proceeds regardless (this lands in buffer
+      internals and interop code, not on call surfaces), and pointer
+      arithmetic is the explicit systems and interop lane (allocators,
+      byte scanners, `memchr`-style loops, MMIO, ported C) the
+      language's C lineage already promises. v1 is runtime-expression
+      only: no pointer arithmetic inside `const` initializers or `@if`
+      conditions. Addition is pointer-left only: `p + n` is the one
+      accepted shape, and the commuted `n + p` is rejected, unlike C
+      (the pointer is the base operand being advanced, and `n - p` has
+      no meaning anyway, so addition matches subtraction's shape)
 - [ ] `tuple<A, B, ...>` — a builtin heterogeneous, fixed-arity product: each
       position keeps its own statically-known type, accessed by position (`t.0`,
       `t.1`). For multiple return values
