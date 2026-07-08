@@ -66,6 +66,7 @@ from mcc.nodes import (
     Program,
     Return,
     SizeOf,
+    Slice,
     StaticAssert,
     StoreCall,
     StoreDeref,
@@ -6479,6 +6480,8 @@ class CodeGen:
         if isinstance(expr, Index):
             addr, element = self.gen_index_addr(expr.base, expr.index, expr.line)
             return self.value_at(addr, element, volatile=element.volatile)
+        if isinstance(expr, Slice):
+            return self.gen_slice(expr)
         if isinstance(expr, Member):
             if not expr.arrow and not isinstance(
                 expr.base, (Var, Member, Index, Unary)
@@ -6968,6 +6971,125 @@ class CodeGen:
             raise LangError(f"index must be an integer, not {index.type}", line)
         addr = self.builder.gep(base.value, [index.value])
         return addr, base.type.pointee
+
+    def gen_slice(self, expr: Slice) -> TypedValue:
+        """Evaluate a sub-slice expression: ``base[start:end]``.
+
+        A sub-slice of a ``slice<T>`` is a new rvalue view of the same
+        storage, ``{ data + start, end - start }`` -- the same data-field
+        extract, GEP, and length subtraction the equivalent struct literal
+        emits. An omitted ``start`` defaults to 0 and an omitted ``end`` to
+        the receiver's length; ``s[:]`` is a plain copy of the view. The
+        result type is the receiver's type verbatim, so element mutability
+        rides the element type (a sub-slice of ``slice<const T>`` is
+        ``slice<const T>``).
+
+        Bounds keep the house posture, unchecked: the GEP is bare (no
+        ``inbounds``, matching slice indexing) and nothing validates
+        ``start <= end <= length``, so an out-of-range pair is UB -- a corrupt
+        view, exactly like an out-of-range ``s[i]``. ``s[n:n]`` is the defined
+        empty result ``{ data + n, 0 }``: the one-past-end pointer is formed
+        but never dereferenced, and it is deliberately not normalized to the
+        empty literal's ``{ null, 0 }`` (no branch in the lowering).
+
+        Only slice-typed receivers slice; everything else reaches sub-slicing
+        by first becoming a slice through its existing borrow spelling (see
+        :meth:`sub_slice_error`).
+
+        Args:
+            expr: The ``Slice`` node.
+
+        Returns:
+            The sub-view as a ``TypedValue``.
+
+        Raises:
+            LangError: When the receiver is not a ``slice<T>`` or a bound is
+                not an integer.
+        """
+        base = self.gen_expr(expr.base)
+        if not is_slice(base.type):
+            raise LangError(self.sub_slice_error(expr.base, base), expr.line)
+        if expr.start is None and expr.end is None:
+            # `s[:]` copies the view: a slice is a plain value, so the copy
+            # is the value itself.
+            return TypedValue(base.value, base.type)
+        ptr = self.builder.extract_value(base.value, base.type.elem_indices[0])
+        if expr.end is None:
+            end = self.builder.extract_value(base.value, base.type.elem_indices[1])
+        else:
+            end = self.slice_bound(expr.end, expr.line)
+        if expr.start is None:
+            data, length = ptr, end
+        else:
+            start = self.slice_bound(expr.start, expr.line)
+            data = self.builder.gep(ptr, [start])
+            length = self.builder.sub(end, start)
+        return self.make_slice(base.type, data, length)
+
+    def slice_bound(self, bound_expr, line: int):
+        """Evaluate a sub-slice bound to a 64-bit element offset.
+
+        Bounds have index parity: any integer type is accepted and widened to
+        64 bits by its own signedness (``sext`` signed, ``zext`` unsigned),
+        the same treatment a GEP gives an index, so the length subtraction
+        happens at the slice length's width.
+
+        Args:
+            bound_expr: The bound expression (an integer).
+            line: Source line for diagnostics.
+
+        Returns:
+            The bound as a 64-bit ``ir.Value``.
+
+        Raises:
+            LangError: When the bound is not an integer.
+        """
+        tv = self.gen_expr(bound_expr)
+        if not is_integer(tv.type):
+            raise LangError(f"slice bound must be an integer, not {tv.type}", line)
+        if tv.type.ir.width == 64:
+            return tv.value
+        extend = self.builder.sext if tv.type.signed else self.builder.zext
+        return extend(tv.value, UINT64.ir)
+
+    def sub_slice_error(self, base_expr, base: TypedValue) -> str:
+        """Word the rejection for a non-slice sub-slice receiver.
+
+        The single dispatch point for every non-slice receiver, so the
+        planned indexing/slicing protocol has one place to hook user-defined
+        slicer overloads into later. Owned containers get the borrow
+        spelling that works today: a fixed array's brackets keep the
+        ``char[N]`` NUL-drop and read-only-source rules exactly where they
+        live, and a ``list<T>`` (or any slice-extending struct) may carry
+        derived state beyond the view (a list's ``capacity``) that only its
+        author knows how to rebuild, so it borrows too. A string literal
+        stays rejected in v1 -- the borrow is its spelling as well.
+
+        Args:
+            base_expr: The receiver's AST node (to name a string literal).
+            base: The evaluated receiver.
+
+        Returns:
+            The error message text.
+        """
+        if base.decayed is not None:
+            # The value is the pointer an array decayed to; reject by the
+            # array type the user wrote, not the pointer it became.
+            return (
+                f"cannot sub-slice {base.decayed}; borrow it first: "
+                f"(arr as slice<{base.decayed.element}>)[a:b]"
+            )
+        if isinstance(base_expr, StrLit):
+            return (
+                "cannot sub-slice a string literal; borrow it first: "
+                '("..." as slice<char>)[a:b]'
+            )
+        if is_struct(base.type):
+            return (
+                f"cannot sub-slice {base.type}; borrow it first: "
+                "(xs as slice<T>)[a:b]"
+            )
+        return f"cannot sub-slice {base.type}; only a slice can be sub-sliced"
 
     def gen_member_addr(
         self, base_expr, fname: str, arrow: bool, line: int

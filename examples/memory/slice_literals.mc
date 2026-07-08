@@ -8,6 +8,8 @@ import "std";
 // Prerequisites: array literals (types/arrays.mc) and the slice<T> view
 // itself (memory/slices.mc). String literals adapt to slices the same way;
 // see types/string_tables.mc for that side.
+// See also: memory/sub_slices.mc -- s[start:end] narrows any slice,
+// including one borrowed from a literal, into a view over the same storage.
 
 // One consumer for the whole tour. It takes slice<const int32>, so mutable
 // views pass too (they widen implicitly, as slices.mc shows).

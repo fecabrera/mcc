@@ -1049,3 +1049,363 @@ def test_format_renders_adapted_literal(capfd):
         """
     )
     assert capfd.readouterr().out == "|[16, 31]|\n"
+
+
+# --- Sub-slicing: s[start:end] -----------------------------------------------
+
+
+def test_sub_slice_all_four_forms():
+    # s[a:b], s[a:], s[:b], and s[:]; values are read back through each
+    # sub-view, so the data pointer and the length are both exercised.
+    source = """
+    fn main() -> int32 {
+        let nums = [10, 20, 30, 40] as slice<int32>;
+        let mid = nums[1:3];      // { &nums[1], 2 } -> 20, 30
+        let tail = nums[1:];      // end defaults to nums.length
+        let head = nums[:2];      // start defaults to 0
+        let all = nums[:];        // a plain copy of the view
+        let got = (mid.length as int32) * 1000
+            + (tail.length as int32) * 100
+            + (head.length as int32) * 10
+            + (all.length as int32);
+        return got + mid[0] + mid[1] + tail[2] + head[0] + all[3];
+    }
+    """
+    # lengths 2/3/2/4 = 2324; elements 20 + 30 + 40 + 10 + 40 = 140
+    assert run(source) == 2464
+
+
+def test_sub_slice_full_copy_is_same_view():
+    # s[:] copies the view itself: same data pointer, same length.
+    source = """
+    fn main() -> int32 {
+        let nums = [1, 2, 3] as slice<int32>;
+        let copy = nums[:];
+        if (copy.data != nums.data) { return 1; }
+        if (copy.length != nums.length) { return 2; }
+        return 0;
+    }
+    """
+    assert run(source) == 0
+
+
+def test_write_through_sub_slice_hits_original_storage():
+    # A sub-slice views the same storage, so a write through it lands in the
+    # array the receiver borrowed.
+    source = """
+    fn main() -> int32 {
+        let xs: int32[4];
+        xs[0] = 1; xs[1] = 2; xs[2] = 3; xs[3] = 4;
+        let s = xs as slice<int32>;
+        let mid = s[1:3];
+        mid[0] = 99;              // s[1], i.e. xs[1]
+        return xs[1];
+    }
+    """
+    assert run(source) == 99
+
+
+def test_sub_slice_of_const_slice_keeps_const():
+    # The result type is the receiver's type verbatim, so a sub-slice of
+    # slice<const T> is slice<const T> and writes through it stay rejected.
+    with pytest.raises(LangError, match="cannot assign through a read-only slice<const T>"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let ro = [1, 2, 3] as slice<const int32>;
+                ro[0:2][0] = 5;
+                return 0;
+            }
+            """
+        )
+
+
+def test_sub_slice_bounds_have_index_parity():
+    # Any integer type serves as a bound (widened by its own signedness, like
+    # a GEP index), so an int32 bound works and mixes with the uint64 default
+    # or an explicit s.length end.
+    source = """
+    fn main() -> int32 {
+        let nums = [10, 20, 30, 40, 50] as slice<int32>;
+        let i: int32 = 1;
+        let t = nums[i:];                 // int32 start, defaulted uint64 end
+        let u = nums[i:nums.length];      // int32 start, uint64 end
+        let b: uint8 = 2;
+        let v = nums[b:4];                // uint8 start
+        return (t.length as int32) * 100 + (u.length as int32) * 10
+            + (v.length as int32) + t[0] / 20;   // 4, 4, 2, 20/20
+    }
+    """
+    assert run(source) == 443
+
+
+def test_sub_slice_non_integer_bound_rejected():
+    with pytest.raises(LangError, match="slice bound must be an integer, not float64"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let s = [1, 2] as slice<int32>;
+                let x = s[1.5:];
+                return 0;
+            }
+            """
+        )
+
+
+def test_sub_slice_chains():
+    # A sub-slice is an ordinary slice value, so it sub-slices again.
+    source = """
+    fn main() -> int32 {
+        let nums = [10, 20, 30, 40] as slice<int32>;
+        let s = nums[1:][1:];     // { &nums[2], 2 }
+        return (s.length as int32) * 100 + s[0];
+    }
+    """
+    assert run(source) == 230
+
+
+def test_sub_slice_empty_keeps_real_data_pointer():
+    # s[n:n] is the defined empty result { &s.data[n], 0 }: the one-past-end
+    # pointer is formed (not normalized to the empty literal's { null, 0 })
+    # but never dereferenced.
+    source = """
+    fn main() -> int32 {
+        let nums = [1, 2, 3] as slice<int32>;
+        let e = nums[2:2];
+        if (e.length != 0) { return 1; }
+        if (e.data == null) { return 2; }
+        for x in e { return 3; }  // zero passes
+        return 0;
+    }
+    """
+    assert run(source) == 0
+
+
+def test_for_in_over_sub_slice():
+    # A sub-slice is a plain slice value, so `for ... in` iterates it.
+    source = """
+    fn main() -> int32 {
+        let nums = [10, 20, 30, 40] as slice<int32>;
+        let total: int32 = 0;
+        for x in nums[1:3] {
+            total += x;
+        }
+        return total;
+    }
+    """
+    assert run(source) == 50
+
+
+def test_sub_slice_as_argument():
+    # A sub-slice passes like any slice value: as a mutable view (writes land
+    # in the shared storage) and as a const parameter.
+    source = """
+    fn bump(xs: slice<int32>) { xs[0] = 77; }
+    fn total(const xs: slice<int32>) -> int32 {
+        let sum: int32 = 0;
+        for x in xs { sum += x; }
+        return sum;
+    }
+    fn main() -> int32 {
+        let xs: int32[3];
+        xs[0] = 1; xs[1] = 2; xs[2] = 3;
+        let s = xs as slice<int32>;
+        bump(s[1:]);              // writes xs[1]
+        return total(s[1:]) + xs[1];   // (77 + 3) + 77
+    }
+    """
+    assert run(source) == 157
+
+
+def test_format_renders_sub_slice(capfd):
+    # Protocol composition: the format module's generic slice<T> renderer
+    # receives a sub-slice like any other slice value.
+    run(
+        """
+        import "format";
+        import "string";
+        import "libc/stdio";
+        fn main() -> int32 {
+            let none: struct string;
+            string_init(none);
+            let s: struct string;
+            string_init(s);
+            let nums = [1, 2, 3, 4] as slice<const int32>;
+            format(s, nums[1:3], none);
+            printf("|%.*s|\\n", s.length as int32, s.data);
+            string_destroy(s);
+            string_destroy(none);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "|[2, 3]|\n"
+
+
+def test_sub_slice_ternary_start_binds_greedily():
+    # A full expression parses before the slice `:` is considered, so a
+    # ternary start consumes its own `:`: s[flag ? 1 : 2 : 3] is
+    # start = (flag ? 1 : 2), end = 3.
+    source = """
+    fn pick(flag: bool) -> int32 {
+        let nums = [10, 20, 30, 40] as slice<int32>;
+        let s = nums[flag ? 1 : 2 : 3];
+        return (s.length as int32) * 100 + s[0];
+    }
+    fn main() -> int32 { return pick(true) * 1000 + pick(false) / 10; }
+    """
+    # true: { &nums[1], 2 } -> 220; false: { &nums[2], 1 } -> 130
+    assert run(source) == 220013
+
+
+def test_sub_slice_of_borrowed_literal():
+    # Composition with the array-literal borrow: the literal becomes a slice
+    # first, then sub-slices as one.
+    source = """
+    fn main() -> int32 {
+        let s = ([1, 2, 3] as slice<int32>)[1:];
+        return (s.length as int32) * 10 + s[0];
+    }
+    """
+    assert run(source) == 22
+
+
+def test_sub_slice_no_step_form():
+    # `::` lexes as one token, so a step never parses as two slice colons.
+    with pytest.raises(LangError, match="unexpected token '::'"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let s = [1, 2] as slice<int32>;
+                let x = s[::2];
+                return 0;
+            }
+            """
+        )
+    with pytest.raises(LangError, match=r"expected '\]', got '::'"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let s = [1, 2] as slice<int32>;
+                let x = s[1::2];
+                return 0;
+            }
+            """
+        )
+
+
+def test_sub_slice_is_not_an_lvalue():
+    # An rvalue view: not an assignment target, not compound-assignable, and
+    # not addressable.
+    with pytest.raises(LangError, match="invalid assignment target"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let s = [1, 2] as slice<int32>;
+                s[0:1] = 9;
+                return 0;
+            }
+            """
+        )
+    with pytest.raises(LangError, match="invalid assignment target"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let s = [1, 2] as slice<int32>;
+                s[0:1] += 9;
+                return 0;
+            }
+            """
+        )
+    with pytest.raises(LangError, match="expression is not addressable"):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let s = [1, 2] as slice<int32>;
+                let p = &s[0:1];
+                return 0;
+            }
+            """
+        )
+
+
+def test_sub_slice_array_receiver_rejected_with_borrow_hint():
+    # Only slices sub-slice; an owned array reaches it through the borrow.
+    with pytest.raises(
+        LangError,
+        match=r"cannot sub-slice int32\[4\]; borrow it first: "
+        r"\(arr as slice<int32>\)\[a:b\]",
+    ):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let a: int32[4];
+                let x = a[1:2];
+                return 0;
+            }
+            """
+        )
+
+
+def test_sub_slice_list_receiver_rejected_with_borrow_hint():
+    # list<T> may carry derived state beyond the view (its capacity), so it
+    # borrows first, like lst[i] not indexing today.
+    with pytest.raises(
+        LangError,
+        match=r"cannot sub-slice list<int32>; borrow it first: "
+        r"\(xs as slice<T>\)\[a:b\]",
+    ):
+        compile_ir(
+            """
+            import "list";
+            fn main() -> int32 {
+                let xs: struct list<int32>;
+                let x = xs[0:1];
+                return 0;
+            }
+            """
+        )
+
+
+def test_sub_slice_string_literal_receiver_rejected():
+    # A literal stays rejected in v1: the borrow is its slice spelling too.
+    with pytest.raises(
+        LangError,
+        match=r'cannot sub-slice a string literal; borrow it first: '
+        r'\("\.\.\." as slice<char>\)\[a:b\]',
+    ):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let x = "hello"[1:3];
+                return 0;
+            }
+            """
+        )
+
+
+def test_sub_slice_pointer_receiver_rejected():
+    # A bare pointer has no length to default and no borrow spelling; v1
+    # keeps slice-making from a raw pointer to the explicit struct literal.
+    with pytest.raises(LangError, match="cannot sub-slice char\\*; only a slice can be sub-sliced"):
+        compile_ir(
+            """
+            fn f(p: char*) -> int32 {
+                let x = p[0:1];
+                return 0;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_sub_slice_not_a_compile_time_constant():
+    # Runtime-expression only: no sub-slicing in const initializers (or @if /
+    # @static, which share the constant evaluator).
+    with pytest.raises(LangError, match="a const initializer must be a compile-time constant"):
+        compile_ir(
+            """
+            const C = ([1, 2] as slice<int32>)[0:1];
+            fn main() -> int32 { return 0; }
+            """
+        )

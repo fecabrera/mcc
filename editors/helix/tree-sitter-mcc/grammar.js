@@ -492,6 +492,7 @@ module.exports = grammar({
     _postfix_expression: ($) =>
       choice(
         $.index_expression,
+        $.slice_expression,
         $.member_expression,
         $.call_expression,
         $.nonnull_assert_expression,
@@ -505,6 +506,25 @@ module.exports = grammar({
 
     index_expression: ($) =>
       prec(PREC.postfix, seq(field('base', $._expression), '[', field('index', $._expression), ']')),
+
+    // `base[start:end]`, the sub-slice; either bound optional (`s[1:]`,
+    // `s[:2]`, `s[:]`). A full expression parses before the slice `:` is
+    // considered, so a ternary start consumes its own `:` greedily, matching
+    // the compiler (`s[flag ? 1 : 2 : 3]` is start `flag ? 1 : 2`, end `3`).
+    // There is no step form: `::` never appears (mcc lexes it as one token,
+    // used only by enum access), so a lone `:` is always the slice colon.
+    slice_expression: ($) =>
+      prec(
+        PREC.postfix,
+        seq(
+          field('base', $._expression),
+          '[',
+          optional(field('start', $._expression)),
+          ':',
+          optional(field('end', $._expression)),
+          ']',
+        ),
+      ),
 
     member_expression: ($) =>
       prec(PREC.postfix, seq(field('base', $._expression), field('operator', choice('.', '->')), field('field', $.identifier))),

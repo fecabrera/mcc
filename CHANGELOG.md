@@ -10,6 +10,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Sub-slicing** — `s[start:end]` on a `slice<T>` yields a new rvalue slice
+  viewing the same storage, `{ &s.data[start], end - start }`. Either bound
+  may be omitted: `s[1:]` defaults the end to `s.length`, `s[:2]` the start
+  to `0`, and `s[:]` is a plain copy of the view. The result type is the
+  receiver's verbatim — a sub-slice of `slice<const T>` stays
+  `slice<const T>` — and bounds have index parity (any integer type, widened
+  by its own signedness). Bounds are unchecked, like indexing: an
+  out-of-range pair is undefined behavior, while `s[n:n]` is the defined
+  empty view over a real one-past-end pointer. Receivers are slice-typed
+  expressions only; arrays, lists, and string literals borrow first
+  (`(arr as slice<int32>)[1:]`), with a compile error suggesting the
+  spelling. No negative indices and no step form (`::` stays one token, so
+  `s[::2]` is a parse error). The tree-sitter grammar follows (the
+  tmLanguage needed no change). See
+  [Sub-slicing](docs/language.md#sub-slicing).
 - **stdlib: the accessor triad lands in `list`, `string`, and `ring`** —
   the containers grow the settled `_get`/`_has`/`_at` accessor shape.
   `list_has`/`string_has`/`ring_has` are the domain predicates: `const

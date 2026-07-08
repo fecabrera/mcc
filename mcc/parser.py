@@ -51,6 +51,7 @@ from mcc.nodes import (
     Program,
     Return,
     SizeOf,
+    Slice,
     StaticAssert,
     StoreCall,
     StoreDeref,
@@ -1920,11 +1921,29 @@ class Parser:
         expr = self.parse_primary()
         while True:
             if self.cur.kind == "[":
+                # `base[i]` indexes; a `:` decision point inside the brackets
+                # makes it a sub-slice, `base[start:end]`, either bound
+                # optional. A full expression parses first, so a ternary start
+                # binds its own `:` greedily -- `s[flag ? 1 : 2 : 3]` is
+                # `start = flag ? 1 : 2` with `end = 3`, deterministic. There
+                # is no step form: `::` lexes as one token, so `s[::2]` never
+                # reads as two slice colons.
                 line = self.advance().line
+                sliced = False
+                start = end = None
                 with self._struct_literals(True):
-                    index = self.parse_expr()
+                    if self.cur.kind != ":":
+                        start = self.parse_expr()
+                    if self.cur.kind == ":":
+                        sliced = True
+                        self.advance()
+                        if self.cur.kind != "]":
+                            end = self.parse_expr()
                 self.expect("]")
-                expr = Index(expr, index, line)
+                if sliced:
+                    expr = Slice(expr, start, end, line)
+                else:
+                    expr = Index(expr, start, line)
             elif self.cur.kind in (".", "->"):
                 arrow = self.advance()
                 field = self.expect("IDENT").text

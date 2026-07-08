@@ -1218,6 +1218,29 @@ class Index:
 
 
 @dataclass
+class Slice:
+    """A sub-slice expression: ``base[start:end]``.
+
+    Either bound may be omitted: ``start`` defaults to 0 and ``end`` to the
+    receiver's length, so ``s[1:]``, ``s[:2]``, and ``s[:]`` all parse here.
+    Deliberately a separate node from :class:`Index`: a sub-slice is always an
+    rvalue view, so every lvalue surface (assignment targets, compound
+    assignment, ``&``) excludes it by not matching this node.
+
+    Attributes:
+        base: The sliced expression (a ``slice<T>`` value).
+        start: The start-bound expression, or ``None`` when omitted.
+        end: The end-bound expression, or ``None`` when omitted.
+        line: Source line for diagnostics.
+    """
+
+    base: object
+    start: object | None
+    end: object | None
+    line: int
+
+
+@dataclass
 class Member:
     """A field access: ``base.field`` or ``base->field``.
 

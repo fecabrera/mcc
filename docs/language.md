@@ -2519,6 +2519,58 @@ mutable `@static slice<int32>` is rejected —
 it would open a write path into read-only data — with a message pointing at
 `slice<const T>`.
 
+### Sub-slicing
+
+A slice **sub-slices**: `s[start:end]` yields a new slice viewing the same
+storage, `{ &s.data[start], end - start }`. Either bound may be omitted —
+`start` defaults to `0` and `end` to `s.length` — so all four forms parse:
+
+```c
+let nums = [10, 20, 30, 40] as slice<int32>;
+let mid  = nums[1:3];   // { &nums.data[1], 2 } — 20, 30
+let tail = nums[1:];    // end defaults to nums.length
+let head = nums[:2];    // start defaults to 0
+let all  = nums[:];     // a plain copy of the view
+```
+
+The result is the receiver's type **verbatim**, so element mutability rides
+the element type: a sub-slice of `slice<T>` writes through to the shared
+storage, and a sub-slice of [`slice<const T>`](#read-only-slices) is
+`slice<const T>` — copying the view opens no new write path. It is a plain
+**rvalue** slice value: it passes as an argument, iterates with `for x in
+s[1:]`, and sub-slices again (`s[1:][1:]`), but it is not an lvalue —
+`s[1:3] = ...`, the compound forms, and `&s[1:3]` are all rejected. Bounds
+have **index parity**: any integer type is accepted, widened internally by its
+own signedness, so an `int32` start mixes freely with the defaulted `uint64`
+end. And like indexing, bounds are **unchecked**: no code validates
+`start <= end <= s.length`, so an out-of-range pair is undefined behavior — a
+corrupt view, exactly like an out-of-range `s[i]`. `s[n:n]` is the defined
+empty result `{ &s.data[n], 0 }`: the one-past-end pointer is formed but never
+dereferenced, and it is deliberately *not* normalized to the empty literal's
+`{ null, 0 }`.
+
+Receivers are **slice-typed expressions only**. Everything else reaches
+sub-slicing by first becoming a slice through its existing borrow spelling,
+which keeps every borrow rule exactly where it lives today: a fixed array
+borrows first (`(arr as slice<int32>)[1:]`, keeping the `char[N]` NUL-drop and
+read-only-source rules), a `list<T>` or other slice-extending struct borrows
+first (`(xs as slice<int32>)[1:]` — a struct may carry derived state beyond
+the view, like a list's `capacity`, that only its author knows how to
+rebuild), and a string or [array literal](#arrays) borrows first
+(`("hello" as slice<char>)[1:3]`, `([1, 2, 3] as slice<int32>)[1:]`). A
+non-slice receiver is a compile error suggesting the borrow. Two forms are
+excluded by design, not deferred: **negative indices** (an index is a raw
+element offset everywhere in mcc) and a **step** — `s[a:b:c]` is
+unrepresentable in the `{ data, length }` layout, and `::` lexes as one token,
+so `s[::2]` stays a parse error. A full expression parses before the slice
+`:` is considered, so a ternary start binds its own `:` greedily —
+`s[flag ? 1 : 2 : 3]` is `start = flag ? 1 : 2` with `end = 3`. Sub-slicing
+is a runtime expression only: it does not fold in [`const`](#constants)
+initializers, [`@if`](#conditional-compilation) conditions, or `@static`
+initializers. A `slice<char>` sub-slice carries its exact length and no NUL at
+`data + length` — already true of every borrowed slice. See
+[examples/memory/sub_slices.mc](../examples/memory/sub_slices.mc).
+
 ### Read-only slices
 
 `slice<const T>` is a **read-only** view — the element-mutability distinction

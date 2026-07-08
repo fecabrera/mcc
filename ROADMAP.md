@@ -877,78 +877,71 @@ already do).
           explicit `as`-cast escape). Recorded: literal elements contribute
           nothing to generic inference in this design (element anchoring is
           a possible later extension)
-- [ ] Sub-slicing — `s[start:end]` on a slice yields a new slice viewing the
+- [x] Sub-slicing — `s[start:end]` on a slice yields a new slice viewing the
       same storage, `{ data = &s.data[start], length = end - start }`, with an
       omitted `start` defaulting to 0 and an omitted `end` to `s.length`:
       `s[1:]`, `s[:2]`, and `s[:]` (a plain copy of the view). Pure surface
-      syntax over a spelling that compiles and runs today
-      (`slice<int32> { data = &nums.data[1], length = nums.length - 1 }`,
-      verified), so codegen emits the same data-field extract, GEP, and
-      length subtraction that struct literal does; in particular it does
-      **not** depend on the
-      [pointer arithmetic](#structs-arrays-and-data-layout) item, since
-      `&s.data[start]` is the shipped indexing lowering and `data + start`
-      is that GEP by another name. Receivers in v1: **slice-typed
-      expressions only**, `slice<const T>` included; slices slice, and
+      syntax over the struct-literal spelling: codegen emits the same
+      data-field extract, GEP, and length subtraction, with no dependency
+      on the [pointer arithmetic](#structs-arrays-and-data-layout) item.
+      Receivers: **slice-typed expressions only**, `slice<const T>`
+      included (safe as a compiler-lowered receiver because the builtin's
+      static `{ data, length }` layout fully describes the view);
       everything else reaches sub-slicing by first becoming a slice
-      through its existing spelling, so `(arr as slice<T>)[1:]` for an
-      owned array or list, the explicit
+      through its existing spelling, `(arr as slice<T>)[1:]` for an owned
+      array or list and `("abc" as slice<char>)[1:]` for a string literal
+      (literal receivers are rejected, keeping literal adaptation's
+      context-position rule at its one home), the explicit
       [borrow](docs/language.md#slices) keeping the `char[N]` NUL-drop
-      and read-only-source rules exactly where they live today. Slices
-      are safe as compiler-lowered receivers precisely because the
-      builtin's static `{ data, length }` layout fully describes the
-      view, so a compiler-constructed sub-view cannot misrepresent
-      anything. Two direct-receiver forms are recorded as possible later
-      extensions, not settled-never, both staying on this primitive side
-      of the split (their layouts are equally static): a fixed-size
-      array (`arr[a:b]` as sugar for the
-      borrow, the slicing brackets serving as the visible borrow marker)
-      and a bare pointer (`p[1:3]` is computable, both bounds explicit,
-      but v1 keeps slice-making from a raw pointer to the explicit
-      struct literal). `list<T>` and other slice-extending structs are
-      non-receivers here and stay so: a struct may carry derived state
-      beyond the view (`list`'s `capacity` the standing example) that
-      only the type's author knows how to rebuild, which is exactly what
-      routes user-defined bracket forms to the planned
-      [indexing and slicing protocol](#functions-and-methods), where
-      author-supplied slicer overloads decide what a valid sub-value
-      even is; until that lands they spell the borrow,
-      `(xs as slice<T>)[1:]`, consistent with `lst[i]` not indexing
-      today. The result is always a plain rvalue
-      `slice<T>` value: element mutability rides the element type (a
-      sub-slice of `slice<const T>` is `slice<const T>`, no new write path
-      beyond what copying the receiver already gives), it is not an lvalue
-      (`s[1:3] = ...` and the compound forms are rejected; bulk-copy
-      assignment is a possible future beside a memcpy-style helper), and
-      `for x in s[1:]` just works, a slice being a plain value. Bounds keep
-      the house posture, unchecked: slice indexing emits a bare GEP with no
-      length test and slice construction validates nothing, so `start > end`
-      or `end > length` is UB (a corrupt view), exactly like an out-of-range
-      `s[i]`; no checked mode arrives with this item. `s[n:n]` is the
-      defined empty result `{ &s.data[n], 0 }`, the one-past-end pointer
-      formed but never dereferenced, deliberately not normalized to the
-      empty literal's `{ null, 0 }` (no branch in the lowering). Two
-      exclusions are settled, not deferred: no negative indices (an index
-      is a raw element offset everywhere in mcc, a negative start is just an
-      out-of-range view), and no step (`s[a:b:c]`): a strided run is
-      unrepresentable in the `{ data, length }` layout, a layout fact
-      rather than taste, and `::` lexes as one token so `s[::2]` stays a
-      parse error naturally. The grammar is the bulk of the work, the
-      first genuinely parser-touching item in some time: a `:` decision
-      point inside the postfix `[...]` (a full expression parses first, so
-      a ternary start binds greedily, `nums[flag ? 1 : 2 : 3]` is
-      `start = flag ? 1 : 2` with `end = 3`, deterministic), a new AST node
-      beside `Index`, the small sugar-only codegen with clean errors for
-      non-sliceable receivers, and **both** editor grammars (the
-      tree-sitter rule needs the same ternary-vs-slice-colon precedence,
-      plus the tmLanguage). A sub-slice in bare argument position is an
-      ordinary typed expression, orthogonal to the array-literal
-      adaptation gates above (those key on literal AST nodes). No `.mci`
-      or import-merge surface. v1 is runtime-expression only: no
-      sub-slicing in `const` initializers, `@if` conditions, or `@static`
-      initializers, matching pointer arithmetic's stance. A `slice<char>`
-      sub-slice carries its exact length and no NUL at `data + length`,
-      already true of every borrowed slice
+      and read-only-source rules exactly where they live. The
+      non-slice-receiver rejection is a single site with tailored
+      borrow-suggesting messages, deliberately shaped as the dispatch
+      point the planned
+      [indexing and slicing protocol](#functions-and-methods) later turns
+      into overload-set dispatch: `list<T>` and other slice-extending
+      structs stay non-receivers (derived state beyond the view, `list`'s
+      `capacity` the standing example, is the type author's to rebuild
+      through a slicer overload), and until the protocol lands they spell
+      the borrow, consistent with `lst[i]` not indexing today. Two
+      direct-receiver forms remain recorded later extensions, not
+      settled-never, both on this primitive side of the split (their
+      layouts are equally static): a fixed-size array (`arr[a:b]` as
+      sugar for the borrow, the slicing brackets serving as the visible
+      borrow marker) and a bare pointer (`p[1:3]`, both bounds explicit).
+      The result is a plain rvalue `slice<T>` (a dedicated AST node
+      beside `Index`, so rvalue-ness falls out of every lvalue path
+      excluding it, no new bans needed): element mutability rides the
+      element type (a sub-slice of `slice<const T>` is `slice<const T>`),
+      `s[1:3] = ...` and the compound forms are rejected (bulk-copy
+      assignment stays a possible future beside a memcpy-style helper),
+      and `for x in s[1:]` just works, a slice being a plain value.
+      Bounds: any integer type is accepted and internally widened to
+      64-bit by its own signedness, index parity with plain `s[i]`
+      (deliberately more permissive than the struct-literal spelling;
+      widths carry no safety since out-of-range is UB regardless), and
+      nothing is checked, the house posture: `start > end` or
+      `end > length` is a corrupt view exactly like an out-of-range
+      `s[i]`, no checked mode. `s[n:n]` is the defined empty result
+      `{ &s.data[n], 0 }`, the one-past-end pointer formed but never
+      dereferenced, not normalized to the empty literal's `{ null, 0 }`
+      (no branch in the lowering). Settled exclusions, not deferred: no
+      negative indices (an index is a raw element offset everywhere in
+      mcc) and no step (`s[a:b:c]`; a strided run is unrepresentable in
+      the `{ data, length }` layout, and `::` lexes as one token so
+      `s[::2]` stays a parse error naturally). Grammar: a `:` decision
+      point inside the postfix `[...]` where a full expression parses
+      first, so a ternary start binds greedily (`nums[flag ? 1 : 2 : 3]`
+      is `start = flag ? 1 : 2` with `end = 3`, deterministic); the
+      tree-sitter grammar carries the same ternary-vs-slice-colon
+      precedence, and the tmLanguage needed no change. A sub-slice in
+      bare argument position is an ordinary typed expression, orthogonal
+      to the array-literal adaptation gates above (those key on literal
+      AST nodes). No `.mci` or import-merge surface. Runtime-expression
+      only: no sub-slicing in `const` initializers, `@if` conditions, or
+      `@static` initializers, matching pointer arithmetic's stance. A
+      `slice<char>` sub-slice carries its exact length and no NUL at
+      `data + length`, already true of every borrowed slice; implemented,
+      see [Sub-slicing](docs/language.md#sub-slicing)
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:
@@ -1376,27 +1369,31 @@ already do).
     lst[1];     // the item at 1: the accessor overload set
     lst[1:];    // the sublist from 1 on: the slicer overload set
     ```
-        Today `lst[1]` is a hard "cannot index" rejection; the protocol
-        turns that rejection path (indexing, the store and compound
-        forms through it, and the bracket slice) into overload-set
-        dispatch, while builtin receivers keep their primitive lowerings
+        Today `lst[1]` is a hard "cannot index" rejection and `lst[1:]`
+        the sub-slicing item's borrow-suggesting non-slice-receiver
+        rejection, a single site deliberately shaped as this protocol's
+        dispatch point; the protocol turns those rejection paths
+        (indexing, the store and compound forms through it, and the
+        bracket slice) into overload-set dispatch, while builtin receivers keep their primitive lowerings
         and never route through the protocol, the same builtins
         carve-out the [`for … in` protocol](#functions-and-methods)
         item records for its lowerings. The split is the design, not an
         optimization: `slice<T>`'s static `{ data, length }` layout
         fully describes the view, so a compiler-constructed sub-view
         cannot misrepresent anything and slices stay primitive (the
-        [sub-slicing](#structs-arrays-and-data-layout) item), while a
+        shipped [sub-slicing](#structs-arrays-and-data-layout) item),
+        while a
         user struct may carry derived state beyond the view (`list`'s
         `capacity` the standing example) that only the type's author
         knows how to rebuild, so the overload is where that knowledge
         lives, and a direct `arr[a:b]`/`p[a:b]`, if it ever lands, is
         the sub-slicing item's recorded primitive extension, not a
         protocol overload. No syntax of its own: `c[i]` already
-        parses, and the `[a:b]` grammar plus the primitive slice
-        lowering arrive with the sub-slicing item, which this
-        strictly builds on (a slicer overload body is typically one
-        primitive sub-slice over the container's storage). The write
+        parses, and the `[a:b]` grammar and the primitive slice
+        lowering shipped with the sub-slicing item, so the build
+        dependency this strictly sat on is satisfied (a slicer
+        overload body is typically one primitive sub-slice over the
+        container's storage). The write
         path rides the shipped
         [`mut` returns](docs/language.md#mut-returns): an accessor
         overload returning `mut T` is what makes `lst[i] = v`, compound

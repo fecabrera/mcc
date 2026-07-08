@@ -7,6 +7,8 @@ import "list";
 //
 // See also: memory/slice_literals.mc -- an array literal borrows straight
 // into a slice too, over a hidden backing array, no named array needed.
+// See also: memory/sub_slices.mc -- s[start:end] narrows a slice into a
+// new view over the same storage.
 
 // A slice is a normal value, so it passes to functions by value (two words: a
 // pointer and a length). One function works over any borrowed run, whether the
