@@ -107,7 +107,7 @@ fn format<T: uint64 | uint32 | uint16 | uint8>(mut str: string, value: T, const 
  */
 fn format(mut str: string, value: float64, const modifier: string) {
     let buf: char[MAX_BUF_LEN];
-    snprintf(buf, MAX_BUF_LEN, "%llf", value);
+    snprintf(buf, MAX_BUF_LEN, "%f", value);
     string_append(str, buf);
 }
 
