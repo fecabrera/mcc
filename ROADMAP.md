@@ -878,6 +878,78 @@ already do).
           explicit `as`-cast escape). Recorded: literal elements contribute
           nothing to generic inference in this design (element anchoring is
           a possible later extension)
+- [ ] Sub-slicing — `s[start:end]` on a slice yields a new slice viewing the
+      same storage, `{ data = &s.data[start], length = end - start }`, with an
+      omitted `start` defaulting to 0 and an omitted `end` to `s.length`:
+      `s[1:]`, `s[:2]`, and `s[:]` (a plain copy of the view). Pure surface
+      syntax over a spelling that compiles and runs today
+      (`slice<int32> { data = &nums.data[1], length = nums.length - 1 }`,
+      verified), so codegen emits the same data-field extract, GEP, and
+      length subtraction that struct literal does; in particular it does
+      **not** depend on the
+      [pointer arithmetic](#structs-arrays-and-data-layout) item, since
+      `&s.data[start]` is the shipped indexing lowering and `data + start`
+      is that GEP by another name. Receivers in v1: **slice-typed
+      expressions only**, `slice<const T>` included; slices slice, and
+      everything else reaches sub-slicing by first becoming a slice
+      through its existing spelling, so `(arr as slice<T>)[1:]` for an
+      owned array or list, the explicit
+      [borrow](docs/language.md#slices) keeping the `char[N]` NUL-drop
+      and read-only-source rules exactly where they live today. Slices
+      are safe as compiler-lowered receivers precisely because the
+      builtin's static `{ data, length }` layout fully describes the
+      view, so a compiler-constructed sub-view cannot misrepresent
+      anything. Two direct-receiver forms are recorded as possible later
+      extensions, not settled-never, both staying on this primitive side
+      of the split (their layouts are equally static): a fixed-size
+      array (`arr[a:b]` as sugar for the
+      borrow, the slicing brackets serving as the visible borrow marker)
+      and a bare pointer (`p[1:3]` is computable, both bounds explicit,
+      but v1 keeps slice-making from a raw pointer to the explicit
+      struct literal). `list<T>` and other slice-extending structs are
+      non-receivers here and stay so: a struct may carry derived state
+      beyond the view (`list`'s `capacity` the standing example) that
+      only the type's author knows how to rebuild, which is exactly what
+      routes user-defined bracket forms to the planned
+      [indexing and slicing protocol](#functions-and-methods), where
+      author-supplied slicer overloads decide what a valid sub-value
+      even is; until that lands they spell the borrow,
+      `(xs as slice<T>)[1:]`, consistent with `lst[i]` not indexing
+      today. The result is always a plain rvalue
+      `slice<T>` value: element mutability rides the element type (a
+      sub-slice of `slice<const T>` is `slice<const T>`, no new write path
+      beyond what copying the receiver already gives), it is not an lvalue
+      (`s[1:3] = ...` and the compound forms are rejected; bulk-copy
+      assignment is a possible future beside a memcpy-style helper), and
+      `for x in s[1:]` just works, a slice being a plain value. Bounds keep
+      the house posture, unchecked: slice indexing emits a bare GEP with no
+      length test and slice construction validates nothing, so `start > end`
+      or `end > length` is UB (a corrupt view), exactly like an out-of-range
+      `s[i]`; no checked mode arrives with this item. `s[n:n]` is the
+      defined empty result `{ &s.data[n], 0 }`, the one-past-end pointer
+      formed but never dereferenced, deliberately not normalized to the
+      empty literal's `{ null, 0 }` (no branch in the lowering). Two
+      exclusions are settled, not deferred: no negative indices (an index
+      is a raw element offset everywhere in mcc, a negative start is just an
+      out-of-range view), and no step (`s[a:b:c]`): a strided run is
+      unrepresentable in the `{ data, length }` layout, a layout fact
+      rather than taste, and `::` lexes as one token so `s[::2]` stays a
+      parse error naturally. The grammar is the bulk of the work, the
+      first genuinely parser-touching item in some time: a `:` decision
+      point inside the postfix `[...]` (a full expression parses first, so
+      a ternary start binds greedily, `nums[flag ? 1 : 2 : 3]` is
+      `start = flag ? 1 : 2` with `end = 3`, deterministic), a new AST node
+      beside `Index`, the small sugar-only codegen with clean errors for
+      non-sliceable receivers, and **both** editor grammars (the
+      tree-sitter rule needs the same ternary-vs-slice-colon precedence,
+      plus the tmLanguage). A sub-slice in bare argument position is an
+      ordinary typed expression, orthogonal to the array-literal
+      adaptation gates above (those key on literal AST nodes). No `.mci`
+      or import-merge surface. v1 is runtime-expression only: no
+      sub-slicing in `const` initializers, `@if` conditions, or `@static`
+      initializers, matching pointer arithmetic's stance. A `slice<char>`
+      sub-slice carries its exact length and no NUL at `data + length`,
+      already true of every borrowed slice
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:
@@ -1258,7 +1330,9 @@ already do).
       [Function overloading](docs/language.md#function-overloading).
       Iteration is the protocol family's second member: the
       `for … in` protocol sub-item above is slated to desugar into
-      `iterate`/`get_next` overloads riding this same mechanism. The
+      `iterate`/`get_next` overloads riding this same mechanism; the
+      indexing and slicing protocol nested below is the third, `c[i]`
+      and `c[a:b]` desugaring to accessor and slicer overload sets. The
       family is free-function overload sets rather than per-struct
       member rules deliberately: a protocol built as an overload set
       is joinable by any type (builtins, pointers, enums, slices,
@@ -1291,6 +1365,67 @@ already do).
         one", the `@deprecated`/`@removed` family. The driving use
         case is the same protocol story: a programmer setting their
         own formatters for stdlib-covered types
+  - [ ] indexing and slicing protocol — the family's third member: `c[i]`
+        and `c[a:b]` on a user-defined struct desugar to overloadable
+        free-function calls resolved through ordinary whole-program
+        overload resolution, so containers index and slice without
+        compiler-blessed types and any type opts in by writing overloads
+        in its own module (direction, not settled design):
+    ```c
+    let lst: list<int32>;
+    list_init(lst, 10);
+    lst[1];     // the item at 1: the accessor overload set
+    lst[1:];    // the sublist from 1 on: the slicer overload set
+    ```
+        Today `lst[1]` is a hard "cannot index" rejection; the protocol
+        turns that rejection path (indexing, the store and compound
+        forms through it, and the bracket slice) into overload-set
+        dispatch, while builtin receivers keep their primitive lowerings
+        and never route through the protocol, the same builtins
+        carve-out the [`for … in` protocol](#functions-and-methods)
+        item records for its lowerings. The split is the design, not an
+        optimization: `slice<T>`'s static `{ data, length }` layout
+        fully describes the view, so a compiler-constructed sub-view
+        cannot misrepresent anything and slices stay primitive (the
+        [sub-slicing](#structs-arrays-and-data-layout) item), while a
+        user struct may carry derived state beyond the view (`list`'s
+        `capacity` the standing example) that only the type's author
+        knows how to rebuild, so the overload is where that knowledge
+        lives, and a direct `arr[a:b]`/`p[a:b]`, if it ever lands, is
+        the sub-slicing item's recorded primitive extension, not a
+        protocol overload. No syntax of its own: `c[i]` already
+        parses, and the `[a:b]` grammar plus the primitive slice
+        lowering arrive with the sub-slicing item, which this
+        strictly builds on (a slicer overload body is typically one
+        primitive sub-slice over the container's storage). The write
+        path rides the shipped
+        [`mut` returns](docs/language.md#mut-returns): an accessor
+        overload returning `mut T` is what makes `lst[i] = v`, compound
+        assignment, and projections work through the brackets, one
+        overload serving both sides of `=` with no separate setter
+        protocol, and the accessor triad's `_at` members above
+        (`fn list_at<T>(mut self: list<T>, i: uint64) -> mut T`) read as
+        the natural overload bodies or even the direct desugar target.
+        Sequencing, not dependency, with the `for … in` protocol: the
+        two share the desugar-to-overloads mechanism, whichever ships
+        first establishes the pattern (builtin carve-outs, stdlib
+        baseline overloads, `.mci` travel), and this one is the simpler
+        pilot, a single call per bracket form with no iteration-state
+        pair. Genuinely open: the overload spelling the brackets desugar
+        to, and whether the accessor half **is** the triad's `_at` set
+        or a dedicated protocol name; the slicer's return type, which is
+        the overload author's freedom (a `list<int32>` slicer may return
+        a genuine sub-list or a `slice<int32>` view; the sub-slicing
+        item's lying-`capacity` concern becomes the author's
+        responsibility, the protocol constrains nothing); `const`
+        receivers (the triad settled `_at` as `mut self` only and
+        overloads differing only in markers are banned, so whether
+        `c[i]` has a read-only target on a `const` container, via a
+        distinct read spelling or not at all, is unresolved); and the
+        bounds posture, presumably each overload's own contract with
+        `_at`-style documented UB as the stdlib baseline. Collision and
+        ambiguity posture is inherited wholesale from the open sets
+        above, `@override` included
 - [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
       keyed to a struct, including `@private` methods and the special
       constructor/destructor below (the `for … in` protocol already dispatches
@@ -1300,7 +1435,8 @@ already do).
       is a direct, statically-bound call; dynamic dispatch exists only behind
       the explicit opt-in of the polymorphic lane below, so code that does not
       opt in pays nothing. A settled scope boundary from the open overload
-      sets item above: protocols (formatting, iteration) are free-function
+      sets item above: protocols (formatting, iteration, indexing/slicing)
+      are free-function
       overload sets, not methods; methods must not become the privileged
       mechanism for protocols, and this item is checked against that family
       rather than the reverse:
