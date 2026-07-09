@@ -840,7 +840,12 @@ class Parser:
 
     def parse_type_params(
         self,
-    ) -> tuple[list[str], dict[str, TypeRef], dict[str, list[TypeRef]]]:
+    ) -> tuple[
+        list[str],
+        dict[str, TypeRef],
+        dict[str, list[TypeRef]],
+        dict[str, TypeRef],
+    ]:
         """Parse an optional generic parameter list ``<A, B = type, ...>``.
 
         A parameter may declare a default type (``<T = int64>``), used when a
@@ -859,18 +864,29 @@ class Parser:
         (``<T: int64 | int32 = int32>``), which must then name a group member
         (membership is checked at declaration, where members resolve).
 
+        A parameter may instead declare a **nominal bound** -- a struct after
+        ``extends`` (``<T extends shape>``), constraining the parameter to that
+        struct and its declared ``extends`` lineage. Like a group member, the
+        bound target must be concrete (it may not reference a type parameter);
+        unlike a group, the set is open-ended, so it composes with a default
+        (``<T extends shape = circle>``) whose satisfaction is checked at the
+        declaration. A parameter may not carry both a bound and a group.
+
         Returns:
-            The type-parameter names, the ``{name: TypeRef}`` defaults, and
-            the ``{name: [TypeRef, ...]}`` closed type groups.
+            The type-parameter names, the ``{name: TypeRef}`` defaults, the
+            ``{name: [TypeRef, ...]}`` closed type groups, and the
+            ``{name: TypeRef}`` nominal bounds.
 
         Raises:
             LangError: On a non-trailing default, a default referencing the
-                parameter itself or a later parameter, a group member or a
-                grouped parameter's default referencing a type parameter.
+                parameter itself or a later parameter, a group member, a
+                grouped parameter's default, or a bound referencing a type
+                parameter, or a parameter carrying both a bound and a group.
         """
         type_params: list[str] = []
         defaults: dict[str, TypeRef] = {}
         groups: dict[str, list[TypeRef]] = {}
+        bounds: dict[str, TypeRef] = {}
         lines: dict[str, int] = {}
         if self.accept("<"):
             while True:
@@ -882,6 +898,14 @@ class Parser:
                     while self.accept("|"):
                         members.append(self.parse_type_ref())
                     groups[tok.text] = members
+                if self.accept("extends"):
+                    if tok.text in groups:
+                        raise LangError(
+                            f"type parameter {tok.text!r} cannot have both a "
+                            "closed type group and an 'extends' bound",
+                            tok.line,
+                        )
+                    bounds[tok.text] = self.parse_type_ref()
                 if self.accept("="):
                     defaults[tok.text] = self.parse_type_ref()
                 elif defaults:
@@ -935,7 +959,19 @@ class Parser:
                             "must name a group member",
                             lines[pname],
                         )
-        return type_params, defaults, groups
+            for pname, ref in bounds.items():
+                # A bound target is a concrete type: referencing a type
+                # parameter (an earlier one included -- `<S, T extends S>` is
+                # deferred) is not yet a resolvable bound.
+                bad = type_ref_names(ref) & set(type_params)
+                if bad:
+                    raise LangError(
+                        f"bound {ref} for type parameter {pname!r} references "
+                        f"type parameter {min(bad)!r}; a bound must be a "
+                        "concrete struct",
+                        lines[pname],
+                    )
+        return type_params, defaults, groups, bounds
 
     def parse_struct(
         self,
@@ -969,13 +1005,22 @@ class Parser:
         """
         line = self.expect("union" if union else "struct").line
         name = self.expect("IDENT").text
-        type_params, type_param_defaults, groups = self.parse_type_params()
+        type_params, type_param_defaults, groups, bounds = self.parse_type_params()
         if groups:
             # Closed type groups are a function-level constraint (they drive
             # call viability, overload partitioning, and eager instantiation
             # checks); a struct has no call site to filter.
             raise LangError(
                 "type groups are only supported on function type parameters",
+                line,
+            )
+        if bounds:
+            # `extends` bounds, like closed groups, constrain call viability
+            # and overload ranking -- both function-only in v1. (A struct's own
+            # `extends` clause is the base-layout mechanism, unrelated.)
+            raise LangError(
+                "type-parameter bounds are only supported on function type "
+                "parameters",
                 line,
             )
         base = None
@@ -1089,9 +1134,10 @@ class Parser:
         line = self.advance().line  # the 'type' identifier
         name = self.expect("IDENT").text
         # A generic alias names a family: `type entry<T> = pair<char*, T>;`.
-        # Bounds (closed type groups) do not extend to alias parameters yet, so
-        # only the names and their defaults are carried.
-        type_params, type_param_defaults, _ = self.parse_type_params()
+        # Constraints (closed type groups and `extends` bounds) do not extend
+        # to alias parameters yet, so only the names and their defaults are
+        # carried.
+        type_params, type_param_defaults, _, _ = self.parse_type_params()
         self.expect("=")
         target = self.parse_type_ref()
         self.expect(";")
@@ -1152,7 +1198,7 @@ class Parser:
         """
         line = self.expect("fn").line
         name = self.expect("IDENT").text
-        type_params, type_param_defaults, type_param_groups = (
+        type_params, type_param_defaults, type_param_groups, type_param_bounds = (
             self.parse_type_params()
         )
         if extern and type_params:
@@ -1289,6 +1335,7 @@ class Parser:
                 removed_msg=removed,
                 type_param_defaults=type_param_defaults,
                 type_param_groups=type_param_groups,
+                type_param_bounds=type_param_bounds,
             )
         if asm:
             # `@asm fn` is sugar for a function whose body is one @asm(...)
@@ -1346,6 +1393,7 @@ class Parser:
                 deprecated_msg=deprecated,
                 type_param_defaults=type_param_defaults,
                 type_param_groups=type_param_groups,
+                type_param_bounds=type_param_bounds,
             )
         if self.cur.kind == ";":
             # A bodyless prototype: a concrete mcc function defined in another
@@ -1395,6 +1443,7 @@ class Parser:
                 removed_msg=removed,
                 type_param_defaults=type_param_defaults,
                 type_param_groups=type_param_groups,
+                type_param_bounds=type_param_bounds,
             )
         return Func(
             name,
@@ -1417,6 +1466,7 @@ class Parser:
             removed_msg=removed,
             type_param_defaults=type_param_defaults,
             type_param_groups=type_param_groups,
+            type_param_bounds=type_param_bounds,
         )
 
     def parse_asm(self):

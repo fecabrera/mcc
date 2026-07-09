@@ -200,6 +200,11 @@ class InterfaceWriter:
             for members in decl.type_param_groups.values():
                 for t in members:
                     _collect_refs(t, names)
+            # An `extends` bound's target struct must travel too, so
+            # `<T extends shape>` pulls `shape` into the stub. (The template
+            # travels verbatim, bound included, from its source span.)
+            for t in decl.type_param_bounds.values():
+                _collect_refs(t, names)
             names -= set(decl.type_params)
         elif isinstance(decl, StructDecl):
             for _, t in decl.fields:

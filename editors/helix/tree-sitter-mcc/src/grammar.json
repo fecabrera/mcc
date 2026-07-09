@@ -694,6 +694,31 @@
                       "members": [
                         {
                           "type": "STRING",
+                          "value": "extends"
+                        },
+                        {
+                          "type": "FIELD",
+                          "name": "bound",
+                          "content": {
+                            "type": "SYMBOL",
+                            "name": "_type"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SEQ",
+                      "members": [
+                        {
+                          "type": "STRING",
                           "value": "="
                         },
                         {
@@ -733,6 +758,31 @@
                         },
                         "named": true,
                         "value": "type_identifier"
+                      },
+                      {
+                        "type": "CHOICE",
+                        "members": [
+                          {
+                            "type": "SEQ",
+                            "members": [
+                              {
+                                "type": "STRING",
+                                "value": "extends"
+                              },
+                              {
+                                "type": "FIELD",
+                                "name": "bound",
+                                "content": {
+                                  "type": "SYMBOL",
+                                  "name": "_type"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "type": "BLANK"
+                          }
+                        ]
                       },
                       {
                         "type": "CHOICE",

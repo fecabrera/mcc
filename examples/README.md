@@ -116,6 +116,7 @@ on legal-but-unproven code.
 | [generics.mc](types/generics.mc) | type inference, generic recursion, multiple type parameters |
 | [generic_defaults.mc](types/generic_defaults.mc) | `<T = int64>` type-parameter defaults: the priority order (explicit > typed inference > default > untyped anchoring), a `U = T*` default referencing an earlier parameter, bare `span` / `pair<int32>` omitting a defaulted tail, struct literals filling from the default |
 | [type_groups.mc](types/type_groups.mc) | closed type groups `<T: int32 \| int16 \| int8>`: the pipe-separated closed set a parameter may instantiate to as a post-deduction call-site filter, disjoint-group same-pattern templates partitioning into an overload set (the signed/unsigned formatter with no `case type`), the concrete > bounded > unbounded rank, eager checking of every member, a default naming a group member |
+| [bounds.mc](types/bounds.mc) | nominal type-parameter bounds `<T extends shape>`: a parameter constrained to a struct and its declared `extends` lineage as a post-deduction filter, the layout twin rejected where the nominal rule (not a field prefix) decides, a bounded overload beside an unbounded fallback in the concrete > bounded > unbounded rank, a bound composing with a default that must satisfy it, the bound joining the template symbol base and `.mci` stub |
 
 ## memory/
 

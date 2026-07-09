@@ -10,6 +10,38 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Nominal type-parameter bounds** — a generic function parameter may now be
+  constrained to a struct and its declared `extends` lineage:
+  `fn describe<T extends shape>(x: T*)` admits `shape` and any struct that
+  reaches it through an `extends` clause, transitively. The bound is
+  **nominal** — the same [nominal struct subtyping](docs/language.md#structs)
+  relation the upcast and slice-borrow use — so a struct that merely shares
+  `shape`'s field prefix, with no declared lineage, is **rejected** where a
+  structural rule would have accepted it. Deduction is unchanged: the bound is a
+  post-deduction viability filter, and a call whose deduced `T` is not a subtype
+  (a layout twin, an unrelated struct, or a non-struct like `int32`) is a
+  compile error at the call site naming both — `blob does not satisfy the bound
+  shape of 'describe'` — with explicit type arguments (`describe<blob>(...)`)
+  checked the same way. Unlike a [closed type group](docs/language.md#closed-type-groups),
+  the satisfying set is **open-ended**, so checking is **lazy** per
+  instantiation rather than eager. The bound target must be a concrete struct
+  (an unknown, non-struct, or union target errors at the declaration; referencing
+  a type parameter, `<S, T extends S>`, is deferred) and may be a fully-applied
+  generic or alias instance (`extends pair<int32, V>`, `extends ipair<char>`). A
+  bound composes with a [default](docs/language.md#type-parameter-defaults)
+  (`<T extends shape = circle>`), which must itself satisfy the bound (checked at
+  the declaration), and may not sit beside a group on one parameter. Bounds slot
+  into the same overload-ranking middle tier as groups — **concrete beats
+  bounded generic beats unbounded generic** — so one bounded overload may coexist
+  with an unbounded fallback (two same-pattern bounded overloads still collide,
+  an open set being unprovable disjoint). The bound joins the template
+  [symbol base](docs/language.md#template-symbols)
+  (`describe<$0 extends shape>($0*)`) and `.mci` interface stubs (pulling its
+  target struct in), so a re-imported bounded template enforces identically. This
+  is the open-set, function-declaration sibling of closed type groups, built on
+  the nominal subtyping foundation. Bounds on generic *struct* parameters remain
+  unsupported in this version. See [Bounds](docs/language.md#bounds) and
+  [examples/types/bounds.mc](examples/types/bounds.mc).
 - **Nominal struct subtyping** — the struct subtype relation now follows the
   declared `extends` lineage instead of a matching layout prefix. The two sites
   that accept one struct where another is expected — the value/pointer upcast

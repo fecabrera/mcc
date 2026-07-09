@@ -337,6 +337,15 @@ class Func:
             instantiate to. Members are concrete types (never type
             parameters -- enforced at parse time); a grouped parameter's
             default must name a member (checked at declaration).
+        type_param_bounds: ``{type parameter: TypeRef}`` for parameters
+            declared with a nominal bound (``<T extends shape>``): the
+            parameter may instantiate only to the bound struct or a struct in
+            its declared ``extends`` lineage. Open-ended (unlike a closed
+            group), so checking is lazy per instantiation; the bound target is
+            a concrete struct (never a type parameter -- enforced at parse
+            time), a parameter cannot carry both a bound and a group, and a
+            bounded parameter's default must satisfy the bound (checked at
+            declaration).
     """
 
     name: str
@@ -363,6 +372,7 @@ class Func:
     removed_msg: str | None = None
     type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
     type_param_groups: dict[str, list[TypeRef]] = field(default_factory=dict)
+    type_param_bounds: dict[str, TypeRef] = field(default_factory=dict)
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 

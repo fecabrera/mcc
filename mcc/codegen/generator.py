@@ -530,6 +530,12 @@ class CodeGen:
         # for the eager end-of-codegen member check.
         self.group_types: dict[int, dict[str, list[LangType]]] = {}
         self.group_templates: list[Func] = []
+        # Nominal `extends` bounds (`fn f<T extends shape>`), resolved once at
+        # the template's declaration: id(Func) -> {type parameter: bound
+        # struct}. Unlike a closed group, the satisfying set is open-ended, so
+        # there is no eager enumeration -- the bound is checked lazily against
+        # each deduced binding at the call/instantiation sites.
+        self.bound_types: dict[int, dict[str, LangType]] = {}
         # (id(template Func), bound types) -> mangled instance name
         self.instances: dict[tuple[int, tuple[str, ...]], str] = {}
         self.struct_templates: dict[str, StructDecl] = {}
@@ -1141,9 +1147,11 @@ class CodeGen:
         A defaulted parameter spells ``$i = <default>`` with the default
         rendered through the same substitution (defaults may reference
         earlier parameters), and a closed type group spells
-        ``$i: member|member`` before the default: two same-pattern templates
-        with disjoint groups are distinct, resolvable overloads, so the
-        group is part of the template's identity and collision key. Patterns
+        ``$i: member|member`` (a nominal ``extends`` bound spells
+        ``$i extends struct``) before the default: two same-pattern templates
+        with disjoint groups or different bounds are distinct, resolvable
+        overloads, so the constraint is part of the template's identity and
+        collision key. Patterns
         are the source spelling of each value parameter's type; a ``mut``
         parameter keeps its marker (``mut $0``) because a same-shape
         mut/by-value template pair is a genuine, resolvable overload -- an
@@ -1183,6 +1191,13 @@ class CodeGen:
             members = func.type_param_groups.get(tparam)
             if groups and members:
                 piece += ": " + "|".join(str(subst(m)) for m in members)
+            bound = func.type_param_bounds.get(tparam)
+            if groups and bound is not None:
+                # A nominal bound, like a closed group, is part of the
+                # template's identity: `f<$0 extends point>($0)`. Two
+                # same-pattern templates whose bounds differ are distinct
+                # symbols (bound rejections partition them at call sites).
+                piece += f" extends {subst(bound)}"
             default = func.type_param_defaults.get(tparam)
             if default is not None:
                 piece += f" = {subst(default)}"
@@ -1292,6 +1307,46 @@ class CodeGen:
                     func.line,
                 )
 
+    def check_bound_overlap(self, func: Func, base: str, overloads: list[Func]):
+        """Reject a second bounded same-pattern template.
+
+        The open-set counterpart of :meth:`check_group_overlap`. A closed
+        group can be shown disjoint from a sibling's (their members compared),
+        so disjoint-group same-pattern templates form a resolvable set. An
+        ``extends`` bound is an *open* set -- any struct anywhere may later
+        declare the lineage -- so two same-pattern bounded templates cannot be
+        proven disjoint and are conservatively rejected at declaration, even
+        when their bound structs differ. Disjoint-bound overloads are a
+        deliberately deferred follow-up; v1 allows exactly one bounded
+        overload beside an unbounded fallback (which ranks a tier below and
+        catches whatever the bound excludes). Same-pattern is compared
+        bound-blind and group-blind (the ``groups=False`` base), so a bounded
+        template collides with a bounded sibling of the same value patterns.
+
+        Args:
+            func: The template being declared (its bounds already resolved).
+            base: ``func``'s full symbol base, for the error message.
+            overloads: The already-declared same-name templates.
+
+        Raises:
+            LangError: When a same-pattern sibling also carries a bound.
+        """
+        if not func.type_param_bounds:
+            return
+        pattern = self.template_base(func, groups=False)
+        for prior in overloads:
+            if not prior.type_param_bounds:
+                continue
+            if self.template_base(prior, groups=False) != pattern:
+                continue
+            raise LangError(
+                f"function '{base}' overlaps "
+                f"'{self.template_bases[id(prior)]}'; two same-pattern "
+                "bounded overloads are not yet supported (a bound is an open "
+                "set; use one bounded overload beside an unbounded fallback)",
+                func.line,
+            )
+
     def group_violation(
         self, func: Func, bindings: dict[str, LangType]
     ) -> "tuple[LangType, str] | None":
@@ -1328,6 +1383,101 @@ class CodeGen:
     def group_error(name: str, bound: LangType, group: str) -> str:
         """The error message for a deduced type outside a closed type group."""
         return f"{bound} is not in the type group of {name!r} ({group})"
+
+    def check_bound_decl(self, func: Func):
+        """Resolve and validate a template's ``extends`` bounds at declaration.
+
+        Each bound target must resolve to a concrete struct (the parser
+        already rejected targets naming a type parameter; an unknown name or a
+        non-struct errors here, reusing :meth:`resolve_base`'s rejection
+        strings). A bounded parameter that also carries a default has that
+        default checked against the bound now -- mirroring the closed-group
+        member-default check -- so a violating default fails at the
+        *declaration*. The resolved bounds are cached for the lazy call-site
+        viability filter; resolving here, where no instantiation's
+        ``type_bindings`` are live, keeps a bound name from ever meaning a
+        binding.
+
+        Unlike a closed group the satisfying set is open-ended, so there is no
+        eager enumeration and no overlap check: same-pattern bounded templates
+        cannot be shown disjoint, so a second bounded overload beside the first
+        still collides at declaration (the duplicate-base rule) -- only an
+        unbounded fallback may join, one rank tier below.
+
+        Args:
+            func: The generic template being declared (``current_source`` is
+                already its file, so a bound may name its private types).
+
+        Raises:
+            LangError: On an unresolvable or non-struct bound target, or a
+                default that does not satisfy its parameter's bound.
+        """
+        if not func.type_param_bounds:
+            return
+        resolved: dict[str, LangType] = {}
+        for tparam, ref in func.type_param_bounds.items():
+            bound = self.lang_type(ref, func.line)
+            if not is_struct(bound):
+                raise LangError(
+                    f"{bound} is not a struct; cannot extend it", func.line
+                )
+            if is_union(bound):
+                raise LangError(
+                    f"a union cannot be extended, but the bound of type "
+                    f"parameter {tparam} of {func.name!r} is union {bound}",
+                    func.line,
+                )
+            resolved[tparam] = bound
+            default = func.type_param_defaults.get(tparam)
+            if default is not None:
+                got = self.lang_type(default, func.line)
+                if not self.nominal_subtype(bound, got):
+                    raise LangError(
+                        f"default {got} for type parameter {tparam} of "
+                        f"{func.name!r} does not satisfy its bound {bound}",
+                        func.line,
+                    )
+        self.bound_types[id(func)] = resolved
+
+    def bound_violation(
+        self, func: Func, bindings: dict[str, LangType]
+    ) -> "tuple[LangType, LangType] | None":
+        """Check a candidate's deduced bindings against its ``extends`` bounds.
+
+        Deduction is unchanged by bounds; this is the post-deduction viability
+        filter (the open-set sibling of :meth:`group_violation`). A binding
+        satisfies its bound when it *is* the bound struct or reaches it up its
+        declared ``extends`` chain -- the nominal relation, reused verbatim, so
+        a layout twin that does not declare the lineage is rejected. ``const``
+        is shed before the comparison, matching unification.
+
+        Args:
+            func: The candidate template.
+            bindings: The deduced ``{type parameter: type}`` map (may be
+                partial during a lenient trial; unbound parameters pass).
+
+        Returns:
+            ``None`` when every bounded parameter's binding satisfies its
+            bound, else the offending (const-stripped) deduced type and the
+            bound struct it failed (for the not-a-subtype error).
+        """
+        bounds = self.bound_types.get(id(func))
+        if not bounds:
+            return None
+        for tparam in func.type_params:
+            bound = bounds.get(tparam)
+            deduced = bindings.get(tparam)
+            if bound is None or deduced is None:
+                continue
+            bare = strip_const(deduced)
+            if not self.nominal_subtype(bound, bare):
+                return bare, bound
+        return None
+
+    @staticmethod
+    def bound_error(name: str, offender: LangType, bound: LangType) -> str:
+        """The error message for a deduced type outside an ``extends`` bound."""
+        return f"{offender} does not satisfy the bound {bound} of {name!r}"
 
     def group_member_combos(self, func: Func) -> list[dict[str, LangType]]:
         """Enumerate a grouped template's eager-check binding combinations.
@@ -3534,6 +3684,7 @@ class CodeGen:
                     # overload set, so no overlap check -- but its groups
                     # still resolve, filter calls, and get the eager check.
                     self.check_group_decl(func)
+                    self.check_bound_decl(func)
                     self.static_templates[key] = func
                     continue
                 symbol = self.symbol_bases[key]
@@ -3578,6 +3729,7 @@ class CodeGen:
                 # @extern (its C symbol is fixed).
                 self.check_template_collecting(func)
                 self.check_group_decl(func)
+                self.check_bound_decl(func)
                 members = self.concrete_decls.get(func.name)
                 if members:
                     self.check_mixed_set(func, members)
@@ -3630,6 +3782,10 @@ class CodeGen:
                 # would be ambiguous at every shared deduction, so they
                 # collide at declaration, cross-module included.
                 self.check_group_overlap(func, base, overloads)
+                # `extends` bounds are open sets that cannot be shown
+                # disjoint, so two same-pattern bounded templates collide
+                # (only an unbounded fallback may join, a tier below).
+                self.check_bound_overlap(func, base, overloads)
                 self.template_bases[id(func)] = base
                 overloads.append(func)
                 continue
@@ -9849,7 +10005,7 @@ class CodeGen:
             # An rvalue argument (no address was formed) rules out any
             # candidate that is mut at its position; an lvalue rules nothing
             # out, so a same-shape mut/non-mut pair stays ambiguous.
-            viable, mut_failures, group_failures = [], [], []
+            viable, mut_failures, group_failures, bound_failures = [], [], [], []
             for func in candidates:
                 bindings = self.resolve_bindings(func, expr, arg_tvs, lenient=True)
                 if bindings is None:
@@ -9860,6 +10016,13 @@ class CodeGen:
                 violation = self.group_violation(func, bindings)
                 if violation is not None:
                     group_failures.append(violation)
+                    continue
+                # The nominal `extends` bound filter is the open-set sibling:
+                # a candidate whose bound the deduced binding does not satisfy
+                # is likewise not viable, leaving an unbounded fallback to win.
+                bviolation = self.bound_violation(func, bindings)
+                if bviolation is not None:
+                    bound_failures.append(bviolation)
                     continue
                 # A mut-returning call argument formed no address up front
                 # (it is not an addressable form), but its carried lvalue
@@ -9892,6 +10055,18 @@ class CodeGen:
                     bound, group = group_failures[0]
                     raise LangError(
                         self.group_error(expr.name, bound, group), expr.line
+                    )
+                if (
+                    len(bound_failures) == 1
+                    and not mut_failures
+                    and not group_failures
+                ):
+                    # Exactly one candidate matched but for the bound filter:
+                    # report the deduced type against the bound, not a generic
+                    # shape mismatch.
+                    offender, target = bound_failures[0]
+                    raise LangError(
+                        self.bound_error(expr.name, offender, target), expr.line
                     )
                 arg_types = ", ".join(str(tv.type) for tv in arg_tvs)
                 raise LangError(
@@ -10117,6 +10292,8 @@ class CodeGen:
                 continue
             if self.group_violation(func, bindings) is not None:
                 continue  # the decayed deduction is outside the group
+            if self.bound_violation(func, bindings) is not None:
+                continue  # the decayed deduction does not satisfy the bound
             params = self.try_param_types(func, bindings)
             if params is None:
                 continue
@@ -10481,15 +10658,15 @@ class CodeGen:
         """An overload candidate's sort key: (tier, specificity).
 
         Three tiers: a concrete signature (2) beats a **bounded** generic --
-        one with a closed type group (1) -- which beats an unbounded generic
-        (0). The concrete tier makes "a fully concrete signature is
-        maximally specific" exactly true: without it, a generic whose
-        effective parameter list is all-concrete (its type parameter
-        appearing only in the return type, or filled by a declared default)
-        would tie an identical concrete overload under the
+        one with a closed type group or a nominal ``extends`` bound (1) --
+        which beats an unbounded generic (0). The concrete tier makes "a fully
+        concrete signature is maximally specific" exactly true: without it, a
+        generic whose effective parameter list is all-concrete (its type
+        parameter appearing only in the return type, or filled by a declared
+        default) would tie an identical concrete overload under the
         pattern-specificity score. The bounded tier extends the same idea a
-        step down: a group is a written, closed commitment to a type set, so
-        it beats the fully open pattern (a bounded candidate whose group
+        step down: a group or a bound is a written commitment to a type set, so
+        it beats the fully open pattern (a bounded candidate whose constraint
         excludes the deduced type was already filtered out as non-viable).
         Same-tier candidates fall back to :meth:`specificity`, and an equal
         rank stays the ambiguity error.
@@ -10502,7 +10679,7 @@ class CodeGen:
         """
         if not func.type_params:
             tier = 2
-        elif func.type_param_groups:
+        elif func.type_param_groups or func.type_param_bounds:
             tier = 1
         else:
             tier = 0
@@ -10555,14 +10732,17 @@ class CodeGen:
 
         Raises:
             LangError: When a binding falls outside the parameter's closed
-                type group -- the backstop for every resolution path
-                (single-candidate calls, explicit type arguments, the
-                ``for ... in`` protocol's ``_next``); overload sets filter
-                group violations during candidate trials instead.
+                type group or fails its ``extends`` bound -- the backstop for
+                every resolution path (single-candidate calls, explicit type
+                arguments, the ``for ... in`` protocol's ``_next``); overload
+                sets filter these violations during candidate trials instead.
         """
         violation = self.group_violation(func, bindings)
         if violation is not None:
             raise LangError(self.group_error(func.name, *violation), line)
+        bviolation = self.bound_violation(func, bindings)
+        if bviolation is not None:
+            raise LangError(self.bound_error(func.name, *bviolation), line)
         key = (id(func), tuple(str(bindings[t]) for t in func.type_params))
         if key in self.instances:
             mangled = self.instances[key]

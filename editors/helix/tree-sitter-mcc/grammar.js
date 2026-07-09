@@ -189,6 +189,7 @@ module.exports = grammar({
         commaSep1(
           seq(
             alias($.identifier, $.type_identifier),
+            optional(seq('extends', field('bound', $._type))),
             optional(seq('=', field('default', $._type))),
           ),
         ),

@@ -218,7 +218,7 @@ already do).
         parameters may be referenced (`<T, U = T*>`), a defaulted tail may be
         omitted from an explicit type-argument list, and a bare defaulted
         struct name is a complete written type
-  - [ ] bounds — constrain a parameter with `fn myfunc<T extends mystruct>(x: T)`
+  - [x] [bounds](docs/language.md#bounds) — constrain a parameter with `fn myfunc<T extends mystruct>(x: T)`
         (a struct and the structs in its declared `extends` lineage). The bound
         is **nominal**: satisfied only by `mystruct` and its declared `extends`
         specializations, never by a struct that merely shares its field prefix,

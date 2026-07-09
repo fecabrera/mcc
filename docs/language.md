@@ -725,7 +725,8 @@ String literals keep adapting when a function becomes overloaded: a literal
 concrete functions — from any module, sets being open; the candidates join
 one set and resolve under a leading (tier, specificity) rank with three
 tiers: a **concrete** overload beats a **bounded** generic (one with a
-[closed type group](#closed-type-groups)) beats an **unbounded** generic.
+[closed type group](#closed-type-groups) or a nominal
+[`extends` bound](#bounds)) beats an **unbounded** generic.
 The concrete tier wins on an exact match — including against a generic
 whose *effective* parameter list ties the concrete one — the bounded tier's
 written, closed commitment to a type set beats the fully open pattern, and
@@ -1046,16 +1047,76 @@ interfaces, the check set written in source with no action at a distance —
 and `typename(T)` composes as usual. See
 [examples/types/type_groups.mc](../examples/types/type_groups.mc).
 
+### Bounds
+
+A type parameter may instead declare a **nominal bound** — a struct after
+`extends` — constraining it to that struct and the structs in its declared
+`extends` lineage:
+
+```c
+struct shape  { area: int32; }
+struct circle extends shape { r: int32; }
+
+fn describe<T extends shape>(x: T*) -> int32 { return x->area; }  // shape, circle, …
+```
+
+Like a [closed type group](#closed-type-groups), the bound is a
+**post-deduction viability filter**: deduction is unchanged, and a call whose
+deduced `T` is neither the bound struct nor an `extends` descendant of it is a
+compile error at the call site naming both — `blob does not satisfy the bound
+shape of 'describe'` — and an explicit type argument (`describe<blob>(...)`) is
+checked the same way. The relation is the single
+[nominal struct subtype](#structs-arrays-and-data-layout) model the upcast and
+slice-borrow also use, so a struct that merely shares `shape`'s field prefix
+but does not declare `extends shape` is **rejected** — the asymmetry the
+nominal model exists to remove. A non-struct deduced type (say `int32`) fails
+the same way. The bound target must be a concrete struct: an unknown or
+non-struct target errors at the *declaration* (`int32 is not a struct; cannot
+extend it`), and it may not reference a type parameter — `<S, T extends S>` is
+a deliberately deferred follow-up. It may be a fully-applied generic or
+[alias](#type-aliases) instance (`extends pair<int32, V>`, `extends
+ipair<char>`), which resolves to the underlying struct.
+
+The essential difference from a closed group is that the satisfying set is
+**open-ended** — any struct, anywhere, may later `extends` the bound — so
+there is no eager enumeration: the bound is checked **lazily** against each
+deduced binding, at every call and instantiation site. A bound composes with a
+[default](#type-parameter-defaults) (`<T extends shape = circle>`), which must
+itself satisfy the bound (checked at the declaration, mirroring the closed-group
+member-default check). A parameter may not carry both a bound and a group.
+
+Bounds slot into the same **overload ranking** middle tier — **concrete beats
+bounded generic beats unbounded generic** (see
+[Function overloading](#function-overloading)) — so a bounded template may
+coexist with an unbounded fallback that ranks a tier below and catches whatever
+the bound excludes. But because an open set cannot be shown disjoint the way two
+closed groups can, **two same-pattern bounded overloads collide at the
+declaration** (`function 'kind<$0 extends other>($0)' overlaps 'kind<$0 extends
+shape>($0)'; two same-pattern bounded overloads are not yet supported`) — one
+bounded overload beside an unbounded fallback is the v1 shape; disjoint-bound
+overloads are a deferred follow-up.
+
+Consequently the bound is part of the template's
+[symbol base](#template-symbols) and collision key
+(`describe<$0 extends shape>($0*)`). `.mci` interfaces carry the bound (a
+generic template travels as source) and pull its target struct into the stub,
+so a re-imported bounded template enforces identically. Bounds are the
+open-set, function-declaration sibling of
+[closed type groups](#closed-type-groups) — the same bounded genericity, over a
+nominal lineage rather than a fixed list — and `typename(T)` composes as usual.
+See [examples/types/bounds.mc](../examples/types/bounds.mc).
+
 ### Template symbols
 
 Every generic template links its instances by a signature-derived symbol
 base spelled from the declaration alone: the name, the type parameters
 alpha-renamed to positional `$i` placeholders in declaration order (a
 defaulted parameter spells `$i = <default>`, a
-[closed type group](#closed-type-groups) spells `$i: member|member` before
+[closed type group](#closed-type-groups) spells `$i: member|member` and a
+nominal [`extends` bound](#bounds) spells `$i extends struct`, both before
 the default), and the parameter patterns — `alloc<$0>(uint64)`,
 `hash<$0>($0*)`, `parse<$0 = int64>(uint8*)`,
-`show<$0: int32|int16|int8>($0)`. An
+`show<$0: int32|int16|int8>($0)`, `describe<$0 extends shape>($0*)`. An
 instance appends its bindings: `hash<$0>($0*)<char>`. Because the base
 depends on nothing but the declaration — not on how many templates share
 the name or the order imports merged them — separately compiled objects
@@ -2856,7 +2917,9 @@ merely shares the target's field prefix, with no `extends` between them, is
 rejected, and two structs that extend the same base never interconvert (each
 upcasts to the shared base, neither to its sibling). The prefix layout stays the
 mechanism — the base's fields come first, so the upcast is a zero-cost
-reinterpret — but the declared lineage is the definition. Only the upcast
+reinterpret — but the declared lineage is the definition. The same nominal
+lineage is what a generic [`extends` bound](#bounds) ranges over
+(`<T extends point>` admits `point3` but not a layout twin). Only the upcast
 direction is allowed: narrowing a base value back to a derived one would read
 past it. With no body of its own,
 `struct meters extends int_wrapper;` is a **specialization** — a distinct
