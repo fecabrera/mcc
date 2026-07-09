@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `@noreturn` marks a void function that never returns to its caller: it
 // exits, aborts, or loops forever. The compiler then treats every direct
@@ -6,7 +6,7 @@ import "std";
 // code past it is silently dropped (reported by the opt-in `-Wdead-code`
 // class: see control-flow/dead_code.mc), and a null guard whose body is one
 // narrows the pointer (the same rules as nonnull_narrowing.mc). libc's
-// `exit`, `abort`, and `_Exit` (import "std" or "libc/stdlib") ship
+// `exit`, `abort`, and `_Exit` (import "std/io" or "libc/stdlib") ship
 // annotated. Prerequisites: functions.mc, nonnull.mc, nonnull_narrowing.mc.
 
 // A panic-style helper: report and exit. `@noreturn` must be void (a call

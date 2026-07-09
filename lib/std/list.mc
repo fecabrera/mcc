@@ -1,4 +1,4 @@
-import "memory";
+import "std/memory";
 
 /**
  * A growable, heap-backed list of T.

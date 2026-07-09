@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A counter with a side effect: it returns the current index and advances the
 // caller's counter. Used below to show that a compound assignment evaluates its

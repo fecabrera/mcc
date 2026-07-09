@@ -262,7 +262,7 @@ read-only or writable, without the caller writing `*var`. A stack value and a
 heap pointer then call the same function identically:
 
 ```c
-import "memory";
+import "std/memory";
 
 struct point { x: int32; y: int32; }
 
@@ -793,7 +793,7 @@ after the call (code past it is silently dropped, exactly like code after a
 and a diverging null guard narrows (below):
 
 ```c
-import "std";                        // exit, abort, and _Exit are @noreturn
+import "std/io";                        // exit, abort, and _Exit are @noreturn
 
 @noreturn fn fail(code: int32) {
     exit(code);
@@ -965,8 +965,8 @@ Generic functions can call themselves recursively. See
 Generic functions with the same name form an _overload set_, dispatched by
 parameter pattern — a call picks the most specific viable variant (`T*`
 beats `T`, `box<T>*` beats both). This is how libraries specialize by type
-shape: [libmc/hash.mc](../libmc/hash.mc) hashes integer keys by value (splitmix64)
-and pointer keys by content (FNV-1a), and [libmc/set.mc](../libmc/set.mc) simply
+shape: [lib/std/hash.mc](../lib/std/hash.mc) hashes integer keys by value (splitmix64)
+and pointer keys by content (FNV-1a), and [lib/std/set.mc](../lib/std/set.mc) simply
 calls `hash(key)`:
 
 ```c
@@ -1197,8 +1197,8 @@ the standard library's `splitmix64<T>`, and the chain walks back out to your
 call:
 
 ```
-libmc/hashing/splitmix64.mc: error: line 10: cannot cast box to uint64
-libmc/hash.mc: note: line 12: in instantiation of splitmix64<box>
+lib/std/hashing/splitmix64.mc: error: line 10: cannot cast box to uint64
+lib/std/hash.mc: note: line 12: in instantiation of splitmix64<box>
 yourcode.mc: note: line 5: in instantiation of hash<box>
 ```
 
@@ -1613,7 +1613,7 @@ container (`list`, `ring`, `stack`, `queue`, `dict`, `set`) and hashing
 module (`md5`, `murmur3`, `fnv1a`) compiles warn-free under it, having
 asserted each invariant-backed dereference of its backing buffer with `!`,
 so enabling the class on a program that imports them reports only *your*
-unproven sites, never libmc-internal ones.
+unproven sites, never stdlib-internal ones.
 
 See [examples/types/unchecked_dereference.mc](../examples/types/unchecked_dereference.mc)
 for the class in action and each way to silence a site.
@@ -1785,7 +1785,7 @@ attribute for free, and a concrete function's bodyless prototype re-emits it
 (`@deprecated("use renamed instead") fn old(x: int32) -> int32;`), so
 importers of a compiled library still get warned at their own call sites.
 
-The standard library uses this for the four renamed [memory](../libmc/memory.mc)
+The standard library uses this for the four renamed [memory](../lib/std/memory.mc)
 forwarders — `copy_bytes`, `copy_items`, `set_bytes`, `set_items` — which
 warn with their replacements (`bytecopy`, `copy`, `bytefill`, `fill`).
 The terminal step of the lifecycle is the separate
@@ -2442,7 +2442,7 @@ arithmetic is a runtime expression only — it is not available inside a `const`
 initializer or an [`@if`](#conditional-compilation) condition. See
 [examples/memory/pointers.mc](../examples/memory/pointers.mc),
 [examples/systems/byte_scan.mc](../examples/systems/byte_scan.mc), and
-[libmc/memory.mc](../libmc/memory.mc) for a generic typed allocator.
+[lib/std/memory.mc](../lib/std/memory.mc) for a generic typed allocator.
 
 ## Function pointers
 
@@ -3147,9 +3147,9 @@ bytes of trailing padding; both over-allocate safely, offsetof exactly.
 passed to and returned from functions, but not to variadic functions like
 printf — pass a pointer or a field instead. See
 [examples/types/structs.mc](../examples/types/structs.mc) and the data structures built on
-them: the growable [libmc/list.mc](../libmc/list.mc), the open-addressing hash
-table [libmc/set.mc](../libmc/set.mc) (borrowing, identity-keyed), and the
-string-keyed [libmc/dict.mc](../libmc/dict.mc), which owns copies of its keys and
+them: the growable [lib/std/list.mc](../lib/std/list.mc), the open-addressing hash
+table [lib/std/set.mc](../lib/std/set.mc) (borrowing, identity-keyed), and the
+string-keyed [lib/std/dict.mc](../lib/std/dict.mc), which owns copies of its keys and
 compares them by content.
 
 ## Unions
@@ -3550,16 +3550,17 @@ several routes (or cyclically) is only loaded once.
 
 Imports resolve relative to the importing file first, then through the
 import search path: directories added with `-I`/`--import-path` (in order),
-and finally the project's [libmc/](../libmc/) directory, which is on the path by
-default so the [standard library](../libmc/README.md) is importable by bare name.
-Pass `--nostdlib` to leave `libmc/` off the path.
+and finally the project's [lib/](../lib/) directory, which is on the path by
+default so the [standard library](../lib/README.md) is importable under its
+`std/` (mcc modules) and `libc/` (C bindings) prefixes. Pass `--nostdlib` to
+leave `lib/` off the path.
 
 ```c
-import "memory";       // found in libmc/ via the search path
-import "libc/stdio";   // libc bindings, also in libmc/
+import "std/memory";   // found in lib/std via the search path
+import "libc/stdio";   // libc bindings, in lib/libc
 
 fn main() -> int32 {
-    let p = alloc<int32>(3);   // defined in libmc/memory.mc
+    let p = alloc<int32>(3);   // defined in lib/std/memory.mc
     ...
 }
 ```
@@ -3948,7 +3949,7 @@ fn digit_value(c: char) -> char {
 
 ## Formatting
 
-`import "format";` provides the **formatting protocol**: one
+`import "std/format";` provides the **formatting protocol**: one
 [overload set](#function-overloading),
 
 ```c
@@ -3956,7 +3957,7 @@ format(mut str: string, value: X, const modifier: slice<char>)
 ```
 
 where every member appends `value`'s rendering to a
-[`string`](../libmc/string.mc) and `modifier` steers the spelling (an empty
+[`string`](../lib/std/string.mc) and `modifier` steers the spelling (an empty
 string picks the default). Because the modifier is a `slice<char>`, a bare
 string literal adapts to it at the call, so modifiers are written inline.
 The baseline members cover the built-in types:
@@ -3990,8 +3991,8 @@ The baseline members cover the built-in types:
   name in angle brackets (`<uint8*>`) instead of a value.
 
 ```c
-import "format";
-import "string";
+import "std/format";
+import "std/string";
 
 let s: struct string;
 string_init(s);
@@ -4024,12 +4025,12 @@ See [examples/systems/formatting.mc](../examples/systems/formatting.mc).
 ## Reaching libc
 
 To call into the C library, import a binding module from
-[libmc/libc/](../libmc/libc/) — `import "libc/stdio";`, `import "libc/string";`, and
+[lib/libc/](../lib/libc/) — `import "libc/stdio";`, `import "libc/string";`, and
 so on. These are ordinary [`@extern` declarations](#extern-declarations) for the
 C functions, covering most of the standard headers (the `printf`/`scanf`
 families, the `str*`/`mem*` functions, `malloc`/`qsort`/`strtol`, `FILE*`
 streams, math, time, errno, …); see the
-[standard library index](../libmc/README.md) for the full list.
+[standard library index](../lib/README.md) for the full list.
 
 ```c
 import "libc/stdio";
@@ -4135,5 +4136,5 @@ the [roadmap](../ROADMAP.md#planned).
  */
 ```
 
-See the [standard library index](../libmc/README.md) for the modules under `libmc/`,
+See the [standard library index](../lib/README.md) for the modules under `lib/`,
 all written in this style.

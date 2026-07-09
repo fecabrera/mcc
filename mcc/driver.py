@@ -26,30 +26,32 @@ from mcc.parser import Parser
 
 
 def _find_stdlib() -> Path:
-    """Locate the standard-library *source* directory (``libmc/``).
+    """Locate the standard-library *source* root (``lib/``).
 
-    These are the ``.mc`` sources, imported by bare name (the "standard
-    library") unless ``--nostdlib`` is passed, and compiled in from source like
-    any other import. (Shipping the stdlib as a precompiled native library is a
-    planned change; see the roadmap.) It lives beside the package when installed
-    as a wheel (mcc/libmc) and at the repo root in a source checkout (../libmc);
-    the ``$MCC_STDLIB`` environment variable overrides both.
+    These are the ``.mc`` sources, imported under their ``std/`` (mcc modules)
+    or ``libc/`` (C bindings) prefix -- e.g. ``import "std/string"``,
+    ``import "libc/stdio"`` -- unless ``--nostdlib`` is passed, and compiled in
+    from source like any other import. (Shipping the stdlib as a precompiled
+    native library is a planned change; see the roadmap.) The root holds the
+    ``std/`` and ``libc/`` trees; it lives beside the package when installed as
+    a wheel (mcc/lib) and at the repo root in a source checkout (../lib); the
+    ``$MCC_STDLIB`` environment variable overrides both.
 
     Returns:
         The first candidate directory that exists, falling back to the
-        source-checkout path (../libmc) when none is found yet.
+        source-checkout path (../lib) when none is found yet.
     """
     override = os.environ.get("MCC_STDLIB")
     if override:
         return Path(override)
     here = Path(__file__).resolve().parent
-    for candidate in (here / "libmc", here.parent / "libmc"):
+    for candidate in (here / "lib", here.parent / "lib"):
         if candidate.is_dir():
             return candidate
-    return here.parent / "libmc"
+    return here.parent / "lib"
 
 
-STDLIB_DIR = _find_stdlib()  # the stdlib sources, compiled in from source
+STDLIB_DIR = _find_stdlib()  # the stdlib source root (holds std/ and libc/)
 
 
 def _stamp_conditionals(conditionals, source: str) -> None:

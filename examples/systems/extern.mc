@@ -1,6 +1,6 @@
 // @extern declares a function or global defined elsewhere -- in libc, or in
 // another object linked into the program: give the signature and end with `;`.
-// The libmc/libc/ modules are ready-made @extern bindings (import "libc/stdio";);
+// The lib/libc/ modules are ready-made @extern bindings (import "libc/stdio";);
 // declare your own here when you need something they do not cover.
 @extern fn strlen(s: char*) -> uint64;
 @extern fn putchar(c: int32) -> int32;

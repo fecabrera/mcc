@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A `case type` arm may be generic. No new syntax marks it: a bare arm-type
 // name that resolves (a builtin, struct, alias, enum, or an enclosing

@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 fn main() -> int32 {
     // `let` declares a variable. A bare integer constant has no definite

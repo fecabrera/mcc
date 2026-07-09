@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 fn main() -> int32 {
     // Values above int32's range fit in unsigned types, and division,

@@ -1,4 +1,4 @@
-import "string";
+import "std/string";
 import "libc/stdio";
 
 // Open overload sets: any module may add overloads to a name declared

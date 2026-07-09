@@ -84,7 +84,7 @@ def test_container_by_value(capfd):
     # the buffer, so it reads the same elements.
     run(
         """
-        import "list";
+        import "std/list";
         import "libc/stdio";
         fn main() -> int32 {
             let xs: struct list<int32>;

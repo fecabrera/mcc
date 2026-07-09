@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `char` is a distinct one-byte text type. A string literal is a NUL-terminated
 // char array: "hi" has type char[3] (the 'h', the 'i', and the trailing '\0').

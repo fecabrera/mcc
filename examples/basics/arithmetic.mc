@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 import "libc/stdlib";
 
 fn main() -> int32 {

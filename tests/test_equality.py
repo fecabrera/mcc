@@ -1,4 +1,4 @@
-"""libmc/equality.mc: the equality protocol's baseline overload set.
+"""lib/std/equality.mc: the equality protocol's baseline overload set.
 
 One generic member so far: `equals<T>(slice<T>, slice<T>)` compares element
 by element with `!=`. Different lengths are never equal; empty slices
@@ -9,8 +9,8 @@ joins by adding an `equals` overload for itself in its own module.
 from helpers import run, run_path
 
 PRELUDE = """
-import "equality";
-import "string";
+import "std/equality";
+import "std/string";
 """
 
 
@@ -119,7 +119,7 @@ def test_user_overload_joins_the_set_cross_module(tmp_path):
     # its own type and it joins the stdlib set at import merge.
     (tmp_path / "point.mc").write_text(
         """
-        import "equality";
+        import "std/equality";
 
         struct point { x: int32; y: int32; }
 
@@ -132,7 +132,7 @@ def test_user_overload_joins_the_set_cross_module(tmp_path):
     main.write_text(
         """
         import "point";
-        import "equality";
+        import "std/equality";
 
         fn main() -> int32 {
             let a = struct point { x = 1, y = 2 };

@@ -67,7 +67,7 @@ def test_target_evaluated_once(capfd):
     # The index expression `next()` has a side effect; it must run once, so the
     # counter advances by one and only one element is incremented.
     src = (
-        'import "std";\n'
+        'import "std/io";\n'
         "fn next(counter: int32*) -> int32 {\n"
         "    let i = *counter;\n"
         "    *counter = i + 1;\n"
@@ -88,7 +88,7 @@ def test_target_evaluated_once(capfd):
 
 def test_target_call_emitted_once_in_ir():
     src = (
-        'import "std";\n'
+        'import "std/io";\n'
         "fn idx() -> int32 { return 0; }\n"
         "fn main() -> int32 {\n"
         "    let arr: int32[2] = [1, 2];\n"
@@ -101,7 +101,7 @@ def test_target_call_emitted_once_in_ir():
 
 def test_through_pointer(capfd):
     src = (
-        'import "std";\n'
+        'import "std/io";\n'
         "fn main() -> int32 {\n"
         "    let n: int32 = 8;\n"
         "    let p = &n;\n"
@@ -116,7 +116,7 @@ def test_through_pointer(capfd):
 
 def test_struct_field_value_and_arrow(capfd):
     src = (
-        'import "std";\n'
+        'import "std/io";\n'
         "struct point { x: int32; y: int32; }\n"
         "fn main() -> int32 {\n"
         "    let p: point;\n"
@@ -135,7 +135,7 @@ def test_struct_field_value_and_arrow(capfd):
 
 def test_float_arithmetic(capfd):
     src = (
-        'import "std";\n'
+        'import "std/io";\n'
         "fn main() -> int32 {\n"
         "    let f: float64 = 2.0;\n"
         "    f += 0.5;\n"
@@ -154,7 +154,7 @@ def test_rhs_is_a_full_expression():
 
 def test_volatile_target_keeps_volatile_load_and_store():
     src = (
-        'import "std";\n'
+        'import "std/io";\n'
         "@volatile @static let flag: int32;\n"
         "fn main() -> int32 {\n"
         "    flag += 1;\n"

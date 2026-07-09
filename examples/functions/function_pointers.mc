@@ -1,5 +1,5 @@
-import "std";
-import "memory";   // alloc, dealloc
+import "std/io";
+import "std/memory";   // alloc, dealloc
 
 // `fn(A, B) -> R` is the type of a pointer to a function. A bare function
 // name -- written without the call parentheses -- is a value of that type.

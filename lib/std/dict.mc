@@ -1,6 +1,6 @@
-import "memory";
-import "hash";
-import "set";
+import "std/memory";
+import "std/hash";
+import "std/set";
 import "libc/string";
 
 // Slot states

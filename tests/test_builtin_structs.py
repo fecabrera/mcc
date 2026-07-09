@@ -54,7 +54,7 @@ def test_containers_yield_builtin_pair(capfd):
     # beyond the container's own.
     run(
         """
-        import "set";
+        import "std/set";
         import "libc/stdio";
         fn main() -> int32 {
             let s: set<uint64, uint64>;

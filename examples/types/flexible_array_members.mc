@@ -1,5 +1,5 @@
-import "std";
-import "memory";
+import "std/io";
+import "std/memory";
 
 // A flexible array member: a trailing `field: T[]` with no size. It adds 0 to
 // the struct's `sizeof` and decays to a `T*` at the struct's tail, so a single

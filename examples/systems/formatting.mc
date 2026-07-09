@@ -1,5 +1,5 @@
-import "format";
-import "string";
+import "std/format";
+import "std/string";
 import "libc/stdio";
 
 // The stdlib `format` module: the formatting protocol's baseline overload

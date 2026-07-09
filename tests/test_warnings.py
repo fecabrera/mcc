@@ -344,10 +344,10 @@ def test_deprecated_only_applies_to_functions():
 # --- the stdlib forwarders: the motivating use case ---
 
 def test_stdlib_memory_forwarders_warn_with_their_replacements(tmp_path):
-    lib_dir = Path(__file__).resolve().parents[1] / "libmc"
+    lib_root = Path(__file__).resolve().parents[1] / "lib"
     main = tmp_path / "main.mc"
     main.write_text(
-        f'import "{lib_dir / "memory"}";\n'
+        'import "std/memory";\n'
         "fn main() -> int32 {\n"
         "    let a = alloc<int32>(2);\n"
         "    if (a == null) return 1;\n"
@@ -362,8 +362,8 @@ def test_stdlib_memory_forwarders_warn_with_their_replacements(tmp_path):
         "}\n"
     )
     warnings = []
-    compile_to_ir(main, (), warnings=warnings)
-    # Attributed to the caller's file and lines, not libmc/memory.mc.
+    compile_to_ir(main, (lib_root,), warnings=warnings)
+    # Attributed to the caller's file and lines, not lib/std/memory.mc.
     assert [(w.message, w.line, w.source) for w in warnings] == [
         ("'copy_bytes' is deprecated: use bytecopy instead", 7, str(main)),
         ("'copy_items' is deprecated: use copy instead", 8, str(main)),
@@ -375,11 +375,11 @@ def test_stdlib_memory_forwarders_warn_with_their_replacements(tmp_path):
 def test_stdlib_compiles_clean_of_deprecation_warnings(tmp_path):
     # The internal callers were repointed to the new names, so merely
     # importing the library (and its dependents) warns nothing.
-    lib_dir = Path(__file__).resolve().parents[1] / "libmc"
+    lib_dir = Path(__file__).resolve().parents[1] / "lib"
     main = tmp_path / "main.mc"
     main.write_text(
-        'import "dict";\n'
-        'import "hashing/md5";\n'
+        'import "std/dict";\n'
+        'import "std/hashing/md5";\n'
         "fn main() -> int32 {\n"
         "    let d: dict<int32>;\n"
         "    dict_init(&d, 4);\n"

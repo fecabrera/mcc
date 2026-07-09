@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `typename(...)` recovers the canonical name of a type as a string. It
 // mirrors `sizeof` in every surface respect: the operand is a type or, as a

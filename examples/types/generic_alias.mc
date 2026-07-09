@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A `type` alias may carry a type-parameter list, naming a *family* of existing
 // types. The alias stays transparent: `entry<int32>` is not a new type, it *is*

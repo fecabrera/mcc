@@ -72,7 +72,7 @@ def test_privacy_holds_through_transitive_imports(tmp_path):
 def test_stdlib_internals_are_private(tmp_path):
     main = tmp_path / "main.mc"
     main.write_text(
-        'import "list";\n'
+        'import "std/list";\n'
         "fn main() -> int32 {\n"
         "    let a = alloc<struct list<int32>>(1);\n"
         "    if (a == null) return 1;    // proves a for the receiver slots below\n"

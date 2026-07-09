@@ -1,7 +1,7 @@
-import "std";
-import "stack";
+import "std/io";
+import "std/stack";
 
-// stack<T> -- a growable LIFO: push and pop at the top (libmc/stack.mc). Like
+// stack<T> -- a growable LIFO: push and pop at the top (lib/std/stack.mc). Like
 // the other lib containers it owns a heap buffer that doubles when it fills.
 
 fn main() -> int32 {

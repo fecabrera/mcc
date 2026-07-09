@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 fn main() -> int32 {
     for i in range(1, 21) {

@@ -488,7 +488,7 @@ already do).
           gets from the trap. `with` becomes a new reserved word, a
           pre-1.0 break with the same treatment as `typename` (lexer
           keyword plus editor grammars); verified currently unused as
-          an identifier in `libmc/` and `examples/`. The statement is
+          an identifier in `lib/` and `examples/`. The statement is
           pure sugar over a two-arm `case type`
           (`when <pattern> t: ...; else: ...`), riding the shipped
           generic-arms machinery below unchanged: `T` may be a
@@ -633,7 +633,7 @@ already do).
           operations. The motivating end-state is the stdlib formatter:
           concrete arms for bespoke types, `when T* ptr:` printing `%p`
           as the pointer fallback, `when T v:` dispatching into the
-          shipped `format` overload set of `libmc/format.mc` (an `else`
+          shipped `format` overload set of `lib/std/format.mc` (an `else`
           still present until the deferred carve-out above lands), and
           every boxed type without a
           viable formatting path a compile error instead of a runtime
@@ -851,7 +851,7 @@ already do).
   };
   ```
   Every piece already works (block expressions, `new<T>` in
-  [memory](libmc/memory.mc), struct literals, deref-assign, whole-struct copy),
+  [memory](lib/std/memory.mc), struct literals, deref-assign, whole-struct copy),
   so the only remaining work is the surface-syntax rewrite into the block above
   — no new codegen.
 
@@ -1197,7 +1197,7 @@ already do).
       what make the union linkable and order-independent, so this
       item was only sound because they shipped. The driving use case
       is the formatting protocol: the stdlib format module, now
-      shipped as `libmc/format.mc` (the baseline stage of
+      shipped as `lib/std/format.mc` (the baseline stage of
       [formatted `{}` print](#strings-and-formatting)), declares
       the baseline
       `format(mut str: string, value: X, const modifier: string)`
@@ -2063,7 +2063,7 @@ already do).
         prototypes. Default severity is warn deliberately: a hard error would
         make a deprecated alias uncallable and break importers, defeating the
         purpose. The motivating use case shipped with it: the four generic
-        forwarders in [memory](libmc/memory.mc) (`copy_bytes`, `copy_items`,
+        forwarders in [memory](lib/std/memory.mc) (`copy_bytes`, `copy_items`,
         `set_bytes`, `set_items`) now carry `@deprecated` with their
         replacements, and the internal stdlib/test callers were repointed to
         the new names (CI runs `-Werror`). Scope v1 is functions only
@@ -2267,7 +2267,7 @@ already do).
   - [x] printf-style `%` formatting — today's `print`/`println` in the
         [standard library](README.md#standard-library), which the `{}` model
         will supersede
-  - [x] the stdlib `format` overload-set module — `libmc/format.mc`, the
+  - [x] the stdlib `format` overload-set module — `lib/std/format.mc`, the
         type-driven per-type rendering layer the placeholder stages below
         dispatch into: a
         `format(mut str: string, value: X, const modifier: string)`
@@ -2305,8 +2305,8 @@ already do).
       `file: note: line N: ...` lines after the unchanged primary
       `file: error: line N: msg`:
   ```
-  libmc/hashing/splitmix64.mc: error: line 10: cannot cast box to uint64
-  libmc/hash.mc: note: line 12: in instantiation of splitmix64<box>
+  lib/std/hashing/splitmix64.mc: error: line 10: cannot cast box to uint64
+  lib/std/hash.mc: note: line 12: in instantiation of splitmix64<box>
   yourcode.mc: note: line 5: in instantiation of hash<box>
   ```
   the "in instantiation of ..." note chain of C++ and Rust. Frames are built on

@@ -49,7 +49,7 @@ def fnv1a64(elems) -> int:
 def run_program(tmp_path, body: str) -> None:
     main = tmp_path / "main.mc"
     main.write_text(
-        'import "libc/stdio";\nimport "libc/string";\nimport "memory";\n' + body
+        'import "libc/stdio";\nimport "libc/string";\nimport "std/memory";\n' + body
     )
     assert run_path(main) == 0
 
@@ -57,7 +57,7 @@ def run_program(tmp_path, body: str) -> None:
 def test_murmur3(tmp_path, capfd):
     run_program(
         tmp_path,
-        'import "hashing/murmur3";\n'
+        'import "std/hashing/murmur3";\n'
         "fn main() -> int32 {\n"
         '    printf("%u %u %u %u\\n",\n'
         '        murmur3("hello", 5, 0), murmur3("hello", 5, 42),\n'
@@ -75,7 +75,7 @@ def test_murmur3(tmp_path, capfd):
 def test_crc32(tmp_path, capfd):
     run_program(
         tmp_path,
-        'import "hashing/crc32";\n'
+        'import "std/hashing/crc32";\n'
         "fn main() -> int32 {\n"
         '    let embedded_nul = alloc<uint8>(3);\n'
         "    if (embedded_nul == null) return 1;\n"  # narrows for crc32's @nonnull
@@ -94,7 +94,7 @@ def test_md5(tmp_path, capfd):
     # Covers single-block, the 55/56-byte padding boundary, and multi-block.
     run_program(
         tmp_path,
-        'import "hashing/md5";\n'
+        'import "std/hashing/md5";\n'
         "fn show(@nonnull data: uint8*, n: uint64) {\n"  # forwards into md5's @nonnull
         "    let digest = alloc<uint8>(16);\n"
         "    if (digest == null) return;\n"
@@ -124,7 +124,7 @@ def test_fnv1a_slice(tmp_path, capfd):
     # are hashed; the zero-terminated pointer member stops at the first zero.
     run_program(
         tmp_path,
-        'import "hashing/fnv1a";\n'
+        'import "std/hashing/fnv1a";\n'
         "fn main() -> int32 {\n"
         "    let buf = alloc<uint8>(3);\n"
         "    if (buf == null) return 1;\n"

@@ -1,4 +1,4 @@
-"""libmc/format.mc: the formatting protocol's baseline overload set.
+"""lib/std/format.mc: the formatting protocol's baseline overload set.
 
 Every member appends `value`'s rendering to a `string`, steered by a
 `slice<char>` modifier (a string literal adapts directly, so
@@ -18,8 +18,8 @@ from helpers import compile_ir, run, run_path
 # Shared prelude: imports plus a printer that dumps a string's bytes between
 # pipes (the buffer is not NUL-terminated, so print exactly `length` bytes).
 PRELUDE = """
-import "format";
-import "string";
+import "std/format";
+import "std/string";
 import "libc/stdio";
 
 fn show(const s: string) {
@@ -337,8 +337,8 @@ def test_user_overload_joins_the_set_cross_module(tmp_path, capfd):
     # recursing back into the set for its fields.
     (tmp_path / "point.mc").write_text(
         """
-        import "format";
-        import "string";
+        import "std/format";
+        import "std/string";
 
         struct point { x: int32; y: int32; }
 
@@ -355,8 +355,8 @@ def test_user_overload_joins_the_set_cross_module(tmp_path, capfd):
     main.write_text(
         """
         import "point";
-        import "format";
-        import "string";
+        import "std/format";
+        import "std/string";
         import "libc/stdio";
 
         fn show(const s: string) {

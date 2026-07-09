@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `@deprecated("message")` is a declaration attribute on a function: the
 // function stays fully callable and the program still builds and runs, but

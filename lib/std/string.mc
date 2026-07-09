@@ -1,5 +1,5 @@
-import "list";
-import "equality";
+import "std/list";
+import "std/equality";
 
 /**
  * Default slot count reserved by string_init before the first growth.

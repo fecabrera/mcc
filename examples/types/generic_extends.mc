@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A generic struct extending a generic base built from its own parameters:
 // `struct entry<K, V> extends cell<K, V>`. Base and extender are

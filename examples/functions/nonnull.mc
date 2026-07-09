@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `@nonnull` on a pointer parameter is a *checked* "definitely non-null"
 // refinement over the nullable-by-default `T*`: the callee is statically

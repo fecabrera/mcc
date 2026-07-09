@@ -1,9 +1,9 @@
-import "std";
-import "queue";
+import "std/io";
+import "std/queue";
 
 // queue<T> -- a linked-list FIFO: push links a node at the back, pop unlinks
-// the front, both O(1), one heap node per queued value (libmc/queue.mc).
-// The array-backed FIFO this replaced lives on as ring<T> (libmc/ring.mc).
+// the front, both O(1), one heap node per queued value (lib/std/queue.mc).
+// The array-backed FIFO this replaced lives on as ring<T> (lib/std/ring.mc).
 
 fn main() -> int32 {
     // The queue functions take const/mut receivers, so a local queue passes

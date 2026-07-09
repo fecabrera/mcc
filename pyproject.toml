@@ -21,24 +21,28 @@ Repository = "https://github.com/fecabrera/mcc"
 [project.scripts]
 mcc = "mcc.driver:main"
 
-# The mcc package plus the bundled standard library. The libmc/ tree lives at
-# the repo root for development; here it is mapped under the package (mcc/libmc)
-# so it ships inside the wheel, where driver._find_stdlib() picks it up.
+# The mcc package plus the bundled standard library. The lib/ tree lives at
+# the repo root for development; here it is mapped under the package (mcc/lib)
+# so it ships inside the wheel, where driver._find_stdlib() picks it up. It
+# holds std/ (mcc modules) and libc/ (C bindings).
 [tool.setuptools]
 packages = [
     "mcc",
     "mcc.codegen",
-    "mcc.libmc",
-    "mcc.libmc.libc",
-    "mcc.libmc.hashing",
+    "mcc.lib",
+    "mcc.lib.std",
+    "mcc.lib.std.hashing",
+    "mcc.lib.libc",
 ]
 
 [tool.setuptools.package-dir]
-"mcc.libmc" = "libmc"
-"mcc.libmc.libc" = "libmc/libc"
-"mcc.libmc.hashing" = "libmc/hashing"
+"mcc.lib" = "lib"
+"mcc.lib.std" = "lib/std"
+"mcc.lib.std.hashing" = "lib/std/hashing"
+"mcc.lib.libc" = "lib/libc"
 
 [tool.setuptools.package-data]
-"mcc.libmc" = ["*.mc", "*.md"]
-"mcc.libmc.libc" = ["*.mc"]
-"mcc.libmc.hashing" = ["*.mc"]
+"mcc.lib" = ["*.md"]
+"mcc.lib.std" = ["*.mc"]
+"mcc.lib.std.hashing" = ["*.mc"]
+"mcc.lib.libc" = ["*.mc"]

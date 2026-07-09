@@ -1,5 +1,5 @@
-import "std";
-import "memory";
+import "std/io";
+import "std/memory";
 
 // Pointer decay into `const`/`mut` parameters: a proven-non-null `T*`
 // argument at a hidden-reference slot (a `const T` struct parameter, or a

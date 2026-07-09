@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Flow-narrowing: a null-check `if` guard proves a plain `T*` local non-null,
 // so idiomatic checked code crosses into a @nonnull parameter (see nonnull.mc)

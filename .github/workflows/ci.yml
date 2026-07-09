@@ -144,15 +144,14 @@ jobs:
         run: pipenv run bash build.sh
 
       # Retain the per-platform precompiled library as a downloadable workflow
-      # artifact (it is a build product, not checked into the repo).
+      # artifact (it is a build product, not checked into the repo). build.sh
+      # writes the whole tree -- the static/shared libraries and the std//libc/
+      # .mci interface stubs -- under dist/lib.
       - name: Upload the precompiled library
         uses: actions/upload-artifact@v4
         with:
           name: libmc-${{ matrix.os }}
-          path: |
-            lib/libmc.a
-            lib/libmc.so
-            lib/libmc/**/*.mci
+          path: dist/lib
 
   # Install the wheel exactly as a user (or the Homebrew formula) does and
   # smoke-test it, so a packaging slip -- a renamed stdlib directory, a missing
@@ -178,14 +177,14 @@ jobs:
       - name: Install the wheel
         run: pip install dist/*.whl
 
-      # Compile from a directory other than the repo root, so `import "std"`
-      # can only resolve through the *bundled* stdlib (mcc/libmc inside the
-      # install), never the repo's own libmc/ tree.
+      # Compile from a directory other than the repo root, so `import "std/io"`
+      # can only resolve through the *bundled* stdlib (mcc/lib inside the
+      # install), never the repo's own lib/ tree.
       - name: Smoke-test the installed compiler
         run: |
           tmp="$(mktemp -d)"
           cat > "$tmp/hi.mc" <<'MC'
-          import "std";
+          import "std/io";
           fn main() -> int32 { println("packaged ok: %d", 30); return 0; }
           MC
           cd "$tmp"

@@ -1,4 +1,4 @@
-import "memory";
+import "std/memory";
 import "libc/math";   // sin/floor/fabs, for the K constant table
 
 /**

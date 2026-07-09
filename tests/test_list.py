@@ -1,4 +1,4 @@
-"""libmc/list.mc: the growable random-access sequence, over mut/const
+"""lib/std/list.mc: the growable random-access sequence, over mut/const
 receivers (stage 4 of the libmc receiver migration)."""
 
 from helpers import run
@@ -9,7 +9,7 @@ def test_direct_receiver_with_growth():
     # Capacity 1 forces list_grow (mut-to-mut re-lending inside list_push).
     assert run(
         """
-        import "list";
+        import "std/list";
         fn main() -> int32 {
             let xs: struct list<int32>;
             list_init(xs, 1);
@@ -36,7 +36,7 @@ def test_has_is_true_strictly_below_length():
     # (length - 1), false at length itself.
     assert run(
         """
-        import "list";
+        import "std/list";
         fn main() -> int32 {
             let xs: struct list<int32>;
             list_init(xs, 2);
@@ -58,7 +58,7 @@ def test_at_is_an_assignable_lvalue():
     # assignment addresses the element once, and value context copies out.
     assert run(
         """
-        import "list";
+        import "std/list";
         fn main() -> int32 {
             let xs: struct list<int32>;
             list_init(xs, 4);
@@ -81,7 +81,7 @@ def test_has_guards_at():
     # test brackets the access; the out-of-range write never runs.
     assert run(
         """
-        import "list";
+        import "std/list";
         fn main() -> int32 {
             let xs: struct list<int32>;
             list_init(xs, 2);
@@ -102,7 +102,7 @@ def test_amp_call_sites_still_compile():
     # Pre-migration `&x` call shapes keep working via pointer decay.
     assert run(
         """
-        import "list";
+        import "std/list";
         fn main() -> int32 {
             let xs: struct list<int32>;
             list_init(&xs, 2);
@@ -123,8 +123,8 @@ def test_heap_pointer_decays_after_guard():
     # loop drops the narrowed fact, so the in-loop push takes the `!` hatch.
     assert run(
         """
-        import "list";
-        import "memory";
+        import "std/list";
+        import "std/memory";
         fn main() -> int32 {
             let p = alloc<struct list<uint64>>(1);
             if (p == null) return 1;
@@ -149,7 +149,7 @@ def test_init_overloads_build_owned_copies():
     # just from another list.
     assert run(
         """
-        import "list";
+        import "std/list";
         fn main() -> int32 {
             let seed: int32[3];
             seed[0] = 1; seed[1] = 2; seed[2] = 3;
@@ -180,7 +180,7 @@ def test_append_and_init_copy_through_const_source():
     # and the for-in inside list_append walks the borrowed run.
     assert run(
         """
-        import "list";
+        import "std/list";
         fn main() -> int32 {
             let a: struct list<int32>;
             list_init(a, 2);

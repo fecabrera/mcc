@@ -209,7 +209,7 @@ def test_address_of_field(capfd):
 def test_memory_lib_copies(tmp_path, capfd):
     from pathlib import Path
 
-    lib_dir = Path(__file__).resolve().parents[1] / "libmc"
+    lib_dir = Path(__file__).resolve().parents[1] / "lib" / "std"
     main = tmp_path / "main.mc"
     main.write_text(
         f'import "{lib_dir / "memory"}";\n'
@@ -251,7 +251,7 @@ def test_memory_lib_copies(tmp_path, capfd):
 def test_list_lib(tmp_path, capfd):
     from pathlib import Path
 
-    lib_dir = Path(__file__).resolve().parents[1] / "libmc"
+    lib_dir = Path(__file__).resolve().parents[1] / "lib" / "std"
     main = tmp_path / "main.mc"
     main.write_text(
         f'import "{lib_dir / "list"}";\n'
@@ -282,7 +282,7 @@ def test_list_lib(tmp_path, capfd):
 def test_list_iterator(tmp_path, capfd):
     from pathlib import Path
 
-    lib_dir = Path(__file__).resolve().parents[1] / "libmc"
+    lib_dir = Path(__file__).resolve().parents[1] / "lib" / "std"
     main = tmp_path / "main.mc"
     main.write_text(
         f'import "{lib_dir / "list"}";\n'
@@ -316,7 +316,7 @@ def test_list_iterator(tmp_path, capfd):
 def test_for_in_loop(tmp_path, capfd):
     from pathlib import Path
 
-    lib_dir = Path(__file__).resolve().parents[1] / "libmc"
+    lib_dir = Path(__file__).resolve().parents[1] / "lib" / "std"
     main = tmp_path / "main.mc"
     main.write_text(
         f'import "{lib_dir / "list"}";\n'
@@ -347,7 +347,7 @@ def test_for_in_loop(tmp_path, capfd):
 def test_list_append_concatenates(capfd):
     run(
         """
-        import "list";
+        import "std/list";
         import "libc/stdio";
         fn main() -> int32 {
             let a: struct list<int32>;
@@ -374,7 +374,7 @@ def test_list_append_concatenates(capfd):
 def test_list_init_from_slice_deep_copies(capfd):
     run(
         """
-        import "list";
+        import "std/list";
         import "libc/stdio";
         fn main() -> int32 {
             let a: struct list<int32>;
@@ -399,7 +399,7 @@ def test_list_init_from_slice_deep_copies(capfd):
 def test_list_init_from_array_builds_a_private_copy(capfd):
     run(
         """
-        import "list";
+        import "std/list";
         import "libc/stdio";
         fn main() -> int32 {
             let raw: int32[3];
@@ -469,7 +469,7 @@ def test_flexible_array_member_emits_zero_length_array():
             "flexible array member with no storage",
         ),
         (
-            'import "list";\n' + PACKET
+            'import "std/list";\n' + PACKET
             + "fn f(p: struct packet*) { let s = p->data as slice<int32>; }",
             "cannot borrow a flexible array member",
         ),
@@ -509,7 +509,7 @@ def test_generic_flexible_array_member(capfd):
     run(
         """
         import "libc/stdio";
-        import "memory";
+        import "std/memory";
         struct vec<T> { length: uint64; items: T[]; }
         fn main() -> int32 {
             let v = alloc<byte>(sizeof(struct vec<int32>)

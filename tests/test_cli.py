@@ -272,7 +272,7 @@ def test_instantiation_notes_trace_a_stdlib_chain(tmp_path):
     # break the test; the user-file note is exact.
     src = tmp_path / "chain.mc"
     src.write_text(
-        'import "hash";\n'
+        'import "std/hash";\n'
         "struct box { x: int32; }\n"
         "fn main() -> int32 {\n"
         "    let b: struct box;\n"
@@ -283,9 +283,9 @@ def test_instantiation_notes_trace_a_stdlib_chain(tmp_path):
     result = mcc(src)
     assert result.returncode == 1
     lines = result.stderr.splitlines()
-    assert lines[0].startswith("libmc/hashing/splitmix64.mc: error: line ")
+    assert lines[0].startswith("lib/std/hashing/splitmix64.mc: error: line ")
     assert lines[0].endswith("cannot cast box to uint64")
-    assert lines[1].startswith("libmc/hash.mc: note: line ")
+    assert lines[1].startswith("lib/std/hash.mc: note: line ")
     assert lines[1].endswith("in instantiation of splitmix64<box>")
     assert lines[2] == f"{src}: note: line 5: in instantiation of hash<box>"
 
@@ -298,7 +298,7 @@ def test_missing_file_is_clean_error():
 
 
 STDLIB_IMPORT = """
-import "memory";
+import "std/memory";
 import "libc/stdio";
 fn main() -> int32 {
     let p = alloc<int32>(1);
@@ -322,7 +322,7 @@ def test_nostdlib_drops_stdlib_path(tmp_path):
     main.write_text(STDLIB_IMPORT)
     result = mcc(main, "--nostdlib")
     assert result.returncode == 1
-    assert "cannot import 'memory'" in result.stderr
+    assert "cannot import 'std/memory'" in result.stderr
 
 
 def test_import_path_flag(tmp_path):
@@ -830,16 +830,16 @@ def test_emit_interface_honors_warning_classes(tmp_path):
 # for the sweep that asserts every invariant-backed dereference with `!`.
 LIBMC_DEREF_EXERCISER = (
     'import "libc/stdio";\n'
-    'import "list";\n'
-    'import "ring";\n'
-    'import "stack";\n'
-    'import "queue";\n'
-    'import "dict";\n'
-    'import "set";\n'
-    'import "equality";\n'
-    'import "hashing/md5";\n'
-    'import "hashing/murmur3";\n'
-    'import "hashing/fnv1a";\n'
+    'import "std/list";\n'
+    'import "std/ring";\n'
+    'import "std/stack";\n'
+    'import "std/queue";\n'
+    'import "std/dict";\n'
+    'import "std/set";\n'
+    'import "std/equality";\n'
+    'import "std/hashing/md5";\n'
+    'import "std/hashing/murmur3";\n'
+    'import "std/hashing/fnv1a";\n'
     "fn main() -> int32 {\n"
     "    let xs: list<int32>;\n"
     "    list_init(xs, 2);\n"
@@ -897,8 +897,8 @@ def test_libmc_compiles_clean_under_unchecked_dereference(tmp_path):
     src.write_text(LIBMC_DEREF_EXERCISER)
     result = mcc(src, "-Wunchecked-dereference", "--emit-llvm")
     assert result.returncode == 0
-    assert "libmc/" not in result.stderr  # no libmc site warns
-    assert result.stderr == ""            # nor does the exerciser itself
+    assert "lib/" not in result.stderr  # no stdlib site warns
+    assert result.stderr == ""          # nor does the exerciser itself
 
 
 def test_libmc_stays_clean_under_werror_unchecked_dereference(tmp_path):
@@ -1140,7 +1140,7 @@ def test_deprecated_call_site_prints_once_across_instantiations(tmp_path):
 def test_stdlib_deprecated_forwarder_blames_the_callers_line(tmp_path):
     src = tmp_path / "dep.mc"
     src.write_text(
-        'import "memory";\n'
+        'import "std/memory";\n'
         "fn main() -> int32 {\n"
         "    let a = alloc<int32>(2);\n"
         "    if (a == null) return 1;\n"

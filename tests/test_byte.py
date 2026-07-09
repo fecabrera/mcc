@@ -74,7 +74,7 @@ def test_alloc_returns_interchangeable_raw_memory():
     # The memory library's allocators yield byte* (raw memory); it round-trips
     # through a typed pointer and back without friction.
     src = """
-    import "memory";
+    import "std/memory";
     fn main() -> int32 {
         let p = alloc<byte>(4);
         p[0] = 9;

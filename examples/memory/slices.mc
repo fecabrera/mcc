@@ -1,5 +1,5 @@
-import "std";
-import "list";
+import "std/io";
+import "std/list";
 
 // A tour of slice<T>: a builtin, non-owning view { ptr: T*; length: uint64 }
 // over a contiguous run of T. A slice borrows storage it does not own -- it

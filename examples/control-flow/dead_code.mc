@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `-Wdead-code`, the second opt-in warning class (the framework itself is
 // toured in types/unchecked_dereference.mc). The generator has always

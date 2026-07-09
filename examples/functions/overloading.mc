@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Concrete function overloading: plain (non-generic) functions sharing a
 // name form an overload set, and the call picks the member whose parameter

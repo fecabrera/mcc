@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // An array dimension can be any constant integer expression -- a `const`,
 // `sizeof`, arithmetic over them -- not just a literal. `counts` is sized for

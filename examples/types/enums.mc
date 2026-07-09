@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // An `enum` is a named set of compile-time constants. Each member has an
 // explicit value; the optional `: <type>` after the name is the underlying

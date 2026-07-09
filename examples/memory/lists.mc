@@ -1,7 +1,7 @@
-import "std";
-import "list";
+import "std/io";
+import "std/list";
 
-// list<T> -- a growable random-access sequence (libmc/list.mc). It owns a heap
+// list<T> -- a growable random-access sequence (lib/std/list.mc). It owns a heap
 // buffer that doubles when it fills, so it starts small and grows as needed.
 
 fn main() -> int32 {

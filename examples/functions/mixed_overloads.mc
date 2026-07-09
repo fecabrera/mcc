@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Mixed generic/concrete overload sets: a generic template and concrete
 // functions may share one name, forming a single overload set (from any

@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 fn is_prime(n: int32) -> bool {
     if (n < 2) {

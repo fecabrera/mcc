@@ -1,15 +1,15 @@
-import "std";
-import "list";
-import "set";
-import "dict";
+import "std/io";
+import "std/list";
+import "std/set";
+import "std/dict";
 
 // `for x in obj` walks anything that provides the `<struct>_it` / `<struct>_next`
-// protocol -- the lib containers in libmc/ all do. The element type is inferred
+// protocol -- the lib containers in lib/ all do. The element type is inferred
 // from `<struct>_next`, the loop variable is scoped to the loop, and
 // `break` / `continue` work as in any loop.
 
 fn main() -> int32 {
-    // A growable list (libmc/list.mc) implements list_it / list_next. The
+    // A growable list (lib/std/list.mc) implements list_it / list_next. The
     // container functions take const/mut receivers, so a local passes
     // directly: no & needed. (A list<T>* still works via pointer decay; see
     // examples/functions/pointer_decay.mc.)

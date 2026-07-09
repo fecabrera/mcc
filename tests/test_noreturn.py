@@ -45,7 +45,7 @@ def test_noreturn_call_terminates_the_block():
     # No dummy return is needed after the call: the block is terminated
     # (today's "may end without a return" would otherwise fire).
     src = """
-    import "std";
+    import "std/io";
     fn f(x: int32) -> int32 {
         if (x >= 0) { return x; }
         abort();
@@ -61,7 +61,7 @@ def test_noreturn_call_terminates_the_block():
 def test_code_after_a_noreturn_call_is_silently_dropped():
     # Same treatment as code after a return: skipped, not type-checked.
     src = """
-    import "std";
+    import "std/io";
     fn f() -> int32 {
         abort();
         this_function_does_not_exist();
@@ -120,7 +120,7 @@ def test_diverging_abort_guard_narrows_nonnull():
     # The C-idiomatic guard: `if (p == null) abort();` proves p non-null for
     # the remainder of the scope with zero narrowing changes.
     src = """
-    import "std";
+    import "std/io";
     fn use(@nonnull p: int32*) -> int32 { return *p; }
     fn f(p: int32*) -> int32 {
         if (p == null) abort();
@@ -235,7 +235,7 @@ def test_function_value_of_a_noreturn_function_is_allowed():
     # Unlike @nonnull, losing @noreturn through a plain fn() type is only a
     # convenience loss -- so exit/abort stay usable as atexit-style handlers.
     src = """
-    import "std";
+    import "std/io";
     fn main() -> int32 {
         let handler: fn() = abort;
         return 0;
@@ -248,7 +248,7 @@ def test_indirect_call_through_the_pointer_does_not_diverge():
     # The plain fn() type dropped the flag: the call is assumed to return,
     # so the non-void body still needs its return path.
     src = """
-    import "std";
+    import "std/io";
     fn f() -> int32 {
         let handler: fn() = abort;
         handler();
@@ -263,7 +263,7 @@ def test_indirect_call_through_the_pointer_does_not_diverge():
 
 def test_generic_noreturn_instance_diverges():
     src = """
-    import "std";
+    import "std/io";
     @noreturn fn die<T>(code: T) { exit(code as int32); }
     fn f(x: int32) -> int32 {
         if (x >= 0) { return x; }

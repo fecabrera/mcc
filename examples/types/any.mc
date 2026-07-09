@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `any` is the builtin tagged box: a fixed 24-byte value (a type tag plus a
 // 16-byte payload, aligned to 8) that holds one value of any boxable type at

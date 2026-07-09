@@ -49,7 +49,7 @@ def test_index_write_through_slice_hits_array():
 
 def test_borrow_list_reads_data_and_length():
     source = """
-    import "list";
+    import "std/list";
     fn main() -> int32 {
         let xs: struct list<int32>;
         list_init(&xs, 4);
@@ -129,7 +129,7 @@ def test_slice_passed_by_value_to_function(capfd):
 
 def test_empty_slice_iterates_zero_times():
     source = """
-    import "list";
+    import "std/list";
     fn main() -> int32 {
         let xs: struct list<int32>;
         list_init(&xs, 4);                 // length 0
@@ -223,7 +223,7 @@ def test_list_borrows_to_both_mutable_and_const_slice():
     # stripped off the target element to reach the same declared base --
     # slice<const T>.
     source = """
-    import "list";
+    import "std/list";
     fn main() -> int32 {
         let xs: struct list<int32>;
         list_init(&xs, 4);
@@ -415,7 +415,7 @@ def test_generic_infers_through_const_slice_element():
     # A `const T` parameter pattern infers T from the element's underlying type,
     # consistent with another parameter that fixes T mutably (here via list<T>*).
     source = """
-    import "list";
+    import "std/list";
     fn copy_first<T>(@nonnull self: struct list<T>*, const arr: slice<const T>) {
         list_init(self, arr.length);
         for el in arr { list_push(self, el); }
@@ -1167,8 +1167,8 @@ def test_format_renders_adapted_literal(capfd):
     # receives an adapted literal like any other slice.
     run(
         """
-        import "format";
-        import "string";
+        import "std/format";
+        import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
             let s: struct string;
@@ -1354,8 +1354,8 @@ def test_format_renders_sub_slice(capfd):
     # receives a sub-slice like any other slice value.
     run(
         """
-        import "format";
-        import "string";
+        import "std/format";
+        import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
             let s: struct string;
@@ -1486,7 +1486,7 @@ def test_sub_slice_list_receiver_rejected_with_borrow_hint():
     ):
         compile_ir(
             """
-            import "list";
+            import "std/list";
             fn main() -> int32 {
                 let xs: struct list<int32>;
                 let x = xs[0:1];

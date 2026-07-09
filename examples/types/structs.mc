@@ -1,5 +1,5 @@
-import "std";
-import "memory";
+import "std/io";
+import "std/memory";
 
 // A plain struct. Fields are declared `name: type;`.
 struct point {

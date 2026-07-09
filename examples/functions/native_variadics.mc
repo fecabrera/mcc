@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Native variadics: a trailing `slice<const any>` parameter marks a
 // COLLECTING function, and `fn f(args...)` is pure sugar for

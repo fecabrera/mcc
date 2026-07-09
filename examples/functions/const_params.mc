@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A `const` parameter is read-only: the body may not assign to it, to one of
 // its fields or array elements, or take its address with `&`. For a *struct*,

@@ -73,7 +73,7 @@ def test_char_is_distinct_from_uint8_in_generics():
     with pytest.raises(LangError, match="conflicting types"):
         compile_ir(
             """
-            import "list";
+            import "std/list";
             fn main() -> int32 {
                 let xs: struct list<uint8>;
                 list_init(&xs, 2);

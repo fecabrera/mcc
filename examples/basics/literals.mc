@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 fn main() -> int32 {
     // Hexadecimal integer literals: 0x / 0X, behaving exactly like decimal

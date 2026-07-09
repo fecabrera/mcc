@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Named-base `extends`: `struct point3 extends point` reuses the base's
 // layout as the derived struct's PREFIX. The base's fields are laid out

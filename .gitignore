@@ -17,9 +17,10 @@ __pycache__/
 .DS_Store
 
 # Compiler output: intermediate objects, interface stubs, and libraries. The
-# precompiled standard library (lib/libmc.a/.so and the lib/libmc/*.mci stubs)
-# is a build product of build.sh -- CI rebuilds it per platform and keeps it as
-# a workflow artifact, so none of it is checked in.
+# precompiled standard library (dist/lib/libmc.a/.so and the dist/lib/**/*.mci
+# stubs) is a build product of build.sh -- CI rebuilds it per platform and keeps
+# it as a workflow artifact, so none of it is checked in. (dist/ is ignored
+# above; these patterns also catch a stray object left beside a source file.)
 *.o
 *.mci
 *.a

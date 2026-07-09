@@ -1,5 +1,5 @@
-import "std";
-import "memory";
+import "std/io";
+import "std/memory";
 
 fn fill_squares(nums: int32*, n: int32) {
     let i: int32 = 0;
@@ -10,7 +10,7 @@ fn fill_squares(nums: int32*, n: int32) {
 }
 
 fn main() -> int32 {
-    // Heap allocation through the generic alloc<T> from libmc/memory.mc.
+    // Heap allocation through the generic alloc<T> from lib/std/memory.mc.
     let nums = alloc<int32>(5);
     fill_squares(nums, 5);
 

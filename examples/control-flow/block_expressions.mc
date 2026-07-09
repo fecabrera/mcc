@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A block expression is a `{ ... }` used where a value is expected. It runs
 // its statements in their own scope and yields a value with `emit` -- like an

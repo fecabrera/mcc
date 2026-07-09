@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // An enum may derive from another by naming the base enum directly in the
 // `: <base>` slot: the new enum copies every member of the base and adopts

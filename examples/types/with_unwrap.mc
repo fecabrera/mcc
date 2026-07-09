@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `with` is the single-pattern unwrap statement: pure sugar over a one-arm
 // `case type`. `with (n = v as int32) body; else other;` evaluates the

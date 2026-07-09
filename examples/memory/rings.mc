@@ -1,9 +1,9 @@
-import "std";
-import "ring";
+import "std/io";
+import "std/ring";
 
 // ring<T> -- an array-backed FIFO ring buffer: one contiguous heap buffer
 // where push writes at the back, pop advances the head, and freed slots are
-// reused as the indices wrap around (libmc/ring.mc). It doubles when full.
+// reused as the indices wrap around (lib/std/ring.mc). It doubles when full.
 // For the linked-list FIFO with one node per value, see queues.mc.
 
 fn main() -> int32 {

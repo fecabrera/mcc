@@ -1,5 +1,5 @@
-import "std";
-import "list";
+import "std/io";
+import "std/list";
 
 // `enumerate(obj)` is a builtin adapter, like `range`: it runs obj's ordinary
 // iteration while counting, yielding a builtin `enumerated<T> { index; value }`

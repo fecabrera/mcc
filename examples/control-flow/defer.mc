@@ -1,6 +1,6 @@
-import "std";
-import "memory";
-import "list";
+import "std/io";
+import "std/memory";
+import "std/list";
 
 // `defer` schedules an action to run when the enclosing block exits -- however
 // it exits: falling off the end, a return, or a break/continue out of a loop.

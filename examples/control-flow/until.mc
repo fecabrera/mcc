@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // An `until` loop is the inverse of `while`: it repeats as long as its
 // condition is *false* and stops once the condition becomes true. Reach for it

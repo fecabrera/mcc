@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Array literals adapting to slice<T>: a literal can be borrowed into a slice
 // directly, with no named array in sight. The literal materializes a hidden

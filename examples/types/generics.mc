@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A type parameter list after the function name makes a function generic;
 // the parameters can stand in anywhere a type is expected.

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from helpers import parse, run, run_path
 
-LIB_DIR = Path(__file__).resolve().parents[1] / "libmc"
+LIB_DIR = Path(__file__).resolve().parents[1] / "lib" / "std"
 
 
 def splitmix64(key: int) -> int:
@@ -24,7 +24,7 @@ def test_direct_receiver_with_growth():
     # Capacity 2 forces set_grow (mut-to-mut re-lending inside set_set).
     assert run(
         """
-        import "set";
+        import "std/set";
         fn main() -> int32 {
             let s: struct set<uint64, uint64>;
             set_init(s, 2);
@@ -50,7 +50,7 @@ def test_amp_call_sites_still_compile():
     # Pre-migration `&x` call shapes keep working via pointer decay.
     assert run(
         """
-        import "set";
+        import "std/set";
         fn main() -> int32 {
             let s: struct set<int32, int32>;
             set_init(&s, 4);
@@ -70,7 +70,7 @@ def test_iteration_visits_all_entries():
     assert (
         run(
             """
-        import "set";
+        import "std/set";
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
             if (s == null) return 1;    // proves s for the receiver slots below
@@ -97,7 +97,7 @@ def test_for_in_iterates_set():
     assert (
         run(
             """
-        import "set";
+        import "std/set";
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
             if (s == null) return 1;    // proves s for the receiver slots below
@@ -124,7 +124,7 @@ def test_nested_generic_type_args_split_shift_token():
 def test_hash_matches_splitmix64(tmp_path, capfd):
     main = tmp_path / "main.mc"
     main.write_text(
-        'import "set";\nimport "libc/stdio";\n'
+        'import "std/set";\nimport "libc/stdio";\n'
         'fn main() -> int32 { printf("%llu\\n", splitmix64(12345)); return 0; }'
     )
     assert run_path(main) == 0
@@ -135,7 +135,7 @@ def test_set_behaves_like_a_dict(tmp_path, capfd):
     main = tmp_path / "main.mc"
     main.write_text(
         """
-        import "set";
+        import "std/set";
         import "libc/stdio";
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
@@ -204,7 +204,7 @@ def test_generic_keys_and_values(tmp_path, capfd):
     main = tmp_path / "main.mc"
     main.write_text(
         """
-        import "set";
+        import "std/set";
         import "libc/stdio";
         fn main() -> int32 {
             // int32 keys mapping to float64 values
@@ -247,7 +247,7 @@ def test_fnv1a_matches_reference(tmp_path, capfd):
 
     main = tmp_path / "main.mc"
     main.write_text(
-        'import "hashing/fnv1a";\nimport "libc/stdio";\n'
+        'import "std/hashing/fnv1a";\nimport "libc/stdio";\n'
         'fn main() -> int32 { printf("%llu %llu\\n", fnv1a("hello"), fnv1a("")); return 0; }'
     )
     assert run_path(main) == 0

@@ -1,5 +1,5 @@
-import "string";
-import "equality";
+import "std/string";
+import "std/equality";
 import "libc/stdio";
 
 // The formatting protocol's baseline overload set: every member appends

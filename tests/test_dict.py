@@ -9,7 +9,7 @@ def test_direct_receiver_with_growth():
     # Capacity 2 forces dict_grow (mut-to-mut re-lending inside dict_set).
     assert run(
         """
-        import "dict";
+        import "std/dict";
         fn main() -> int32 {
             let d: struct dict<int32>;
             dict_init(d, 2);
@@ -35,7 +35,7 @@ def test_amp_call_sites_still_compile():
     # Pre-migration `&x` call shapes keep working via pointer decay.
     assert run(
         """
-        import "dict";
+        import "std/dict";
         fn main() -> int32 {
             let d: struct dict<int32>;
             dict_init(&d, 4);
@@ -54,7 +54,7 @@ def test_iteration_visits_all_entries():
     # pair via a `dict_entry as pair` value upcast (see lib/dict.mc).
     assert run(
         """
-        import "dict";
+        import "std/dict";
         fn main() -> int32 {
             let d = alloc<struct dict<uint64>>(1);
             if (d == null) return 1;    // proves d for the receiver slots below
@@ -76,7 +76,7 @@ def test_for_in_iterates_dict():
     # `for x in &d` dispatches to dict_it/dict_next by name.
     assert run(
         """
-        import "dict";
+        import "std/dict";
         fn main() -> int32 {
             let d = alloc<struct dict<uint64>>(1);
             if (d == null) return 1;    // proves d for the receiver slots below
@@ -98,7 +98,7 @@ def test_lookup_by_content_not_address(tmp_path, capfd):
     main = tmp_path / "main.mc"
     main.write_text(
         """
-        import "dict";
+        import "std/dict";
         import "libc/stdio";
         fn main() -> int32 {
             let d = alloc<struct dict<int32>>(1);
@@ -129,7 +129,7 @@ def test_dict_owns_key_copies(tmp_path, capfd):
     main = tmp_path / "main.mc"
     main.write_text(
         """
-        import "dict";
+        import "std/dict";
         import "libc/stdio";
         fn main() -> int32 {
             let d = alloc<struct dict<int32>>(1);
@@ -183,7 +183,7 @@ def test_remove_and_tombstone_reuse(tmp_path, capfd):
     main = tmp_path / "main.mc"
     main.write_text(
         """
-        import "dict";
+        import "std/dict";
         import "libc/stdio";
         fn main() -> int32 {
             let d = alloc<struct dict<int32>>(1);

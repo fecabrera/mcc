@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `type <name> = <type>;` gives an existing type a second name. An alias is
 // transparent -- not a new distinct type -- so a value typed by the alias and

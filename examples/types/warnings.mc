@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `@warning("message")` is the non-fatal member of the error directive family:
 // where a reached `@error` fails the compile, a reached `@warning` is collected

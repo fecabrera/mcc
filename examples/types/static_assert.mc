@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `@static_assert` and `@error` are top-level compile-time directives, checked
 // during code generation once every type, constant, and enum is known but

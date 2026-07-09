@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `@noalias` on a pointer parameter is a promise, kept by the caller, that the
 // pointer does not overlap any other pointer the function reaches -- C's

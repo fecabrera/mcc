@@ -1,5 +1,5 @@
-import "std";
-import "memory";
+import "std/io";
+import "std/memory";
 
 // The postfix `p!` non-null assertion: the escape hatch into @nonnull.
 // A @nonnull parameter (see nonnull.mc) only accepts arguments the compiler

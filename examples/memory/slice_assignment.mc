@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Assigning a string literal to an existing char-slice lvalue: `s = "hi";`
 // reborrows with no explicit `as`. It repoints the slice at the literal's

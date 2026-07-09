@@ -1,5 +1,5 @@
-import "std";
-import "memory";
+import "std/io";
+import "std/memory";
 
 // The intrusive-container shape: a struct whose base is a bare type
 // parameter, `extends T`. The entry embeds whatever payload it is

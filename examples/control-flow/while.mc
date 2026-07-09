@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A `while` loop repeats its body as long as the condition holds -- the basic
 // counting loop. `break` leaves the loop early; `continue` skips to the next

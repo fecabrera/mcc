@@ -1,4 +1,4 @@
-import "memory";
+import "std/memory";
 
 // Singly-linked node holding one queued value.
 struct queue_node<T> {

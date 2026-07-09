@@ -2,8 +2,8 @@
 # Smoke-test the packaged wheel the way a user (or the Homebrew formula) does:
 # build the wheel, install it -- with its dependencies -- into a throwaway
 # virtualenv, and compile a small program from a directory other than the repo
-# root, so `import "std"` resolves only through the bundled stdlib (mcc/libmc
-# inside the install), never the repo's own libmc/ tree. Guards against a
+# root, so `import "std/io"` resolves only through the bundled stdlib (mcc/lib
+# inside the install), never the repo's own lib/ tree. Guards against a
 # packaging slip -- a missing subpackage, a renamed stdlib directory, an absent
 # data file -- that the source-tree test suite cannot see. Mirrors the smoke
 # job in .github/workflows/ci.yml.
@@ -29,7 +29,7 @@ run_echo "$VENV/bin/pip" install $DIST/*.whl
 
 # A minimal program, compiled from outside the repo root.
 cat > "$WORK/hi.mc" <<'MC'
-import "std";
+import "std/io";
 fn main() -> int32 { println("packaged ok: %d", 30); return 0; }
 MC
 cd "$WORK" || exit 1

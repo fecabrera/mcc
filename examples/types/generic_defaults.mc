@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Generic type-parameter defaults: `<T = int64>` declares a fallback type
 // for a parameter that is neither given explicitly nor inferred from a

@@ -1,5 +1,5 @@
-import "string";
-import "format";
+import "std/string";
+import "std/format";
 
 @if (NATIVE_PRINTLN) {
     @private

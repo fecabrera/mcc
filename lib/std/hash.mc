@@ -1,5 +1,5 @@
-import "hashing/splitmix64";
-import "hashing/fnv1a";
+import "std/hashing/splitmix64";
+import "std/hashing/fnv1a";
 
 /**
  * Hashes an integer (or pointer identity) key by value via splitmix64.

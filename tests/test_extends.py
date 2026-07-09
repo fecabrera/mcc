@@ -332,7 +332,7 @@ def test_bare_param_upcast_inside_generic_function():
 
 def test_intrusive_list_end_to_end():
     assert run(
-        'import "memory";\n'
+        'import "std/memory";\n'
         "struct item { value: int32; }\n"
         "struct entry<T> extends T { next: entry<T>*; }\n"
         "struct list<T> { head: entry<T>*; }\n"

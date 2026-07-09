@@ -1,6 +1,6 @@
-"""libmc/ring.mc: the growable FIFO ring buffer, over mut/const receivers.
+"""lib/std/ring.mc: the growable FIFO ring buffer, over mut/const receivers.
 
-Formerly libmc/queue.mc's implementation; the queue moved to a linked list
+Formerly lib/std/queue.mc's implementation; the queue moved to a linked list
 (see test_queue.py) and the ring buffer kept living here under ring_* names.
 """
 
@@ -12,7 +12,7 @@ def test_fifo_with_direct_receiver():
     # (mut-to-mut re-lending inside ring_push).
     assert run(
         """
-        import "ring";
+        import "std/ring";
         fn main() -> int32 {
             let r: struct ring<int32>;
             ring_init(r, 1);
@@ -37,7 +37,7 @@ def test_wraps_around_head():
     # value context reads through the wrap without disturbing the ring.
     assert run(
         """
-        import "ring";
+        import "std/ring";
         fn main() -> int32 {
             let r: struct ring<int32>;
             ring_init(r, 4);
@@ -62,7 +62,7 @@ def test_grow_relays_wrapped_elements():
     # index 0 and resets head, so FIFO order survives the reallocation.
     assert run(
         """
-        import "ring";
+        import "std/ring";
         fn main() -> int32 {
             let r: struct ring<int32>;
             ring_init(r, 2);
@@ -87,7 +87,7 @@ def test_has_and_at_write_through_the_wrap():
     # returned lvalue lands on the physical slot behind the logical index.
     assert run(
         """
-        import "ring";
+        import "std/ring";
         fn main() -> int32 {
             let r: struct ring<int32>;
             ring_init(r, 4);
@@ -119,7 +119,7 @@ def test_has_and_at_track_a_grow():
     # ring_has tracks the grown length.
     assert run(
         """
-        import "ring";
+        import "std/ring";
         fn main() -> int32 {
             let r: struct ring<int32>;
             ring_init(r, 2);
@@ -143,7 +143,7 @@ def test_amp_call_sites_still_compile():
     # Pre-migration `&x` call shapes keep working via pointer decay.
     assert run(
         """
-        import "ring";
+        import "std/ring";
         fn main() -> int32 {
             let r: struct ring<char>;
             ring_init(&r, 2);

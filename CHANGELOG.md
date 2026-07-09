@@ -14,7 +14,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   that return their quotient and remainder together, now bindable because a
   by-value struct return crosses the `@extern` C boundary correctly. Adds the
   `div_t` / `ldiv_t` / `lldiv_t` struct types and the three functions to
-  [libc/stdlib](libmc/libc/stdlib.mc); they were previously impossible to bind
+  [libc/stdlib](lib/libc/stdlib.mc); they were previously impossible to bind
   (a struct return was not ABI-compatible). `div_t` is one 8-byte register,
   `ldiv_t`/`lldiv_t` a 16-byte register pair.
 - **C struct-passing ABI: x86-64 (System V and Windows)** — the by-value

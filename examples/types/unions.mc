@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A `union` is an aggregate whose members all share one storage: its size is
 // the largest member's (rounded to the alignment), and every member sits at

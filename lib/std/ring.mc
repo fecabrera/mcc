@@ -1,4 +1,4 @@
-import "memory";
+import "std/memory";
 
 // Dynamic ring-buffer FIFO ring<T>. Grows automatically when full; never
 // shrinks.

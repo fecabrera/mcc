@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A function declared `-> mut T` returns an lvalue: a reference to
 // caller-reachable storage instead of a copy of the value. The call

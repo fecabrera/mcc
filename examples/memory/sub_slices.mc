@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Sub-slicing: s[start:end] on a slice yields a NEW slice viewing the same
 // storage -- { &s.data[start], end - start }. No allocation, no element copy:

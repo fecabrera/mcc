@@ -1,4 +1,4 @@
-import "memory";
+import "std/memory";
 
 struct stack<T> {
     data: T*;         // heap-allocated element buffer

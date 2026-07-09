@@ -309,7 +309,7 @@ Only three candidates genuinely break, and each has a managed path:
 3. **Immutable `let`** — today `let` is reassignable. If immutable-by-default
    is ever wanted (`let` frozen, `var` mutable — the modern default, and it
    helps the optimizer), that breaks *almost every existing program*. Options:
-   (a) do it now while the corpus is just `libmc/` plus the examples — the
+   (a) do it now while the corpus is just `lib/` plus the examples — the
    cheapest it will ever be; (b) add an opt-in `final`/`val` and keep `let`
    mutable forever; (c) `let mut` Rust-style, same break as (a). If (a) is
    tempting at all, it should jump the queue ahead of everything else in this

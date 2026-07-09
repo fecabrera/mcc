@@ -1,4 +1,4 @@
-"""libmc/stack.mc: the growable LIFO, over mut/const receivers (stage 2 of the
+"""lib/std/stack.mc: the growable LIFO, over mut/const receivers (stage 2 of the
 libmc receiver migration)."""
 
 from helpers import run
@@ -9,7 +9,7 @@ def test_lifo_with_direct_receiver():
     # Capacity 1 forces stack_grow (mut-to-mut re-lending inside stack_push).
     assert run(
         """
-        import "stack";
+        import "std/stack";
         fn main() -> int32 {
             let s: struct stack<int32>;
             stack_init(s, 1);
@@ -32,7 +32,7 @@ def test_amp_call_sites_still_compile():
     # Pre-migration `&x` call shapes keep working via pointer decay.
     assert run(
         """
-        import "stack";
+        import "std/stack";
         fn main() -> int32 {
             let s: struct stack<char>;
             stack_init(&s, 2);
@@ -52,8 +52,8 @@ def test_heap_pointer_decays_after_guard():
     # proof: one null guard covers every later call.
     assert run(
         """
-        import "stack";
-        import "memory";
+        import "std/stack";
+        import "std/memory";
         fn main() -> int32 {
             let p = alloc<struct stack<int32>>(1);
             if (p == null) return 1;

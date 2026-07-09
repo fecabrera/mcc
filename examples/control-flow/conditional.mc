@@ -20,7 +20,7 @@ import "libc/stdio";
 }
 
 // The classic use pairs `@if` with @symbol to bind a name spelled differently
-// per platform behind one mcc name. libmc/libc/stdio.mc does exactly this for the
+// per platform behind one mcc name. lib/libc/stdio.mc does exactly this for the
 // standard streams -- libc's stdout is the symbol `__stdoutp` on macOS but
 // `stdout` on Linux -- so the `stdout` we use below is already the right one
 // for this target, with no per-platform code here.

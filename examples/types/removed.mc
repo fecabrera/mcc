@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `@removed("message")` is the terminal state of the availability lifecycle,
 // one step past `@deprecated`: a function goes from available, to

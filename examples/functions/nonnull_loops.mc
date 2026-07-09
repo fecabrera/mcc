@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Flow-narrowing across loops: how the null-check facts from
 // nonnull_narrowing.mc behave when a `while`/`until`/`for` sits between the

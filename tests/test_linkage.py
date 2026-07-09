@@ -25,7 +25,7 @@ def defining_line(ir_text, symbol):
 def test_imported_generic_instance_is_linkonce(tmp_path):
     ir_text = compile_file_ir(
         tmp_path, "main.mc",
-        'import "memory";\n'
+        'import "std/memory";\n'
         "fn main() -> int32 {\n"
         "    let p = alloc<uint8>(4);\n"
         "    dealloc(p);\n"

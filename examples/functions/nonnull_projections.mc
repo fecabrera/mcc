@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Flow-narrowing for field projections: the null-check guards from
 // nonnull_narrowing.mc also prove a pointer-typed struct field non-null, so

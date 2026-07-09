@@ -551,11 +551,11 @@ def test_missing_import_is_clean_error(tmp_path):
 
 
 def test_import_resolves_through_stdlib_path(tmp_path, capfd):
-    # `import "memory";` works from anywhere: lib/ is on the search path.
+    # `import "std/memory";` works from anywhere: lib/ is on the search path.
     main = tmp_path / "main.mc"
     main.write_text(
         """
-        import "memory";
+        import "std/memory";
         import "libc/stdio";
         fn main() -> int32 {
             let p = alloc<int32>(1);
@@ -571,8 +571,12 @@ def test_import_resolves_through_stdlib_path(tmp_path, capfd):
 
 
 def test_relative_import_wins_over_search_path(tmp_path):
-    # A file next to the importer shadows a same-named one on the search path.
-    (tmp_path / "memory.mc").write_text("fn marker() -> int32 { return 42; }")
+    # A file next to the importer shadows a same-named one on the search path
+    # (here the bundled std/memory), so a local std/memory.mc wins.
+    (tmp_path / "std").mkdir()
+    (tmp_path / "std" / "memory.mc").write_text(
+        "fn marker() -> int32 { return 42; }"
+    )
     main = tmp_path / "main.mc"
-    main.write_text('import "memory";\nfn main() -> int32 { return marker(); }')
+    main.write_text('import "std/memory";\nfn main() -> int32 { return marker(); }')
     assert run_path(main) == 42

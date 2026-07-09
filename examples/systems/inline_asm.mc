@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `@asm` drops to raw machine instructions when nothing higher-level will do.
 // It is inherently target-specific, so it pairs with `@if` on TARGET_ARCH; the

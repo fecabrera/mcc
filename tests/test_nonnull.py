@@ -204,13 +204,13 @@ def test_extern_nonnull_round_trips_through_mci():
 # ------------------------------------------- annotated libc binding surface
 
 # Wave 2 (ROADMAP 1800) annotates the @extern libc bindings with @nonnull.
-# These tests reach the *real* libmc/libc declarations through an import merge,
+# These tests reach the *real* lib/libc declarations through an import merge,
 # so they cover the annotation as it actually ships (not an inline stand-in)
 # and confirm the graded postures fire through the real binding.
 
 
 def compile_libc_strict(source: str) -> str:
-    """Resolve imports against the real libmc/ tree and compile at the strict
+    """Resolve imports against the real lib/ tree and compile at the strict
     extern-nonnull posture, so an annotated libc binding is enforced through
     its shipped declaration rather than an inline stand-in prototype."""
     program = merge_imports(parse(source), STDLIB_DIR, (STDLIB_DIR,))
@@ -257,7 +257,7 @@ def test_wave1_wrapper_proven_call_into_annotated_libc_compiles_strict():
     # proof satisfies the annotated binding, so the whole chain compiles clean
     # at strict -- the blast-radius guarantee, exercised end to end.
     ir_text = compile_libc_strict(
-        'import "memory";\n'
+        'import "std/memory";\n'
         "fn main() -> int32 {\n"
         "    let a: int32[2] = [1, 2];\n"
         "    let b: int32[2] = [0, 0];\n"
@@ -1884,7 +1884,7 @@ def test_println_call_kills_projection_fact():
     # canonical const-laundering case.
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         run(
-            'import "std";\n'
+            'import "std/io";\n'
             + BUF + FIRST + "fn peek(b: Buf*) -> int32 {\n"
             "    if (b == null or b->data == null) { return 0; }\n"
             '    println("checking");\n'
@@ -2226,7 +2226,7 @@ def test_hatch_crosses_concrete_call():
     # A heap pointer carries no syntactic proof; `p!` is the programmer's
     # explicit assertion, and it is the whole proof.
     assert run(
-        'import "std";\n' + FIRST + "fn main() -> int32 {\n"
+        'import "std/io";\n' + FIRST + "fn main() -> int32 {\n"
         "    let p: int32* = malloc(4) as int32*;\n"
         "    *p = 42;\n"
         "    let r = first(p!);\n"
@@ -2402,7 +2402,7 @@ def test_stdlib_rejects_unproven_heap_pointer():
     ):
         run(
             """
-            import "memory";
+            import "std/memory";
             fn main() -> int32 {
                 let src: int32[2];
                 src[0] = 1; src[1] = 2;
@@ -2419,7 +2419,7 @@ def test_stdlib_accepts_guarded_heap_pointer():
     # narrows the pointer for every annotated stdlib call that follows.
     assert run(
         """
-        import "memory";
+        import "std/memory";
         fn main() -> int32 {
             let src: int32[2];
             src[0] = 40; src[1] = 2;

@@ -1,5 +1,5 @@
-import "std";
-import "memory";
+import "std/io";
+import "std/memory";
 
 // A struct literal `Name { field = value, ... }` builds a whole struct value
 // in one expression, instead of declaring it and assigning fields one at a

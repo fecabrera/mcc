@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Nominal type-parameter bounds: `fn f<T extends shape>(x: T)` constrains a
 // generic parameter to a struct AND the structs in its declared `extends`

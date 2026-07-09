@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `if` / `else if` / `else` branch at runtime. The condition is any integer:
 // non-zero is true, zero is false, as in C -- there is no separate bool to

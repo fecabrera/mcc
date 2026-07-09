@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Forward declarations: a bodyless `fn` prototype coexisting with its
 // definition in the same program. The prototype states the signature up

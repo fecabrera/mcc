@@ -7,7 +7,7 @@ the [mcc/](mcc/) package, with one module per stage: lexer, parser, code
 generator, and driver.
 
 ```c
-import "std";
+import "std/io";
 
 fn main() -> int32 {
     println("hello, world");
@@ -93,7 +93,7 @@ once after tapping.
 ### pip
 
 The compiler is a regular Python package that installs an `mcc` command and
-bundles the [standard library](libmc/README.md):
+bundles the [standard library](lib/README.md):
 
 ```bash
 pip install git+https://github.com/fecabrera/mcc
@@ -119,12 +119,12 @@ mcc examples/basics/helloworld.mc              # compile to a native executable
 mcc examples/basics/helloworld.mc -o hello     # choose the output name
 mcc examples/basics/helloworld.mc --run        # JIT-compile and run immediately
 mcc examples/basics/helloworld.mc --emit-llvm  # print the LLVM IR instead of compiling
-mcc libmc/list.mc -c                      # compile to an object (.o), don't link
-mcc libmc/list.mc -S                      # emit target assembly (.s), don't assemble
-mcc libmc/list.mc --emit-interface        # write an importable .mci stub
+mcc lib/std/list.mc -c                      # compile to an object (.o), don't link
+mcc lib/std/list.mc -S                      # emit target assembly (.s), don't assemble
+mcc lib/std/list.mc --emit-interface        # write an importable .mci stub
 mcc examples/basics/helloworld.mc -O3          # optimization level (0-3, default 2)
 mcc main.mc -I vendor -I deps           # extra import search paths
-mcc main.mc --nostdlib                  # don't put libmc/ on the import path
+mcc main.mc --nostdlib                  # don't put lib/ on the import path
 mcc main.mc util.o -lcurl               # link extra objects and libraries
 mcc main.mc -L build/lib -lmylib        # with a library search path
 
@@ -145,7 +145,7 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 | `--run`                   | JIT-compile and run the program immediately instead of writing a file; its exit code becomes mcc's. Cannot be combined with `--target`.                                                       |
 | `--emit-llvm`             | Print the generated LLVM IR to stdout and exit, without compiling or linking.                                                                                                                 |
 | `-I`, `--import-path DIR` | Add a directory to the import search path. Repeatable; later paths are searched after earlier ones.                                                                                           |
-| `--nostdlib`              | Do not put the bundled `libmc/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).                                                  |
+| `--nostdlib`              | Do not put the bundled `lib/` directory on the import path, dropping the standard library (for freestanding builds that supply their own).                                                  |
 | `--target TRIPLE`         | Cross-compile for the given LLVM target triple, emitting an object file instead of a host executable.                                                                                         |
 | `--general-regs-only`     | Generate code that uses only general-purpose registers, never the floating-point/SIMD ones.                                                                                                   |
 | `--strict-align`          | Never emit unaligned memory accesses (gcc's `-mstrict-align`); needed for bare-metal targets running with the MMU off, where an unaligned wide load/store traps.                              |
@@ -180,7 +180,7 @@ functions and rewrite calls between them. At `-O2`, a `printf("done\n")`
 (constant string, no args) is otherwise turned into a `puts` call, and
 `printf("%c", c)` into `putchar`, synthesizing references to libc symbols a
 bare-metal program never defines. Pass it when building a kernel or any
-target with no libc. (`--nostdlib` only drops mcc's `libmc/` from the import
+target with no libc. (`--nostdlib` only drops mcc's `lib/` from the import
 path; it does not change this optimizer assumption.)
 
 ## Quickstart
@@ -190,7 +190,7 @@ language, showing typed `fn`s, `let` with type inference, structs, a monomorphiz
 generic, `defer`, control flow, and the standard library:
 
 ```c
-import "std";        // print / println, from the standard library
+import "std/io";        // print / println, from the standard library
 
 struct point {
     x: int32;
@@ -231,13 +231,13 @@ to fizzbuzz and a prime sieve. See the [index](examples/README.md).
 
 ## Standard library
 
-The modules under [libmc/](libmc/) are on the import search path by default, so
-they import by bare name. For everyday output, `import "std";` provides `print`
-and `println`, printf-style formatting written in mcc on top of the libc
-bindings:
+The [lib/](lib/) root is on the import search path by default, so its modules
+import under their `std/` (mcc modules) or `libc/` (C bindings) prefix. For
+everyday output, `import "std/io";` provides `print` and `println`, printf-style
+formatting written in mcc on top of the libc bindings:
 
 ```c
-import "std";
+import "std/io";
 
 fn main() -> int32 {
     println("answer = %d", 42);
@@ -251,10 +251,10 @@ rendering values into a `string`, extensible one overload at a time), `memory`
 (typed `alloc`/`dealloc`), the `list`/`stack`/`queue`/`set`/`dict` containers,
 the `range` iterable, and the `hashing/*` functions.
 
-The [`libc/`](libmc/libc/) modules are instead `@extern` bindings for the C
+The [`libc/`](lib/libc/) modules are instead `@extern` bindings for the C
 library itself (`printf`, `malloc`, the `str*`/`mem*` functions, `FILE*`
 streams, and so on), for when you want C directly; see
-[Reaching libc](docs/language.md#reaching-libc). The [standard library index](libmc/README.md)
+[Reaching libc](docs/language.md#reaching-libc). The [standard library index](lib/README.md)
 lists every module.
 
 The standard library is **compiled from source** with each program. Shipping it
@@ -270,7 +270,7 @@ aren't linked.
 mcc follows the platform C ABI for **scalars and pointers**, so any function
 whose signature is built from them interoperates with C in both directions:
 call C from mcc with `@extern`, or expose mcc functions to a C linker. This is
-why the [libc bindings](libmc/libc/) work directly:
+why the [libc bindings](lib/libc/) work directly:
 
 | mcc type                         | C type                                                   |
 | -------------------------------- | -------------------------------------------------------- |

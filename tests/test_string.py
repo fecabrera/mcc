@@ -1,4 +1,4 @@
-"""libmc/string.mc: a text string, `type string = list<char>`.
+"""lib/std/string.mc: a text string, `type string = list<char>`.
 
 Exercises the @inline list wrappers (string_push/string_append/string_get/...,
 which forward straight to the list_* functions through the transparent alias)
@@ -14,7 +14,7 @@ from helpers import run
 def test_base_operations(capfd):
     run(
         """
-        import "string";
+        import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
             let s: struct string;
@@ -39,7 +39,7 @@ def test_base_operations(capfd):
 def test_for_in_iterates_characters(capfd):
     run(
         """
-        import "string";
+        import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
             let s: struct string;
@@ -60,7 +60,7 @@ def test_for_in_iterates_characters(capfd):
 def test_string_append_concatenates(capfd):
     run(
         """
-        import "string";
+        import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
             let a: struct string;
@@ -89,7 +89,7 @@ def test_string_append_cstr_copies_until_nul(capfd):
     # a bare literal would pick the slice<char> overload instead.
     run(
         """
-        import "string";
+        import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
             let s: struct string;
@@ -109,7 +109,7 @@ def test_string_append_cstr_copies_until_nul(capfd):
 def test_string_init_from_cstr_copies_until_nul(capfd):
     run(
         """
-        import "string";
+        import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
             let s: struct string;
@@ -131,7 +131,7 @@ def test_direct_receiver_through_the_alias(capfd):
     # through the `type string = list<char>` alias.
     run(
         """
-        import "string";
+        import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
             let s: struct string;
@@ -159,7 +159,7 @@ def test_string_has_and_at_through_the_wrappers():
     # string's bytes.
     assert run(
         """
-        import "string";
+        import "std/string";
         fn main() -> int32 {
             let s: struct string;
             string_init(s, "abc");
@@ -183,7 +183,7 @@ def test_string_equals_and_init_copy():
     # ceremony.
     assert run(
         """
-        import "string";
+        import "std/string";
         fn main() -> int32 {
             let a: struct string;
             string_init(a, "hi");
@@ -211,7 +211,7 @@ def test_string_equals_over_char_slices():
     # each binds `T` and compares with no explicit borrow at the call site.
     assert run(
         """
-        import "string";
+        import "std/string";
         fn main() -> int32 {
             let a: struct string;
             string_init(a, "hi");
@@ -244,7 +244,7 @@ def test_string_equals_rejects_non_char_slice():
     ):
         run(
             """
-            import "string";
+            import "std/string";
             fn main() -> int32 {
                 let a: struct string;
                 string_init(a, "hi");
@@ -261,7 +261,7 @@ def test_string_init_from_literal_drops_the_nul():
     # length 3, not 4.
     assert run(
         """
-        import "string";
+        import "std/string";
         fn main() -> int32 {
             let s: struct string;
             string_init(s, "hey");
@@ -278,8 +278,8 @@ def test_heap_string_pointer_decays_after_guard():
     # proof: one null guard after the allocation covers the later calls.
     assert run(
         """
-        import "string";
-        import "memory";
+        import "std/string";
+        import "std/memory";
         fn main() -> int32 {
             let p = alloc<struct string>(1);
             if (p == null) return 1;

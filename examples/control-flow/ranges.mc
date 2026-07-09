@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `range` is a builtin: `for i in range(start, end)` counts over the half-open
 // interval [start, end), and `for i in range(end)` counts from 0. It lowers to

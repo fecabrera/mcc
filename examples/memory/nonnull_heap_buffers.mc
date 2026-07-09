@@ -1,6 +1,6 @@
-import "std";
-import "memory";
-import "hashing/crc32";
+import "std/io";
+import "std/memory";
+import "std/hashing/crc32";
 
 // A heap buffer crossing the stdlib's @nonnull contracts. The stdlib
 // annotates its data, source, key, and destination pointers @nonnull (see

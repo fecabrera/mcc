@@ -97,7 +97,7 @@ def test_hash_lib_dispatches(tmp_path, capfd):
     main = tmp_path / "main.mc"
     main.write_text(
         """
-        import "hash";
+        import "std/hash";
         import "libc/stdio";
         fn main() -> int32 {
             let by_value = hash(99 as uint64) == splitmix64(99);

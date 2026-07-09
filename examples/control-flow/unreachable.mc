@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // `unreachable;` asserts that a path is never executed. The statement
 // diverges like a `return`: no return is needed after (or instead of) it,

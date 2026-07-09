@@ -1,5 +1,5 @@
-import "memory";
-import "hash";
+import "std/memory";
+import "std/hash";
 
 // Slot states
 enum set_entry_state: uint8 {

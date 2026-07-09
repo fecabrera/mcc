@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Overloads of one generic name may freely mix `mut` and non-`mut`
 // positions. The motivating shape is one name serving both kinds of

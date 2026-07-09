@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // Closed type groups: a pipe-separated group after a generic parameter,
 // `fn f<T: int32 | int16 | int8>(x: T)`, is the closed set of types T may

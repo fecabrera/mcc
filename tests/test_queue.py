@@ -1,7 +1,7 @@
-"""libmc/queue.mc: the linked-list FIFO queue, over mut/const receivers.
+"""lib/std/queue.mc: the linked-list FIFO queue, over mut/const receivers.
 
 Enqueue links a node at the tail, dequeue unlinks the head, both O(1); the
-ring-buffer implementation this queue replaced lives on as libmc/ring.mc
+ring-buffer implementation this queue replaced lives on as lib/std/ring.mc
 (see test_ring.py).
 """
 
@@ -12,7 +12,7 @@ def test_fifo_with_direct_receiver():
     # The post-migration idiom: a local queue passes directly, no `&`.
     assert run(
         """
-        import "queue";
+        import "std/queue";
         fn main() -> int32 {
             let q: struct queue<int32>;
             queue_init(q);
@@ -36,7 +36,7 @@ def test_first_push_links_head():
     # queue, so tail relinks after a full drain.
     assert run(
         """
-        import "queue";
+        import "std/queue";
         fn main() -> int32 {
             let q: struct queue<int32>;
             queue_init(q);
@@ -57,7 +57,7 @@ def test_for_in_yields_fifo_order():
     # queue_it/queue_next walk from the front (oldest) to the back (newest).
     assert run(
         """
-        import "queue";
+        import "std/queue";
         fn main() -> int32 {
             let q: struct queue<int32>;
             queue_init(q);
@@ -77,7 +77,7 @@ def test_amp_call_sites_still_compile():
     # Pre-migration `&x` call shapes keep working via pointer decay.
     assert run(
         """
-        import "queue";
+        import "std/queue";
         fn main() -> int32 {
             let q: struct queue<char>;
             queue_init(&q);

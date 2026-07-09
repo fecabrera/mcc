@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // String-literal elements adapt to char-slice element types: an array literal
 // like ["bin", "usr/bin"] fills a slice<char>[2] with borrowed

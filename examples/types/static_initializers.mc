@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A `@static` global has file-scoped storage and a constant initializer,
 // folded at compile time into the binary's data. Beyond scalars, arrays, and

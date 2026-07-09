@@ -1,4 +1,4 @@
-import "std";
+import "std/io";
 
 // A `case type` arm may list several comma-separated types over one binding:
 // `when int32, int16, int8 n:` is one arm, three tags, one shared body. The

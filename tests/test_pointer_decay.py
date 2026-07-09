@@ -394,7 +394,7 @@ def test_generic_decay_infers_through_list_pointer():
     # The libmc migration shape: a heap-style list<int32>* argument infers
     # T at a const list<T> slot while the mut slot takes a plain lvalue.
     assert run(
-        'import "list";\n'
+        'import "std/list";\n'
         "fn steal_len<T>(mut dst: struct list<T>, const src: struct list<T>) {\n"
         "    dst.length = src.length;\n"
         "}\n"
@@ -418,7 +418,7 @@ def test_generic_decay_with_both_arguments_ampersand_shaped():
     # The &x-shaped call sites the libmc migration leans on: both hidden
     # slots receive rvalue pointers, both prove non-null for free.
     assert run(
-        'import "list";\n'
+        'import "std/list";\n'
         "fn steal_len<T>(mut dst: struct list<T>, const src: struct list<T>) {\n"
         "    dst.length = src.length;\n"
         "}\n"
