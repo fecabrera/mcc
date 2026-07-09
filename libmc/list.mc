@@ -155,7 +155,7 @@ fn list_push<T>(mut self: list<T>, value: T) {
  * @param items: elements to append -- any borrowed run, so a source list
  *               (`b as slice<T>`) or an array's borrow both work
  **/
-fn list_append<T>(mut self: list<T>, const items: slice<T>) {
+fn list_append<T>(mut self: list<T>, const items: slice<const T>) {
     for value in items {
         list_push(self, value);
     }

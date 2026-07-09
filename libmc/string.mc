@@ -180,7 +180,7 @@ fn string_push(mut self: string, value: char) {
  *              (`b as slice<char>`); a string literal adapts directly
  **/
 @inline
-fn string_append(mut self: string, const str: slice<char>) {
+fn string_append(mut self: string, const str: slice<const char>) {
     list_append(self, str);
 }
 

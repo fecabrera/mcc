@@ -161,7 +161,7 @@ fn format<T>(mut str: string, value: slice<T>, const modifier: slice<char>) {
  * @param modifier: ignored
  */
 @inline
-fn format(mut str: string, value: slice<char>, const modifier: slice<char>) {
+fn format(mut str: string, value: slice<const char>, const modifier: slice<char>) {
     string_append(str, value);
 }
 
