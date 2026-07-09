@@ -43,14 +43,14 @@ fn describe(args...) {
             // (`const`) alias of the caller's storage. Reading p.x / p.y reads
             // the caller's live fields, and passing `p` to manhattan shares
             // that storage a second time -- still no copy.
-            when point p:  println("point   (%d, %d)  |m| = %d", p.x, p.y, manhattan(p));
+            when point p:  println("point   ({}, {})  |m| = {}", p.x, p.y, manhattan(p));
 
             // `point` and `point*` are DISTINCT tags. A pointer argument boxes
             // by value under its own pointer tag (as in any.mc) and lands here,
             // never in the struct arm above.
-            when point* p: println("point*  ->(%d, %d)", p!->x, p!->y);
+            when point* p: println("point*  ->({}, {})", p!->x, p!->y);
 
-            when int32 n:  println("int32   %d", n);
+            when int32 n:  println("int32   {}", n);
             else:          println("some other type");
         }
     }
@@ -60,7 +60,7 @@ fn describe(args...) {
 // is a `const any` element; `with (p = xs[0] as point)` tests its tag and, on
 // a match, binds `p` to the caller's storage for the true branch only.
 fn first_point(xs: slice<const any>) {
-    with (p = xs[0] as point) println("first:  point (%d, %d)", p.x, p.y);
+    with (p = xs[0] as point) println("first:  point ({}, {})", p.x, p.y);
     else println("first:  not a point");
 }
 

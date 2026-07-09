@@ -19,11 +19,11 @@ fn main() -> int32 {
     let n: int32 = 2;
     while (n < 50) {
         if (is_prime(n)) {
-            print("%d ", n);
+            print("{} ", n);
             count += 1;
         }
         n += 1;
     }
-    print("\n%d primes below 50\n", count);
+    print("\n{} primes below 50\n", count);
     return 0;
 }

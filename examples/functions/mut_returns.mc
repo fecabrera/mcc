@@ -80,24 +80,24 @@ fn main() -> int32 {
 
     // In value context the call auto-loads the current value.
     let c = buf_at(b, 0);
-    println("buf_at(b, 0) -> %c", c);
+    println("buf_at(b, 0) -> {}", c);
 
     // Projections: a struct-typed mut return takes `.field`, and a
     // pointer-typed one indexes through the loaded pointer.
     buf_ref(b).length = 2;
     buf_data(b)![1] = 'z';
     buf_first(b) = 'q';                 // through the composed accessor
-    println("bytes        -> %c%c%c (length %d)",
+    println("bytes        -> {}{}{} (length {})",
             bytes[0], bytes[1], bytes[2], b.length as int32);
 
     high_score_ref() += 32;
-    println("high_score   -> %d", high_score);
+    println("high_score   -> {}", high_score);
 
     let x: int32 = 1;
     let y: int32 = 2;
     pick(x, y, false) = 20;             // the returned lvalue is y
     pick(x, y, true) += 9;              // ...and here x
-    println("pick         -> x=%d y=%d", x, y);
+    println("pick         -> x={} y={}", x, y);
 
     return 0;
 }

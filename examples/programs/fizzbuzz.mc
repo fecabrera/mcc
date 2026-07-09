@@ -9,7 +9,7 @@ fn main() -> int32 {
         } else if (i % 5 == 0) {
             println("Buzz");
         } else {
-            println("%d", i);
+            println("{}", i);
         }
     }
     return 0;

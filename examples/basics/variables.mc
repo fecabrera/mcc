@@ -20,17 +20,17 @@ fn main() -> int32 {
     let big: int64 = 9000000000;
     let huge: uint64 = 18000000000000000000;
 
-    println("answer = %d", answer);
-    println("pi     = %f", pi);
-    println("yes    = %d", yes);
-    println("byte   = %u", byte);
-    println("short  = %d", short);
-    println("big    = %lld", big);
-    println("huge   = %llu", huge);
+    println("answer = {}", answer);
+    println("pi     = {}", pi);
+    println("yes    = {}", yes);
+    println("byte   = {}", byte);
+    println("short  = {}", short);
+    println("big    = {}", big);
+    println("huge   = {}", huge);
 
     // Variables are mutable; assignment keeps the declared type.
     answer = answer * 2;
-    println("answer = %d", answer);
+    println("answer = {}", answer);
 
     // A declaration may omit the initializer if it has a type annotation.
     // Like a C local, it holds garbage until assigned -- useful when the
@@ -41,7 +41,7 @@ fn main() -> int32 {
     } else {
         parity = "odd";
     }
-    println("answer is %s", parity);
+    println("answer is {}", parity);
 
     return 0;
 }

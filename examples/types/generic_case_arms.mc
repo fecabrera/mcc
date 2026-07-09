@@ -35,19 +35,19 @@ fn show(a: any) {
         // `case type arm for char* is unreachable: the generic pointer arm
         // 'T*' above it matches every pointer type`.
         when char* s:
-            println("string:  %s", s);
+            println("string:  {}", s);
 
         // The pointer fallback. T binds per tag to the pointee (point* runs
         // a copy with T = point, int32* a copy with T = int32), and the
         // binding is the pointer itself, so sizeof(T) is the pointee's size.
         when T* ptr:
-            println("pointer: %d-byte pointee", sizeof(T) as int32);
+            println("pointer: {}-byte pointee", sizeof(T) as int32);
 
         // The value fallback: every tag still unclaimed. T binds to the
         // boxed type itself. Without the pointer arm above, pointer tags
         // would land here too, with T = point* and so on.
         when T v:
-            println("value:   %d-byte payload", payload_width(v));
+            println("value:   {}-byte payload", payload_width(v));
 
         // `else` stays mandatory even under a catch-all `when T v:` arm.
         // The generic arms cover every tag the program boxes, but not the

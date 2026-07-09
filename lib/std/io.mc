@@ -1,7 +1,51 @@
 import "std/string";
 import "std/format";
 
-@if (NATIVE_PRINTLN) {
+// print/println format with `{}` placeholders: each `{[modifiers]}` renders
+// the next variadic argument through the std/format overload set,
+// type-driven -- no `%`-letters. The legacy printf-style pair below is kept
+// behind -D PRINTF_PRINTLN=1 for programs mid-migration; libc's printf
+// remains the tool for width/precision formatting the `{...}` modifiers do
+// not carry yet.
+@if (PRINTF_PRINTLN) {
+    /**
+     * Formats according to format and writes the result to standard output
+     * (no trailing newline). Thin wrapper around vprintf.
+     *
+     * @param format: printf-style format string (stb_sprintf grammar; floats disabled)
+     * @param ...:    variadic arguments matching the format specifiers
+     */
+    fn print(format: char*, ...) {
+        let args: va_list;
+        va_start(args, format);
+        vprintf(format, args);
+        va_end(args);
+    }
+
+    /**
+     * Like print, but appends a newline after the formatted output.
+     *
+     * @param format: printf-style format string (stb_sprintf grammar; floats disabled)
+     * @param ...:    variadic arguments matching the format specifiers
+     */
+    fn println(format: char*, ...) {
+        let args: va_list;
+        va_start(args, format);
+        vprintf(format, args);
+        va_end(args);
+        putchar('\n' as int32);   // char literals are char; putchar takes int32
+    }
+} @else {
+    /**
+     * Renders fmt into str: literal text copied through, each `{[modifiers]}`
+     * placeholder replaced by the next argument's `format(...)` rendering,
+     * with the bracket content passed verbatim as its modifier. `{{` and
+     * `}}` escape literal braces.
+     *
+     * @param str:  destination string
+     * @param fmt:  format string with `{[modifiers]}` placeholders
+     * @param args: values rendered in sequence, one per placeholder
+     */
     @private
     fn format_args(mut str: string, const fmt: slice<const char>, args...) {
         let i: uint64 = 0;
@@ -38,7 +82,7 @@ import "std/format";
 
                 if (i < args.length) {
                     with (t = args[i] as T) {
-                        format(str, t, (modifier as slice<char>)[1:]);
+                        format(str, t, modifier as slice<char>);
                     }
 
                     string_reset(modifier);
@@ -53,43 +97,35 @@ import "std/format";
             }
         }
     }
-}
 
-/**
- * Formats according to format and writes the result to standard output (no
- * trailing newline). Thin wrapper around vprintf.
- *
- * @todo: use `const format: struct string` instead.
- *
- * @param format: printf-style format string (stb_sprintf grammar; floats disabled)
- * @param ...:    variadic arguments matching the format specifiers
- */
-@if (NATIVE_PRINTLN) {
-    fn print(const format: slice<const char>, args...) {
+    /**
+     * Formats according to fmt and writes the result to standard output (no
+     * trailing newline).
+     *
+     * Each `{}` placeholder renders the next argument through the
+     * std/format overload set (type-driven), and `{modifiers}` passes the
+     * bracket content through as the per-type modifier -- `{x}`/`{X}`/`{p}`
+     * on integers, `{y}`/`{yes}` on bools, applied per element on slices.
+     * `{{`/`}}` print literal braces. Making your own type printable is one
+     * `format` overload in your module (the set is open).
+     *
+     * @param fmt:  format string with `{[modifiers]}` placeholders
+     * @param args: values rendered in sequence, one per placeholder
+     */
+    fn print(const fmt: slice<const char>, args...) {
         let str: string;
         string_init(str);
         defer string_destroy(str);
-        format_args(str, format, args);
+        format_args(str, fmt, args);
         writestr(str as slice<char>);
     }
-} @else {
-    fn print(format: char*, ...) {
-        let args: va_list;
-        va_start(args, format);
-        vprintf(format, args);
-        va_end(args);
-    }
-}
 
-/**
- * Like print, but appends a newline after the formatted output.
- * 
- * @todo: use `const format: struct string` instead.
- *
- * @param format: printf-style format string (stb_sprintf grammar; floats disabled)
- * @param ...:    variadic arguments matching the format specifiers
- */
-@if (NATIVE_PRINTLN) {
+    /**
+     * Like print, but appends a newline after the formatted output.
+     *
+     * @param fmt:  format string with `{[modifiers]}` placeholders
+     * @param args: values rendered in sequence, one per placeholder
+     */
     fn println(const fmt: slice<const char>, args...) {
         let str: string;
         string_init(str);
@@ -97,14 +133,6 @@ import "std/format";
         format_args(str, fmt, args);
         string_push(str, '\n');
         writestr(str as slice<char>);
-    }
-} @else {
-    fn println(format: char*, ...) {
-        let args: va_list;
-        va_start(args, format);
-        vprintf(format, args);
-        va_end(args);
-        putchar('\n' as int32);   // char literals are char; putchar takes int32
     }
 }
 

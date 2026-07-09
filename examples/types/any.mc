@@ -25,12 +25,12 @@ struct point {
 // boxes elsewhere is open, so no arm list is ever exhaustive.
 fn describe(a: any) {
     case type (a) {
-        when int32 n:       println("int32:       %d", n);
-        when float64 f:     println("float64:     %f", f);
-        when bool b:        println("bool:        %s", b ? "true" : "false");
-        when char* s:       println("char*:       %s", s);
-        when slice<char> t: println("slice<char>: %llu chars", t.length);
-        when point* p:      println("point*:      (%d, %d)", p!->x, p!->y);
+        when int32 n:       println("int32:       {}", n);
+        when float64 f:     println("float64:     {}", f);
+        when bool b:        println("bool:        {}", b ? "true" : "false");
+        when char* s:       println("char*:       {}", s);
+        when slice<char> t: println("slice<char>: {} chars", t.length);
+        when point* p:      println("point*:      ({}, {})", p!->x, p!->y);
         else:               println("some other type");
     }
 }
@@ -46,8 +46,8 @@ fn pick(text: bool) -> any {
 
 fn main() -> int32 {
     // The box is one fixed size no matter what it holds.
-    println("sizeof(any)  = %d", sizeof(any) as int32);
-    println("alignof(any) = %d", alignof(any) as int32);
+    println("sizeof(any)  = {}", sizeof(any) as int32);
+    println("alignof(any) = {}", alignof(any) as int32);
 
     // Boxing at assignment. An untyped literal anchors at its default
     // placeholder, so 5 boxes as int32 (the same rule call-site inference

@@ -44,36 +44,36 @@ fn main() -> int32 {
     // Inherited fields are the derived struct's own: name them in a
     // literal and read them with `.` directly, no base member in between.
     let p = point3 { x = 3, y = 4, z = 5 };
-    println("p = (%d, %d, %d)", p.x, p.y, p.z);
+    println("p = ({}, {}, {})", p.x, p.y, p.z);
 
     // The base is a true prefix: x and y sit at the front, z after them.
-    println("offsetof(point3, z) = %llu, sizeof(point3) = %llu",
+    println("offsetof(point3, z) = {}, sizeof(point3) = {}",
             offsetof(struct point3, z), sizeof(struct point3));
 
     // Pointer upcast: `&p as struct point*` reads the same storage, so a
     // base-only function accepts the derived value. The cast is explicit;
     // a point3* is a distinct type and never silently passes as point*.
-    println("length2 = %d", length2(&p as struct point*));
+    println("length2 = {}", length2(&p as struct point*));
 
     // Value upcast copies just the base prefix, dropping z. Only this
     // direction exists: narrowing a point back to a point3 would have to
     // read past the base, so it is a compile error.
     let q = p as struct point;
-    println("q = (%d, %d)", q.x, q.y);
+    println("q = ({}, {})", q.x, q.y);
 
     // Base defaults carry down: capacity comes from config's default, port
     // from db_config's own, verbose has no default and stays zero.
     let c = db_config { };
-    println("capacity = %d, verbose = %d, port = %d",
+    println("capacity = {}, verbose = {}, port = {}",
             c.capacity, c.verbose, c.port);
 
     // The specializations share scalar's exact layout...
-    println("sizeof: scalar %llu, meters %llu, feet %llu",
+    println("sizeof: scalar {}, meters {}, feet {}",
             sizeof(struct scalar), sizeof(struct meters), sizeof(struct feet));
     // ...but stay distinct types: passing a feet value here fails with
     // "argument 1 of 'double_meters': expected meters, got feet".
     let m = double_meters(meters { value = 21 });
-    println("doubled = %d meters", m.value);
+    println("doubled = {} meters", m.value);
 
     return 0;
 }

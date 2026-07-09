@@ -1990,7 +1990,7 @@ value: T }`) read as `e.index` / `e.value`:
 
 ```c
 for e in enumerate(&nums) {                    // nums: list<int32>
-    println("%llu: %d", e.index, e.value);     // 0: first, 1: second, ...
+    println("{}: {}", e.index, e.value);       // 0: first, 1: second, ...
 }
 for e in enumerate(xs as slice<char>) { ... }  // slices too; index is free
 ```
@@ -2043,7 +2043,7 @@ one-type unwrap to a line:
 
 ```mcc
 fn describe(a: any) {
-    with (n = a as int32) println("int32: %d", n);
+    with (n = a as int32) println("int32: {}", n);
     else println("something else");
 }
 ```
@@ -2537,15 +2537,18 @@ initialized with one at compile time.
 
 A `const` (or `@static let`) may also name a single function, giving a
 compile-time **alias** you then call by its new name. The type is inferred from
-the function, so nothing needs spelling out — even a variadic like `println`
-aliases cleanly:
+the function, so nothing needs spelling out — even a C variadic like `printf`
+aliases cleanly. (`println` itself is not a function value: its format
+parameter is a `const` slice passed by hidden reference, a contract the plain
+`fn(...)` type cannot carry — the same rule that excludes `@nonnull`
+functions.)
 
 ```c
-const log = println;          // an alias; the type is inferred
+const log = printf;           // an alias; the type is inferred
 const plus = add;
 
 fn main() -> int32 {
-    log("plus(2, 3) = %d", plus(2, 3));
+    log("plus(2, 3) = %d\n", plus(2, 3));
     return 0;
 }
 ```
@@ -3324,11 +3327,11 @@ readable):
 ```c
 fn show(a: any) {
     case type (a) {
-        when int32 n:       println("int %d", n);
-        when float64 f:     println("float %f", f);
-        when char* s:       println("string %s", s);
-        when slice<char> t: println("slice of %llu", t.length);
-        when T* ptr:        println("pointer %p", ptr);  // every other boxed pointer
+        when int32 n:       println("int {}", n);
+        when float64 f:     println("float {}", f);
+        when char* s:       println("string {}", s);
+        when slice<char> t: println("slice of {}", t.length);
+        when T* ptr:        println("pointer {p}", ptr);  // every other boxed pointer
         else:               println("something else");
     }
 }
@@ -3421,10 +3424,10 @@ by design: the name flows into a variable, a parameter, a struct field, a
 initializer.
 
 ```c
-println("%s", typename(int64));          // int64
-println("%s", typename(slice<int32>));   // slice<int32>
+println("{}", typename(int64));          // int64
+println("{}", typename(slice<int32>));   // slice<int32>
 let x: const float64 = 1.5;
-println("%s", typename(x));              // float64 — const strips
+println("{}", typename(x));              // float64 — const strips
 const NAME = typename(uint8);            // folds like sizeof does
 ```
 
@@ -4091,6 +4094,38 @@ fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
 ```
 
 See [examples/systems/formatting.mc](../examples/systems/formatting.mc).
+
+### Formatted print / println
+
+`std/io`'s `print` / `println` are the protocol's main consumer, and their
+format is `{}` placeholders — type-driven, no `%`-letters:
+
+```c
+import "std/io";
+
+println("{} + {} = {}", 2, 3, 2 + 3);      // 2 + 3 = 5
+println("mask {x}, ok {yes}", 255, true);  // mask ff, ok yes
+```
+
+The signature is `fn println(const fmt: slice<const char>, args...)`: a
+string literal adapts to `fmt` at the call site, and the
+[native variadic](#native-variadics) collects the arguments into a
+`slice<const any>`. Each `{[modifiers]}` placeholder renders the next
+argument in sequence through the `format` overload set, passing the bracket
+content verbatim as the per-type modifier — `{}` is the default rendering,
+`{x}`/`{X}`/`{p}` steer integers, `{y}`/`{yes}` steer bools, and a modifier
+applies per element on slices. `{{` and `}}` print literal braces. Because
+dispatch is the open overload set, a `format` overload you write makes your
+type printable straight through `println("{}", value)` — boxed
+[by reference](#the-any-type) with no copy.
+
+Manual field selection is planned as compile-time sugar — a positional
+`println("{0}, {0}", x)` desugaring to the sequential
+`println("{}, {}", x, x)`, no runtime machinery — and width/precision are
+planned as further `{...}` modifiers; until then, libc's `printf` remains
+the tool for width and precision (`printf("%.1f\n", f)`). The legacy
+printf-style `print`/`println` pair is kept behind `-D PRINTF_PRINTLN=1`
+for programs mid-migration.
 
 ## Reaching libc
 

@@ -10,6 +10,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Formatted `{}` `print`/`println` is now the default** — `std/io`'s
+  `print` and `println` format with `{}` placeholders, type-driven through
+  the `std/format` overload set: `println("{} + {} = {}", 2, 3, 2 + 3)`,
+  with `{[modifiers]}` passing the bracket content verbatim as the per-type
+  modifier (`{x}`/`{X}`/`{p}` on integers, `{y}`/`{yes}` on bools, per
+  element on slices) and `{{`/`}}` escaping literal braces. The signature is
+  `fn println(const fmt: slice<const char>, args...)`: a string literal
+  adapts to `fmt`, the native variadic collects the arguments into a
+  `slice<const any>`, and a `format` overload you write makes your type
+  printable straight through `println("{}", value)` (a struct boxes by
+  reference, no copy). The legacy printf-style pair is kept behind
+  `-D PRINTF_PRINTLN=1` for programs mid-migration, and libc's `printf`
+  remains the width/precision tool until the `{...}` modifier stages land
+  (positional `{n}` is planned as compile-time sugar desugaring to the
+  sequential form). The example suite, the docs, and the smoke tests all
+  speak `{}` now; the only visible renderings that changed are deliberate
+  (`true`/`false` for bools instead of printf's `1`/`0`). See
+  [Formatted print/println](docs/language.md#formatted-print--println).
+
 - **Whole-build `-Wall -Werror` in CI and the stdlib build** — the CI
   example-compile loop, the wheel smoke tests (CI's package job and
   `test.sh`), and `build.sh` now run `-Wall -Werror`, promoting all three
@@ -763,6 +782,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   [Template symbols](docs/language.md#template-symbols).
 
 ### Fixed
+
+- **A slice boxed into an `any` survives the boxing frame again** — the
+  struct-boxing-by-reference feature's aggregate test also caught slices
+  (a slice is a struct under the hood), so a slice boxed by hidden
+  reference: the payload held a pointer to a call-scoped temporary instead
+  of the 16-byte `{data, length}` view itself. Within one frame the two
+  conventions round-trip identically, which is why it passed the suite —
+  but an `any` *returned* out of the boxing frame carried a dangling
+  pointer, so `case type` recovered garbage (`t.length` read 0 or a stray
+  address). Slices now box by value again on all three paths (the coerce
+  choke point, the variadic collection, and arm recovery), and a
+  cross-frame regression test pins the convention.
 
 - **Overload resolution against a `slice<const T>` parameter** — an argument
   whose type is exactly `slice<const T>` now matches a `slice<const T>`

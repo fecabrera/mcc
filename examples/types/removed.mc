@@ -1,4 +1,5 @@
 import "std/io";
+import "libc/stdio";   // printf for the %g float rendering
 
 // `@removed("message")` is the terminal state of the availability lifecycle,
 // one step past `@deprecated`: a function goes from available, to
@@ -57,8 +58,8 @@ fn max_of<T>(a: T, b: T) -> T;
 fn main() -> int32 {
     // Migrated code builds and runs as ever; an uncalled tombstone costs
     // nothing and generates nothing.
-    println("largest(3, 7)     = %d", largest(3, 7));
-    println("largest(2.5, 1.5) = %g", largest(2.5, 1.5));
+    println("largest(3, 7)     = {}", largest(3, 7));
+    printf("largest(2.5, 1.5) = %g\n", largest(2.5, 1.5));
     return 0;
 }
 

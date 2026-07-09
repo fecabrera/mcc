@@ -45,24 +45,24 @@ fn main() -> int32 {
     // The alias-typed value flows into the underlying-typed function, and vice
     // versa -- one type, two names.
     let e: entry<int32> = make_pair(41);
-    println("entry.second = %d", value_of(e));
-    println("value_of(pair) = %d", value_of(make_pair(7)));
+    println("entry.second = {}", value_of(e));
+    println("value_of(pair) = {}", value_of(make_pair(7)));
 
     // The comparator alias, reassignable like any function value.
     let choose: cmp<int32> = less;
-    println("pick(less, 3, 9) = %d", pick(choose, 3, 9));
+    println("pick(less, 3, 9) = {}", pick(choose, 3, 9));
     choose = greater;
-    println("pick(greater, 3, 9) = %d", pick(choose, 3, 9));
+    println("pick(greater, 3, 9) = {}", pick(choose, 3, 9));
 
     // Inert parameter: both spellings are the one `int32` type, so they add.
     let a: boxed<bool> = 20;
     let b: boxed<char> = 22;
-    println("boxed<bool> + boxed<char> = %d", a + b);
+    println("boxed<bool> + boxed<char> = {}", a + b);
 
     // Defaulted alias: `record` alone is `record<int64>`.
     let r: record;
     r.second = 100;
-    println("record.second = %ld", r.second);
+    println("record.second = {}", r.second);
 
     return 0;
 }

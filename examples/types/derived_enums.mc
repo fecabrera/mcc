@@ -48,25 +48,25 @@ enum long_greeting: greeting {
 fn main() -> int32 {
     // An inherited member resolves through the derived enum and folds equal
     // to the base's spelling of it.
-    println("io_status::NOT_FOUND = %d", io_status::NOT_FOUND);
-    println("equal to io_error::NOT_FOUND: %d",
+    println("io_status::NOT_FOUND = {}", io_status::NOT_FOUND);
+    println("equal to io_error::NOT_FOUND: {}",
             (io_status::NOT_FOUND == io_error::NOT_FOUND) as int32);
 
     // Because it folds to a constant, compile-time contexts see it too:
     // here an inherited member sizes an array.
     let buf: int32[io_status::NOT_FOUND];
     buf[io_status::SUCCESS] = io_status::RETRY;
-    println("buf[SUCCESS] = %d", buf[0]);
+    println("buf[SUCCESS] = {}", buf[0]);
 
     // A derived member built from an inherited one.
-    println("wide_limits::LARGE = %d", wide_limits::LARGE);
+    println("wide_limits::LARGE = {}", wide_limits::LARGE);
 
     // The full chain: one member from each link.
-    println("full::A | full::B | full::C = %d",
+    println("full::A | full::B | full::C = {}",
             (full::A | full::B | full::C) as int32);
 
     // Inherited string members keep the pointer underlying type.
-    println("%s, then %s", long_greeting::Hi, long_greeting::Bye);
+    println("{}, then {}", long_greeting::Hi, long_greeting::Bye);
 
     return 0;
 }

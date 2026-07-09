@@ -3174,9 +3174,12 @@ class CodeGen:
         payload_ptr = self.builder.gep(
             slot, [I32_ZERO, ir.Constant(ir.IntType(32), 1)], inbounds=True
         )
-        if is_aggregate(boxed):
+        if is_aggregate(boxed) and not is_slice(boxed):
             # Box by hidden reference: a pointer fits the 16-byte payload. An
             # rvalue with no storage of its own spills to a call-scoped temp.
+            # A slice never takes this arm: its 16 bytes fill the payload
+            # exactly, and the by-value box is what lets an owning any (or a
+            # return) carry it past the boxing frame.
             if ref is None:
                 ref = self.entry_alloca(boxed.ir)
                 if over_aligned(boxed):
@@ -6082,7 +6085,7 @@ class CodeGen:
             arm_type: The arm's (``const``-stripped) recovered type.
             name: The binding name to introduce into the arm's scope.
         """
-        if is_aggregate(arm_type):
+        if is_aggregate(arm_type) and not is_slice(arm_type):
             ref_ptr = self.builder.bitcast(
                 payload_ptr, arm_type.ir.as_pointer().as_pointer()
             )
@@ -9994,9 +9997,10 @@ class CodeGen:
             return tv.value  # any to any is a plain copy, never a nesting
         ref = None
         base = strip_const(tv.type)
-        if is_aggregate(base) and isinstance(arg_expr, Var):
+        if is_aggregate(base) and not is_slice(base) and isinstance(arg_expr, Var):
             # A bare variable is side-effect-free to re-address, so share its
             # existing storage as the hidden reference rather than copy it.
+            # (A slice boxes by value -- its 16 bytes are the payload.)
             addr, t, _, _ = self.gen_addr(arg_expr, line)
             if strip_const(t).ir is base.ir:
                 ref = addr

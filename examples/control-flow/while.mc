@@ -1,4 +1,5 @@
 import "std/io";
+import "libc/stdio";   // printf: `{...}` has no width options yet
 
 // A `while` loop repeats its body as long as the condition holds -- the basic
 // counting loop. `break` leaves the loop early; `continue` skips to the next
@@ -8,7 +9,7 @@ fn main() -> int32 {
     // Count 0..4.
     let i: int32 = 0;
     while (i < 5) {
-        println("i = %d", i);
+        println("i = {}", i);
         i += 1;
     }
 
@@ -17,7 +18,7 @@ fn main() -> int32 {
     while (row <= 3) {
         let col: int32 = 1;
         while (col <= 3) {
-            print("%2d ", row * col);
+            printf("%2d ", row * col);
             col += 1;
         }
         println("");                   // newline after each row
@@ -33,7 +34,7 @@ fn main() -> int32 {
         if (k % 2 == 0) { continue; }  // skip the even numbers
         sum += k;
     }
-    println("sum of odds 1..9 = %d", sum);
+    println("sum of odds 1..9 = {}", sum);
 
     return 0;
 }

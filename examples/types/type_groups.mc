@@ -21,24 +21,24 @@ import "std/io";
 // collide at the declaration:
 //     error: ... same-pattern overloads need disjoint type groups
 fn show<T: int32 | int16 | int8>(x: T) {
-    println("signed   %d", x as int32);
+    println("signed   {}", x as int32);
 }
 
 fn show<T: uint32 | uint16 | uint8>(x: T) {
-    println("unsigned %u", x as uint32);
+    println("unsigned {}", x as uint32);
 }
 
 // Ranking gains a middle tier: concrete beats bounded beats unbounded. This
 // concrete member takes the exact int32 call away from the signed template
 // above...
 fn show(x: int32) {
-    println("signed   %d (the concrete fast path)", x);
+    println("signed   {} (the concrete fast path)", x);
 }
 
 // ...and this unbounded template ranks below both bounded ones, catching
 // only what every group excludes.
 fn show<T>(x: T) {
-    println("ungrouped (%d bytes)", sizeof(T) as int32);
+    println("ungrouped ({} bytes)", sizeof(T) as int32);
 }
 
 // Group members are checked EAGERLY: every listed member is instantiated
@@ -79,7 +79,7 @@ fn main() -> int32 {
     //     error: no overload of 'show' matches
     show(2.5);
 
-    println("width(0) = %d  (the group's default anchored the literal)",
+    println("width(0) = {}  (the group's default anchored the literal)",
             width(0));
     return 0;
 }

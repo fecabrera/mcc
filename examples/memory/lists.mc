@@ -21,7 +21,7 @@ fn main() -> int32 {
     // list_get writes the element through a `mut` parameter -- no & at the call.
     let value: int32 = 0;
     if (list_get(nums, 6, value))
-        println("length %llu, nums[6] = %d", nums.length, value);
+        println("length {}, nums[6] = {}", nums.length, value);
 
     // list_init is overloaded on its source: a (T*, n) pair copies a raw
     // array, and a const slice<T> copies any borrowed run -- so a source list
@@ -38,7 +38,7 @@ fn main() -> int32 {
     let copy: struct list<int32>;
     list_init(copy, nums as slice<int32>);        // independent deep copy
     defer list_destroy(copy);
-    println("after append: nums.length %llu, copy.length %llu",
+    println("after append: nums.length {}, copy.length {}",
             nums.length, copy.length);
 
     return 0;

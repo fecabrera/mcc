@@ -30,18 +30,18 @@ fn main() -> int32 {
     // The trivial { emit e; } is just `e`, so an untyped constant still adapts
     // to the annotated type.
     let one: uint64 = { emit 1; };
-    println("one = %llu", one);
+    println("one = {}", one);
 
-    println("pack(0xABCD, 0x1234) = 0x%llX", pack(0xABCD, 0x1234));
+    println("pack(0xABCD, 0x1234) = 0x{X}", pack(0xABCD, 0x1234));
 
-    println("classify(0)  = %s", classify(0));
-    println("classify(-7) = %s", classify(-7));
-    println("classify(42) = %s", classify(42));
+    println("classify(0)  = {}", classify(0));
+    println("classify(-7) = {}", classify(-7));
+    println("classify(42) = {}", classify(42));
 
     // Block expressions are ordinary expressions: usable as operands, in calls,
     // and nested inside one another.
     let sum: int32 = { emit 20; } + { emit 22; };
-    println("sum = %d", sum);
+    println("sum = {}", sum);
 
     // A defer inside a block runs when the block yields, before the value
     // leaves -- just like a function's defers run before its return.
@@ -50,7 +50,7 @@ fn main() -> int32 {
         let scratch: int32 = 6 * 7;
         emit scratch;
     };
-    println("n = %d", n);
+    println("n = {}", n);
 
     return 0;
 }

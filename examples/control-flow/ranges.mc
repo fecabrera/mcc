@@ -8,7 +8,7 @@ import "std/io";
 fn main() -> int32 {
     // Count 0, 1, 2, 3, 4 (end is excluded).
     for i in range(5) {
-        println("i = %d", i);
+        println("i = {}", i);
     }
 
     // A two-argument range sets the start. Sums 10..15 (10 + 11 + 12 + 13 + 14).
@@ -16,7 +16,7 @@ fn main() -> int32 {
     for n in range(10, 15) {
         sum += n;
     }
-    println("sum of [10, 15) = %d", sum);
+    println("sum of [10, 15) = {}", sum);
 
     // The bounds are ordinary expressions, and `break`/`continue` work as in any
     // loop. The element type is inferred from the bounds -- here `int32` from the
@@ -24,7 +24,7 @@ fn main() -> int32 {
     for k in range(100) {
         if (k % 2 != 0) { continue; }   // even values only
         if (k > 8) { break; }           // stop past 8
-        println("even k = %d", k);
+        println("even k = {}", k);
     }
 
     return 0;

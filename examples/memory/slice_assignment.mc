@@ -43,9 +43,9 @@ fn main() -> int32 {
     // it, and .length tracks the new literal (2, then 5). Locals are mutable by
     // default, so no extra keyword is needed to reassign.
     let s: slice<char> = "hi";
-    writestr(s); println(" (length %llu)", s.length);   // hi (length 2)
+    writestr(s); println(" (length {})", s.length);   // hi (length 2)
     s = "hello";
-    writestr(s); println(" (length %llu)", s.length);   // hello (length 5)
+    writestr(s); println(" (length {})", s.length);   // hello (length 5)
 
     // Form 2, a member. This is the headline case: it closes the gap where the
     // struct literal `command { name = "…" }` adapted but the field assignment
@@ -53,14 +53,14 @@ fn main() -> int32 {
     // into it exactly as the literal form does.
     let c: struct command;
     c.name = "listing";
-    writestr(c.name); println(" (length %llu)", c.name.length);   // listing (length 7)
+    writestr(c.name); println(" (length {})", c.name.length);   // listing (length 7)
 
     // Form 3, a deref. set_label writes `*out = "labelled";` through the
     // pointer, reborrowing the caller's slice even though `label` outlives the
     // callee's frame -- safe because the string constant is static.
     let label: slice<const char> = "unset";
     set_label(&label);
-    writestr(label); println(" (length %llu)", label.length);     // labelled (length 8)
+    writestr(label); println(" (length {})", label.length);     // labelled (length 8)
 
     // Form 4, an index. Each element of a char-slice array takes a literal by
     // assignment, the same borrow the initializer list in string_tables.mc does.
@@ -76,13 +76,13 @@ fn main() -> int32 {
 
     // A @static char-slice global reassigns at runtime the same way.
     banner = "ready";
-    writestr(banner); println(" (length %llu)", banner.length);  // ready (length 5)
+    writestr(banner); println(" (length {})", banner.length);  // ready (length 5)
 
     // A ternary of string literals adapts arm by arm, each arm keeping its own
     // length. Here the true arm wins, so s becomes the 3-char "yes".
     let verbose = true;
     s = verbose ? "yes" : "no";
-    writestr(s); println(" (length %llu)", s.length);            // yes (length 3)
+    writestr(s); println(" (length {})", s.length);            // yes (length 3)
 
     // Only string literals adapt in assignment. An ARRAY-literal assignment
     // like `rows[0] = ['x', 'y'];` or `nums = [1, 2, 3];` is a compile error:

@@ -1,4 +1,5 @@
 import "std/io";
+import "libc/stdio";   // printf: `{...}` has no precision options yet
 
 // A counter with a side effect: it returns the current index and advances the
 // caller's counter. Used below to show that a compound assignment evaluates its
@@ -23,20 +24,20 @@ fn main() -> int32 {
     x &= 0xC;  // 4
     x |= 0x1;  // 5
     x ^= 0x6;  // 3
-    println("x = %d", x);   // 3
+    println("x = {}", x);   // 3
 
     // The right-hand side is a full expression, and the result keeps the
     // target's type -- exactly like the plain assignment it stands in for.
     let total: int32 = 0;
     total += 2 * 3 + 1;     // total = total + (2 * 3 + 1)
-    println("total = %d", total);   // 7
+    println("total = {}", total);   // 7
 
     // Compound assignment works through every assignable target: a variable,
     // a pointer dereference, an array element, and a struct field.
     let n: int32 = 100;
     let p = &n;
     *p -= 58;               // through a pointer
-    println("n = %d", n);   // 42
+    println("n = {}", n);   // 42
 
     // The target is evaluated a single time. `bump(&i)` runs once, so the
     // counter advances by one and only arr[0] is incremented -- not the
@@ -45,13 +46,13 @@ fn main() -> int32 {
     let arr: int32[3] = [0, 0, 0];
     let i: int32 = 0;
     arr[bump(&i)] += 10;
-    println("arr = [%d, %d, %d], i = %d", arr[0], arr[1], arr[2], i);
+    println("arr = [{}, {}, {}], i = {}", arr[0], arr[1], arr[2], i);
 
     // float64 supports the arithmetic forms (no %= for floats).
     let f: float64 = 2.0;
     f += 0.5;
     f *= 4.0;
-    println("f = %.1f", f);   // 10.0
+    printf("f = %.1f\n", f);   // 10.0 (printf: precision needs the C formatter for now)
 
     return 0;
 }

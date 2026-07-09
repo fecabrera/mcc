@@ -25,7 +25,7 @@ fn main() -> int32 {
 
     // first(p);         // error: a plain int32* carries no proof
     let a = first(p!);   // the assertion is the whole proof, at zero cost
-    println("a = %d", a);
+    println("a = {}", a);
 
     // `p!` is legal anywhere as identity, not only in @nonnull argument
     // position:
@@ -40,7 +40,7 @@ fn main() -> int32 {
     // Lexing gotcha: `!=` lexes greedily as one token, so `p != q` is always
     // the comparison. Asserting and then comparing needs parens:
     let same = (p!) == q;
-    println("b = %d, c = %d, same = %d", b, c, same);
+    println("b = {}, c = {}, same = {}", b, c, same);
 
     dealloc(p);
     return 0;

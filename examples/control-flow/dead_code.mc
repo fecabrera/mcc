@@ -107,11 +107,11 @@ fn cleanup_demo() {
 }
 
 fn main() -> int32 {
-    println("classify(-5) = %d", classify(-5));
-    println("first_multiple(3, 10) = %d", first_multiple(3, 10));
-    println("low_digit(47) = %d", low_digit(47));
-    println("ensure_positive(5) = %d", ensure_positive(5));
-    println("magnitude(-8) = %d", magnitude(-8));
+    println("classify(-5) = {}", classify(-5));
+    println("first_multiple(3, 10) = {}", first_multiple(3, 10));
+    println("low_digit(47) = {}", low_digit(47));
+    println("ensure_positive(5) = {}", ensure_positive(5));
+    println("magnitude(-8) = {}", magnitude(-8));
     cleanup_demo();
 
     // Inside a block expression, `emit` is the divergence: it ends the
@@ -121,7 +121,7 @@ fn main() -> int32 {
         emit n * 2;
         println("emitted");     // warns: nothing runs after 'emit'
     };
-    println("doubled = %d", doubled);
+    println("doubled = {}", doubled);
 
     // THE DELIBERATE NON-CASE. Code after `while (true)` does NOT warn,
     // even when `break` is the only way out: the generator still emits the
@@ -135,7 +135,7 @@ fn main() -> int32 {
             break;
         }
     }
-    println("counted to %d", i);    // live: no warning
+    println("counted to {}", i);    // live: no warning
 
     return 0;
 }

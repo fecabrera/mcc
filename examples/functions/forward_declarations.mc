@@ -29,8 +29,8 @@ fn clamp(v: int32, lo: int32, hi: int32) -> int32;
 // name's overload set (see overloading.mc) and needs its own definition.
 
 fn main() -> int32 {
-    println("clamp(17, 0, 10) = %d", clamp(17, 0, 10));
-    println("100 C = %f F", celsius_to_fahrenheit(100.0));
+    println("clamp(17, 0, 10) = {}", clamp(17, 0, 10));
+    println("100 C = {} F", celsius_to_fahrenheit(100.0));
     return 0;
 }
 

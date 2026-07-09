@@ -46,20 +46,20 @@ fn mirror(mut p: struct point) {
 fn main() -> int32 {
     let x: int32 = 0;
     set(x);
-    println("set(x)      -> %d", x);
+    println("set(x)      -> {}", x);
 
     twice(x);
-    println("twice(x)    -> %d", x);
+    println("twice(x)    -> {}", x);
 
     let data: int32[5] = [4, 8, 15, 16, 23];
     let at: uint64 = 0;
     if (find(data as slice<const int32>, 15, at)) {
-        println("find(15)    -> index %d", at as int32);
+        println("find(15)    -> index {}", at as int32);
     }
 
     let p = point { x = 1, y = 2 };
     mirror(p);
-    println("mirror(p)   -> (%d, %d)", p.x, p.y);
+    println("mirror(p)   -> ({}, {})", p.x, p.y);
 
     // The standard library builds on mut: `swap` exchanges two values in
     // place and `replace` stores a new value while returning the old one,
@@ -67,10 +67,10 @@ fn main() -> int32 {
     let a: int32 = 3;
     let b: int32 = 9;
     swap(a, b);
-    println("swap(a, b)  -> a=%d b=%d", a, b);
+    println("swap(a, b)  -> a={} b={}", a, b);
 
     let old = replace(a, 100);
-    println("replace(a)  -> a=%d old=%d", a, old);
+    println("replace(a)  -> a={} old={}", a, old);
 
     return 0;
 }

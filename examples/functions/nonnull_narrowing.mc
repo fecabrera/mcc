@@ -59,12 +59,12 @@ fn main() -> int32 {
     // Both helpers take a plain int32*, so null is a legal argument; the
     // guards inside pick the path at runtime while proving the non-null
     // path at compile time.
-    println("show(&x) = %d, show(null) = %d", show(&x), show(null));
-    println("get(&x) = %d, get(null) = %d", get(&x), get(null));
+    println("show(&x) = {}, show(null) = {}", show(&x), show(null));
+    println("get(&x) = {}, get(null) = {}", get(&x), get(null));
 
     let y: int32 = 7;
-    println("add(&x, &y) = %d, add(&x, null) = %d", add(&x, &y), add(&x, null));
-    println("max_of(&x, &y) = %d", max_of(&x, &y));
+    println("add(&x, &y) = {}, add(&x, null) = {}", add(&x, &y), add(&x, null));
+    println("max_of(&x, &y) = {}", max_of(&x, &y));
     return 0;
 }
 

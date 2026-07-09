@@ -46,13 +46,13 @@ fn main() -> int32 {
 
     set(x);     // lvalue, and int32 cannot match T*: the mut overload wins
     set(&y);    // &y is an rvalue: the mut overload drops, the T* one wins
-    println("set(x)   -> x=%d", x);
-    println("set(&y)  -> y=%d", y);
+    println("set(x)   -> x={}", x);
+    println("set(&y)  -> y={}", y);
 
     // A literal is an rvalue, so only the by-value `pick` is viable.
-    println("pick(3)  -> overload %d", pick(3));
+    println("pick(3)  -> overload {}", pick(3));
 
-    println("label(c) -> overload %d", describe('q'));
+    println("label(c) -> overload {}", describe('q'));
 
     // The argument is evaluated exactly once, before the winner is known:
     // because SOME candidate marks the position `mut`, the lvalue's address
@@ -62,7 +62,7 @@ fn main() -> int32 {
     let a: int32[2] = [0, 0];
     let i: int32 = 0;
     set(a[advance(i)]);
-    println("once     -> a=[%d, %d] i=%d", a[0], a[1], i);
+    println("once     -> a=[{}, {}] i={}", a[0], a[1], i);
 
     return 0;
 }

@@ -34,25 +34,25 @@ fn main() -> int32 {
     // Alias and underlying type combine freely -- they are the same type.
     let a: word = 20;
     let b: int32 = 22;
-    println("word + int32 = %d", a + b);
+    println("word + int32 = {}", a + b);
 
     // A function-pointer alias, reassignable like any variable.
     let op: binop = add;
-    println("apply(add) = %d", apply(op, 10, 3));
+    println("apply(add) = {}", apply(op, 10, 3));
     op = sub;
-    println("apply(sub) = %d", apply(op, 10, 3));
+    println("apply(sub) = {}", apply(op, 10, 3));
 
     // Pointer alias: `bytes` is uint8*, so a string literal fits.
     let s: bytes = "aliased";
-    println("bytes = %s", s);
+    println("bytes = {}", s as char*);
 
     // Struct-pointer alias passed through.
     let pt = struct point { x = 3, y = 4 };
-    println("dist2 = %d", dist2(&pt));
+    println("dist2 = {}", dist2(&pt));
 
     // `type` used as a field name, with an alias-typed field beside it.
     let t = struct tagged { type = 7, value = 42 };
-    println("tagged { type = %d, value = %d }", t.type, t.value);
+    println("tagged {{ type = {}, value = {} }}", t.type, t.value);
 
     return 0;
 }

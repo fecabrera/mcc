@@ -19,19 +19,19 @@ fn main() -> int32 {
         i += 1;
     }
 
-    println("front %d", queue_peek(q));
+    println("front {}", queue_peek(q));
 
     // for-in walks front to back (oldest to newest) without consuming.
     print("queue (walk):  ");
     for v in &q {
-        print("%d ", v);                   // 1 2 3 4 5
+        print("{} ", v);                   // 1 2 3 4 5
     }
     println("");
 
     // Popping returns the oldest element first.
     print("queue (FIFO):  ");
     until (queue_is_empty(q)) {
-        print("%d ", queue_pop(q));        // 1 2 3 4 5
+        print("{} ", queue_pop(q));        // 1 2 3 4 5
     }
     println("");
 

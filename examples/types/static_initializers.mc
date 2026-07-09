@@ -66,17 +66,17 @@ union boxed<T> {
 fn main() -> int32 {
     // Structs read back field by field; a whole-value copy works too.
     let here = corner;
-    println("corner      = (%d, %d)", here.x, here.y);
-    println("config      = limit %d, used %d", setup.limit, setup.used);
-    println("unit box    = corner (%d, %d), depth %d",
+    println("corner      = ({}, {})", here.x, here.y);
+    println("config      = limit {}, used {}", setup.limit, setup.used);
+    println("unit box    = corner ({}, {}), depth {}",
             unit.corner.x, unit.corner.y, unit.sizes[2]);
 
     // Union members reinterpret the shared bytes, folded or not.
-    println("whole.i     = %d", whole.i as int32);
-    println("byte.b      = %d", byte.b as int32);
-    println("blank.i     = %d", blank.i as int32);
-    println("placed.at   = (%d, %d)", placed.at.x, placed.at.y);
-    println("held.typed  = %d", held.typed);
+    println("whole.i     = {}", whole.i as int32);
+    println("byte.b      = {}", byte.b as int32);
+    println("blank.i     = {}", blank.i as int32);
+    println("placed.at   = ({}, {})", placed.at.x, placed.at.y);
+    println("held.typed  = {}", held.typed);
 
     return 0;
 }

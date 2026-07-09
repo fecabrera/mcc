@@ -40,8 +40,8 @@ fn main() -> int32 {
     // see, the postfix `p!` assertion is the escape hatch: see
     // nonnull_assert.mc.
 
-    println("a = %d, b = %d, head = %c", a, b, c as int32);
-    println("sum = %d", a + b + (c as int32 - 64)); // 40 + 1 + 1 = 42
+    println("a = {}, b = {}, head = {}", a, b, c as char);
+    println("sum = {}", a + b + (c as int32 - 64)); // 40 + 1 + 1 = 42
     return 0;
 }
 

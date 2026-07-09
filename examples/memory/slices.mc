@@ -47,21 +47,21 @@ fn main() -> int32 {
     arr[0] = 1; arr[1] = 2; arr[2] = 3; arr[3] = 4;
     
     let view = arr as slice<int32>;
-    println("array view: length %llu, first %d, last %d",
+    println("array view: length {}, first {}, last {}",
             view.length, view[0], view[view.length - 1]);
-    println("sum %d", sum(view));        // 10
+    println("sum {}", sum(view));        // 10
 
     // The slice borrows the array, so writes through it are visible in arr.
     double_all(view);
-    println("after double_all: arr[0] %d, arr[3] %d", arr[0], arr[3]);  // 2, 8
+    println("after double_all: arr[0] {}, arr[3] {}", arr[0], arr[3]);  // 2, 8
 
     // A mutable slice<int32> widens implicitly to the read-only slice<const T>
     // form, so `view` passes straight to a function that takes slice<const int32>.
-    println("largest %d", largest(view));    // 8
+    println("largest {}", largest(view));    // 8
 
     // ...or borrow a read-only view directly.
     let readonly = arr as slice<const int32>;
-    println("readonly largest %d", largest(readonly));
+    println("readonly largest {}", largest(readonly));
 
     // Borrow an owned list<T>: `as slice<T>` reads {data, length} and drops
     // the list's capacity. The slice tracks the elements, not the list object.
@@ -77,10 +77,10 @@ fn main() -> int32 {
     let s = nums as slice<int32>;
     print("list view: ");
     for v in s {                          // 1 4 9 16 25
-        print("%d ", v);
+        print("{} ", v);
     }
     println("");
-    println("sum %d (length %llu)", sum(s), s.length);       // 55
+    println("sum {} (length {})", sum(s), s.length);       // 55
 
     list_destroy(nums);
     return 0;

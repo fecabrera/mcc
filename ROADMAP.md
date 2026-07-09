@@ -2298,21 +2298,25 @@ already do).
 
 ### Strings and formatting
 
-- [ ] Formatted `print`/`println` — Rust/Python-style `{}` placeholders,
+- [x] Formatted `print`/`println` — Rust/Python-style `{}` placeholders,
       type-driven (no `%`-letters), written in mcc over the
       [native variadic](#functions-and-methods) `slice<const any>`; enables
       compile-time format checking later. Per-type rendering is not
       per-struct `format` methods but the shipped stdlib `format` overload
       set below, per the [open overload sets](#functions-and-methods)
-      rule that protocols are free-function overload sets. The
-      signature is `fn println(format: slice<const uint8>, args: slice<const any>)`:
-      a string literal adapts to `format` at the call site (so `println("{}", a)`
+      rule that protocols are free-function overload sets. The shipped
+      signature is `fn println(const fmt: slice<const char>, args...)`: a
+      string literal adapts to `fmt` at the call site (so `println("{}", a)`
       works directly), and an owned `struct string` borrows in with
-      `str as slice<uint8>` — both via the
-      [`slice<T>`](docs/language.md#slices) borrowing rules:
-  - [x] printf-style `%` formatting — today's `print`/`println` in the
-        [standard library](README.md#standard-library), which the `{}` model
-        will supersede
+      `str as slice<char>` — both via the
+      [`slice<T>`](docs/language.md#slices) borrowing rules. **This is now
+      the default `print`/`println`**; the follow-ups nested below are the
+      compile-time stages:
+  - [x] printf-style `%` formatting — the previous `print`/`println` in the
+        [standard library](README.md#standard-library), superseded by the
+        `{}` model and kept behind `-D PRINTF_PRINTLN=1` for programs
+        mid-migration; libc's `printf` stays the width/precision tool until
+        the modifiers stage below lands
   - [x] the stdlib `format` overload-set module — `lib/std/format.mc`, the
         type-driven per-type rendering layer the placeholder stages below
         dispatch into: a
@@ -2322,25 +2326,48 @@ already do).
         `float64`/`bool`/`char`/`char*`/`slice<char>`, a generic
         `slice<T>` list-renderer, and an unbounded `<typename>` fallback
         rendering the type's name in angle brackets; integer modifiers
-        `:x`/`:X`/`:p`, bool `:y`/`:yes`, and slices apply the modifier
+        `x`/`X`/`p`, bool `y`/`yes`, and slices apply the modifier
         per element. The formatting member of the overload-set protocol
         family, riding the shipped
         [open overload sets](#functions-and-methods): the set is open,
         so making a type printable is one `format` overload written in
         the user's own module
-  - [ ] formatting over the `slice<const uint8>` format with bare/sequential and
-        positional placeholders (`"{d} {f} {x} {s}"`, `"{0:d} {1:f} {2:x} {3:s}"`),
-        parsed at runtime
+  - [x] formatting over the format string with bare/sequential
+        `{[modifiers]}` placeholders, parsed at runtime: each `{}` renders
+        the next argument in sequence through the `format` set, the bracket
+        content travels verbatim as the per-type modifier (`{x}`, `{yes}`),
+        and `{{`/`}}` escape literal braces
+  - [ ] positional placeholders — `{n}` selecting an argument manually, as
+        compile-time sugar over the sequential form:
+        `println("{0}, {0}", x)` desugars to `println("{}, {}", x, x)`
+        (duplicating/reordering the arguments at the call site), so the
+        runtime parser stays sequential-only. In the positional form a `:`
+        separates the index from the modifiers — `println("{0} {0:x}", n)`
+        desugars to `println("{} {x}", n, n)`, the colon dropping with the
+        index. One format string commits to one placeholder style: manual
+        numbering (`{n}`), auto numbering (`{}`), and interpolation
+        (`{expr}`, below) cannot mix — a mixed string is a compile error,
+        not a guess at the intent. Pairs with the compile-time format
+        checking that string interpolation (below) also builds on
   - [ ] format modifiers — precision and zero-padded width (`.Nf`, `Nx`, `0Nx`,
         `0x0Nx`, `Ns`, and `sN`), e.g. `{.8f}`, `{08x}`, `{0x08x}`, `{20s}`,
         `{s20}`; the per-type channel these travel through (the `format`
-        set's `modifier` parameter, already routing `:x`/`:X`/`:p` and
-        `:y` per type) shipped with the baseline module above
-- [ ] String interpolation — `println("x = {x}")`: a string literal with
-      `{expr}` holes desugars at compile time into the formatted
+        set's `modifier` parameter, already routing `x`/`X`/`p` and
+        `y` per type) shipped with the baseline module above
+- [ ] String interpolation — `println(f"x = {x}")`: an `f`-prefixed string
+      literal with `{expr}` holes desugars at compile time into the formatted
       `println("{}", ...)` call above (`{{`/`}}` escape a literal brace), so it
-      is surface syntax only — no new runtime. Depends on formatted print
-      (above) and the [native variadics](#functions-and-methods) it builds on
+      is surface syntax only — no new runtime. The prefix is what keeps the
+      two brace grammars apart: in a plain literal `{x}` is a *modifier*
+      placeholder (hex the next argument), while in an `f`-string `{x}` is
+      the *expression* `x` — `println("{x}", x)` and `println(f"{x}")` are
+      both meaningful and unambiguous. The inspector form `{=n}` desugars to
+      the labelled `println("n = {}", n)`, printing the expression's own
+      spelling next to its value. An interpolated string is its own
+      placeholder style: it does not mix with the auto-numbered `{}` or
+      manually numbered `{n}` forms in one format string (a mixed string is
+      a compile error). Depends on formatted print (above) and the
+      [native variadics](#functions-and-methods) it builds on
 
 ### Tooling and C interop
 

@@ -126,6 +126,30 @@ def test_each_boxable_category_round_trips():
     ) == 0
 
 
+def test_returned_any_slice_survives_the_boxing_frame():
+    # A slice boxes BY VALUE -- its {data, length} exactly fill the 16-byte
+    # payload -- so an any returned out of the boxing frame still carries the
+    # view. (A by-reference box here would hand back a pointer to a temp that
+    # died with the callee: recovery inside one frame cannot tell the two
+    # conventions apart, so this cross-frame read is the distinguishing test.)
+    assert run(
+        """
+        fn pick() -> any {
+            return "chosen" as slice<char>;
+        }
+        fn main() -> int32 {
+            let a = pick();
+            case type (a) {
+                when slice<char> t:
+                    return t.length == 6 and t[0] == 'c' ? 0 : 1;
+                else: return 2;
+            }
+            return 3;
+        }
+        """
+    ) == 0
+
+
 def test_untyped_literal_anchors_as_int32():
     # `5` boxes at its adaptable default placeholder -- int32, the same rule
     # call-site inference uses -- so the int64 arm must not match.

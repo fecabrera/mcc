@@ -22,7 +22,7 @@ fn process(n: int32) -> int32 {
     buffer[0] = 'O';
     buffer[1] = 'K';
     buffer[2] = 0;
-    println("%s", buffer);                     // both buffers freed as this returns
+    println("{}", buffer as char*);           // both buffers freed as this returns
     return n * 2;
 }
 
@@ -37,7 +37,7 @@ fn build_labels(n: uint64) {
         let i: uint64 = 0;
         while (i < labels.length) {
             defer i += 1;                 // bump at the end of each iteration
-            println("  free %s", labels.data![i]);
+            println("  free {}", labels.data![i] as char*);
             dealloc(labels.data![i]);
         }
         list_destroy(labels);               // runs after the loop, last of all
@@ -51,7 +51,7 @@ fn build_labels(n: uint64) {
         list_push(labels, label);
         i += 1;
     }
-    println("built %llu labels", labels.length);
+    println("built {} labels", labels.length);
     // falling off the end here runs the cleanup block above
 }
 
@@ -62,14 +62,14 @@ fn main() -> int32 {
         println("goodbye");
     }
 
-    println("process(7)  -> %d", process(7));
-    println("process(-1) -> %d", process(-1));
+    println("process(7)  -> {}", process(7));
+    println("process(-1) -> {}", process(-1));
 
     // A defer inside a loop body runs every iteration, at the end of that pass.
     let i: int32 = 0;
     while (i < 3) {
         defer print("| ");          // marks the end of each iteration
-        print("step %d ", i);
+        print("step {} ", i);
         i += 1;
     }
     println("");

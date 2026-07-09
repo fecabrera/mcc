@@ -68,9 +68,9 @@ fn main() -> int32 {
     // The directives above produced no code: passing asserts are invisible at
     // runtime. Had any condition been false, this file would not have compiled
     // at all -- so reaching `main` proves every invariant held.
-    println("Header is %llu bytes, %llu-byte aligned, built for %s",
+    println("Header is {} bytes, {}-byte aligned, built for {}",
             sizeof(struct Header), alignof(struct Header), ARCH_NAME);
-    println("protocol version %d, max payload %d", Version::V2, MAX_PAYLOAD);
+    println("protocol version {}, max payload {}", Version::V2, MAX_PAYLOAD);
     return 0;
 }
 

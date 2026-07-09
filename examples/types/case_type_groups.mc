@@ -26,13 +26,13 @@ fn describe(a: any) {
         // copy, and width(int8) in the int8 copy. The `as int32` cast rides
         // the C default argument promotions into varargs printf's %d.
         when int32, int16, int8 n:
-            println("signed   %d (width %d)", n as int32, width(n));
+            println("signed   {} (width {})", n as int32, width(n));
 
         // The unsigned group shares a %u body. A type may appear once across
         // the whole switch: listing uint16 again, here or in another arm,
         // is the compile error `duplicate case type arm for uint16`.
         when uint32, uint16, uint8 u:
-            println("unsigned %u", u as uint32);
+            println("unsigned {}", u as uint32);
 
         // A list does not close the universe, so `else` is still mandatory.
         else:

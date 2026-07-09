@@ -31,14 +31,14 @@ fn main() -> int32 {
     let f: float64 = 2.5;
     let b: bool = true;
 
-    println("describe(n)        -> member %d", describe(n));   // exact int32: concrete wins
-    println("describe(f)        -> member %d", describe(f));   // exact float64: concrete wins
-    println("describe(b)        -> member %d", describe(b));   // no bool member: the generic covers it
-    println("describe(&f)       -> member %d", describe(&f));  // generic tier, T* beats T
+    println("describe(n)        -> member {}", describe(n));   // exact int32: concrete wins
+    println("describe(f)        -> member {}", describe(f));   // exact float64: concrete wins
+    println("describe(b)        -> member {}", describe(b));   // no bool member: the generic covers it
+    println("describe(&f)       -> member {}", describe(&f));  // generic tier, T* beats T
 
     // Explicit type arguments select among the GENERIC candidates only:
     // the concrete int32 member is skipped even on its exact type.
-    println("describe<int32>(9) -> member %d", describe<int32>(9));
+    println("describe<int32>(9) -> member {}", describe<int32>(9));
 
     return 0;
 }

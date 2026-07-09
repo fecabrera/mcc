@@ -51,36 +51,36 @@ struct pixel {
 
 fn main() -> int32 {
     // A member folds to its underlying value.
-    println("Color::Green = %d", Color::Green);
+    println("Color::Green = {}", Color::Green);
 
     // The enum used as a parameter type.
-    println("name_of(Blue) = %s", name_of(Color::Blue));
+    println("name_of(Blue) = {}", name_of(Color::Blue));
 
     // An array typed by the enum.
     let palette: Color[3] = [Color::Red, Color::Green, Color::Blue];
     let i: int32 = 0;
     while (i < 3) {
-        println("palette[%d] = %s", i, name_of(palette[i]));
+        println("palette[{}] = {}", i, name_of(palette[i]));
         i += 1;
     }
 
     // uint64 flags, combined with bitwise OR and tested with AND.
     let perms: Flags = (Flags::A | Flags::B) as Flags;
     if ((perms & Flags::A) != Flags::None) {
-        println("flag A is set; High = %llu", Flags::High);
+        println("flag A is set; High = {}", Flags::High);
     }
 
     // String-valued members.
-    println("Msg::Hi = %s, Msg::Bye = %s", Msg::Hi, Msg::Bye);
+    println("Msg::Hi = {}, Msg::Bye = {}", Msg::Hi, Msg::Bye);
 
     // A member defined in terms of an earlier one.
-    println("Step::Third = %d", Step::Third);
+    println("Step::Third = {}", Step::Third);
 
     // The enum as a struct field.
     let p: struct pixel;
     p.color = Color::Green;
     p.alpha = 255;
-    println("pixel is %s, alpha %d", name_of(p.color), p.alpha);
+    println("pixel is {}, alpha {}", name_of(p.color), p.alpha);
 
     return 0;
 }

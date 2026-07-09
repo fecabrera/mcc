@@ -206,13 +206,13 @@ fn main() -> int32 {
     let p = point { x = 3, y = 7 };
 
     let hi = max(p.x, p.y);     // type inferred: int32
-    println("max = %d", hi);
+    println("max = {}", hi);
 
     let i: int32 = 0;
     while (i < hi) {
         defer i += 1;            // runs at the end of every iteration
         if (i % 2 == 0) {
-            println("%d is even", i);
+            println("{} is even", i);
         }
     }
     return 0;
@@ -233,14 +233,16 @@ to fizzbuzz and a prime sieve. See the [index](examples/README.md).
 
 The [lib/](lib/) root is on the import search path by default, so its modules
 import under their `std/` (mcc modules) or `libc/` (C bindings) prefix. For
-everyday output, `import "std/io";` provides `print` and `println`, printf-style
-formatting written in mcc on top of the libc bindings:
+everyday output, `import "std/io";` provides `print` and `println` — `{}`
+placeholders rendered type-driven through the
+[formatting protocol](docs/language.md#formatted-print--println), written
+in mcc on top of the libc bindings:
 
 ```c
 import "std/io";
 
 fn main() -> int32 {
-    println("answer = %d", 42);
+    println("answer = {}", 42);
     return 0;
 }
 ```

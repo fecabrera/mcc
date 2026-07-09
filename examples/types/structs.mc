@@ -27,26 +27,26 @@ fn main() -> int32 {
     // Build a struct value in one go with a struct literal; omitted fields are
     // zero. (See struct_literals.mc for the full tour.)
     let start = struct point { x = 3, y = 4 };
-    println("start = (%d, %d)", start.x, start.y);
+    println("start = ({}, {})", start.x, start.y);
 
     // Heap-allocate a struct; `->` reads and writes fields through a pointer.
     let p = alloc<struct point>(1)!;
     *p = start;             // copy the value in...
     p->y = 4;               // ...or set fields one at a time through the pointer
-    println("point = (%d, %d)", p->x, p->y);
-    println("sizeof(point) = %llu", sizeof(struct point));
+    println("point = ({}, {})", p->x, p->y);
+    println("sizeof(point) = {}", sizeof(struct point));
 
     // sizeof / alignof / offsetof are compile-time uint64 layout constants.
     // The int32 `value` pads out to the pointer's 8-byte alignment, so `next`
     // sits at offset 8 and the whole node is 16 bytes.
-    println("sizeof(node<int32>) = %llu, alignof = %llu, next @ %llu",
+    println("sizeof(node<int32>) = {}, alignof = {}, next @ {}",
             sizeof(struct node<int32>), alignof(struct node<int32>),
             offsetof(struct node<int32>, next));
 
     // Dereferencing copies the struct; `.` accesses fields of a value.
     let q = *p;
     q.x = 30;
-    println("q = (%d, %d), p untouched = (%d, %d)", q.x, q.y, p->x, p->y);
+    println("q = ({}, {}), p untouched = ({}, {})", q.x, q.y, p->x, p->y);
     dealloc(p);
 
     // A linked list of three nodes, terminated by null. Each node's value is
@@ -62,7 +62,7 @@ fn main() -> int32 {
     // constant, so there is nothing to infer T from -- spell it out.
     *c = struct node<int32> { value = 4, next = null };
 
-    println("list sum = %d", sum_list(a));
+    println("list sum = {}", sum_list(a));
     dealloc(a); dealloc(b); dealloc(c);
 
     return 0;

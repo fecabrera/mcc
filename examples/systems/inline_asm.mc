@@ -23,7 +23,7 @@ import "std/io";
 }
 
 fn main() -> int32 {
-    println("byteswap32(0x11223344) = %x", byteswap32(0x11223344));   // 44332211
+    println("byteswap32(0x11223344) = {x}", byteswap32(0x11223344));   // 44332211
 
     // The `@asm(...)` expression form: operands in parentheses, an optional
     // `-> type` output, one string literal per instruction. `@if` as a
@@ -35,7 +35,7 @@ fn main() -> int32 {
     } @else {
         let sum = a + b;
     }
-    println("a + b = %lld", sum);
+    println("a + b = {}", sum);
 
     return 0;
 }

@@ -51,7 +51,7 @@ fn counter_init(mut self: struct counter, label: slice<const char>) {
 // typed variable disambiguates.
 
 fn show(name: char*, const c: struct counter) {
-    println("%s: value=%d step=%d", name, c.value, c.step);
+    println("{}: value={} step={}", name, c.value, c.step);
 }
 
 fn main() -> int32 {

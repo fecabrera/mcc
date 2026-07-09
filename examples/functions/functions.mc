@@ -5,8 +5,8 @@ import "std/io";
 fn main() -> int32 {
     greet();
 
-    println("gcd(252, 105) = %d", gcd(252, 105));
-    println("fib(10)       = %d", fib(10));
+    println("gcd(252, 105) = {}", gcd(252, 105));
+    println("fib(10)       = {}", fib(10));
     
     if (is_even(10)) {
         println("10 is even");

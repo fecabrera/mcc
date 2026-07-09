@@ -1,5 +1,6 @@
 import "std/format";
 import "std/string";
+import "std/io";
 import "libc/stdio";
 
 // The stdlib `format` module: the formatting protocol's baseline overload
@@ -104,6 +105,11 @@ fn main() -> int32 {
     format(line, ' ', "");
     format(line, &p, "x");                   // (3, ff)
     show("point:", line);
+
+    // println is this same set behind `{}` placeholders: each `{[modifiers]}`
+    // renders the next argument, the bracket content arriving verbatim as the
+    // modifier. The point* overload above answers the last placeholder.
+    println("println:  {} {x} {yes} {x}", -4, 255 as uint8, true, &p);
 
     return 0;
 }

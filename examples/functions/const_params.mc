@@ -38,16 +38,16 @@ fn main() -> int32 {
     let a = struct vec3 { x = 1.0, y = 2.0, z = 2.0 };
     let b = struct vec3 { x = 0.0, y = 3.0, z = 4.0 };
 
-    println("length_squared = %d", length_squared(a) as int32);   // 1+4+4 = 9
-    println("dot = %d", dot(a, b) as int32);                       // 0+6+8 = 14
+    println("length_squared = {}", length_squared(a) as int32);   // 1+4+4 = 9
+    println("dot = {}", dot(a, b) as int32);                       // 0+6+8 = 14
 
     let c = struct counter { hits = 0 };
     record(&c);
     record(&c);
     record(&c);
-    println("hits = %d", c.hits as int32);                         // 3
+    println("hits = {}", c.hits as int32);                         // 3
 
-    println("scaled = %d", scaled(6, 7) as int32);                 // 42
+    println("scaled = {}", scaled(6, 7) as int32);                 // 42
     return 0;
 }
 

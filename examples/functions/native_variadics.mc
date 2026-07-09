@@ -15,8 +15,8 @@ fn sum(label: char*, args...) -> int32 {
     for a in args {
         case type (a) {
             when int32 v: n = n + v;
-            when char* s: println("%s: note %s", label, s);
-            else:         println("%s: an extra with no arm", label);
+            when char* s: println("{}: note {}", label, s);
+            else:         println("{}: an extra with no arm", label);
         }
     }
     return n;
@@ -31,14 +31,14 @@ fn count(args: slice<const any>) -> uint64 {
 fn main() -> int32 {
     // Three extras, each boxed where the call is made: the two int32s hit
     // the first arm, the string literal lands under the char* tag.
-    println("total = %d", sum("mix", 1, 2, "three"));
+    println("total = {}", sum("mix", 1, 2, "three"));
 
     // Zero extras: args is an empty slice (length 0), the loop runs 0 times.
-    println("empty = %d", sum("empty"));
+    println("empty = {}", sum("empty"));
 
     // The explicit form, with and without extras.
-    println("count = %llu", count(4, 5, 6));
-    println("none  = %llu", count());
+    println("count = {}", count(4, 5, 6));
+    println("none  = {}", count());
 
     // v1: a collecting function cannot be overloaded or share a generic
     // name, and a call through a fn(...) value passes the slice explicitly.

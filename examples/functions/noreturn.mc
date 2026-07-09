@@ -14,7 +14,7 @@ import "std/io";
 // body is the compile error "cannot return from @noreturn function 'fail'
 // (it promises never to return)".
 @noreturn fn fail(msg: char*, code: int32) {
-    println("fatal: %s", msg);
+    println("fatal: {}", msg);
     exit(code);   // itself @noreturn: nothing runs past this line
 }
 
@@ -54,10 +54,10 @@ fn main() -> int32 {
     // The diverging paths exist to be dead: every call below stays on the
     // returning side, so the program runs to completion and exits 0.
     let bytes: uint8[4] = [10, 20, 30, 40];
-    println("read_byte(bytes, 4, 2) = %u", read_byte(bytes, 4, 2));
+    println("read_byte(bytes, 4, 2) = {}", read_byte(bytes, 4, 2));
 
     let x: int32 = 42;
-    println("checked_first(&x) = %d", checked_first(&x));
+    println("checked_first(&x) = {}", checked_first(&x));
     return 0;
 }
 

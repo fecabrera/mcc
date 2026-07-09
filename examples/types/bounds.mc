@@ -55,7 +55,7 @@ fn main() -> int32 {
 
     // Every value in shape's lineage satisfies `extends shape`: the bound
     // struct itself, a direct subtype, and a transitive one.
-    println("areas: shape %d, circle %d, disc %d",
+    println("areas: shape {}, circle {}, disc {}",
             describe(&s), describe(&c), describe(&d));
 
     // The bounded overload claims the subtypes; a struct outside the lineage
@@ -63,11 +63,11 @@ fn main() -> int32 {
     // `describe` instead would be a compile error at the call:
     //     error: label does not satisfy the bound shape of 'describe'.)
     let label = "hi";
-    println("tag: circle %d (bounded), string-ptr %d (fallback)",
+    println("tag: circle {} (bounded), string-ptr {} (fallback)",
             tag(&c), tag(&label));
 
     // The default anchored the measurement to circle.
-    println("footprint<circle> = %d bytes", footprint());
+    println("footprint<circle> = {} bytes", footprint());
     return 0;
 }
 
