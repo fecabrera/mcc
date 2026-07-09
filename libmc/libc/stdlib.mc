@@ -127,6 +127,63 @@ const RAND_MAX = 2147483647;   // the largest value rand() can return
  */
 @extern fn llabs(n: int64) -> int64;
 
+/**
+ * The quotient and remainder of an `int` division, as returned by div. Crosses
+ * the C boundary by value (two `int` fields, eight bytes).
+ */
+struct div_t {
+    quot: int32;   // the quotient numer / denom
+    rem: int32;    // the remainder numer % denom
+}
+
+/**
+ * The quotient and remainder of a `long` division, as returned by ldiv (two
+ * 64-bit fields to match the LP64 `long` the other bindings assume).
+ */
+struct ldiv_t {
+    quot: int64;   // the quotient numer / denom
+    rem: int64;    // the remainder numer % denom
+}
+
+/**
+ * The quotient and remainder of a `long long` division, as returned by lldiv.
+ */
+struct lldiv_t {
+    quot: int64;   // the quotient numer / denom
+    rem: int64;    // the remainder numer % denom
+}
+
+/**
+ * Divides numer by denom, returning the quotient and remainder together. The
+ * quotient is rounded toward zero; denom must be non-zero.
+ *
+ * @param numer: dividend
+ * @param denom: divisor (must be non-zero)
+ *
+ * @return a div_t whose quot is numer / denom and rem is numer % denom
+ */
+@extern fn div(numer: int32, denom: int32) -> struct div_t;
+
+/**
+ * The long form of div.
+ *
+ * @param numer: dividend
+ * @param denom: divisor (must be non-zero)
+ *
+ * @return an ldiv_t whose quot is numer / denom and rem is numer % denom
+ */
+@extern fn ldiv(numer: int64, denom: int64) -> struct ldiv_t;
+
+/**
+ * The long long form of div.
+ *
+ * @param numer: dividend
+ * @param denom: divisor (must be non-zero)
+ *
+ * @return an lldiv_t whose quot is numer / denom and rem is numer % denom
+ */
+@extern fn lldiv(numer: int64, denom: int64) -> struct lldiv_t;
+
 /***************************************
  * String conversion
  ***************************************/

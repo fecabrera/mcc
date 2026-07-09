@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from mcc.errors import LangError
-from helpers import compile_ir
+from helpers import compile_ir, run
 
 ROOT = Path(__file__).resolve().parents[1]
 AARCH64 = "arm64-apple-darwin"
@@ -597,3 +597,28 @@ def test_struct_abi_round_trips_through_linked_c_sysv(tmp_path):
     # This is the only linked oracle for the SysV eightbyte coercions and the
     # byval demotion -- Win64 has no runner and stays IR-shape-tested only.
     assert _round_trip(tmp_path) == 99
+
+
+# The libc div/ldiv/lldiv bindings are the real-world payoff of struct-by-value
+# @extern support: each returns its quotient and remainder together. These call
+# real libc through the JIT, so they exercise the host's ABI (AArch64 here, SysV
+# on the ubuntu leg) end to end -- div_t is one 8-byte GPR, ldiv_t/lldiv_t are a
+# 16-byte register pair.
+def test_libc_div_family_returns_structs_by_value():
+    assert run(
+        """
+        import "libc/stdlib";
+        fn main() -> int32 {
+            let d: struct div_t = div(17, 5);
+            let l: struct ldiv_t = ldiv(1000, 7);
+            let ll: struct lldiv_t = lldiv(45, 6);
+            if (d.quot != 3) return 10;
+            if (d.rem != 2) return 11;
+            if (l.quot != 142) return 12;
+            if (l.rem != 6) return 13;
+            if (ll.quot != 7) return 14;
+            if (ll.rem != 3) return 15;
+            return 42;
+        }
+        """
+    ) == 42
