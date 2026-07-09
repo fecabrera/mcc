@@ -833,10 +833,10 @@ already do).
       the door to a statically-typed variadic later (no erasure), if wanted
 - [ ] Literal adaptation to `slice<T>` — a literal in a slice-typed slot
       borrows from context, the compiler materializing the backing storage.
-      (Known gap, family-wide: plain **assignment** to an existing slice
-      variable — `s = "hi";` — is not an adaptation position even in the
-      shipped string-literal form; the positions are argument / `let` /
-      `return` / array element / `@static`):
+      The shipped positions are argument / `let` / `return` / array element /
+      `@static` / struct field; one position in the family remains, plain
+      **assignment** to an existing slice variable (`s = "hi";`), tracked as
+      the last sub-item below:
   - [x] string literals — `"hi"` adapts to a `slice<char>`/`slice<const char>`
         expected by a `let` or a parameter (NUL dropped), borrowing the string
         constant's bytes; implemented, see [Slices](docs/language.md#slices)
@@ -917,6 +917,20 @@ already do).
           `f([1, 2, 3])` cannot infer `T`; pass `f<int32>(...)` or a companion
           argument), so element anchoring stays a possible later extension;
           implemented, see [Slices](docs/language.md#slices)
+  - [ ] assignment position — plain assignment to an existing slice variable
+        (`s = "hi";`), the last position in the family. String-literal
+        assignment is coherent: the literal repoints `s` at its global string
+        constant (static lifetime, no backing-storage or lifetime question),
+        exactly the borrow the `let`/argument/element positions already do, and
+        safe even through a pointer (`*out = "hi";`); the work is to extend the
+        same string-literal sink to the assignment path (deref-assign included).
+        **Not planned: array-literal assignment** (`s = [1, 2, 3];`) — the
+        materialized backing is frame-local, but an assignment target can
+        outlive the current frame (a `mut slice<T>*` out-parameter, or a
+        variable declared in an outer scope), so the borrowed view would
+        dangle, the same lifetime hazard that rejects the direct
+        `return [..] as slice<T>;` spelling; `let`/argument stay safe only
+        because the binding and its backing share a frame
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:
