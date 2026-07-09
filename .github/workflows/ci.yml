@@ -68,12 +68,25 @@ jobs:
         # the next step, not linkable for the host here. Basenames are unique
         # across folders, so the -o output names never collide. -Werror keeps
         # the examples warning-clean (the decided default: off in normal
-        # builds, on in CI).
+        # builds, on in CI); -Wextern-nonnull additionally enforces the
+        # @nonnull-annotated libc binding surface at the strict posture, so a
+        # possibly-null argument into an annotated str*/mem* slot fails here.
+        #
+        # The class's own demo, systems/extern_nonnull.mc, deliberately keeps a
+        # LIVE possibly-null call to teach the warning, so under strict it is a
+        # hard error by design -- a warning-class demo cannot build with its own
+        # class promoted to error. It is compiled just below at plain -Werror
+        # (the class off, its documented relaxed default), like the other opt-in
+        # class demos whose classes CI does not enable.
         run: |
-          find examples -name '*.mc' -not -path 'examples/baremetal/*' | while read -r f; do
+          find examples -name '*.mc' -not -path 'examples/baremetal/*' \
+              -not -path 'examples/systems/extern_nonnull.mc' | while read -r f; do
             echo "== $f =="
-            pipenv run python -m mcc "$f" -Werror -o "$RUNNER_TEMP/$(basename "$f" .mc)"
+            pipenv run python -m mcc "$f" -Werror -Wextern-nonnull -o "$RUNNER_TEMP/$(basename "$f" .mc)"
           done
+          echo "== examples/systems/extern_nonnull.mc (own-class demo: plain -Werror) =="
+          pipenv run python -m mcc examples/systems/extern_nonnull.mc -Werror \
+            -o "$RUNNER_TEMP/extern_nonnull"
 
       - name: Cross-compile the bare-metal kernel
         run: |
@@ -154,8 +167,8 @@ jobs:
           fn main() -> int32 { println("packaged ok: %d", 30); return 0; }
           MC
           cd "$tmp"
-          mcc hi.mc -Werror --run             # JIT: exercises codegen + the bundled stdlib
-          mcc hi.mc -Werror -o hi && ./hi     # native: object emission + linking
+          mcc hi.mc -Werror -Wextern-nonnull --run          # JIT: exercises codegen + the bundled stdlib
+          mcc hi.mc -Werror -Wextern-nonnull -o hi && ./hi  # native: object emission + linking
 
       # The wheel is pure Python (py3-none-any), identical on every runner, so
       # publish it once -- from Linux -- to avoid a duplicate-name upload.

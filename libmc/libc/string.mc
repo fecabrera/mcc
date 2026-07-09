@@ -12,7 +12,7 @@
  *
  * @return dest
  */
-@extern fn strcpy(@noalias dest: char*, @noalias src: char*) -> char*;
+@extern fn strcpy(@noalias @nonnull dest: char*, @noalias @nonnull src: char*) -> char*;
 
 /**
  * Copies at most count characters from src into dest. If src is shorter than count,
@@ -24,7 +24,7 @@
  *
  * @return dest
  */
-@extern fn strncpy(@noalias dest: char*, @noalias src: char*, count: uint64) -> char*;
+@extern fn strncpy(@noalias @nonnull dest: char*, @noalias @nonnull src: char*, count: uint64) -> char*;
 
 /**
  * Appends the null-terminated string src to the end of dest, overwriting dest's
@@ -36,7 +36,7 @@
  *
  * @return dest
  */
-@extern fn strcat(@noalias dest: char*, @noalias src: char*) -> char*;
+@extern fn strcat(@noalias @nonnull dest: char*, @noalias @nonnull src: char*) -> char*;
 
 /**
  * Appends at most count characters from src to the end of dest, then adds a
@@ -48,7 +48,7 @@
  *
  * @return dest
  */
-@extern fn strncat(@noalias dest: char*, @noalias src: char*, count: uint64) -> char*;
+@extern fn strncat(@noalias @nonnull dest: char*, @noalias @nonnull src: char*, count: uint64) -> char*;
 
 /***************************************
  * String examination
@@ -61,7 +61,7 @@
  *
  * @return Number of characters in str.
  */
-@extern fn strlen(str: char*) -> uint64;
+@extern fn strlen(@nonnull str: char*) -> uint64;
 
 /**
  * Returns the length of str, but reads at most count bytes. Unlike strlen, will not read past count
@@ -72,7 +72,7 @@
  *
  * @return number of characters before the null terminator, or count if none found
  */
-@extern fn strnlen(str: char*, count: uint64) -> uint64;
+@extern fn strnlen(@nonnull str: char*, count: uint64) -> uint64;
 
 /**
  * Compares two null-terminated strings lexicographically.
@@ -82,7 +82,7 @@
  *
  * @return Negative if lhs < rhs, zero if equal, positive if lhs > rhs.
  */
-@extern fn strcmp(lhs: char*, rhs: char*) -> int32;
+@extern fn strcmp(@nonnull lhs: char*, @nonnull rhs: char*) -> int32;
 
 /**
  * Compares at most count characters of two null-terminated strings lexicographically.
@@ -93,7 +93,7 @@
  *
  * @return Negative if lhs < rhs, zero if equal or count is zero, positive if lhs > rhs.
  */
-@extern fn strncmp(lhs: char*, rhs: char*, count: uint64) -> int32;
+@extern fn strncmp(@nonnull lhs: char*, @nonnull rhs: char*, count: uint64) -> int32;
 
 /**
  * Compares two null-terminated strings according to the current locale's
@@ -104,7 +104,7 @@
  *
  * @return Negative if lhs < rhs, zero if equal, positive if lhs > rhs.
  */
-@extern fn strcoll(lhs: char*, rhs: char*) -> int32;
+@extern fn strcoll(@nonnull lhs: char*, @nonnull rhs: char*) -> int32;
 
 /**
  * Transforms src into a form such that comparing two transformed strings with
@@ -118,7 +118,7 @@
  * @return the length of the transformed string, excluding the null terminator;
  *         if it is >= count, the contents of dest are indeterminate
  */
-@extern fn strxfrm(@noalias dest: char*, @noalias src: char*, count: uint64) -> uint64;
+@extern fn strxfrm(@noalias dest: char*, @noalias @nonnull src: char*, count: uint64) -> uint64;
 
 /***************************************
  * String searching
@@ -133,7 +133,7 @@
  *
  * @return pointer to the first match, or null if ch does not occur
  */
-@extern fn strchr(str: char*, ch: int32) -> char*;
+@extern fn strchr(@nonnull str: char*, ch: int32) -> char*;
 
 /**
  * Finds the last occurrence of ch (as an unsigned char) in the null-terminated
@@ -144,7 +144,7 @@
  *
  * @return pointer to the last match, or null if ch does not occur
  */
-@extern fn strrchr(str: char*, ch: int32) -> char*;
+@extern fn strrchr(@nonnull str: char*, ch: int32) -> char*;
 
 /**
  * Finds the first occurrence of the substring needle in haystack. An empty
@@ -155,7 +155,7 @@
  *
  * @return pointer to the start of the first match, or null if not found
  */
-@extern fn strstr(haystack: char*, needle: char*) -> char*;
+@extern fn strstr(@nonnull haystack: char*, @nonnull needle: char*) -> char*;
 
 /**
  * Returns the length of the initial run of str made up entirely of characters
@@ -166,7 +166,7 @@
  *
  * @return number of leading characters that are all in accept
  */
-@extern fn strspn(str: char*, accept: char*) -> uint64;
+@extern fn strspn(@nonnull str: char*, @nonnull accept: char*) -> uint64;
 
 /**
  * Returns the length of the initial run of str made up entirely of characters
@@ -177,7 +177,7 @@
  *
  * @return number of leading characters before the first one in reject
  */
-@extern fn strcspn(str: char*, reject: char*) -> uint64;
+@extern fn strcspn(@nonnull str: char*, @nonnull reject: char*) -> uint64;
 
 /**
  * Finds the first character in str that is also in accept.
@@ -187,7 +187,7 @@
  *
  * @return pointer to the first matching character, or null if none match
  */
-@extern fn strpbrk(str: char*, accept: char*) -> char*;
+@extern fn strpbrk(@nonnull str: char*, @nonnull accept: char*) -> char*;
 
 /**
  * Splits a string into tokens separated by any character in delim. The first
@@ -199,7 +199,7 @@
  *
  * @return pointer to the next token, or null when there are no more
  */
-@extern fn strtok(str: char*, delim: char*) -> char*;
+@extern fn strtok(str: char*, @nonnull delim: char*) -> char*;
 
 /***************************************
  * Character array manipulation
@@ -215,7 +215,7 @@
  *
  * @return pointer to the matching byte, or null if it does not occur
  */
-@extern fn memchr(ptr: byte*, ch: int32, count: uint64) -> byte*;
+@extern fn memchr(@nonnull ptr: byte*, ch: int32, count: uint64) -> byte*;
 
 /**
  * Compares the first count bytes of the objects pointed to by lhs and rhs lexicographically.
@@ -228,7 +228,7 @@
  *
  * @return Negative if lhs < rhs, zero if equal or count is zero, positive if lhs > rhs.
  */
-@extern fn memcmp(lhs: byte*, rhs: byte*, count: uint64) -> int32;
+@extern fn memcmp(@nonnull lhs: byte*, @nonnull rhs: byte*, count: uint64) -> int32;
 
 /**
  * Fills the first count bytes of the object pointed to by dest with the value ch.
@@ -239,7 +239,7 @@
  *
  * @return dest
  */
-@extern fn memset(dest: byte*, value: int32, count: uint64) -> byte*;
+@extern fn memset(@nonnull dest: byte*, value: int32, count: uint64) -> byte*;
 
 /**
  * Copies count bytes from src to dest. The objects must not overlap.
@@ -250,7 +250,7 @@
  *
  * @return dest
  */
-@extern fn memcpy(@noalias dest: byte*, @noalias src: byte*, count: uint64) -> byte*;
+@extern fn memcpy(@noalias @nonnull dest: byte*, @noalias @nonnull src: byte*, count: uint64) -> byte*;
 
 /**
  * Copies count bytes from src to dest. The objects may overlap.
@@ -261,7 +261,7 @@
  *
  * @return dest
  */
-@extern fn memmove(dest: byte*, src: byte*, count: uint64) -> byte*;
+@extern fn memmove(@nonnull dest: byte*, @nonnull src: byte*, count: uint64) -> byte*;
 
 /***************************************
  * Error messages

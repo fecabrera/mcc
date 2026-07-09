@@ -69,7 +69,7 @@ struct tm {
  *
  * @return the corresponding time_t, or -1 if it cannot be represented
  */
-@extern fn mktime(tm: struct tm*) -> int64;
+@extern fn mktime(@nonnull tm: struct tm*) -> int64;
 
 /***************************************
  * Conversion
@@ -82,7 +82,7 @@ struct tm {
  *
  * @return pointer to a static struct tm (overwritten by later calls), or null
  */
-@extern fn localtime(timer: int64*) -> struct tm*;
+@extern fn localtime(@nonnull timer: int64*) -> struct tm*;
 
 /**
  * Converts a time_t to broken-down UTC time.
@@ -91,7 +91,7 @@ struct tm {
  *
  * @return pointer to a static struct tm (overwritten by later calls), or null
  */
-@extern fn gmtime(timer: int64*) -> struct tm*;
+@extern fn gmtime(@nonnull timer: int64*) -> struct tm*;
 
 /**
  * Formats a broken-down time as a fixed 26-character string of the form
@@ -101,7 +101,7 @@ struct tm {
  *
  * @return pointer to a static string (overwritten by later calls)
  */
-@extern fn asctime(tm: struct tm*) -> char*;
+@extern fn asctime(@nonnull tm: struct tm*) -> char*;
 
 /**
  * Equivalent to asctime(localtime(timer)): a fixed 26-character local-time
@@ -111,7 +111,7 @@ struct tm {
  *
  * @return pointer to a static string (overwritten by later calls)
  */
-@extern fn ctime(timer: int64*) -> char*;
+@extern fn ctime(@nonnull timer: int64*) -> char*;
 
 /**
  * Formats tm into s according to format (strftime conversion specifiers such as
@@ -124,4 +124,4 @@ struct tm {
  *
  * @return number of bytes written (excluding the NUL), or 0 if it did not fit
  */
-@extern fn strftime(s: char*, max: uint64, format: char*, tm: struct tm*) -> uint64;
+@extern fn strftime(@nonnull s: char*, max: uint64, @nonnull format: char*, @nonnull tm: struct tm*) -> uint64;

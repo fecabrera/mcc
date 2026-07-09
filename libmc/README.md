@@ -48,6 +48,12 @@ import needed (see [Control flow](../docs/language.md#control-flow)).
 
 ## C bindings (`libc/`)
 
+Pointer parameters that the C contract forbids to be null (the `str*`/`mem*`
+arguments, `strto*`/`ato*` inputs, `time`/`strftime` fields, the pointer-out
+math functions) are marked [`@nonnull`](../docs/language.md#-wextern-nonnull),
+so a build under `-Wextern-nonnull` enforces that contract at every call site;
+the default build leaves it unenforced.
+
 | Module                           | Import                  | Provides                                                                                                                                                                                                                                                                                                                                          |
 | -------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [libc/stdio.mc](libc/stdio.mc)   | `import "libc/stdio";`  | Formatted I/O (`printf`/`sprintf`/`snprintf`/`scanf` families), `getchar`/`putchar`/`puts`, and `FILE*` streams: the `stdin`/`stdout`/`stderr` handles, `fopen`/`fclose`/`fflush`, `fread`/`fwrite`, `fseek`/`ftell`, `fgets`/`fputs`/`fgetc`/`fputc`, `fprintf`/`fscanf`, `feof`/`ferror`, plus `remove`/`rename`, `perror`, and `EOF`/`SEEK_*`. |

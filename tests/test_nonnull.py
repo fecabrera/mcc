@@ -3,6 +3,7 @@
 import pytest
 
 from mcc.codegen import CodeGen
+from mcc.driver import STDLIB_DIR, merge_imports
 from mcc.errors import LangError
 from mcc.interface import render_interface
 from mcc.lexer import tokenize
@@ -198,6 +199,73 @@ def test_extern_nonnull_round_trips_through_mci():
     cg.generate()
     stub = render_interface(cg, source, [])
     assert "@nonnull s: uint8*" in stub
+
+
+# ------------------------------------------- annotated libc binding surface
+
+# Wave 2 (ROADMAP 1800) annotates the @extern libc bindings with @nonnull.
+# These tests reach the *real* libmc/libc declarations through an import merge,
+# so they cover the annotation as it actually ships (not an inline stand-in)
+# and confirm the graded postures fire through the real binding.
+
+
+def compile_libc_strict(source: str) -> str:
+    """Resolve imports against the real libmc/ tree and compile at the strict
+    extern-nonnull posture, so an annotated libc binding is enforced through
+    its shipped declaration rather than an inline stand-in prototype."""
+    program = merge_imports(parse(source), STDLIB_DIR, (STDLIB_DIR,))
+    return str(
+        CodeGen(program, "test", error_classes=frozenset({"extern-nonnull"})).generate()
+    )
+
+
+def test_libc_strlen_proven_call_compiles_strict():
+    # libc/string's strlen now carries @nonnull on `str`; a proven-non-null
+    # argument (a string literal) crosses cleanly at strict, and the LLVM hint
+    # rides the real extern declare.
+    ir_text = compile_libc_strict(
+        'import "libc/string";\n'
+        'fn main() -> int32 { return strlen("hi") as int32; }'
+    )
+    (declare,) = [
+        line for line in ir_text.splitlines()
+        if "declare" in line and '@"strlen"' in line
+    ]
+    assert "nonnull" in declare and "dereferenceable(1)" in declare
+
+
+def test_libc_strlen_possibly_null_rejected_strict():
+    # The same annotated binding rejects a possibly-null argument at strict,
+    # naming the real function.
+    with pytest.raises(
+        LangError,
+        match="cannot pass a possibly-null pointer as argument 1 of 'strlen'",
+    ):
+        compile_libc_strict(
+            'import "libc/string";\n'
+            "fn make() -> char* { return null; }\n"
+            "fn main() -> int32 {\n"
+            "    let p: char* = make();\n"
+            "    return strlen(p) as int32;\n"
+            "}"
+        )
+
+
+def test_wave1_wrapper_proven_call_into_annotated_libc_compiles_strict():
+    # memory.mc's bytecopy (a wave-1 @nonnull wrapper) forwards its own
+    # @nonnull dst/src into libc memcpy's freshly-@nonnull slots. The wrapper's
+    # proof satisfies the annotated binding, so the whole chain compiles clean
+    # at strict -- the blast-radius guarantee, exercised end to end.
+    ir_text = compile_libc_strict(
+        'import "memory";\n'
+        "fn main() -> int32 {\n"
+        "    let a: int32[2] = [1, 2];\n"
+        "    let b: int32[2] = [0, 0];\n"
+        "    bytecopy(&b[0], &a[0], 8);\n"
+        "    return b[1];\n"
+        "}"
+    )
+    assert '@"memcpy"' in ir_text
 
 
 def test_nonnull_on_static_function():

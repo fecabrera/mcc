@@ -1797,15 +1797,15 @@ already do).
           instantiation, so the `hash<T>`/`fnv1a`/`splitmix64` chain stays
           unannotated); implemented, see
           [@nonnull parameters](docs/language.md#nonnull-parameters)
-    - [ ] `libc/` bindings, wave 2 — annotate the `@extern` libc surface
+    - [x] `libc/` bindings, wave 2 — annotated the `@extern` libc surface
           (attribute-only there, like `@noalias` on the `restrict` family:
           the C side is never checked, only callers are), a separate change
           set from wave 1 above, and a follow-on to the now-shipped
           [`-Wextern-nonnull`](#metaprogramming-and-builtins) class, its
-          prerequisite (the three-posture enforcement is what lets these
+          prerequisite (the three-posture enforcement is what let these
           annotations land without re-imposing a hard null-proof wall on
           ported C code): the class landed as the immediately prior change
-          set, so this wave is now unblocked and next in line. 57 pointer
+          set, so this wave rode in right behind it. 57 pointer
           parameters across four modules, 58 with
           `getenv`. `libc/string.mc`: 36 parameters across the `str*`/`mem*`
           externs, excluding `strtok`'s `str` (null continues a
@@ -1830,22 +1830,26 @@ already do).
           proves), but a `str.data` used across calls or inside a loop
           still needs a `let`-seeded binding or a `str.data!` hatch, so
           stdio remains the highest downstream friction for the lowest
-          value. The caller blast radius is essentially zero: wave 1 already
+          value. The caller blast radius was essentially zero: wave 1 already
           funneled every in-repo raw-libc string/mem call through proven
           wrappers (`dict.mc`'s `strlen`, `memory.mc`'s `memcpy`/`memset`,
-          `md5.mc`'s `memset`), so these four call sites already carry the
+          `md5.mc`'s `memset`), so these four call sites already carried the
           proof the annotations demand. The annotations ship unconditionally,
           in the source and in `.mci` stubs alike: no `-D`/`@if` gate (the
           declared contract never varies per build; a gate would also have to
           duplicate every declaration, since `@if` is declaration-granular).
           This wave ships with `-Wextern-nonnull` enabled in CI (the
           example-compile line and `test.sh`), verified green off exactly
-          those four proven call sites, so the wave is enforceable at home.
+          those four proven call sites, so the wave is enforceable at home
+          (the `extern_nonnull.mc` class demo stays compiled at plain
+          `-Werror` there, not under the enabled class, since a
+          warning-class demo cannot run with its own class turned on).
           Enablement is `-Wextern-nonnull` specifically, NOT `-Wall`: `-Wall`
           would also pull in `-Wunchecked-dereference`, under which `libmc`
           is not yet clean (the open
           [`libmc` sweep](#metaprogramming-and-builtins) still owes ~60
-          invariant-backed dereferences their `!` or guard)
+          invariant-backed dereferences their `!` or guard); implemented, see
+          [Reaching libc](docs/language.md#reaching-libc)
     - [x] loop-body fact preservation — replaced the shipped blanket rule
           (all narrowed facts drop at loop entry) with a pre-scan of the
           whole loop (condition and body, nested statements, `defer`

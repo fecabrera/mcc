@@ -20,11 +20,18 @@
 // `@nonnull` possibly-null argument is ALWAYS a hard error (its callee body
 // holds the parameter as a load-bearing fact).
 //
-// This file is CI-safe with a LIVE possibly-null site (length_of below): the
-// class is off by default, so the plain build (and CI's bare `-Werror` build,
-// which only promotes ENABLED classes) compiles it clean and `main` runs.
-// It mirrors the default-off-class shape of types/unchecked_dereference.mc
-// and control-flow/dead_code.mc.
+// This file keeps a LIVE possibly-null site (length_of below) on purpose, to
+// teach the graded crossing. Because the class is off by default, the plain
+// build compiles it clean and `main` runs. CI's main example loop now compiles
+// every file at `-Werror -Wextern-nonnull` (the class ENABLED), which would
+// promote this live site to a hard error, so CI builds THIS demo in a
+// dedicated step at plain `-Werror` (the class off, its documented relaxed
+// default), exactly as a warning-class demo cannot build with its own class
+// promoted to error. The two other opt-in-class demos,
+// types/unchecked_dereference.mc and control-flow/dead_code.mc, still ride the
+// main loop clean: only extern-nonnull is enabled there, so their classes stay
+// off and their live sites stay silent. This file shares their default-off
+// shape but needs the carve-out because its class is the one CI turns on.
 //
 // Prerequisites: systems/extern.mc (the `@extern` boundary), functions/
 // nonnull.mc and nonnull_narrowing.mc (the proof relation and the null-check

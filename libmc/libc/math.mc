@@ -95,7 +95,7 @@
  *
  * @return the fraction, such that x == fraction * 2**exp
  */
-@extern fn frexp(x: float64, exp: int32*) -> float64;
+@extern fn frexp(x: float64, @nonnull exp: int32*) -> float64;
 
 /** x * 2**exp. @param x: significand @param exp: power of two @return x * 2**exp */
 @extern fn ldexp(x: float64, exp: int32) -> float64;
@@ -108,7 +108,7 @@
  *
  * @return the fractional part
  */
-@extern fn modf(x: float64, iptr: float64*) -> float64;
+@extern fn modf(x: float64, @nonnull iptr: float64*) -> float64;
 
 /** x * 2**n (like ldexp). @param x: significand @param n: power of two @return x * 2**n */
 @extern fn scalbn(x: float64, n: int32) -> float64;
@@ -201,7 +201,7 @@
  *
  * @return the remainder
  */
-@extern fn remquo(x: float64, y: float64, quo: int32*) -> float64;
+@extern fn remquo(x: float64, y: float64, @nonnull quo: int32*) -> float64;
 
 /***************************************
  * Floating-point manipulation
@@ -214,7 +214,7 @@
 @extern fn nextafter(x: float64, y: float64) -> float64;
 
 /** A quiet NaN, with an implementation-defined payload from tagp. @param tagp: payload string @return NaN */
-@extern fn nan(tagp: uint8*) -> float64;
+@extern fn nan(@nonnull tagp: uint8*) -> float64;
 
 /***************************************
  * Maximum, minimum, positive difference

@@ -1644,6 +1644,15 @@ The annotation itself ships unconditionally in source and in
 [`.mci`](#interfaces) stubs — the declared promise never varies per build;
 only its enforcement does.
 
+The [libc bindings](#reaching-libc) carry these annotations already: the
+null-hostile pointer parameters of the `str*`/`mem*`, `strto*`/`ato*`,
+`time`/`strftime`, and pointer-out math functions are `@nonnull`, so building
+a program with `-Wextern-nonnull` enforces the C contract on every call into
+them. (Slots where C gives `null` a meaning — `strtok`'s continuation, a
+`strxfrm` with count `0`, `free`/`realloc`, `getenv`-adjacent probes — are
+deliberately left plain.) This repository's own CI compiles the example suite
+with `-Wextern-nonnull` for exactly this reason.
+
 ##### Selective -Werror=<class>
 
 `-Werror=<name>` promotes a single warning class to error level, without the
@@ -3712,6 +3721,11 @@ fn main() -> int32 { printf("hello\n"); return 0; }
 For ordinary output you usually want the [`std`](../README.md#standard-library) `print` /
 `println` wrappers rather than `printf` directly; the `libc/` bindings are for
 reaching the rest of the C library.
+
+The bindings' null-hostile pointer parameters are marked
+[`@nonnull`](#-wextern-nonnull), so a build under `-Wextern-nonnull` enforces
+the C contract at every call into them; the default build leaves them
+unenforced (a mechanical C port compiles with no flag).
 
 Anything the bindings do not cover, you can [declare yourself](#extern-declarations)
 with `@extern`. Variadic arguments to functions like `printf` follow C promotion

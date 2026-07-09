@@ -10,6 +10,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **libc bindings annotated `@nonnull`** — the `@extern` libc binding surface
+  now marks its null-hostile pointer parameters `@nonnull`: the `str*`/`mem*`
+  functions (`libc/string`), the `strto*`/`ato*` inputs and `getenv`
+  (`libc/stdlib`), the pointer-out math functions `frexp`/`modf`/`remquo`/`nan`
+  (`libc/math`), and `mktime`/`asctime`/`strftime`/`localtime`/`gmtime`/`ctime`
+  (`libc/time`). Slots where C gives `null` a meaning are deliberately left
+  plain — `strtok`'s continuation, a `strxfrm` with count `0`, the `strto*`
+  `endptr`, `free`/`realloc`, `system(null)`, `time(null)`. The annotations
+  only bite under [`-Wextern-nonnull`](docs/language.md#-wextern-nonnull) (the
+  default relaxed posture accepts any argument), and this repository's CI now
+  compiles the example suite with `-Wextern-nonnull`, so the libc contract is
+  enforced there. `libc/stdio` is left unannotated for now (its
+  `null`-meaningful slots need a closer pass). See
+  [Reaching libc](docs/language.md#reaching-libc).
 - **`-Wextern-nonnull` — graded enforcement for `@nonnull` on `@extern`
   declarations** — a possibly-null argument to a `@nonnull` slot on a foreign
   `@extern` declaration is now graded by three postures over one default-off
