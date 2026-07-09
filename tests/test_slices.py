@@ -824,16 +824,112 @@ def test_array_literal_cast_in_argument_position():
     assert run(source) == 6
 
 
-def test_bare_argument_still_rejected():
-    # Argument adaptation is a later stage: without the `as`, the literal has
-    # no receiving array/slice context.
+def test_array_literal_adapts_in_bare_argument():
+    # Stage 2: a bare array literal adapts to a slice<T> parameter with no
+    # `as` cast. A const slice parameter travels by hidden reference, so the
+    # borrowed view spills to a temporary first.
+    source = """
+    fn sum(s: slice<const int32>) -> int32 {
+        let total: int32 = 0;
+        for v in s { total = total + v; }
+        return total;
+    }
+    fn main() -> int32 { return sum([1, 2, 3]); }
+    """
+    assert run(source) == 6
+
+
+def test_array_literal_argument_to_plain_slice_is_writable():
+    # A plain (non-mut) slice<T> parameter with mutable elements accepts a
+    # literal: the backing array is fresh writable storage, so the view is
+    # mutable (uniform-allow, matching the string-literal family).
+    source = """
+    fn bump(s: slice<int32>) -> int32 {
+        s[0] = s[0] + 40;
+        return s[0] + s[1];
+    }
+    fn main() -> int32 { return bump([1, 2]); }   // 41 + 2
+    """
+    assert run(source) == 43
+
+
+def test_empty_array_literal_argument():
+    # `[]` in argument position builds no backing array: the { null, 0 } view.
+    source = """
+    fn count(s: slice<int32>) -> int32 { return s.length as int32; }
+    fn main() -> int32 { return count([]); }
+    """
+    assert run(source) == 0
+
+
+def test_array_literal_argument_to_overload_set():
+    # A second overload flips the name onto the overload-set path; the literal
+    # must still adapt there (the parity trap the string family already hit).
+    source = """
+    fn take(s: slice<int32>) -> int32 { return 100 + s.length as int32; }
+    fn take(x: int32) -> int32 { return x; }
+    fn main() -> int32 { return take([1, 2, 3]); }   // slice overload: 103
+    """
+    assert run(source) == 103
+
+
+def test_array_literal_argument_prefers_slice_over_pointer():
+    # The overload-collision case: f(int32*) beside f(slice<int32>) called with
+    # a literal must pick the slice -- an array literal never adapts to a
+    # pointer (shape_matches rejects the pointer candidate).
+    source = """
+    fn f(p: int32*) -> int32 { return 1; }
+    fn f(s: slice<int32>) -> int32 { return 2; }
+    fn main() -> int32 { return f([1, 2, 3]); }   // slice: 2
+    """
+    assert run(source) == 2
+
+
+def test_ternary_of_array_literals_argument():
+    # A ternary whose arms are both array literals adapts arm by arm: each
+    # borrows in its own branch, so the chosen arm's exact length survives.
+    source = """
+    fn count(s: slice<int32>) -> int32 { return s.length as int32; }
+    fn main() -> int32 {
+        return count(true ? [1] : [2, 3]) + count(false ? [1] : [2, 3]);
+    }
+    """
+    assert run(source) == 3   # 1 (then arm) + 2 (else arm)
+
+
+def test_generic_array_literal_argument_with_explicit_type():
+    # A bare literal contributes nothing to inference, so a generic slice<T>
+    # parameter needs T from an explicit type argument (or a companion arg).
+    source = """
+    fn count<T>(s: slice<T>) -> int32 { return s.length as int32; }
+    fn main() -> int32 { return count<int32>([4, 5, 6]); }
+    """
+    assert run(source) == 3
+
+
+def test_generic_array_literal_argument_cannot_infer_t():
+    # Without an explicit type argument the literal cannot anchor T: element
+    # anchoring is not in scope for this stage.
+    with pytest.raises(LangError, match="cannot infer type parameter"):
+        compile_ir(
+            """
+            fn count<T>(s: slice<T>) -> int32 { return 0; }
+            fn main() -> int32 { return count([1, 2, 3]); }
+            """
+        )
+
+
+def test_mut_slice_parameter_still_rejects_literal():
+    # Uniform-allow applies to non-mut parameters only. A `mut slice<T>`
+    # parameter demands the caller's own writable storage, which a literal is
+    # not, so it stays rejected.
     with pytest.raises(
         LangError, match="only allowed where an array or slice type receives it"
     ):
         compile_ir(
             """
-            fn sum(s: slice<const int32>) -> int32 { return 0; }
-            fn main() -> int32 { return sum([1, 2, 3]); }
+            fn f(mut s: slice<int32>) -> int32 { return 0; }
+            fn main() -> int32 { return f([1, 2, 3]); }
             """
         )
 

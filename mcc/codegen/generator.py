@@ -7827,19 +7827,18 @@ class CodeGen:
     def array_literal_adapts(self, expr, expected: LangType) -> bool:
         """Whether an array literal adapts to ``expected`` without an ``as``.
 
-        The array sibling of :meth:`str_literal_adapts` (Stage 1): an array
-        literal implicitly adapts to a ``slice<T>`` from an annotated ``let``
-        or an array/slice element slot, borrowing a hidden backing array in
-        the enclosing frame (see the ``ArrayLit`` arm of
-        :meth:`gen_borrow_slice`). Argument positions and ``return`` do not
-        adapt yet -- an argument needs the collection and overload paths
-        together, and a returned view would dangle.
+        The array sibling of :meth:`str_literal_adapts`: an array literal
+        implicitly adapts to a ``slice<T>`` from an annotated ``let``, an
+        array/slice element slot (Stage 1), or a function argument (Stage 2),
+        borrowing a hidden backing array in the enclosing frame (see the
+        ``ArrayLit`` arm of :meth:`gen_borrow_slice`). A ``return`` still does
+        not adapt -- the returned view would dangle.
 
         A ternary adapts when both of its arms do, exactly as for string
         literals: each arm borrows in its own branch.
 
         Args:
-            expr: The initializer/element expression.
+            expr: The initializer/element/argument expression.
             expected: The type the context expects.
 
         Returns:
@@ -7851,6 +7850,31 @@ class CodeGen:
                 expr.then, expected
             ) and self.array_literal_adapts(expr.otherwise, expected)
         return isinstance(expr, ArrayLit) and is_slice(expected)
+
+    def defers_array_literal(self, expr) -> bool:
+        """Whether an argument is an array literal (or a ternary of them).
+
+        The overload/generic call path pre-evaluates every argument for
+        inference, but an array literal cannot lower without a receiving
+        ``slice<T>`` type and the winning parameter is not yet chosen. Such an
+        argument is instead stood in as a ``NULLT`` placeholder -- the
+        inference loop skips ``NULLT``, so literal elements contribute nothing
+        to generic inference -- and borrowed only once the winner is known
+        (see :meth:`literal_adapts_to_pattern` and the winner-emission arm),
+        the argument-position sibling of a string literal pre-evaluating to a
+        ``char*``. A ternary defers when both of its arms do.
+
+        Args:
+            expr: The raw argument expression.
+
+        Returns:
+            ``True`` if ``expr`` is an array literal or a ternary of them.
+        """
+        if isinstance(expr, Ternary):
+            return self.defers_array_literal(expr.then) and self.defers_array_literal(
+                expr.otherwise
+            )
+        return isinstance(expr, ArrayLit)
 
     def gen_borrow_slice(self, value_expr, target: LangType, line: int) -> TypedValue:
         """Lower a borrow ``value as slice<T>`` into a non-owning view.
@@ -9210,10 +9234,14 @@ class CodeGen:
                 # caller's storage, so it must be rejected, not spilled.
                 args.append(self.mut_ref_arg(arg_expr, params[i], line, context))
                 continue
-            if i < len(params) and self.str_literal_adapts(arg_expr, params[i]):
-                # A string literal adapts to a char slice from the parameter type
-                # (Stage 4). A `const` slice parameter is passed by hidden
-                # reference, so spill the borrowed view to a temporary first.
+            if i < len(params) and (
+                self.str_literal_adapts(arg_expr, params[i])
+                or self.array_literal_adapts(arg_expr, params[i])
+            ):
+                # A string literal adapts to a char slice, or an array literal
+                # to a slice<T>, from the parameter type (the implicit borrow).
+                # A `const` slice parameter is passed by hidden reference, so
+                # spill the borrowed view to a temporary first.
                 tv = self.gen_borrow_slice(arg_expr, params[i], line)
                 if i in hidden:
                     args.append(self.spill_to_temp(tv, params[i], line, context))
@@ -10116,6 +10144,15 @@ class CodeGen:
                         strip_const(t),
                     )
                 )
+            elif self.defers_array_literal(arg):
+                # An array literal cannot lower without a receiving slice type,
+                # and the winning parameter is not yet chosen. Stand it in as a
+                # NULLT placeholder: the inference loop skips NULLT (so literal
+                # elements contribute nothing to generic inference), and
+                # emission borrows it against the resolved parameter (see
+                # literal_adapts_to_pattern and the winner-emission arm) --
+                # exactly as a string literal pre-evaluates to a char*.
+                arg_tvs.append(TypedValue(ir.Constant(RAWPTR.ir, None), NULLT))
             else:
                 arg_tvs.append(self.gen_expr(arg))
         if len(candidates) == 1:
@@ -10360,13 +10397,16 @@ class CodeGen:
                 # loaded, once, when the argument was evaluated); a direct
                 # lend passes the caller's storage address.
                 args.append(tv.value if i in decayed else addrs[i][0])
-            elif self.str_literal_adapts(expr.args[i], p):
-                # String-literal-to-slice adaptation, in parity with
-                # marshal_args: the literal (or ternary of literals) borrows
-                # to the parameter's char slice view; a const slice parameter
-                # travels by hidden reference, so the view spills to a
-                # temporary first. (The char* the literal pre-evaluated to
-                # for inference goes unused.)
+            elif self.str_literal_adapts(expr.args[i], p) or self.array_literal_adapts(
+                expr.args[i], p
+            ):
+                # Literal-to-slice adaptation, in parity with marshal_args: a
+                # string literal borrows to the parameter's char slice view and
+                # an array literal to its slice<T> view (each a ternary of them
+                # too); a const slice parameter travels by hidden reference, so
+                # the view spills to a temporary first. (The char* / NULLT
+                # placeholder the literal pre-evaluated to for inference goes
+                # unused.)
                 tv = self.gen_borrow_slice(expr.args[i], p, expr.line)
                 if i in hidden:
                     args.append(self.spill_to_temp(tv, p, expr.line, context))
@@ -10742,14 +10782,17 @@ class CodeGen:
         bindings: dict[str, LangType],
         line: int,
     ) -> bool:
-        """Whether a string-literal argument adapts to a candidate's parameter.
+        """Whether a literal argument adapts to a candidate's parameter.
 
         The pre-evaluate path's parity with :meth:`marshal_args`' literal
         handling: a string literal (or a ternary of literals) stays viable
         against a parameter that resolves to a ``slice<char>`` (or
         ``slice<const char>``) under the candidate's bindings, even though
-        the ``char*`` it evaluated to does not match the slice shape.
-        Emission then borrows the literal (see :meth:`gen_borrow_slice`).
+        the ``char*`` it evaluated to does not match the slice shape; an array
+        literal likewise stays viable against a parameter that resolves to any
+        ``slice<T>`` (it pre-evaluated to a NULLT placeholder that matches no
+        shape). Emission then borrows the literal (see
+        :meth:`gen_borrow_slice`).
 
         Args:
             arg: The raw argument expression.
@@ -10761,7 +10804,7 @@ class CodeGen:
         Returns:
             ``True`` when the argument adapts to the resolved parameter.
         """
-        if not isinstance(arg, (StrLit, Ternary)):
+        if not isinstance(arg, (StrLit, ArrayLit, Ternary)):
             return False
         outer_bindings = self.type_bindings
         outer_source = self.current_source
@@ -10774,7 +10817,9 @@ class CodeGen:
         finally:
             self.type_bindings = outer_bindings
             self.current_source = outer_source
-        return self.str_literal_adapts(arg, resolved)
+        return self.str_literal_adapts(arg, resolved) or self.array_literal_adapts(
+            arg, resolved
+        )
 
     def shape_matches(
         self,

@@ -866,7 +866,7 @@ already do).
         struct literals infer their type arguments **from** those evaluated
         field types — the very evaluation the gate would have to precede. Needs
         a deferred-evaluation restructure of the struct-literal path first
-  - [ ] array literals — the generalization: `let dirs: slice<char*> = ["/bin"];`
+  - [x] array literals — the generalization: `let dirs: slice<char*> = ["/bin"];`
         (or `["/bin", "/usr/bin"]` passed to a `slice<T>` parameter)
         materializes a hidden fixed-size backing array, entry-alloca'd in the
         enclosing frame, and borrows it, replacing today's two-step
@@ -895,17 +895,19 @@ already do).
           backs the view; a mutable `@static` target is rejected toward
           `slice<const T>`); implemented, see
           [Slices](docs/language.md#slices)
-    - [ ] stage 2: bare argument position — `f([1, 2, 3])` against a
-          `slice<T>` parameter. Must land on the direct call path
+    - [x] stage 2: bare argument position — `f([1, 2, 3])` against a
+          `slice<T>` parameter. Lands on the direct call path
           (`marshal_args`) and the overload-set path (the pre-evaluation
           carve-out, `literal_adapts_to_pattern`, winner emission)
           **together**: open overload sets mean a second overload flips a
           name onto the set path, the parity trap the string-literal family
-          already hit once. Open decision: bare-argument mutability (uniform
-          allow, for family consistency, vs const-only implicit with the
-          explicit `as`-cast escape). Recorded: literal elements contribute
-          nothing to generic inference in this design (element anchoring is
-          a possible later extension)
+          already hit once. Resolved: **uniform allow** — a plain (non-`mut`)
+          `slice<T>` parameter accepts a literal (the fresh backing array is
+          writable), a `mut slice<T>` parameter still rejects it. Literal
+          elements contribute nothing to generic inference (a bare
+          `f([1, 2, 3])` cannot infer `T`; pass `f<int32>(...)` or a companion
+          argument), so element anchoring stays a possible later extension;
+          implemented, see [Slices](docs/language.md#slices)
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:

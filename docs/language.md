@@ -716,10 +716,12 @@ that keep it C-simple:
   functions with a `va_list` parameter, `@extern`/`@symbol` functions
   (their C symbol is fixed), and `@static` functions.
 
-String literals keep adapting when a function becomes overloaded: a literal
-(or a ternary of literals) still borrows to a `slice<char>` /
-`slice<const char>` parameter exactly as at a
-[non-overloaded call](#slices).
+String and array literals keep adapting when a function becomes overloaded: a
+literal (or a ternary of literals) still borrows to a `slice<char>` /
+`slice<const char>` (or, for an array literal, a `slice<T>`) parameter exactly
+as at a [non-overloaded call](#slices) — a literal argument contributes nothing
+to overload resolution, so `f([1, 2, 3])` picks the `slice<int32>` overload
+over an `int32*` one rather than adapting to the pointer.
 
 **Mixed generic/concrete sets.** A generic template may share its name with
 concrete functions — from any module, sets being open; the candidates join
@@ -2658,8 +2660,9 @@ needed. The literal materializes a hidden backing array in the enclosing
 function's frame (so the storage lives for the whole call) and the slice views
 it: `[16, 31, 255] as slice<int32>` is `{ &backing[0], 3 }`. Like a string
 literal, it also **adapts** from context with no `as`: at an annotated `let`,
-and at an array or slice element whose element type is a slice (nested literals
-recurse, so one `as` covers a whole `slice<slice<int32>>`). See
+at an array or slice element whose element type is a slice (nested literals
+recurse, so one `as` covers a whole `slice<slice<int32>>`), and at a **function
+argument** whose parameter is a `slice<T>` (`sum([1, 2, 3])`). See
 [examples/memory/slice_literals.mc](../examples/memory/slice_literals.mc):
 
 ```c
@@ -2684,13 +2687,22 @@ the view alias the one backing array. Each literal *occurrence* owns one slot,
 re-stored per execution — a view captured on one loop pass observes a later
 pass's elements, like any loop local.
 
-Two positions do not take the shortcut. `return [1, 2] as slice<int32>;` is a
-compile error — the view would point into the returning call's hidden backing
-array, which dies with the return and is named by nothing else (a *named*
-local's borrow, `return xs as slice<int32>`, still compiles, with the usual
-care returning a borrow of a local demands). And a **bare argument**
-(`sum([1, 2, 3])`) does not adapt yet — write the `as`
-(`sum([1, 2, 3] as slice<const int32>)` works in any argument slot). In a
+At a **function argument** the literal borrows into the calling frame, so the
+view lives for the whole call — even against a plain (non-`mut`) `slice<T>`
+parameter, whose fresh backing array is writable (uniform-allow, exactly as for
+a string literal). A `mut slice<T>` parameter still rejects a literal: it
+demands the caller's own named storage, which a literal is not. The adaptation
+holds through an overload set — `f([1, 2, 3])` picks the `slice<int32>`
+overload over an `int32*` one, never adapting the literal to the pointer — but a
+literal argument contributes nothing to type inference, so a **generic**
+`slice<T>` parameter needs `T` from an explicit type argument or a companion
+argument (`count<int32>([1, 2, 3])`; bare `count([1, 2, 3])` cannot infer `T`).
+
+One position still does not take the shortcut. `return [1, 2] as slice<int32>;`
+is a compile error — the view would point into the returning call's hidden
+backing array, which dies with the return and is named by nothing else (a
+*named* local's borrow, `return xs as slice<int32>`, still compiles, with the
+usual care returning a borrow of a local demands). In a
 `@static` initializer the elements must be constant expressions and land in
 read-only data, so only the read-only form is allowed:
 `@static let g: slice<const int32> = [1, 2];` becomes a constant

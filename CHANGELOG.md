@@ -269,10 +269,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   backing storage is fresh, so writes go through). `@static let g:
   slice<const int32> = [1, 2];` becomes a constant view over an anonymous
   rodata array (the mutable form is rejected, pointing at
-  `slice<const T>`). The direct `return [...] as slice<T>` is rejected up
-  front — the view would dangle — and bare literal arguments
-  (`f([1, 2, 3])`) stay a later stage. See
-  [Slices](docs/language.md#slices) and
+  `slice<const T>`). A **bare argument** now adapts too — `f([1, 2, 3])`
+  against a `slice<T>` parameter, no `as` and no intermediate `let` — on the
+  direct call path and the overload-set path alike (a second overload of a
+  name flips it onto the set path, so both must adapt or `f([1, 2, 3])`
+  silently breaks). A plain (non-`mut`) `slice<T>` parameter accepts the
+  literal (its fresh backing array is writable), a `mut slice<T>` parameter
+  still rejects it, an overloaded `f([1, 2, 3])` picks the `slice<int32>`
+  candidate over an `int32*` one, and a literal argument anchors no type
+  inference (a bare generic `f([1, 2, 3])` cannot infer `T` — pass
+  `f<int32>(...)` or a companion argument). The direct
+  `return [...] as slice<T>` is still rejected up front — the view would
+  dangle. See [Slices](docs/language.md#slices) and
   [examples/memory/slice_literals.mc](examples/memory/slice_literals.mc).
 - **The `format` module** — the formatting protocol's baseline overload
   set: every member of `import "format";`'s

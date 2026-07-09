@@ -21,6 +21,14 @@ fn sum(xs: slice<const int32>) -> int32 {
     return total;
 }
 
+// An overloaded name: the moment `pick` gains a second overload it resolves
+// through the overload-set path, yet a bare literal argument still adapts to
+// the slice<int32> candidate (and never to the int32* one -- a literal is not
+// a pointer). Both call paths adapt, so adding this overload cannot silently
+// break pick([...]).
+fn pick(xs: slice<int32>) -> int32 { return xs[xs.length - 1]; }
+fn pick(p: int32*) -> int32 { return *p; }
+
 // A @static literal lands in read-only data: the elements must be constant
 // expressions, and the target must be slice<const T>. A mutable
 // @static slice<int32> would open a write path into that read-only storage,
@@ -33,9 +41,22 @@ fn main() -> int32 {
     println("view: length %llu, sum %d", view.length, sum(view));   // 3, 6
 
     // Argument positions included -- no named array, no temporary binding.
-    // (The `as` is still required here: a bare sum([10, 20, 30]) does not
-    // adapt to the parameter type.)
     println("inline: %d", sum([10, 20, 30] as slice<const int32>)); // 60
+
+    // ...and the `as` is now optional at an argument: a bare literal adapts to
+    // the parameter's slice type directly, borrowing into this frame for the
+    // call. A plain (non-mut) slice parameter is fine -- the backing array is
+    // fresh writable storage -- so uniform-allow lets the literal in.
+    println("bare arg: %d", sum([1, 2, 3, 4]));                     // 10
+
+    // Through an overload set the literal still adapts, picking the
+    // slice<int32> overload of pick over the int32* one.
+    println("overloaded: %d", pick([7, 8, 9]));                     // 9
+
+    // A ternary whose arms are both literals adapts arm by arm, each arm's
+    // exact length surviving into its own branch.
+    let flag = true;
+    println("ternary arg: %d", sum(flag ? [100] : [1, 2, 3]));      // 100
 
     // Spelling 2: implicit adaptation at an annotated let. The annotation
     // supplies the element type, so no `as` is needed.
