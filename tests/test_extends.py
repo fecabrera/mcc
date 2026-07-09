@@ -523,3 +523,71 @@ def test_packed_payload_packs_its_instance_only():
         "    return 0;\n"
         "}\n"
     ) == 0
+
+
+# ------------------------------------------- nominal subtyping: declared lineage
+#
+# The struct subtype relation follows the declared `extends` lineage, not a
+# matching layout prefix. A struct upcasts only to a base it names -- transitively
+# -- in an `extends` clause; a coincidental layout twin with no `extends` is
+# rejected, and sibling brands over one base never interconvert. (The generic
+# and bare-parameter upcasts above are the positive lineage cases.)
+
+def test_layout_match_without_extends_upcast_rejected():
+    # `b` has `a`'s exact fields but does not `extends a`, so the value upcast is
+    # rejected: declared lineage, not a matching field list, decides it.
+    with pytest.raises(LangError, match="cannot cast"):
+        run(
+            "struct a { x: int32; y: int32; }\n"
+            "struct b { x: int32; y: int32; }\n"
+            "fn main() -> int32 {\n"
+            "    let v: struct a; v.x = 1; v.y = 2;\n"
+            "    let w = v as struct b;\n"
+            "    return 0;\n"
+            "}\n"
+        )
+
+
+def test_layout_prefix_without_extends_upcast_rejected():
+    # `wide` opens with `narrow`'s exact field as a true layout prefix, but with
+    # no `extends narrow` the structural twin no longer upcasts.
+    with pytest.raises(LangError, match="cannot cast"):
+        run(
+            "struct narrow { x: int32; }\n"
+            "struct wide { x: int32; y: int32; }\n"
+            "fn main() -> int32 {\n"
+            "    let v: struct wide; v.x = 1; v.y = 2;\n"
+            "    let w = v as struct narrow;\n"
+            "    return 0;\n"
+            "}\n"
+        )
+
+
+def test_sibling_specializations_do_not_interconvert():
+    # Two specializations of one base share its layout but are distinct brands:
+    # neither converts to its sibling (only up to the shared base, below).
+    with pytest.raises(LangError, match="cannot cast"):
+        run(
+            "struct base { id: int64; }\n"
+            "struct user_id extends base;\n"
+            "struct order_id extends base;\n"
+            "fn main() -> int32 {\n"
+            "    let u: struct user_id; u.id = 1;\n"
+            "    let o = u as struct order_id;\n"
+            "    return 0;\n"
+            "}\n"
+        )
+
+
+def test_sibling_specialization_still_upcasts_to_shared_base():
+    # The rejection above is nominal, not blanket: the declared base upcast works.
+    assert run(
+        "struct base { id: int64; }\n"
+        "struct user_id extends base;\n"
+        "struct order_id extends base;\n"
+        "fn main() -> int32 {\n"
+        "    let u: struct user_id; u.id = 42;\n"
+        "    let b = u as struct base;\n"
+        "    return b.id as int32;\n"
+        "}\n"
+    ) == 42

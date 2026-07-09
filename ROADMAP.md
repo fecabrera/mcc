@@ -742,7 +742,7 @@ already do).
         declaration onto their own AST node and type kind, so a struct-only
         code path (sequential layout, `extends`, prefix upcast) can never
         silently accept a union. A pure compiler refactor, no language change
-- [ ] Nominal struct subtyping — make the struct subtype relation follow the
+- [x] Nominal struct subtyping — make the struct subtype relation follow the
       declared `extends` lineage rather than a matching layout prefix. Two
       struct sites accept any struct whose fields are the leading prefix of
       another today (`is_struct_prefix`): the value/pointer upcast and the

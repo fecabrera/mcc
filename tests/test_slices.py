@@ -200,6 +200,45 @@ def test_borrow_non_container_is_rejected():
         )
 
 
+def test_layout_twin_without_extends_borrow_rejected():
+    # `buf` is laid out exactly like slice<char> ({T*, integer}) but does not
+    # `extends slice<char>`, so it no longer borrows: the borrow follows the
+    # declared `extends` lineage, not a coincidentally matching shape.
+    with pytest.raises(LangError, match="cannot borrow"):
+        compile_ir(
+            """
+            struct buf { data: char*; length: uint64; }
+            fn main() -> int32 {
+                let b: struct buf;
+                let s = b as slice<char>;
+                return 0;
+            }
+            """
+        )
+
+
+def test_list_borrows_to_both_mutable_and_const_slice():
+    # The nominal borrow still spans the element-const axis: list<T> `extends`
+    # slice<T>, so the same owned list borrows to slice<T> and -- with const
+    # stripped off the target element to reach the same declared base --
+    # slice<const T>.
+    source = """
+    import "list";
+    fn main() -> int32 {
+        let xs: struct list<int32>;
+        list_init(&xs, 4);
+        list_push(&xs, 10);
+        list_push(&xs, 20);
+        let m = xs as slice<int32>;
+        let c = xs as slice<const int32>;
+        let got = m[0] + c[1];   // 10 + 20
+        list_destroy(&xs);
+        return got;
+    }
+    """
+    assert run(source) == 30
+
+
 # ----------------------------------------------- the element-const axis (Stage 3)
 
 

@@ -2532,11 +2532,15 @@ list_init(nums, 8);
 let s = nums as slice<int32>;      // reads { data, length }, drops capacity
 ```
 
-The source is either an owned `T[N]` (giving `{ &arr[0], N }`) or any struct
-laid out like a list — one with a `T*` `data` field and an integer `length`
-field, such as `list<T>` — which borrows to `{ data, length }`, ignoring any
-other fields (e.g. a list's `capacity`). The borrow is structural, not keyed to
-a particular type name. The element types must match. A `char[N]` is the one
+The source is either an owned `T[N]` (giving `{ &arr[0], N }`) or a struct that
+**is** a `slice<T>` or names one in its declared `extends` lineage — such as
+`list<T>`, which `extends slice<T>` (its `data`/`length` are the base's fields,
+followed by its own `capacity`, ignored in the borrow). The borrow follows that
+declared lineage, not a coincidentally matching `{ T*, integer }` shape: a struct
+laid out like a slice but without the `extends` clause does not borrow. (The
+check was once structural — a pre-`extends` vestige, from before `list<T> extends
+slice<T>` could be declared — now retired in favor of the nominal rule.) The
+element types must match. A `char[N]` is the one
 special case: as NUL-terminated [text](#strings), its borrow drops the trailing
 terminator, so `length` is `N - 1` (the text, without the NUL); a `uint8[N]` raw
 buffer keeps every byte. This is the one struct-producing `as` (ordinary struct
@@ -2845,9 +2849,16 @@ Because the base is a true prefix, the upcast `&p as struct point*` reads the
 same storage; casting the value, `p as struct point`, copies just the base
 prefix. Both are _explicit_ — there is no implicit upcast, so a
 `struct point3*` is a distinct type that won't silently pass where a
-`struct point*` is expected (and two structs that extend the same base never
-interconvert). Only the upcast direction is allowed: narrowing a base value
-back to a derived one would read past it. With no body of its own,
+`struct point*` is expected. What decides whether the upcast is allowed is the
+**declared `extends` lineage**, not the layout: only a struct that names the
+target — transitively — in an `extends` clause upcasts to it. A struct that
+merely shares the target's field prefix, with no `extends` between them, is
+rejected, and two structs that extend the same base never interconvert (each
+upcasts to the shared base, neither to its sibling). The prefix layout stays the
+mechanism — the base's fields come first, so the upcast is a zero-cost
+reinterpret — but the declared lineage is the definition. Only the upcast
+direction is allowed: narrowing a base value back to a derived one would read
+past it. With no body of its own,
 `struct meters extends int_wrapper;` is a **specialization** — a distinct
 type with the base's exact layout, useful for branding values so the compiler
 keeps them apart. See

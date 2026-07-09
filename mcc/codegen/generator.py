@@ -3014,6 +3014,13 @@ class CodeGen:
         )
         defaults.update(decl.defaults)
         object.__setattr__(struct_type, "defaults", defaults)
+        # Record the resolved immediate base so the nominal subtype relation can
+        # walk this instance's declared `extends` lineage (see
+        # :meth:`nominal_subtype`). `base_type` is concrete here even for a bare
+        # parameter (`struct entry<T> extends T`) or a generic base
+        # (`extends pair<K, V>`), since it resolved against this instance's
+        # bindings above; `None` when the struct extends nothing.
+        object.__setattr__(struct_type, "base", base_type)
         if decl.union:
             # A union's members all share the storage at offset 0. Body the
             # identified type as the most-aligned member plus explicit pad
@@ -3061,22 +3068,42 @@ class CodeGen:
         object.__setattr__(struct_type, "elem_indices", tuple(indices))
         return struct_type
 
-    def is_struct_prefix(self, base: LangType, derived: LangType) -> bool:
-        """Whether ``base``'s fields are the leading prefix of ``derived``'s.
+    def nominal_subtype(self, base: LangType, derived: LangType) -> bool:
+        """Whether ``derived`` *is* ``base`` or reaches it up its ``extends`` chain.
 
-        That is exactly how ``extends`` lays a struct out (base fields first), so
-        a ``derived`` value can be narrowed to ``base`` -- the prefix occupies
-        the same starting bytes. Compared by field name and type, so the check
-        also covers transitive ``extends`` chains and same-layout
-        specializations. A union never participates: its members share offset
-        0, so a matching field list does not mean a matching layout.
+        The nominal struct subtype relation. A struct participates only when it
+        is the target itself or names it -- transitively -- through a declared
+        ``extends`` clause, the immediate base recorded per instantiation on
+        :attr:`LangType.base` by :meth:`instantiate_struct`. This walks
+        ``derived``'s recorded base chain, comparing each hop to ``base`` by
+        nominal identity: struct instances are interned per mangled name in
+        ``struct_types``, so two types are the same brand exactly when they
+        compare equal. The chain ends at ``None`` (a root struct, e.g.
+        ``slice<T>``). A union never participates: its members share offset 0,
+        so a shared brand would not mean a shared layout.
+
+        ``const`` is stripped on both sides so a value read out of a ``const``
+        lvalue still upcasts, and to mirror the borrow site, which strips
+        ``const`` off the element before forming the target ``slice<T>`` -- so a
+        ``list<T>`` borrows to both ``slice<T>`` and ``slice<const T>``.
+
+        This replaces the structural ``is_struct_prefix`` that predated
+        ``extends``. The prefix layout stays the mechanism -- base fields first,
+        so the upcast is still a zero-cost reinterpret and the borrow still reads
+        ``{data, length}`` straight across -- but the declared lineage, not a
+        coincidentally matching field prefix, now decides participation.
         """
-        if base.fields is None or derived.fields is None:
+        if not is_struct(base) or not is_struct(derived):
             return False
         if base.union or derived.union:
             return False
-        n = len(base.fields)
-        return n <= len(derived.fields) and derived.fields[:n] == base.fields
+        target = strip_const(base)
+        current: "LangType | None" = strip_const(derived)
+        while current is not None:
+            if strip_const(current) == target:
+                return True
+            current = current.base
+        return False
 
     def field_type(self, ftype: TypeRef, is_last: bool, decl: StructDecl) -> LangType:
         """Resolve a struct field's type, lowering a flexible array member.
@@ -7487,9 +7514,10 @@ class CodeGen:
             return TypedValue(self.builder.ptrtoint(tv.value, target.ir), target)
         if is_integer(src) and target_addr:
             return TypedValue(self.builder.inttoptr(tv.value, target.ir), target)
-        if is_struct(src) and is_struct(target) and self.is_struct_prefix(target, src):
-            # Value upcast: `target` is the leading prefix of `src` (via
-            # `extends`), so it occupies the same starting bytes. Round-trip
+        if is_struct(src) and is_struct(target) and self.nominal_subtype(target, src):
+            # Value upcast: `target` is a base of `src` in its declared `extends`
+            # lineage, so its fields are `src`'s leading prefix and it occupies
+            # the same starting bytes. Round-trip
             # through memory -- store the derived value, reinterpret the slot as
             # the base, load -- which keeps any @packed/@align padding identical.
             slot = self.builder.alloca(src.ir)
@@ -7744,15 +7772,17 @@ class CodeGen:
         if is_pointer(owner) and is_struct(owner.pointee):
             owner = owner.pointee  # a list<T>* (or slice<T>*) borrows like the value
             struct_val = self.gen_load(src.value)
-        # The source borrows to the slice when it *is* a slice<T> or *extends*
-        # one (as list<T> does): its leading fields are then exactly that slice.
-        # The check is by struct compatibility -- the slice<T> is the layout
-        # prefix of the source (:meth:`is_struct_prefix`) -- so it follows the
-        # `extends` chain without hardcoding any field names. The element may
-        # gain `const` (see :meth:`check_borrow_element`); const shares the
-        # layout, so the leading {data, length} transfer straight across.
+        # The source borrows to the slice when it *is* a slice<T> or names one
+        # in its declared `extends` lineage (as list<T> does): the base's fields
+        # are then its leading {data, length} prefix. The check is nominal
+        # (:meth:`nominal_subtype`) -- the slice<T> must be a declared base of the
+        # source, not merely a coincidental layout twin. The element may gain
+        # `const` (see :meth:`check_borrow_element`); the target `prefix` strips
+        # it so a list<T> borrows to both slice<T> and slice<const T>, and const
+        # shares the layout, so the leading {data, length} transfer straight
+        # across.
         prefix = self.slice_type(strip_const(element), line)
-        if is_slice(owner) or self.is_struct_prefix(prefix, owner):
+        if is_slice(owner) or self.nominal_subtype(prefix, owner):
             self.check_borrow_element(
                 owner.fields[0][1].pointee, value_expr, str(src.type), target, line
             )

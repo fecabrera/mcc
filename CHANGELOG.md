@@ -10,6 +10,26 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Nominal struct subtyping** — the struct subtype relation now follows the
+  declared `extends` lineage instead of a matching layout prefix. The two sites
+  that accept one struct where another is expected — the value/pointer upcast
+  (`p as struct point`) and the borrow of a struct to a `slice<T>`
+  (`list as slice<T>`) — participate only when the source **is** the target or
+  names it, transitively, in an `extends` clause. A struct that merely shares a
+  base's field prefix, with no `extends` between them, no longer upcasts or
+  borrows; sibling brands over one base still never interconvert (each upcasts
+  to the shared base, neither to its sibling). The bare-parameter base
+  (`struct entry<T> extends T`), generic bases (`extends pair<K, V>`), the
+  bodyless specialization (`struct meters extends int_wrapper;`), and the
+  element-const axis (a `list<T>` borrowing to both `slice<T>` and
+  `slice<const T>`) all keep working — every one routes through a declared base.
+  The prefix layout stays the mechanism (base fields first, so the upcast is a
+  zero-cost reinterpret and the borrow reads `{data, length}` straight across),
+  but the declared lineage, not a coincidental layout twin, is now the
+  definition. This settles a single nominal subtyping model across the language
+  and is the foundation for generic-parameter `extends` bounds. See
+  [struct `extends`](docs/language.md#structs) and
+  [Slices](docs/language.md#slices).
 - **Generic type aliases** — a `type` declaration may now carry a
   type-parameter list, naming a *family* of existing types:
   `type entry<T> = pair<char*, T>;` (a wider generic partially applied) and
@@ -429,6 +449,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **Layout-identical structs without `extends` no longer interconvert** — a
+  documented-only behavior change from nominal struct subtyping (above). A
+  struct laid out exactly like another — same field prefix — but with no
+  `extends` clause between them can no longer be upcast (`v as struct twin`) or,
+  when shaped like a slice (`{ T*, integer }`), borrowed to a `slice<T>`. Both
+  now raise (`cannot cast ...` / `cannot borrow ...`). No shipped code, example,
+  or `libmc` module relied on the old structural acceptance — every upcast and
+  slice-borrow already routes through a declared base — so the change is inert
+  in practice; the structural check was a pre-`extends` vestige, now retired.
 - **No-overload errors show the call signature** — when no overload of a
   name fits a call, the error now renders the attempted call as a
   signature, `no overload of 'format' with signature format(char*)`,

@@ -4,6 +4,11 @@ import "std";
 // layout as the derived struct's PREFIX. The base's fields are laid out
 // first, then the derived struct's own, so every derived value starts with
 // a complete base and upcasting just reads the front of it.
+//
+// The subtype relation is NOMINAL: the declared `extends` lineage decides
+// whether an upcast is allowed, not the layout. A struct that merely shares
+// point's field prefix but does not `extends point` won't upcast to it, and
+// the sibling specializations below (both `extends scalar`) never interconvert.
 // Prerequisites: structs.mc; struct_literals.mc for the `= default` fields.
 
 // The base, and a derived struct laid out x, y, z.

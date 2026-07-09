@@ -60,6 +60,11 @@ class LangType:
             interned object), so :func:`strip_const` restores it by identity --
             keeping the many ``is FLOAT64``/``is UINT8`` checks valid on a value
             read out of a ``const`` lvalue. ``None`` for a mutable type.
+        base: The immediate ``extends`` base of a struct, resolved per
+            instantiation, else ``None`` (a struct with no base, or a non-struct).
+            Records the declared lineage the nominal subtype relation walks (see
+            :meth:`CodeGen.nominal_subtype`); excluded from equality/hash like the
+            other layout attributes -- the interned name is the identity.
     """
 
     name: str
@@ -79,6 +84,7 @@ class LangType:
     count: int | None = None
     const: bool = False
     mutable: "LangType | None" = field(default=None, compare=False)
+    base: "LangType | None" = field(default=None, compare=False)
 
     def __str__(self) -> str:
         """Return the type's source-level name."""
