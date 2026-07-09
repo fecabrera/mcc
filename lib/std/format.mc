@@ -144,7 +144,7 @@ fn format(mut str: string, value: bool, const modifier: slice<char>) {
  * @param modifier: applied to every element (e.g. "x" renders each
  *                  integer as hex)
  */
-fn format<T>(mut str: string, value: slice<T>, const modifier: slice<char>) {
+fn format<T>(mut str: string, const value: slice<T>, const modifier: slice<char>) {
     string_push(str, '[');
     for item in enumerate(value) {
         if (item.index > 0) string_append(str, ", ");
@@ -161,7 +161,7 @@ fn format<T>(mut str: string, value: slice<T>, const modifier: slice<char>) {
  * @param modifier: ignored
  */
 @inline
-fn format(mut str: string, value: slice<const char>, const modifier: slice<char>) {
+fn format(mut str: string, const value: slice<const char>, const modifier: slice<char>) {
     string_append(str, value);
 }
 
@@ -176,7 +176,7 @@ fn format(mut str: string, value: slice<const char>, const modifier: slice<char>
  *                  null (asserted with the `!` hatch, undefined if one is)
  * @param modifier: ignored
  */
-fn format(mut str: string, value: slice<char*>, const modifier: slice<char>) {
+fn format(mut str: string, const value: slice<char*>, const modifier: slice<char>) {
     string_push(str, '[');
     for item in enumerate(value) {
         if (item.index > 0) string_append(str, ", ");
