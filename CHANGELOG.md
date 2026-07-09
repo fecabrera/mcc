@@ -10,6 +10,36 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Pointer arithmetic** — pointers join the binary and compound operator
+  surface with C's element-scaled semantics and no bespoke syntax. `p + n` and
+  `p - n` advance a pointer by `n` elements (`p + n` is exactly `&p[n]`, so `n`
+  is any integer type, scaled by `sizeof(pointee)`), and the compound forms
+  `p += n` / `p -= n` follow from compound assignment's existing operator
+  reuse. `p - q` requires two pointers of identical type and yields their
+  signed element distance as an `int64`; the ordering relationals
+  `<` `<=` `>` `>=` extend to pointers of identical type (the `while (p < end)`
+  scan-loop idiom), joining the `==` / `!=` and `!= null` checks that already
+  worked. `uint8*` is the raw-memory pointer, so its element size is 1 and its
+  arithmetic is byte arithmetic. In `p - q` and the relationals a `const`
+  qualifier on the pointee is ignored, so `int32*` and `const int32*` compare
+  and subtract without an explicit cast. Pointer arithmetic is an
+  always-non-null source: `p + n` proves non-null at a
+  [`@nonnull`](docs/language.md#nonnull-parameters) slot exactly as `&p[n]`
+  does, and `*(p + n)` never warns under
+  [`-Wunchecked-dereference`](docs/language.md#-wunchecked-dereference) (the
+  derived address is proven like `*&p[n]`; v1 does not look through to the base
+  pointer); `p += n` is a reassignment that drops a narrowed local's non-null
+  fact and stays rejected on a `@nonnull` parameter. Everything else keeps its
+  rejection: addition is **pointer-left only** (`p + n` is accepted, the
+  commuted `n + p` is rejected with a spelling hint), and `p + q`, the
+  multiplicative operators `*` `/` `%`, the bitwise operators, the shifts,
+  any arithmetic on a function pointer (they keep `==` / `!=` only), and any
+  `null` operand all stay errors. v1 is a runtime expression only — not
+  available inside a `const` initializer or an `@if` condition. This reverses
+  the language reference's former exclusion ("there is no pointer arithmetic;
+  use `&p[1]`"). Documented under
+  [Pointers](docs/language.md#pointer-arithmetic); see
+  [examples/systems/byte_scan.mc](examples/systems/byte_scan.mc).
 - **Nominal type-parameter bounds** — a generic function parameter may now be
   constrained to a struct and its declared `extends` lineage:
   `fn describe<T extends shape>(x: T*)` admits `shape` and any struct that

@@ -761,7 +761,7 @@ already do).
       pairs with the [C struct-passing ABI](#tooling-and-c-interop) work; the
       read-modify-write granularity under a `@volatile` struct must be
       specified
-- [ ] Pointer arithmetic — pointers join the shipped binary and compound
+- [x] Pointer arithmetic — pointers join the shipped binary and compound
       operator surface, no bespoke syntax: `p + n` and `p - n` advance by
       elements, the compound forms `p += n` / `p -= n` follow, `p - q` is
       the pointer difference, and the relational comparisons

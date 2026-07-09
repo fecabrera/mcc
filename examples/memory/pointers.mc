@@ -53,4 +53,5 @@ fn main() -> int32 {
 }
 
 // See also: functions/nonnull.mc and functions/noalias.mc for the @nonnull and
-// @noalias promises a pointer parameter can carry.
+// @noalias promises a pointer parameter can carry; systems/byte_scan.mc for
+// pointer arithmetic (`p + n`, `p - q`, the `while (p < end)` scan loop).

@@ -2394,9 +2394,52 @@ let scratch: uint8[offsetof(struct mixed, c)];     // a 16-byte buffer
 raw-memory pointer (C's `void*`): any pointer
 implicitly coerces to it, which is why `free(nums)` works without a cast.
 A [string literal](#strings) is a `char[N]` array that decays to a `char*`
-(which coerces to `uint8*`), so `"hi"[0]` is the byte `104`. There is
-no pointer arithmetic (`p + 1`); use `&p[1]`. See
-[examples/memory/pointers.mc](../examples/memory/pointers.mc) and
+(which coerces to `uint8*`), so `"hi"[0]` is the byte `104`.
+
+### Pointer arithmetic
+
+Pointers join the binary and compound operators, with C's element-scaled
+semantics and no bespoke syntax. `p + n` and `p - n` advance a pointer by `n`
+elements — `p + n` is exactly `&p[n]`, so `n` is any integer type, scaled by
+`sizeof(pointee)` — and the compound forms `p += n` / `p -= n` follow:
+
+```c
+let end = p + 8;          // eight int32s past p (32 bytes)
+p += 1;                   // step one element forward
+let scan = &buf[0];
+while (scan < end) {      // pointer ordering: the scan-loop idiom
+    total = total + *scan;
+    scan += 1;
+}
+```
+
+`uint8*` is the raw-memory pointer, so its element size is 1 and its
+arithmetic is byte arithmetic. `p - q` requires two pointers of identical type
+and yields their signed element distance as an `int64` (byte distance is
+`uint8*` arithmetic or a `p as uint64` round-trip). The ordering relationals
+`< <= > >=` likewise require identical pointer types; `==` / `!=`, the
+`!= null` checks, and the ternary work as before. In `p - q` and the
+relationals a `const` qualifier on the pointee is ignored, so `int32*` and
+`const int32*` compare and subtract without an explicit cast.
+
+Pointer arithmetic is an always-non-null source: `p + n` proves non-null at a
+[`@nonnull`](#nonnull-parameters) slot exactly as `&p[n]` does, and `*(p + n)`
+never warns under [`-Wunchecked-dereference`](#-wunchecked-dereference) — the
+derived address is proven like `*&p[n]` (v1 does not look through to the base
+pointer). `p += n` is an ordinary reassignment: it drops a narrowed local's
+non-null fact, and stays rejected on a `@nonnull` parameter (which cannot be
+reassigned).
+
+Everything else keeps its rejection. Addition is pointer-left only: `p + n` is
+the accepted shape and the commuted `n + p` is rejected (the pointer is the
+base being advanced, and `n - p` has no meaning). `p + q`, the multiplicative
+operators `* / %`, the bitwise operators, and the shifts stay unsupported on
+pointers (a tag-bit trick keeps its explicit `as uint64` round-trip), function
+pointers keep `==` / `!=` only, and any `null` operand is rejected. Pointer
+arithmetic is a runtime expression only — it is not available inside a `const`
+initializer or an [`@if`](#conditional-compilation) condition. See
+[examples/memory/pointers.mc](../examples/memory/pointers.mc),
+[examples/systems/byte_scan.mc](../examples/systems/byte_scan.mc), and
 [libmc/memory.mc](../libmc/memory.mc) for a generic typed allocator.
 
 ## Function pointers

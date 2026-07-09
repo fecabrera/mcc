@@ -194,15 +194,17 @@ def test_rejects_constant():
 
 
 def test_rejects_unsupported_operator_for_pointer():
+    # `p += n` / `p -= n` now move the pointer (see test_pointers.py), but the
+    # multiplicative and bitwise operators remain unsupported on pointers.
     src = (
         "fn main() -> int32 {\n"
         "    let n: int32 = 0;\n"
         "    let p = &n;\n"
-        "    p += 1;\n"
+        "    p *= 2;\n"
         "    return 0;\n"
         "}\n"
     )
-    with pytest.raises(LangError, match="operand of '\\+'"):
+    with pytest.raises(LangError, match="operand of '\\*'"):
         compile_ir(src)
 
 

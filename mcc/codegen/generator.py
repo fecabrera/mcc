@@ -101,6 +101,7 @@ from mcc.codegen.types import (
     FLOAT64,
     I32_ZERO,
     INT32,
+    INT64,
     NULLT,
     RAWPTR,
     RESERVED_TYPE_NAMES,
@@ -9438,7 +9439,9 @@ class CodeGen:
         ``if (p == null) ...``), a field projection flow-narrowed the same
         way (``if (a->ptr != null) { ... }``; see :meth:`nonnull_path_of`),
         a postfix ``p!`` assertion (the programmer's explicit, unchecked
-        claim), and an ``as`` cast to a pointer type of any of these (a
+        claim), pointer arithmetic ``p + n`` / ``p - n`` (the derived address
+        of ``&p[n]``, an always-non-null source like ``&p[n]`` itself), and an
+        ``as`` cast to a pointer type of any of these (a
         pointer reinterpretation preserves the address; a non-pointer
         intermediate, e.g. an integer round-trip, severs the proof).
 
@@ -9453,6 +9456,12 @@ class CodeGen:
         if isinstance(expr, (StrLit, ArrayLit)):
             return True
         if isinstance(expr, Unary) and expr.op == "&":
+            return True
+        if isinstance(expr, Binary) and expr.op in ("+", "-"):
+            # Pointer arithmetic yields an always-non-null source, exactly as
+            # `&p[n]` does (`p + n` is `&p[n]`); this also silences the
+            # `-Wunchecked-dereference` warning on `*(p + n)`. Integer `+`/`-`
+            # reaching a @nonnull pointer slot is caught by the type check.
             return True
         if isinstance(expr, Cast):
             # Resolve the target (an alias like `type cstr = uint8*` counts),
@@ -10862,6 +10871,90 @@ class CodeGen:
             LangError: On operands of mismatched or unsupported types for the
                 operator.
         """
+        # Pointer arithmetic, handled ahead of operand unification (which would
+        # otherwise coerce the two sides to one type and mangle the pointer).
+        # NULLT is a pointer underneath, so every arm excludes it on both sides
+        # to keep `null` operands rejected; function pointers carry no pointee
+        # and so match none of these arms (they keep `==`/`!=` only).
+        #
+        # `p + n` / `p - n`: advance by n elements, exactly as `&p[n]` -- a bare
+        # typed GEP (not gen_index_addr, whose deref-warning does not apply to
+        # address arithmetic). The result carries `p`'s type verbatim.
+        if (
+            op in ("+", "-")
+            and lhs.type is not NULLT
+            and rhs.type is not NULLT
+            and is_pointer(lhs.type)
+            and is_integer(rhs.type)
+        ):
+            idx = rhs.value
+            if op == "-":
+                # Extend n to i64 by its own signedness *before* negating: a
+                # naive neg on a narrow or unsigned n would advance wrongly.
+                if rhs.type.ir.width != 64:
+                    extend = self.builder.sext if rhs.type.signed else self.builder.zext
+                    idx = extend(idx, INT64.ir)
+                idx = self.builder.neg(idx)
+            return TypedValue(self.builder.gep(lhs.value, [idx]), lhs.type)
+        # `p - q`: signed element distance as int64. Identical pointer types
+        # only, comparing pointees with const stripped so `int32*` and
+        # `const int32*` subtract without an explicit cast.
+        if (
+            op == "-"
+            and lhs.type is not NULLT
+            and rhs.type is not NULLT
+            and is_pointer(lhs.type)
+            and is_pointer(rhs.type)
+        ):
+            pointee = strip_const(lhs.type.pointee)
+            if pointee != strip_const(rhs.type.pointee):
+                raise LangError(
+                    f"cannot subtract {rhs.type} from {lhs.type}; pointer "
+                    "difference requires identical pointer types",
+                    line,
+                )
+            diff = self.builder.sub(
+                self.builder.ptrtoint(lhs.value, INT64.ir),
+                self.builder.ptrtoint(rhs.value, INT64.ir),
+            )
+            return TypedValue(
+                self.builder.sdiv(diff, ir.Constant(INT64.ir, type_size(pointee))),
+                INT64,
+            )
+        # `n + p`: addition is pointer-left only (the pointer is the base being
+        # advanced, and `n - p` has no meaning), so reject the commuted form
+        # with a spelling hint rather than a bare type error.
+        if (
+            op == "+"
+            and rhs.type is not NULLT
+            and is_integer(lhs.type)
+            and is_pointer(rhs.type)
+        ):
+            raise LangError(
+                "pointer arithmetic requires the pointer on the left "
+                "(write `p + n`, not `n + p`)",
+                line,
+            )
+        # Pointer ordering (`< <= > >=`): identical pointer types only, const
+        # stripped, and no `null` operand (null has no ordering). Equality
+        # (`==`/`!=`, including against null) stays on the post-unification icmp
+        # path below, which coerces a NULLT operand to the other side's type.
+        if (
+            op in ("<", "<=", ">", ">=")
+            and is_pointer(lhs.type)
+            and is_pointer(rhs.type)
+        ):
+            if lhs.type is NULLT or rhs.type is NULLT:
+                raise LangError(f"operator {op!r} not supported for null", line)
+            if strip_const(lhs.type.pointee) != strip_const(rhs.type.pointee):
+                raise LangError(
+                    f"cannot compare {lhs.type} with {rhs.type}; pointer "
+                    "ordering requires identical pointer types",
+                    line,
+                )
+            return TypedValue(
+                self.builder.icmp_unsigned(op, lhs.value, rhs.value), BOOL
+            )
         if lhs.type != rhs.type:
             ctx = f"operand of {op!r}"
             both_int = is_integer(lhs.type) and is_integer(rhs.type)
