@@ -86,8 +86,10 @@ from mcc.nodes import (
     While,
 )
 
+from mcc.codegen.abi import Direct, Indirect, classify_arg, classify_return
 from mcc.codegen.ir_ext import VolatileLoad, VolatileStore
 from mcc.codegen.targets import (
+    classify_arch,
     compute_target_facts,
     eval_static_cond,
     eval_static_value,
@@ -144,6 +146,25 @@ from mcc.codegen.types import (
     wrap_int,
     _host_triple,
 )
+
+
+@dataclass
+class ExternABI:
+    """The C-ABI marshalling plan for one struct-passing ``@extern`` function.
+
+    Built by :meth:`CodeGen.declare_extern_abi` when a declaration's signature
+    carries a by-value aggregate, and consulted at the call site. Each entry of
+    ``args`` is the classification of the same-indexed fixed parameter -- a
+    :class:`~mcc.codegen.abi.Direct`/:class:`~mcc.codegen.abi.Indirect` for an
+    aggregate, or ``None`` for a scalar/pointer that passes unchanged.
+
+    Attributes:
+        args: Per fixed parameter, its classification or ``None``.
+        ret: The return classification, or ``None`` for a scalar/void return.
+    """
+
+    args: list
+    ret: object = None
 
 
 def borrows_array_literal(expr) -> bool:
@@ -567,6 +588,12 @@ class CodeGen:
         # @extern declarations refer to symbols defined elsewhere; identical
         # redeclarations across files collapse onto the first one.
         self.extern_decls: set[str] = set()
+        # The C-ABI call plan (an ExternABI) for each @extern that passes or
+        # returns a struct by value across the C boundary -- absent for an
+        # @extern whose signature is all scalars/pointers, which needs no
+        # marshalling. Built once when the declaration is first seen (see
+        # declare_extern_abi), consulted at the call site (gen_direct_call).
+        self.extern_abi: dict[str, ExternABI] = {}
         # The AST node behind each concrete (non-generic, non-@static,
         # non-@extern) function in self.funcs, keyed by name and then by the
         # signature's params-key -- the canonical `str(LangType)` join over
@@ -863,7 +890,9 @@ class CodeGen:
         if func.inline:
             fn.attributes.add("alwaysinline")
 
-    def mark_noalias(self, fn: ir.Function, func: Func, params: list):
+    def mark_noalias(
+        self, fn: ir.Function, func: Func, params: list, arg_offset: int = 0
+    ):
         """Apply ``@noalias`` by attaching LLVM's ``noalias`` argument attribute.
 
         Each marked parameter must be a pointer (the attribute is meaningless
@@ -875,6 +904,8 @@ class CodeGen:
             fn: The IR function whose args to annotate.
             func: The AST function carrying ``noalias_params``.
             params: The resolved parameter ``LangType``s, in order.
+            arg_offset: How many hidden args precede the real parameters in
+                ``fn.args`` (1 when a struct-return ``sret`` pointer leads).
 
         Raises:
             LangError: When ``@noalias`` marks a non-pointer parameter.
@@ -890,9 +921,11 @@ class CodeGen:
                     func.line,
                     source=func.source,
                 )
-            fn.args[i].add_attribute("noalias")
+            fn.args[i + arg_offset].add_attribute("noalias")
 
-    def mark_nonnull(self, fn: ir.Function, func: Func, params: list):
+    def mark_nonnull(
+        self, fn: ir.Function, func: Func, params: list, arg_offset: int = 0
+    ):
         """Apply ``@nonnull`` by attaching LLVM argument attributes.
 
         Each marked parameter must be a pointer. Unlike ``@noalias``, the
@@ -914,6 +947,8 @@ class CodeGen:
             fn: The IR function whose args to annotate.
             func: The AST function carrying ``nonnull_params``.
             params: The resolved parameter ``LangType``s, in order.
+            arg_offset: How many hidden args precede the real parameters in
+                ``fn.args`` (1 when a struct-return ``sret`` pointer leads).
 
         Raises:
             LangError: When ``@nonnull`` marks a non-pointer parameter.
@@ -936,10 +971,12 @@ class CodeGen:
                 )
             if not hint:
                 continue
-            fn.args[i].add_attribute("nonnull")
+            fn.args[i + arg_offset].add_attribute("nonnull")
             pointee = strip_const(ptype.pointee)
             if pointee is not VOID and not is_flexible_array(pointee):
-                fn.args[i].attributes.dereferenceable = type_size(pointee)
+                fn.args[i + arg_offset].attributes.dereferenceable = type_size(
+                    pointee
+                )
 
     def check_noreturn_decl(self, func: Func, ret: LangType):
         """Validate a ``@noreturn`` declaration once its return type resolves.
@@ -2046,6 +2083,90 @@ class CodeGen:
                 out.append(p.ir.as_pointer())
             else:
                 out.append(p.ir)
+        return out
+
+    def abi_target_arch(self) -> str:
+        """The ``ARCH_*`` name of the current compilation target."""
+        return classify_arch((self.target or _host_triple()).lower())
+
+    def declare_extern_abi(
+        self, func: Func, ret: LangType, params: list
+    ) -> "ExternABI | None":
+        """Classify a struct-passing ``@extern`` for the platform C ABI.
+
+        Returns ``None`` for a signature that is all scalars/pointers -- it
+        needs no marshalling and keeps today's declaration verbatim. Otherwise
+        builds the per-argument and return classifications (see
+        :mod:`mcc.codegen.abi`), which the declaration lowers to coercion types
+        or a hidden ``sret`` pointer and the call site marshals to.
+
+        Only AArch64/AAPCS64 is implemented: on any other target an ``@extern``
+        that passes or returns an aggregate by value is a hard error, rather
+        than silently emitting the raw-aggregate form that does not match the C
+        ABI there.
+
+        Args:
+            func: The ``@extern`` declaration.
+            ret: Its resolved return ``LangType``.
+            params: Its resolved parameter ``LangType``s, in order.
+
+        Returns:
+            An :class:`ExternABI` when a by-value aggregate is present, else
+            ``None``.
+
+        Raises:
+            LangError: When a by-value aggregate crosses the boundary on a
+                non-AArch64 target.
+        """
+        has_agg = is_aggregate(ret) or any(is_aggregate(p) for p in params)
+        if not has_agg:
+            return None
+        if self.abi_target_arch() != "ARCH_AARCH64":
+            raise LangError(
+                "passing a struct by value across the C boundary is not "
+                f"supported on target {self.target or _host_triple()!r} yet; "
+                "pass a pointer instead",
+                func.line,
+                source=func.source,
+            )
+        arg_classes = [
+            classify_arg(p) if is_aggregate(p) else None for p in params
+        ]
+        ret_class = classify_return(ret) if is_aggregate(ret) else None
+        return ExternABI(arg_classes, ret_class)
+
+    def extern_ret_ir(self, ret: LangType, plan: "ExternABI | None") -> ir.Type:
+        """The LLVM return type for an ``@extern`` declaration under its plan.
+
+        A struct returned in registers becomes its coercion type; a large
+        struct returns ``void`` (its value travels through the ``sret``
+        pointer); everything else is unchanged.
+        """
+        if plan is None or plan.ret is None:
+            return ret.ir
+        if isinstance(plan.ret, Indirect):
+            return ir.VoidType()
+        return plan.ret.coerce_ir
+
+    def extern_param_irs(
+        self, params: list, plan: "ExternABI | None"
+    ) -> list:
+        """The LLVM parameter types for an ``@extern`` declaration under its plan.
+
+        A register aggregate becomes its coercion type and a large aggregate a
+        pointer to the caller's copy; a leading ``sret`` pointer is prepended
+        for a struct return. Scalar/pointer parameters keep :meth:`param_irs`.
+        """
+        out = self.param_irs(params)
+        if plan is None:
+            return out
+        for i, cls in enumerate(plan.args):
+            if isinstance(cls, Direct):
+                out[i] = cls.coerce_ir
+            elif isinstance(cls, Indirect):
+                out[i] = cls.struct_ir.as_pointer()
+        if isinstance(plan.ret, Indirect):
+            out.insert(0, plan.ret.struct_ir.as_pointer())
         return out
 
     def hidden_ref_indices(self, func: Func, params: list) -> frozenset[int]:
@@ -3624,14 +3745,25 @@ class CodeGen:
                     raise LangError(
                         f"function {func.name!r} already defined", func.line
                     )
+                plan = self.declare_extern_abi(func, ret, params)
+                sret = plan is not None and isinstance(plan.ret, Indirect)
                 fnty = ir.FunctionType(
-                    ret.ir, self.param_irs(params), var_arg=func.variadic
+                    self.extern_ret_ir(ret, plan),
+                    self.extern_param_irs(params, plan),
+                    var_arg=func.variadic,
                 )
                 # @symbol overrides the linker name; mcc still calls it by func.name.
                 fn = ir.Function(self.module, fnty, name=func.symbol or func.name)
+                if sret:
+                    # The struct return travels through a hidden first pointer
+                    # the caller allocates; the arg indices for the real
+                    # parameters (and their attributes) shift past it.
+                    fn.args[0].add_attribute("sret")
+                    fn.args[0].attributes.align = plan.ret.align
+                arg_offset = 1 if sret else 0
                 # @noalias/@nonnull are attribute-only, so allowed on @extern.
-                self.mark_noalias(fn, func, params)
-                self.mark_nonnull(fn, func, params)
+                self.mark_noalias(fn, func, params, arg_offset)
+                self.mark_nonnull(fn, func, params, arg_offset)
                 self.mark_noreturn(fn, func)
                 if func.noreturn:
                     self.noreturn_syms.add(func.name)
@@ -3640,6 +3772,8 @@ class CodeGen:
                 self.nonnull_ref[func.name] = self.nonnull_indices(func)
                 self.func_privacy[func.name] = (func.private, func.source)
                 self.extern_decls.add(func.name)
+                if plan is not None:
+                    self.extern_abi[func.name] = plan
                 self.used_symbols.add(func.name)
                 if func.deprecated_msg is not None:
                     self.deprecated_syms[func.name] = func.deprecated_msg
@@ -9174,7 +9308,13 @@ class CodeGen:
             self.funcs[symbol], function_type(ret, tuple(params), variadic)
         )
 
-    def emit_call(self, callee, args: list, preserves: bool = False) -> ir.Value:
+    def emit_call(
+        self,
+        callee,
+        args: list,
+        preserves: bool = False,
+        arg_attrs: dict | None = None,
+    ) -> ir.Value:
         """Emit a call instruction, dropping projection facts unless proven safe.
 
         A callee can reach any non-local memory -- a global pointer, an
@@ -9195,11 +9335,14 @@ class CodeGen:
             args: The marshalled LLVM argument values.
             preserves: The callee's write-effect bit is proven clear, so
                 projection facts survive the call.
+            arg_attrs: Optional ``{index: attr-tuple}`` argument attributes for
+                the call site -- an ``sret`` pointer for a struct-returning
+                ``@extern`` -- matching the callee's declared attributes.
 
         Returns:
             The call instruction's result value.
         """
-        result = self.builder.call(callee, args)
+        result = self.builder.call(callee, args, arg_attrs=arg_attrs)
         if not preserves:
             self.narrowed_paths.clear()
         return result
@@ -9223,6 +9366,16 @@ class CodeGen:
         self.warn_deprecated(expr.name, self.deprecated_syms.get(symbol), expr.line)
         ret, params, variadic = self.signatures[symbol]
         mut = self.mut_ref.get(symbol, frozenset())
+        # A struct-passing @extern marshals its aggregates to the C ABI form
+        # (coercion types, a pointer-to-copy, or a hidden sret slot); a plain
+        # scalar/pointer @extern has no plan and takes the ordinary path.
+        abi = self.extern_abi.get(symbol)
+        sret_slot = None
+        arg_attrs: dict[int, tuple] = {}
+        if abi is not None and isinstance(abi.ret, Indirect):
+            sret_slot = self.entry_alloca(abi.ret.struct_ir)
+            sret_slot.align = max(sret_slot.align or 0, abi.ret.align)
+            arg_attrs[0] = ("sret",)
         args = self.marshal_args(
             expr.args,
             params,
@@ -9240,11 +9393,23 @@ class CodeGen:
             # An @extern @nonnull slot grades a possibly-null argument by
             # posture; a native one always rejects it.
             extern=symbol in self.extern_decls,
+            abi=abi,
+            sret_slot=sret_slot,
         )
         raw = self.emit_call(
-            self.funcs[symbol], args, preserves=symbol in self.fact_safe_syms
+            self.funcs[symbol],
+            args,
+            preserves=symbol in self.fact_safe_syms,
+            arg_attrs=arg_attrs or None,
         )
-        if symbol in self.mut_ret:
+        if abi is not None and abi.ret is not None:
+            # Reconstruct the struct return: a register return is stored back
+            # into a struct slot and reloaded; a large return already sits in
+            # the caller-allocated sret slot.
+            result = TypedValue(
+                self.reconstruct_abi_return(raw, ret, abi.ret, sret_slot), ret
+            )
+        elif symbol in self.mut_ret:
             # A mut return arrives as a pointer to the vouched storage: load
             # eagerly for value contexts (folded away when unused) and carry
             # the address for the lvalue surfaces.
@@ -9299,6 +9464,8 @@ class CodeGen:
         nonnull: frozenset[int] = frozenset(),
         collecting: bool = False,
         extern: bool = False,
+        abi: "ExternABI | None" = None,
+        sret_slot=None,
     ) -> list:
         """Evaluate and coerce a call's arguments against the parameter types.
 
@@ -9326,6 +9493,11 @@ class CodeGen:
             extern: Whether the callee is an ``@extern`` declaration, which
                 grades a possibly-null ``@nonnull`` argument by posture instead
                 of always rejecting it (see :meth:`check_nonnull_arg`).
+            abi: The struct-passing C-ABI plan for an ``@extern`` callee, whose
+                aggregate arguments marshal to the classified register/pointer
+                form (see :meth:`lower_abi_arg`); ``None`` for every other call.
+            sret_slot: The caller-allocated result slot to prepend as the hidden
+                first argument when ``abi`` returns a struct indirectly.
 
         Returns:
             The marshalled LLVM argument values.
@@ -9349,6 +9521,9 @@ class CodeGen:
                 f"{label} expects {len(params)} argument(s), got {len(arg_exprs)}", line
             )
         args = []
+        if sret_slot is not None:
+            # The struct return's hidden pointer leads the argument list.
+            args.append(sret_slot)
         # A C-variadic tail runs through the loop for its promotions; a
         # collecting tail is gathered separately below.
         head = arg_exprs[:fixed] if collecting else arg_exprs
@@ -9356,6 +9531,13 @@ class CodeGen:
             context = f"argument {i + 1} of {label}"
             if i in nonnull:
                 self.check_nonnull_arg(arg_expr, context, line, extern=extern)
+            abi_cls = abi.args[i] if abi is not None and i < len(abi.args) else None
+            if abi_cls is not None:
+                # A by-value aggregate argument to an @extern is marshalled to
+                # the C ABI form (a register coercion or a pointer to a copy);
+                # it is never hidden/mut/valist, so this precedes those paths.
+                args.append(self.lower_abi_arg(arg_expr, params[i], abi_cls, line, context))
+                continue
             if i in mut:
                 # Before the string-literal adaptation: a literal is not the
                 # caller's storage, so it must be rejected, not spilled.
@@ -9408,6 +9590,60 @@ class CodeGen:
                 )
             )
         return args
+
+    def lower_abi_arg(self, arg_expr, ptype: LangType, cls, line: int, context: str):
+        """Marshal one by-value aggregate argument into its C-ABI form.
+
+        A :class:`~mcc.codegen.abi.Direct` aggregate is spilled to a slot of its
+        coercion type and reloaded through that type, so the value arrives in
+        the registers the ABI expects. An :class:`~mcc.codegen.abi.Indirect`
+        aggregate is spilled to a fresh caller-owned copy whose pointer is
+        passed -- matching clang's AArch64 lowering, which materializes the copy
+        in the frontend and passes a plain pointer rather than relying on the
+        ``byval`` attribute.
+
+        Args:
+            arg_expr: The argument expression.
+            ptype: The parameter's aggregate ``LangType``.
+            cls: The argument's classification.
+            line: Source line for diagnostics.
+            context: A label for coercion error messages.
+
+        Returns:
+            The LLVM value (a coerced register value, or a pointer to a copy).
+        """
+        tv = self.coerce(self.gen_expr(arg_expr), ptype, line, context)
+        if isinstance(cls, Indirect):
+            return self.spill_to_temp(tv, ptype, line, context)
+        # Direct: store the struct into a coercion-typed slot (large enough and
+        # aligned for the coercion type), then reload it in that form.
+        slot = self.entry_alloca(cls.coerce_ir)
+        self.builder.store(tv.value, self.builder.bitcast(slot, ptype.ir.as_pointer()))
+        return self.builder.load(slot)
+
+    def reconstruct_abi_return(self, raw, ret: LangType, cls, sret_slot):
+        """Rebuild an ``@extern`` call's by-value struct return from its ABI form.
+
+        A :class:`~mcc.codegen.abi.Direct` return arrives as a register value
+        (``raw``): it is stored into a coercion-typed slot and reloaded as the
+        struct. An :class:`~mcc.codegen.abi.Indirect` return was written by the
+        callee into ``sret_slot``, which is loaded as the struct.
+
+        Args:
+            raw: The call instruction's result (the register value, or the void
+                of an ``sret`` call).
+            ret: The struct return ``LangType``.
+            cls: The return classification.
+            sret_slot: The caller-allocated slot for an indirect return.
+
+        Returns:
+            The reconstructed struct value.
+        """
+        if isinstance(cls, Indirect):
+            return self.builder.load(sret_slot)
+        slot = self.entry_alloca(cls.coerce_ir)
+        self.builder.store(raw, slot)
+        return self.builder.load(self.builder.bitcast(slot, ret.ir.as_pointer()))
 
     def collect_variadic_args(
         self, extras: list, ptype: LangType, hidden: bool, label: str, line: int

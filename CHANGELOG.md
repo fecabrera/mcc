@@ -10,6 +10,29 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **C struct-passing ABI (AArch64), mcc calling C** — an `@extern` function may
+  now take or return a `struct`/`union` **by value**, classified for the
+  platform C ABI so the aggregate crosses the boundary correctly. Only the
+  `@extern` call boundary is affected: mcc's own calls keep their raw-aggregate
+  convention (whole struct as an LLVM aggregate, `const`/`mut` struct parameters
+  by hidden reference), and the two conventions stay distinct. The
+  classification is Apple/AAPCS64: a homogeneous float aggregate (1–4 `float64`
+  members) passes in FP registers, any other aggregate ≤16 bytes in
+  general-purpose registers (`i64` or `[2 x i64]`), and a larger one indirectly
+  — an argument by a pointer to a caller-owned copy, a return through a hidden
+  `sret` pointer (the function returns `void`). A `union` is never a float
+  aggregate. `@packed`/`@align` are honored. This is why libc's `div`/`ldiv`
+  (small structs returned in a register / a register pair) now work directly. A
+  new `mcc/codegen/abi.py` module holds the classifier; the shape matrix
+  round-trips against a linked C fixture in the test suite. See
+  [C ABI compatibility](README.md#c-abi-compatibility),
+  [Extern declarations](docs/language.md#passing-structs-by-value-across-the-c-boundary),
+  and [examples/systems/c_struct_abi.mc](examples/systems/c_struct_abi.mc).
+  **On any non-AArch64 target** (x86-64, Windows), a by-value-struct `@extern` is
+  a compile error (`passing a struct by value across the C boundary is not
+  supported on target '…' yet; pass a pointer instead`) — pass a pointer there
+  instead; those targets, and the reverse (C calling into mcc) direction, remain
+  [on the roadmap](ROADMAP.md#planned).
 - **String literals adapt in slice assignment** — a string literal (or a
   ternary of them) now borrows into an existing char-slice lvalue with no
   explicit `as`, the final position in the string/array-literal adaptation

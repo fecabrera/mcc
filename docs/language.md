@@ -3739,6 +3739,52 @@ platform:
 Code still refers to the declaration by its mcc name (`stdout`, `length`); only
 the emitted symbol changes.
 
+### Passing structs by value across the C boundary
+
+An `@extern` function may take or return a `struct` (or `union`) **by value**,
+and the call is lowered to the platform C ABI so the aggregate lands where the C
+side expects it. This is a property of the `@extern` boundary only: mcc's own
+calls keep their raw-aggregate convention (the whole struct as an LLVM
+aggregate, with `const`/`mut` struct parameters travelling by a
+[hidden reference](#mut-parameters)), which is self-consistent but is not the C
+ABI. The two conventions stay distinct.
+
+The classification implemented is **AArch64 (Apple/AAPCS64)**, for the direction
+**mcc calling C**. An aggregate crossing the boundary is passed as:
+
+- **FP registers** when it is a homogeneous float aggregate — every member
+  (recursively, through nested structs and arrays) the same floating type, one
+  to four in all. mcc has only `float64`, so this is 1–4 `double`s, e.g. a
+  `{ x: float64; y: float64; }` point.
+- **General-purpose registers** otherwise, when it is 16 bytes or less (one
+  register up to 8 bytes, a pair up to 16). A `union` is always classified this
+  way — it is never a float aggregate.
+- **Indirectly** when it is larger than 16 bytes: an argument is passed as a
+  pointer to a caller-owned copy, and a return is written through a hidden
+  pointer the caller allocates (the C `sret` convention), so the function itself
+  returns nothing.
+
+```c
+struct div_t { quot: int32; rem: int32; }          // 8 bytes → one register
+@extern @symbol("div") fn c_div(n: int32, d: int32) -> struct div_t;
+
+fn main() -> int32 {
+    let r: struct div_t = c_div(17, 5);             // quot = 3, rem = 2
+    return r.quot * 10 + r.rem;
+}
+```
+
+`@packed` and `@align` are honored (they change the size/alignment the rules
+see). On any **non-AArch64** target (x86-64, Windows), an `@extern` that passes
+or returns a struct by value is a compile error —
+
+```
+example.mc: error: line 2: passing a struct by value across the C boundary is not supported on target 'x86_64-unknown-linux-gnu' yet; pass a pointer instead
+```
+
+— so pass a pointer (`struct point*`) there instead. See
+[c_struct_abi.mc](../examples/systems/c_struct_abi.mc) for a runnable example.
+
 ### Bodyless fn prototypes
 
 A plain `fn` may also end with `;` instead of a body. Where `@extern` means

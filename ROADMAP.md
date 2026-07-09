@@ -2345,8 +2345,20 @@ already do).
       for linking (today the system `cc` on `PATH`)
 - [ ] C struct-passing ABI — classify by-value struct arguments and returns
       into registers/`byval`/`sret` per the platform ABI, so structs cross the
-      C boundary correctly (today only scalars and pointers are ABI-compatible;
-      see [C ABI compatibility](README.md#c-abi-compatibility))
+      C boundary correctly (see
+      [C ABI compatibility](README.md#c-abi-compatibility)). Applied only at the
+      `@extern` boundary; mcc's own calls keep their raw-aggregate convention
+  - [x] AArch64 (Apple/AAPCS64), mcc calling C — homogeneous float aggregates
+        in FP registers, ≤16-byte aggregates in GPRs, larger ones indirect
+        (pointer-to-copy arguments, `sret` returns); a by-value-struct `@extern`
+        hard-errors on any non-AArch64 target. See
+        [c_struct_abi.mc](examples/systems/c_struct_abi.mc)
+  - [ ] x86-64 (System V and Windows x64) and other targets — the same
+        classification for their register/`byval`/`sret` rules, lifting the
+        non-AArch64 compile error
+  - [ ] C calling mcc — exporting an mcc function that takes/returns a struct by
+        value to a C caller (today mcc's own definitions keep the native
+        raw-aggregate convention; only the `@extern` call *into* C is classified)
 - [ ] Namespaced exported symbols — emit mcc functions under a mangled/prefixed
       symbol (the `@extern` libc bindings keep their real names via `@symbol`),
       so a precompiled mcc library does not clash with libc/system symbols when

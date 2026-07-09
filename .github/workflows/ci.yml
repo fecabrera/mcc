@@ -78,9 +78,15 @@ jobs:
         # class promoted to error. It is compiled just below at plain -Werror
         # (the class off, its documented relaxed default), like the other opt-in
         # class demos whose classes CI does not enable.
+        #
+        # systems/c_struct_abi.mc passes structs by value across the C boundary,
+        # which is classified only for AArch64 and hard-errors on other targets;
+        # it is cross-compiled to an AArch64 object in a dedicated step instead
+        # (the host loop runs on x86-64 too, where those declarations are gated).
         run: |
           find examples -name '*.mc' -not -path 'examples/baremetal/*' \
-              -not -path 'examples/systems/extern_nonnull.mc' | while read -r f; do
+              -not -path 'examples/systems/extern_nonnull.mc' \
+              -not -path 'examples/systems/c_struct_abi.mc' | while read -r f; do
             echo "== $f =="
             pipenv run python -m mcc "$f" -Werror -Wextern-nonnull -o "$RUNNER_TEMP/$(basename "$f" .mc)"
           done
@@ -92,6 +98,15 @@ jobs:
         run: |
           pipenv run python -m mcc examples/baremetal/kernel.mc -Werror \
             --target aarch64-unknown-none-elf -o "$RUNNER_TEMP/kernel.o"
+
+      - name: Cross-compile the C struct-ABI example
+        # By-value struct passing is AArch64-only, so this file is gated off the
+        # x86-64 host loop; cross-compiling to an AArch64 object exercises the
+        # classifier on every runner. Its full linked round-trip runs in the
+        # test suite on the AArch64 runner.
+        run: |
+          pipenv run python -m mcc examples/systems/c_struct_abi.mc -Werror \
+            --target aarch64-apple-darwin -o "$RUNNER_TEMP/c_struct_abi.o"
 
   # The precompiled standard library is experimental: it builds, but linking a
   # program against it is not ready (exported symbols like errno/crc32 collide

@@ -27,9 +27,14 @@ def _resolve(source: str) -> Program:
     return merge_imports(program, STDLIB_DIR, (STDLIB_DIR,))
 
 
-def compile_ir(source: str) -> str:
-    """Compile source to LLVM IR text (unoptimized, unverified)."""
-    return str(CodeGen(_resolve(source), "test").generate())
+def compile_ir(source: str, target: str | None = None) -> str:
+    """Compile source to LLVM IR text (unoptimized, unverified).
+
+    A ``target`` triple fixes the compilation target (e.g. to exercise a
+    platform ABI deterministically regardless of the host); the default follows
+    the host.
+    """
+    return str(CodeGen(_resolve(source), "test", target=target).generate())
 
 
 def _execute(module) -> int:
