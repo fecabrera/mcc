@@ -61,6 +61,10 @@ its reference section in the [language reference](docs/language.md).
       `slice<const T>` is the read-only form a mutable slice widens into. A
       string literal **adapts** to a `slice<char>`/`slice<const char>` from
       context (NUL dropped), so `writeln("hi")` just works
+- [x] [Sub-slicing](docs/language.md#sub-slicing) — `s[start:end]` on a slice
+      yields a new slice over the same storage (`s[1:]`, `s[:2]`, `s[:]`),
+      omitted bounds defaulting to `0`/`.length`; a plain rvalue, unchecked
+      like `s[i]`
 - [x] [Structs](docs/language.md#structs) — `.`/`->` access, generics, struct
       literals (`point { x = 6, y = 4 }`, the `struct` keyword optional, omitted
       fields zeroed or set to a field's `= default`, generic type arguments
@@ -72,6 +76,10 @@ its reference section in the [language reference](docs/language.md).
       type parameter in the `extends` slot (`struct wrapper<T> extends T`)
       embeds `T`'s fields as the layout prefix per instantiation (the
       intrusive-container shape); single base by design
+- [x] [Nominal struct subtyping](docs/language.md#structs) — the struct
+      subtype relation (value/pointer upcast and slice-borrow) follows the
+      declared `extends` lineage, not a matching layout prefix, so a
+      coincidental layout twin no longer upcasts or borrows
 - [x] [Builtin structs](docs/language.md#control-flow) — `iterator<T>` (the
       shared `_it`/`_next` cursor), `pair<K, V>` (what the keyed containers
       yield), and `enumerated<T>` (what `enumerate` yields), available with no
@@ -85,6 +93,10 @@ its reference section in the [language reference](docs/language.md).
       constants over any underlying type, the name usable as a type
 - [x] [Type aliases](docs/language.md#type-aliases) — `type <name> = <type>;`,
       transparent (e.g. `type callback = fn(int32, uint8**) -> int32;`)
+- [x] [`typename`](docs/language.md#the-typename-builtin) — recover a type's
+      canonical name as a `const` string, taking a type or an expression
+      (`typename(int64)`, `typename(x)`), folded at compile time; resolves
+      per instantiation inside generics
 - [x] [Imports](docs/language.md#imports) — bare-name resolution, search paths
 - [x] [Visibility](docs/language.md#visibility) — `@private`, `@static`
 - [x] [Extern declarations](docs/language.md#extern-declarations) — `@extern`, `@symbol`
@@ -742,50 +754,6 @@ already do).
         declaration onto their own AST node and type kind, so a struct-only
         code path (sequential layout, `extends`, prefix upcast) can never
         silently accept a union. A pure compiler refactor, no language change
-- [x] Nominal struct subtyping — make the struct subtype relation follow the
-      declared `extends` lineage rather than a matching layout prefix. Two
-      struct sites accept any struct whose fields are the leading prefix of
-      another today (`is_struct_prefix`): the value/pointer upcast and the
-      borrow of a struct to a `slice<T>`. That structural test is broader than
-      the relation the language declares, since a struct that merely shares a
-      base's field prefix, with no `extends` clause, silently upcasts and
-      borrows. This narrows both sites to the nominal rule, so only a type in
-      the target's declared `extends` chain participates (including a
-      bare-parameter base, `struct wrapper<T> extends T`, resolved per
-      instantiation, and a transparent `type` alias, which resolves to the same
-      underlying struct); a coincidental layout twin is rejected. The prefix
-      layout stays the mechanism (base fields first, so the upcast is still a
-      zero-cost reinterpret and the borrow still reads `{data, length}` straight
-      across) but stops being the definition. Unions still never participate.
-      The only behavior change in the repo is one new rejection: a non-`extends`
-      struct that happens to match a prefix (a `buf` laid out like
-      `slice<char>`, say) can no longer be upcast or borrowed. Every shipped
-      `extends`, upcast, and slice-borrow already routes through a declared
-      base, so the conversion is behavior-preserving on all current code,
-      examples, and `libmc`. The slice-borrow's structural check predates
-      `extends`: before `list<T> extends slice<T>` could be declared it was the
-      only way to recognize a list-shaped struct as borrowable, so it is now
-      vestigial scaffolding, and the docs line "the borrow is structural, not
-      keyed to a particular type name" ([slices](docs/language.md#slices)) is
-      stale pre-`extends` prose, not a design guarantee, corrected by this
-      change. Mechanically the declared base chain (today computed per
-      instantiation by `resolve_base` but not retained on the frozen
-      `LangType`) is recorded so each site walks lineage instead of comparing
-      field lists, one predicate replacing `is_struct_prefix` at all three; no
-      grammar, `.mci`, or type-kind change, since the lineage derives from the
-      already-serialized `extends` clause. This settles a single nominal
-      subtyping model across the language: it removes the asymmetry the planned
-      [bounds](#types-and-generics) would otherwise introduce (a `T extends S`
-      bound rejecting a layout twin while the upcast beside it accepts one), it
-      matches the declared-not-inferred stance of
-      [closed type groups](docs/language.md#closed-type-groups) and generic
-      [defaults](docs/language.md#type-parameter-defaults), and it is the
-      foundation the [polymorphic base views](#functions-and-methods) dispatch
-      chain relies on, whose tables are prefix-compatible down the declared
-      single `extends` chain that a structural notion would fight. Small and
-      near-term, it may land in the same change set as `bounds`, but stays its
-      own line so the shift to two shipped sites is visible and correctly
-      ordered as the prerequisite
 - [ ] Bitfields — `field: uint32 : 5;`, packing consecutive narrow fields into
       one storage unit, for hardware registers, protocol headers, and C-layout
       interop (many syscall/kernel structs use them; `@packed` doesn't
@@ -928,71 +896,6 @@ already do).
           explicit `as`-cast escape). Recorded: literal elements contribute
           nothing to generic inference in this design (element anchoring is
           a possible later extension)
-- [x] Sub-slicing — `s[start:end]` on a slice yields a new slice viewing the
-      same storage, `{ data = &s.data[start], length = end - start }`, with an
-      omitted `start` defaulting to 0 and an omitted `end` to `s.length`:
-      `s[1:]`, `s[:2]`, and `s[:]` (a plain copy of the view). Pure surface
-      syntax over the struct-literal spelling: codegen emits the same
-      data-field extract, GEP, and length subtraction, with no dependency
-      on the [pointer arithmetic](#structs-arrays-and-data-layout) item.
-      Receivers: **slice-typed expressions only**, `slice<const T>`
-      included (safe as a compiler-lowered receiver because the builtin's
-      static `{ data, length }` layout fully describes the view);
-      everything else reaches sub-slicing by first becoming a slice
-      through its existing spelling, `(arr as slice<T>)[1:]` for an owned
-      array or list and `("abc" as slice<char>)[1:]` for a string literal
-      (literal receivers are rejected, keeping literal adaptation's
-      context-position rule at its one home), the explicit
-      [borrow](docs/language.md#slices) keeping the `char[N]` NUL-drop
-      and read-only-source rules exactly where they live. The
-      non-slice-receiver rejection is a single site with tailored
-      borrow-suggesting messages, deliberately shaped as the dispatch
-      point the planned
-      [indexing and slicing protocol](#functions-and-methods) later turns
-      into overload-set dispatch: `list<T>` and other slice-extending
-      structs stay non-receivers (derived state beyond the view, `list`'s
-      `capacity` the standing example, is the type author's to rebuild
-      through a slicer overload), and until the protocol lands they spell
-      the borrow, consistent with `lst[i]` not indexing today. Two
-      direct-receiver forms remain recorded later extensions, not
-      settled-never, both on this primitive side of the split (their
-      layouts are equally static): a fixed-size array (`arr[a:b]` as
-      sugar for the borrow, the slicing brackets serving as the visible
-      borrow marker) and a bare pointer (`p[1:3]`, both bounds explicit).
-      The result is a plain rvalue `slice<T>` (a dedicated AST node
-      beside `Index`, so rvalue-ness falls out of every lvalue path
-      excluding it, no new bans needed): element mutability rides the
-      element type (a sub-slice of `slice<const T>` is `slice<const T>`),
-      `s[1:3] = ...` and the compound forms are rejected (bulk-copy
-      assignment stays a possible future beside a memcpy-style helper),
-      and `for x in s[1:]` just works, a slice being a plain value.
-      Bounds: any integer type is accepted and internally widened to
-      64-bit by its own signedness, index parity with plain `s[i]`
-      (deliberately more permissive than the struct-literal spelling;
-      widths carry no safety since out-of-range is UB regardless), and
-      nothing is checked, the house posture: `start > end` or
-      `end > length` is a corrupt view exactly like an out-of-range
-      `s[i]`, no checked mode. `s[n:n]` is the defined empty result
-      `{ &s.data[n], 0 }`, the one-past-end pointer formed but never
-      dereferenced, not normalized to the empty literal's `{ null, 0 }`
-      (no branch in the lowering). Settled exclusions, not deferred: no
-      negative indices (an index is a raw element offset everywhere in
-      mcc) and no step (`s[a:b:c]`; a strided run is unrepresentable in
-      the `{ data, length }` layout, and `::` lexes as one token so
-      `s[::2]` stays a parse error naturally). Grammar: a `:` decision
-      point inside the postfix `[...]` where a full expression parses
-      first, so a ternary start binds greedily (`nums[flag ? 1 : 2 : 3]`
-      is `start = flag ? 1 : 2` with `end = 3`, deterministic); the
-      tree-sitter grammar carries the same ternary-vs-slice-colon
-      precedence, and the tmLanguage needed no change. A sub-slice in
-      bare argument position is an ordinary typed expression, orthogonal
-      to the array-literal adaptation gates above (those key on literal
-      AST nodes). No `.mci` or import-merge surface. Runtime-expression
-      only: no sub-slicing in `const` initializers, `@if` conditions, or
-      `@static` initializers, matching pointer arithmetic's stance. A
-      `slice<char>` sub-slice carries its exact length and no NUL at
-      `data + length`, already true of every borrowed slice; implemented,
-      see [Sub-slicing](docs/language.md#sub-slicing)
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:
@@ -2160,39 +2063,6 @@ already do).
   - [ ] `@define <name> = <value>` — a named compile-time substitution
 - [ ] Bit-twiddling builtins — `byte_swap<T>` (`llvm.bswap`) and
       `bit_reverse<T>` (`llvm.bitreverse`) over the integer types
-- [x] `typename` builtin — recover the canonical name of a type as a `const`
-      string: mirrors `sizeof` in taking a type or an expression
-      (`typename(int64)`, `typename(x)`) and folds at compile time to a
-      deduplicated rodata string literal, typed like any other string
-      literal, zero runtime machinery. Value-level by design: the result
-      flows into a variable if needed (`let n = typename(T);`), a parameter,
-      a struct, a `println`, which is what distinguishes it from the planned
-      [`@typeof`](#types-and-generics) (compile-time-only, yielding a type
-      usable in type position, its `@` prefix placing it with the
-      `@if`/`@else` compile-time family, and not part of this item) and why
-      the bare name reads next to `sizeof` instead of implying C's
-      `typeof`. The canonical
-      spelling already exists in the compiler: `str(LangType)` drives the
-      [`any`](#structs-arrays-and-data-layout) tags (`any_tag` hashes
-      exactly this string), the signature mangles, and diagnostics, so
-      `typename` surfaces that string unchanged, deterministic across
-      compilations (the property the tag hashing relies on) and precisely
-      the preimage of the value's `any` tag. Monomorphization gives
-      per-instantiation resolution for free: in `fn f<T>(...)`,
-      `typename(T)` resolves to its own literal per instantiation. The
-      powerful combination is with the
-      [generic arms in `case type`](#structs-arrays-and-data-layout):
-      inside `when T v:` the arm is a real generic context, so
-      `typename(T)` names the dynamic type of the boxed `any` per tag,
-      statically, covering most of what the `any` item's descriptor-pointer
-      upgrade path was reserved for without descriptors (the one remaining
-      descriptor-only case is naming a type in a bare `else` arm, where
-      only the erased `any` exists). Semantics pinned: `typename(expr)`
-      uses the expression's **static** type, so an `any` names as `"any"`,
-      never its dynamic type. A top-level `const` strips, matching what
-      boxing does with tags, keeping the name the tag's preimage —
-      implemented, see
-      [The typename builtin](docs/language.md#the-typename-builtin)
 - [ ] Builtin `enumerate` — pairing each element with its `uint64` position:
   - [x] over containers, arrays, and slices — implemented, see
         [Control flow](docs/language.md#control-flow)
