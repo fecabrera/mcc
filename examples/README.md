@@ -135,13 +135,14 @@ Pointers and the builtin container/view types built on them.
 
 ## systems/
 
-Interfacing with the outside world: libc, formatted I/O (raw printf and the
-stdlib's native `format` protocol), shipping compiled libraries, and inline
-assembly.
+Interfacing with the outside world: libc, the graded `@nonnull` promise on a
+foreign declaration, formatted I/O (raw printf and the stdlib's native
+`format` protocol), shipping compiled libraries, and inline assembly.
 
 | Example | Shows |
 |---------|-------|
 | [extern.mc](systems/extern.mc) | `@extern` functions (including variadic `...`), interfacing with libc |
+| [extern_nonnull.mc](systems/extern_nonnull.mc) | `@nonnull` on an `@extern` declaration, graded by three postures over the opt-in `-Wextern-nonnull` class: a possibly-null argument silently accepted (relaxed default), warned (`-Wextern-nonnull` / `-Wall`), or a hard error with the LLVM hint restored (`-Werror=extern-nonnull`, or global `-Werror`); the always-rejected `null` literal and native-`@nonnull` contrasts, and the selective `-Werror=<class>` input form |
 | [io.mc](systems/io.mc) | printf format specifiers, `puts`, `putchar`, string escapes |
 | [formatting.mc](systems/formatting.mc) | the stdlib `format` overload set: direct calls appending each value's rendering into a `string`, the string-valued `":x"`/`":p"`/`":yes"` modifiers, per-element slice rendering (nesting recurses), the `<typename>` fallback, and one user overload making a struct printable |
 | [interfaces.mc](systems/interfaces.mc) | bodyless `fn` prototypes (the mcc-convention counterpart to `@extern`) and the `--emit-interface` / `.mci` flow for shipping a compiled library: `mut`/`const`-struct exports, what ships as a prototype vs in full, the compile-then-link consumer side |

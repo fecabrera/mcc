@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from mcc.codegen import CodeGen
-from mcc.driver import _report_warnings, compile_to_ir, parse_wflags
+from mcc.driver import (
+    _report_warnings,
+    compile_to_ir,
+    parse_wflags,
+    split_werror_classes,
+)
 from mcc.errors import WARNING_CLASSES, LangError, Note
 from helpers import parse, run
 
@@ -892,3 +897,60 @@ def test_report_dedups_within_an_enabled_class(capsys):
     assert _report_warnings(notes, Path("w.mc"), False, enabled) is False
     assert capsys.readouterr().err == (
         "w.mc: warning: line 2: m [-Wunchecked-dereference]\n")
+
+
+# --- selective -Werror=<class>: split_werror_classes and the error-level gate ---
+
+def test_split_werror_classes_peels_the_attached_form():
+    classes, rest = split_werror_classes(
+        ["a.mc", "-Werror=extern-nonnull", "-Wall"])
+    assert classes == ["extern-nonnull"]
+    assert rest == ["a.mc", "-Wall"]
+
+
+def test_split_werror_classes_leaves_bare_werror_for_argparse():
+    # A bare -Werror is the whole-build boolean; it must pass through so
+    # argparse still sees it.
+    classes, rest = split_werror_classes(["-Werror", "a.mc"])
+    assert classes == []
+    assert rest == ["-Werror", "a.mc"]
+
+
+def test_split_werror_classes_is_repeatable():
+    classes, rest = split_werror_classes(
+        ["-Werror=dead-code", "-Werror=extern-nonnull"])
+    assert classes == ["dead-code", "extern-nonnull"]
+    assert rest == []
+
+
+def test_split_werror_class_names_validate_through_parse_wflags():
+    # The peeled names are validated by parse_wflags, so an unknown one fails
+    # exactly like an unknown -W<name>.
+    classes, _ = split_werror_classes(["-Werror=bogus"])
+    with pytest.raises(ValueError, match="unknown warning class 'bogus'"):
+        parse_wflags(classes)
+
+
+def test_report_error_class_promotes_without_global_werror(capsys):
+    # A class in error_classes fails the build and renders [-Werror=<name>]
+    # even though global -Werror is off (the -Werror=<class> posture).
+    notes = [Note("m", 1, "w.mc", UNCHECKED)]
+    enabled = frozenset({UNCHECKED})
+    error_classes = frozenset({UNCHECKED})
+    assert _report_warnings(
+        notes, Path("w.mc"), False, enabled, error_classes) is True
+    assert capsys.readouterr().err == (
+        "w.mc: error: line 1: m [-Werror=unchecked-dereference]\n")
+
+
+def test_report_error_class_leaves_other_classes_as_warnings(capsys):
+    # Only the promoted class fails; another enabled class still prints as a
+    # plain warning and does not fail the build.
+    notes = [Note("m", 1, "w.mc", UNCHECKED), Note("d", 2, "w.mc", "dead-code")]
+    enabled = frozenset({UNCHECKED, "dead-code"})
+    error_classes = frozenset({UNCHECKED})
+    assert _report_warnings(
+        notes, Path("w.mc"), False, enabled, error_classes) is True
+    assert capsys.readouterr().err == (
+        "w.mc: error: line 1: m [-Werror=unchecked-dereference]\n"
+        "w.mc: warning: line 2: d [-Wdead-code]\n")

@@ -1800,21 +1800,27 @@ already do).
     - [ ] `libc/` bindings, wave 2 — annotate the `@extern` libc surface
           (attribute-only there, like `@noalias` on the `restrict` family:
           the C side is never checked, only callers are), a separate change
-          set from wave 1 above, roughly fifty parameters across four
-          modules. `libc/string.mc`: 36 parameters across the `str*`/`mem*`
+          set from wave 1 above, and a follow-on to the now-shipped
+          [`-Wextern-nonnull`](#metaprogramming-and-builtins) class, its
+          prerequisite (the three-posture enforcement is what lets these
+          annotations land without re-imposing a hard null-proof wall on
+          ported C code): the class landed as the immediately prior change
+          set, so this wave is now unblocked and next in line. 57 pointer
+          parameters across four modules, 58 with
+          `getenv`. `libc/string.mc`: 36 parameters across the `str*`/`mem*`
           externs, excluding `strtok`'s `str` (null continues a
           tokenization) and `strxfrm`'s `dest` (null is allowed when
           `count` is 0). `libc/stdlib.mc`: the `str` of
-          `atoi`/`atol`/`atoll`/`atof` and the `strto*` family (9),
-          excluding all five `endptr` parameters (documented "if
-          non-null"), `free`/`realloc`'s `ptr` (null is meaningful there),
-          and `system`'s `command` (`system(null)` probes shell
-          availability); `qsort`/`bsearch`'s function-pointer parameters
-          are skipped. `libc/math.mc`: `frexp`'s `exp`, `modf`'s `iptr`,
-          `remquo`'s `quo`, and `nan`'s `tagp` (4). `libc/time.mc`: the
-          pointer parameters of
-          `mktime`/`asctime`/`strftime`/`localtime`/`gmtime`/`ctime`,
-          excluding `time`'s `timer` (null is documented OK).
+          `atoi`/`atol`/`atoll`/`atof`, the `strto*` family, and `getenv`'s
+          `name` (`getenv(null)` is UB) (10), excluding all five `endptr`
+          parameters (documented "if non-null"), `free`/`realloc`'s `ptr`
+          (null is meaningful there), and `system`'s `command`
+          (`system(null)` probes shell availability); `qsort`/`bsearch`'s
+          function-pointer parameters are skipped. `libc/math.mc`: `frexp`'s
+          `exp`, `modf`'s `iptr`, `remquo`'s `quo`, and `nan`'s `tagp` (4).
+          `libc/time.mc`: `mktime`'s `tm`, `asctime`'s `tm`, `strftime`'s
+          `s`/`format`/`tm`, `localtime`/`gmtime`'s `timer`, and `ctime`'s
+          `timer` (8), excluding `time`'s `timer` (null is documented OK).
           `libc/stdio.mc` is deferred indefinitely, not part of this wave:
           it has real null-meaningful carve-outs (`freopen`'s `filename`,
           `setbuf`'s `buf`), and annotating `fwrite`'s `ptr` would ask
@@ -1824,18 +1830,22 @@ already do).
           proves), but a `str.data` used across calls or inside a loop
           still needs a `let`-seeded binding or a `str.data!` hatch, so
           stdio remains the highest downstream friction for the lowest
-          value. The annotations ship unconditionally, in the
-          source and in `.mci` stubs alike: no `-D`/`@if` gate (the
-          declared contract never varies per build; a gate would also
-          have to duplicate every declaration, since `@if` is
-          declaration-granular). Enforcement on externs is opt-in: by
-          default the only teeth are the unconditional literal-`null`
-          error, and the proof obligation rides the
-          [`-Wextern-nonnull`](#metaprogramming-and-builtins) class, so
-          ported C code never hits a null-proof wall and no ordering
-          between this wave and that class is forced; this repo opts in
-          by enabling the class under its existing `-Werror` CI, which
-          is what makes the wave enforceable at home
+          value. The caller blast radius is essentially zero: wave 1 already
+          funneled every in-repo raw-libc string/mem call through proven
+          wrappers (`dict.mc`'s `strlen`, `memory.mc`'s `memcpy`/`memset`,
+          `md5.mc`'s `memset`), so these four call sites already carry the
+          proof the annotations demand. The annotations ship unconditionally,
+          in the source and in `.mci` stubs alike: no `-D`/`@if` gate (the
+          declared contract never varies per build; a gate would also have to
+          duplicate every declaration, since `@if` is declaration-granular).
+          This wave ships with `-Wextern-nonnull` enabled in CI (the
+          example-compile line and `test.sh`), verified green off exactly
+          those four proven call sites, so the wave is enforceable at home.
+          Enablement is `-Wextern-nonnull` specifically, NOT `-Wall`: `-Wall`
+          would also pull in `-Wunchecked-dereference`, under which `libmc`
+          is not yet clean (the open
+          [`libmc` sweep](#metaprogramming-and-builtins) still owes ~60
+          invariant-backed dereferences their `!` or guard)
     - [x] loop-body fact preservation — replaced the shipped blanket rule
           (all narrowed facts drop at loop entry) with a pre-scan of the
           whole loop (condition and body, nested statements, `defer`
@@ -2258,46 +2268,78 @@ already do).
             `libmc` compiles warn-free under `-Wunchecked-dereference`,
             this repo's `-Werror` CI can add `-Wall`, which stays gated on
             this sweep
-    - [ ] `-Wextern-nonnull` — the enforcement class for `@nonnull` on
-          `@extern` declarations, which is opt-in by design: by default an
-          unproven pointer reaching an annotated extern slot compiles
-          silently, so mechanically ported C code (which would otherwise
-          hit a null-proof error on every `strcpy`/`strlen`/`memcpy`
-          call) builds with no flag at all; strictness on the C boundary
-          is what a codebase reaches for, not what a port escapes from.
-          Enabling the class warns at each unproven site over the channel
-          (`[-Wextern-nonnull]` in the rendering), `-Wall` includes it,
-          and `-Werror` promotes it to the failure path, which is how
-          this repo opts in: CI and `test.sh` already run `-Werror`, so
-          adding the class there turns libc-call proof violations into
-          build failures at home while user ports stay unaffected (the
-          same dogfooding endgame as `-Wunchecked-dereference` above).
-          Default silent rather than warn-by-default, deliberately: the
-          no-unavoidable-noise principle above cuts both ways, and a
-          fresh port would drown in per-call warnings it never asked for;
-          discoverability rides `-Wall` and the flag-suffix convention
-          instead. Two pieces stay unconditional: passing a literal
-          `null` to an annotated slot is always a hard error (never
-          porting noise, it is equally broken C), and native mcc
-          `@nonnull` never joins this class (the callee body holds the
-          parameter as a non-null fact, so its caller proof is
-          load-bearing). The class never changes codegen, which forces
-          one redefinition of the shipped `@extern` allowance: the LLVM
-          `nonnull`/`dereferenceable` attributes are justified only by
-          unconditional caller proof, so `mark_nonnull` stops emitting
-          them on `@extern` declarations entirely (native functions keep
-          them; docs and any exact-error-string tests for extern
-          violations update with the implementation). A hard-strict
-          posture flag restoring the optimizer hint alongside error-level
-          enforcement stays possible later, only if demand appears. The
-          annotations themselves still ship unconditionally in source and
-          `.mci` stubs (the declared promise never varies per build), and
-          the rejected alternative stands recorded: a `-D`/`@if`
+    - [x] `-Wextern-nonnull` — graded enforcement for `@nonnull` on
+          `@extern` declarations, three postures over one warning class.
+          Built first, its own change set, ahead of the
+          [wave-2 libc annotations](#tooling-and-c-interop) that depend on
+          it: those annotations without this class would re-impose a hard
+          null-proof wall on ported C code, so the class was the real
+          prerequisite and landed ahead of the wave. Extern `@nonnull`
+          already parsed, emitted attributes, enforced callers (literal-null
+          and possibly-null were both hard errors before this), and
+          round-tripped in `.mci`; this item replaced the flat possibly-null
+          error with the graded posture below. Two pieces stay outside the
+          grading: passing
+          a literal `null` to an annotated slot is always a hard error at
+          every posture (never porting noise, it is equally broken C), and
+          native mcc `@nonnull` never joins the class at all (the callee
+          body holds the parameter as a non-null fact, so its caller proof
+          is load-bearing and stays a hard error). Hint-emission is the axis
+          the postures move: the LLVM `nonnull`/`dereferenceable` attributes
+          are sound only under unconditional caller proof, so on an
+          `@extern` declaration they are emitted only at the strict posture
+          and skipped otherwise (native functions always keep them). This is
+          a per-declaration codegen fact keyed off the global posture, which
+          is knowable from the CLI `-W`/`-Werror` state before codegen runs.
+          The compiler work was narrow: registered `extern-nonnull` in
+          `WARNING_CLASSES`; made `mark_nonnull` skip the hint on externs
+          unless the posture is strict (the extern-vs-native fork is
+          `symbol in self.extern_decls`); and forked `check_nonnull_arg`'s
+          possibly-null branch three ways (accept / warn / error) by
+          posture. The annotations themselves ship unconditionally in
+          source and `.mci` stubs (the declared promise never varies per
+          build), and the rejected alternative stands recorded: a `-D`/`@if`
           `SAFE_LIBC` gate would duplicate the declaration surface per
-          branch (`@if` is declaration-granular), flip the whole
-          program's libc contract on one define, and break `.mci`
-          identity (stubs re-emit `@nonnull`) plus the merge collapse of
-          matching `@extern` redeclarations
+          branch (`@if` is declaration-granular), flip the whole program's
+          libc contract on one define, and break `.mci` identity (stubs
+          re-emit `@nonnull`) plus the merge collapse of matching `@extern`
+          redeclarations; implemented, see
+          [-Wextern-nonnull](docs/language.md#-wextern-nonnull):
+      - [x] relaxed (default, no flag) — a possibly-null argument to an
+            annotated extern slot is silently accepted, and no LLVM
+            `nonnull`/`dereferenceable` is emitted on the extern declare
+            (the hint is unsound here, `mark_nonnull` skips it via the
+            `self.extern_decls` fork). This is the posture a mechanical C
+            port builds under with no flag at all, so it never hits a
+            null-proof wall on `strcpy`/`strlen`/`memcpy` calls; strictness
+            on the C boundary is what a codebase reaches for, not what a
+            port escapes from
+      - [x] warn (`-Wextern-nonnull`, opt-in) — a possibly-null argument
+            warns over the channel (`[-Wextern-nonnull]` in the rendering),
+            `-Wall` includes it; still no LLVM hint (a warning is not a
+            proof, so the extern declare stays hint-free). Default-silent
+            rather than warn-by-default is deliberate, the no-unavoidable-
+            noise principle above: a fresh port would drown in per-call
+            warnings it never asked for, so discoverability rides `-Wall`
+            and the flag-suffix convention instead
+      - [x] strict (`-Werror=extern-nonnull`) — the class is error-level, so
+            a possibly-null argument is a hard error, restoring the
+            unconditional caller proof the default trades away, which is what
+            makes it sound for `mark_nonnull` to re-emit the LLVM
+            `nonnull`/`dereferenceable` hints on the extern declares. This is
+            the posture that recovers the codegen quality the relaxed default
+            gives up. Reachable two ways. First, whole-build `-Werror`: this
+            repo's CI and `test.sh` already run it, and global `-Werror` plus
+            `-Wextern-nonnull` is exactly "this class is error-level."
+            Second, and settled to ship with the class: selective per-class
+            `-Werror=<class>` input parsing, so `-Werror=extern-nonnull`
+            alone makes strict a targeted posture on the C boundary without
+            promoting the whole build. This is a general driver feature, not
+            special-cased to this class: it parses `-Werror=<name>` for any
+            registered warning class (an unknown name is the same hard CLI
+            error `-W<name>` already gives), and the output render already
+            spoke `[-Werror=<name>]`, so this only added the matching input
+            spelling
 - [ ] [Inline assembly](docs/language.md#inline-assembly) — arch-specific (pair with `@if` on
       `TARGET_ARCH`), preferring intrinsics where they exist:
   - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an

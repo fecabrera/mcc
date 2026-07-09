@@ -894,6 +894,111 @@ def test_dead_code_in_a_generic_body_prints_once_across_instantiations(tmp_path)
     assert result.stderr.count(warning) == 1
 
 
+# -------------------------------------------------------- -Wextern-nonnull
+
+# A possibly-null argument to an @extern @nonnull slot: the pointer comes from
+# a call's return value, an unproven source. `ext` is undefined, so these use
+# --emit-llvm to stop before linking.
+EXTERN_NN_SRC = (
+    "@extern fn ext(@nonnull p: int32*) -> int32;\n"
+    "fn make() -> int32* { return null; }\n"
+    "fn main() -> int32 {\n"
+    "    let p: int32* = make();\n"
+    "    return ext(p);\n"
+    "}\n"
+)
+EXTERN_NN_WARNING = ("passing a possibly-null pointer as argument 1 of 'ext': "
+                     "the parameter is @nonnull on an @extern declaration")
+EXTERN_NN_ERROR = "cannot pass a possibly-null pointer as argument 1 of 'ext'"
+
+# A proven-non-null argument, for observing the strict-posture LLVM hint.
+EXTERN_NN_PROVEN = (
+    "@extern fn ext(@nonnull p: int32*) -> int32;\n"
+    "fn main() -> int32 { let x: int32 = 3; return ext(&x); }\n"
+)
+
+
+def test_extern_nonnull_is_off_by_default(tmp_path):
+    # Relaxed: the possibly-null argument is silently accepted, no warning.
+    src = tmp_path / "ext.mc"
+    src.write_text(EXTERN_NN_SRC)
+    result = mcc(src, "--emit-llvm")
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert "nonnull" not in result.stdout  # no hint on the extern declare
+
+
+def test_wextern_nonnull_warns(tmp_path):
+    src = tmp_path / "ext.mc"
+    src.write_text(EXTERN_NN_SRC)
+    result = mcc(src, "-Wextern-nonnull", "--emit-llvm")
+    assert result.returncode == 0  # a warning, not an error: IR still emits
+    assert result.stderr == (
+        f"{src}: warning: line 5: {EXTERN_NN_WARNING} [-Wextern-nonnull]\n")
+    assert "nonnull" not in result.stdout  # warn keeps no hint either
+
+
+def test_wall_enables_extern_nonnull(tmp_path):
+    src = tmp_path / "ext.mc"
+    src.write_text(EXTERN_NN_SRC)
+    result = mcc(src, "-Wall", "--emit-llvm")
+    assert result.returncode == 0
+    assert (f"{src}: warning: line 5: {EXTERN_NN_WARNING} "
+            "[-Wextern-nonnull]\n") in result.stderr
+
+
+def test_werror_selective_extern_nonnull_is_strict(tmp_path):
+    # -Werror=extern-nonnull makes the class error-level: the possibly-null
+    # case is a hard compile error, no IR emitted.
+    src = tmp_path / "ext.mc"
+    src.write_text(EXTERN_NN_SRC)
+    result = mcc(src, "-Werror=extern-nonnull", "--emit-llvm")
+    assert result.returncode == 1
+    assert f"{src}: error: line 5: {EXTERN_NN_ERROR}" in result.stderr
+    assert result.stdout == ""
+
+
+def test_werror_selective_extern_nonnull_restores_the_hint(tmp_path):
+    # The strict posture is what makes the LLVM nonnull/dereferenceable hint
+    # sound again on the extern declare (observed on a proven program).
+    src = tmp_path / "ext.mc"
+    src.write_text(EXTERN_NN_PROVEN)
+    result = mcc(src, "-Werror=extern-nonnull", "--emit-llvm")
+    assert result.returncode == 0
+    assert "declare i32 @\"ext\"" in result.stdout
+    assert "nonnull dereferenceable(4)" in result.stdout
+
+
+def test_global_werror_with_wextern_nonnull_is_strict(tmp_path):
+    # Global -Werror plus the enabled class composes to the same strict
+    # posture as the selective spelling.
+    src = tmp_path / "ext.mc"
+    src.write_text(EXTERN_NN_SRC)
+    result = mcc(src, "-Wextern-nonnull", "-Werror", "--emit-llvm")
+    assert result.returncode == 1
+    assert f"{src}: error: line 5: {EXTERN_NN_ERROR}" in result.stderr
+
+
+def test_bare_werror_leaves_extern_nonnull_relaxed(tmp_path):
+    # The CI shape: bare -Werror with no -W flag. The default-off class neither
+    # prints nor fails the build, so a mechanical C port stays buildable.
+    src = tmp_path / "ext.mc"
+    src.write_text(EXTERN_NN_SRC)
+    result = mcc(src, "-Werror", "--emit-llvm")
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
+def test_werror_selective_unknown_class_is_an_error(tmp_path):
+    # An unknown -Werror=<name> fails exactly like an unknown -W<name>.
+    src = tmp_path / "ext.mc"
+    src.write_text(EXTERN_NN_SRC)
+    result = mcc(src, "-Werror=bogus", "--emit-llvm")
+    assert result.returncode == 1
+    assert result.stderr == "mcc: error: unknown warning class 'bogus'\n"
+    assert result.stdout == ""
+
+
 # ------------------------------------------------------------- @deprecated
 
 DEPRECATED_SRC = (

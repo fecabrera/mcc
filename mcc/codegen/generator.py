@@ -426,6 +426,7 @@ class CodeGen:
         root_source: str | None = None,
         target: str | None = None,
         defines: dict[str, int] | None = None,
+        error_classes: frozenset[str] = frozenset(),
     ):
         """Initialize the code generator.
 
@@ -439,8 +440,20 @@ class CodeGen:
                 ``va_list`` layout.
             defines: Command-line ``-D`` names mapped to integer values, made
                 available to ``@if`` conditions alongside the target facts.
+            error_classes: The opt-in warning classes promoted to error level
+                for this build (global ``-Werror`` over the enabled classes,
+                plus any ``-Werror=<class>``). A member here reads as its
+                *strict* posture, which two codegen facts key off before any
+                warning is printed: an ``@extern`` ``@nonnull`` declaration
+                re-emits the LLVM ``nonnull``/``dereferenceable`` hint (sound
+                only under unconditional caller proof), and a possibly-null
+                argument to such a slot is a hard error rather than an accepted
+                or warned one (see :meth:`check_nonnull_arg`).
         """
         self.program = program
+        # Warning classes promoted to error level (the strict posture); see
+        # the constructor doc. Consulted by mark_nonnull and check_nonnull_arg.
+        self.error_classes = error_classes
         # Target triple (None = host); fixes the platform va_list layout.
         self.target = target
         # -D NAME[=VALUE] command-line defines, visible only in @if conditions.
@@ -879,6 +892,15 @@ class CodeGen:
         LLVM as ``nonnull``, plus ``dereferenceable(sizeof(pointee))`` when
         the pointee is sized.
 
+        On an ``@extern`` declaration the hint is conditional on posture. The
+        default (relaxed) and ``-Wextern-nonnull`` (warn) postures accept a
+        possibly-null argument -- silently or with a warning -- so caller proof
+        is no longer unconditional and the ``nonnull``/``dereferenceable``
+        attributes would lie; they are emitted only at the strict posture
+        (``extern-nonnull`` promoted to error level), which restores that
+        proof. A native ``@nonnull`` always carries the hint: its caller proof
+        never relaxes.
+
         Args:
             fn: The IR function whose args to annotate.
             func: The AST function carrying ``nonnull_params``.
@@ -889,6 +911,11 @@ class CodeGen:
         """
         if not func.nonnull_params:
             return
+        # An extern declaration keeps the hint only under the strict posture,
+        # where caller proof is unconditional again. The pointer-shape check
+        # below is unconditional -- @nonnull on a non-pointer is a declaration
+        # error at every posture.
+        hint = not func.extern or "extern-nonnull" in self.error_classes
         for i, ((pname, _), ptype) in enumerate(zip(func.params, params)):
             if pname not in func.nonnull_params:
                 continue
@@ -898,6 +925,8 @@ class CodeGen:
                     func.line,
                     source=func.source,
                 )
+            if not hint:
+                continue
             fn.args[i].add_attribute("nonnull")
             pointee = strip_const(ptype.pointee)
             if pointee is not VOID and not is_flexible_array(pointee):
@@ -8657,6 +8686,9 @@ class CodeGen:
             # stay explicit-slice), and a mut trailing parameter never does.
             collecting=self.collecting_params(params)
             and len(params) - 1 not in mut,
+            # An @extern @nonnull slot grades a possibly-null argument by
+            # posture; a native one always rejects it.
+            extern=symbol in self.extern_decls,
         )
         raw = self.emit_call(
             self.funcs[symbol], args, preserves=symbol in self.fact_safe_syms
@@ -8715,6 +8747,7 @@ class CodeGen:
         mut: frozenset[int] = frozenset(),
         nonnull: frozenset[int] = frozenset(),
         collecting: bool = False,
+        extern: bool = False,
     ) -> list:
         """Evaluate and coerce a call's arguments against the parameter types.
 
@@ -8739,6 +8772,9 @@ class CodeGen:
                 provably non-null (see :meth:`check_nonnull_arg`).
             collecting: Whether the callee's trailing ``slice<const any>``
                 parameter collects the extra arguments (native variadics).
+            extern: Whether the callee is an ``@extern`` declaration, which
+                grades a possibly-null ``@nonnull`` argument by posture instead
+                of always rejecting it (see :meth:`check_nonnull_arg`).
 
         Returns:
             The marshalled LLVM argument values.
@@ -8768,7 +8804,7 @@ class CodeGen:
         for i, arg_expr in enumerate(head):
             context = f"argument {i + 1} of {label}"
             if i in nonnull:
-                self.check_nonnull_arg(arg_expr, context, line)
+                self.check_nonnull_arg(arg_expr, context, line, extern=extern)
             if i in mut:
                 # Before the string-literal adaptation: a literal is not the
                 # caller's storage, so it must be rejected, not spilled.
@@ -9197,9 +9233,24 @@ class CodeGen:
         return False
 
     def check_nonnull_arg(
-        self, arg_expr, context: str, line: int, proven: "bool | None" = None
+        self, arg_expr, context: str, line: int, proven: "bool | None" = None,
+        extern: bool = False,
     ):
         """Require proof that an argument to a ``@nonnull`` slot is non-null.
+
+        The ``null`` literal is always a hard error, and a native (non-extern)
+        ``@nonnull`` slot always rejects a possibly-null argument -- the callee
+        body holds the parameter as a load-bearing non-null fact. An
+        ``@extern`` slot instead grades the possibly-null case by posture (the
+        ``extern-nonnull`` class), because a mechanical C port would otherwise
+        hit a null-proof wall on every ``strcpy``/``strlen`` call:
+
+        * **relaxed** (default): silently accepted.
+        * **warn** (``-Wextern-nonnull``): a warning on the ``extern-nonnull``
+          channel; the driver prints it only when the class is enabled, so a
+          disabled class is exactly the relaxed posture.
+        * **strict** (``-Werror=extern-nonnull`` or global ``-Werror`` with the
+          class enabled): a hard error, restoring unconditional caller proof.
 
         Args:
             arg_expr: The argument expression.
@@ -9210,10 +9261,13 @@ class CodeGen:
                 a later argument's nested call blanket-kills path facts,
                 but an earlier argument's load already happened under its
                 guard); ``None`` judges it here, against the current facts.
+            extern: Whether the callee is an ``@extern`` declaration, selecting
+                the graded posture for the possibly-null case.
 
         Raises:
-            LangError: When the argument is the ``null`` literal or is not
-                provably non-null (see :meth:`proves_nonnull`).
+            LangError: When the argument is the ``null`` literal, or is not
+                provably non-null (see :meth:`proves_nonnull`) at a native slot
+                or an extern slot under the strict posture.
         """
         if isinstance(arg_expr, NullLit):
             raise LangError(
@@ -9221,14 +9275,27 @@ class CodeGen:
             )
         if proven is None:
             proven = self.proves_nonnull(arg_expr)
-        if not proven:
-            raise LangError(
-                f"cannot pass a possibly-null pointer as {context}: the "
-                "parameter is @nonnull (pass &x, a string or array literal, "
-                "an array, a @nonnull parameter, a pointer narrowed by a "
-                "null check, or assert with postfix '!')",
+        if proven:
+            return
+        if extern and "extern-nonnull" not in self.error_classes:
+            # relaxed or warn: never a hard error. The warning is always
+            # collected (tagged extern-nonnull); the driver's class filter is
+            # what makes an unenabled class silent (relaxed) and an enabled one
+            # print (warn).
+            self.warn(
+                f"passing a possibly-null pointer as {context}: the parameter "
+                "is @nonnull on an @extern declaration",
                 line,
+                wclass="extern-nonnull",
             )
+            return
+        raise LangError(
+            f"cannot pass a possibly-null pointer as {context}: the "
+            "parameter is @nonnull (pass &x, a string or array literal, "
+            "an array, a @nonnull parameter, a pointer narrowed by a "
+            "null check, or assert with postfix '!')",
+            line,
+        )
 
     def decays_to(self, arg_type: LangType, ptype: LangType, mut: bool) -> bool:
         """Whether a pointer argument type may decay into a hidden-ref slot.
@@ -9848,11 +9915,14 @@ class CodeGen:
         # The proof is syntactic, so it runs on the argument expressions even
         # though they were already lowered to values for binding inference --
         # against the facts recorded when each argument was evaluated.
+        # A template is never @extern (externs are non-generic direct
+        # symbols), so this fork stays relaxed-free; threaded for parity.
+        extern = expr.name in self.extern_decls
         for i in self.nonnull_indices(func):
             if i < len(expr.args):
                 self.check_nonnull_arg(
                     expr.args[i], f"argument {i + 1} of {expr.name!r}",
-                    expr.line, proven=proofs[i],
+                    expr.line, proven=proofs[i], extern=extern,
                 )
         hidden = self.hidden_ref_indices(func, params)
         args = []

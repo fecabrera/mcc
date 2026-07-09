@@ -29,4 +29,6 @@ fn main() -> int32 {
 
 // See also: interfaces.mc -- for a function defined in another *mcc* object,
 // a bodyless `fn` prototype keeps the mcc calling convention (mut/const
-// markers included), where @extern means the C one.
+// markers included), where @extern means the C one. extern_nonnull.mc adds
+// `@nonnull` to an @extern declaration: the graded null-proof promise on a
+// foreign C parameter.

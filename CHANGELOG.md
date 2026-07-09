@@ -10,6 +10,33 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`-Wextern-nonnull` — graded enforcement for `@nonnull` on `@extern`
+  declarations** — a possibly-null argument to a `@nonnull` slot on a foreign
+  `@extern` declaration is now graded by three postures over one default-off
+  warning class, instead of the flat hard error it shared with native
+  `@nonnull`. **relaxed** (the default, no flag) silently accepts it — the
+  posture a mechanical C port builds under, so `strcpy`/`strlen`/`memcpy`
+  calls no longer hit a null-proof wall; **warn** (`-Wextern-nonnull`, or
+  `-Wall`) reports it as a `[-Wextern-nonnull]` warning; **strict**
+  (`-Werror=extern-nonnull`, or a global `-Werror` with the class enabled)
+  makes it a hard error again. Native (non-extern) `@nonnull` never joins the
+  class — its possibly-null case stays a hard error at every posture — and
+  passing the `null` literal to an extern `@nonnull` slot is always a hard
+  error. The LLVM `nonnull`/`dereferenceable` hint on the extern declare is
+  sound only under unconditional caller proof, so it is emitted only at the
+  strict posture (native declarations always keep it). The class is off by
+  default: CI and existing builds are unaffected. See
+  [-Wextern-nonnull](docs/language.md#-wextern-nonnull) and
+  [examples/systems/extern_nonnull.mc](examples/systems/extern_nonnull.mc).
+- **Selective `-Werror=<class>`** — a new driver input form that promotes a
+  single warning class to error level without the whole-build promotion of a
+  bare `-Werror`. It enables the class and marks it error-level (repeatable),
+  is general to any registered class (e.g. `-Werror=unchecked-dereference`),
+  composes with a global `-Werror`, and rejects an unknown name with the same
+  `mcc: error: unknown warning class 'name'` an unknown `-W<name>` gives. The
+  spelling mirrors the `[-Werror=<name>]` promotion render that already
+  existed. See [Selective -Werror=<class>](docs/language.md#selective--werrorclass).
+
 - **Sub-slicing** — `s[start:end]` on a `slice<T>` yields a new rvalue slice
   viewing the same storage, `{ &s.data[start], end - start }`. Either bound
   may be omitted: `s[1:]` defaults the end to `s.length`, `s[:2]` the start

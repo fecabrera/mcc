@@ -50,4 +50,6 @@ fn main() -> int32 {
 // is a promise the caller keeps. See also: nonnull_narrowing.mc for the
 // null-check guards that narrow a plain T* into a proof; nonnull_assert.mc
 // for the postfix `p!` assertion that lets unproven pointers cross;
-// noalias.mc; memory/pointers.mc for the pointer basics.
+// systems/extern_nonnull.mc for @nonnull on an @extern declaration, where the
+// flat hard error here becomes a graded posture over the `-Wextern-nonnull`
+// class; noalias.mc; memory/pointers.mc for the pointer basics.

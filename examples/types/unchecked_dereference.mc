@@ -119,7 +119,10 @@ fn main() -> int32 {
 // See also: warnings.mc for the warning channel, `-Werror`, and the
 // unconditional `@warning` this class contrasts with;
 // control-flow/dead_code.mc for the second class, `-Wdead-code`, riding
-// the same framework;
+// the same framework; systems/extern_nonnull.mc for a third class,
+// `-Wextern-nonnull`, that uses the framework differently: it grades an
+// @extern `@nonnull` argument check across three postures rather than
+// reporting otherwise-legal code;
 // functions/nonnull.mc for the proof relation and its always-non-null
 // sources; functions/nonnull_narrowing.mc for the guard shapes that
 // silence a site; functions/nonnull_assert.mc for the postfix `!` hatch.

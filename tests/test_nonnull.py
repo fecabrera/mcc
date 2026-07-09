@@ -71,12 +71,133 @@ def test_nonnull_emits_argument_attributes():
     assert "nonnull" in head and "dereferenceable(4)" in head
 
 
-def test_nonnull_on_extern_declaration():
+def compile_ir_posture(source: str, *, strict: bool = False) -> str:
+    """Compile a string to IR under a chosen extern-nonnull posture.
+
+    ``strict`` promotes the ``extern-nonnull`` class to error level (the
+    ``-Werror=extern-nonnull`` / global-``-Werror`` posture); the default is
+    relaxed. Uses ``parse`` (no import merge) -- the extern-nonnull tests
+    declare their own ``@extern`` prototypes, so no libc bindings are needed.
+    """
+    classes = frozenset({"extern-nonnull"}) if strict else frozenset()
+    return str(CodeGen(parse(source), "test", error_classes=classes).generate())
+
+
+def extern_nonnull_warnings(source: str) -> list:
+    """The warnings a compile collects, for inspecting the warn posture."""
+    cg = CodeGen(parse(source), "test")
+    cg.generate()
+    return cg.warnings
+
+
+def test_nonnull_on_extern_declaration_relaxed_drops_hint():
+    # Relaxed (default) posture: a possibly-null argument is accepted, so the
+    # LLVM nonnull/dereferenceable hint would be unsound -- it is not emitted.
     ir_text = compile_ir(
         "@extern fn strlen(@nonnull s: uint8*) -> uint64;\n"
         'fn main() -> int32 { return strlen("hi") as int32; }'
     )
-    assert "declare" in ir_text and "nonnull" in ir_text
+    assert "declare" in ir_text and "nonnull" not in ir_text
+
+
+def test_nonnull_on_extern_declaration_strict_emits_hint():
+    # Strict posture restores unconditional caller proof, so the hint is sound
+    # again and rides the extern declare.
+    ir_text = compile_ir_posture(
+        "@extern fn strlen(@nonnull s: uint8*) -> uint64;\n"
+        'fn main() -> int32 { return strlen("hi") as int32; }',
+        strict=True,
+    )
+    head = ir_text.split('declare')[1].split("\n")[0]
+    assert "nonnull" in head and "dereferenceable(1)" in head
+
+
+# ------------------------------------------- extern-nonnull graded postures
+
+# A possibly-null argument: the pointer comes from a call's return value, an
+# unproven source (see test_plain_pointer_rejected).
+EXTERN_NN = "@extern fn ext(@nonnull p: int32*) -> int32;\n"
+MAYBE_NULL = (
+    "fn make() -> int32* { return null; }\n"
+    "fn main() -> int32 {\n"
+    "    let p: int32* = make();\n"
+    "    return ext(p);\n"
+    "}"
+)
+
+
+def test_extern_nonnull_relaxed_accepts_possibly_null():
+    # Relaxed: a possibly-null argument compiles without error (the C-port
+    # default). The call is emitted; only the hard error is gone.
+    ir_text = compile_ir(EXTERN_NN + MAYBE_NULL)
+    assert 'call i32 @"ext"' in ir_text
+
+
+def test_extern_nonnull_possibly_null_collects_class_warning():
+    # The warning is always collected (tagged extern-nonnull); the driver's
+    # class filter is what makes it silent (relaxed) or printed (warn).
+    (warning,) = extern_nonnull_warnings(EXTERN_NN + MAYBE_NULL)
+    assert warning.wclass == "extern-nonnull"
+    assert "possibly-null" in warning.message and "@extern" in warning.message
+
+
+def test_extern_nonnull_strict_rejects_possibly_null():
+    # Strict: the possibly-null case is a hard error again.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir_posture(EXTERN_NN + MAYBE_NULL, strict=True)
+
+
+def test_extern_nonnull_literal_null_always_errors():
+    # The literal null is never porting noise -- it is a hard error at every
+    # posture, and it collects no warning.
+    program = EXTERN_NN + "fn main() -> int32 { return ext(null); }"
+    for strict in (False, True):
+        with pytest.raises(LangError, match="cannot pass null as argument 1"):
+            compile_ir_posture(program, strict=strict)
+
+
+def test_native_nonnull_possibly_null_errors_at_every_posture():
+    # A native @nonnull never joins the class: its caller proof is load-bearing
+    # (the body holds the parameter as non-null), so possibly-null stays a hard
+    # error whatever the extern-nonnull posture.
+    program = (
+        FIRST + "fn make() -> int32* { return null; }\n"
+        "fn main() -> int32 {\n"
+        "    let p: int32* = make();\n"
+        "    return first(p);\n"
+        "}"
+    )
+    for strict in (False, True):
+        with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+            compile_ir_posture(program, strict=strict)
+
+
+def test_native_nonnull_possibly_null_collects_no_warning():
+    # The native rejection is not a class warning -- nothing is collected.
+    program = (
+        FIRST + "fn make() -> int32* { return null; }\n"
+        "fn main() -> int32 { return 0; }"
+    )
+    assert extern_nonnull_warnings(program) == []
+
+
+def test_extern_nonnull_proven_argument_needs_no_posture():
+    # A proven-non-null argument passes at every posture with no warning.
+    program = EXTERN_NN + (
+        "fn main() -> int32 { let x: int32 = 3; return ext(&x); }"
+    )
+    assert extern_nonnull_warnings(program) == []
+    assert 'call i32 @"ext"' in compile_ir_posture(program, strict=True)
+
+
+def test_extern_nonnull_round_trips_through_mci():
+    # The annotation ships unconditionally in the .mci stub (the declared
+    # promise never varies per build), filling the interface coverage gap.
+    source = "@extern fn strlen(@nonnull s: uint8*) -> uint64;\n"
+    cg = CodeGen(parse(source), "test")
+    cg.generate()
+    stub = render_interface(cg, source, [])
+    assert "@nonnull s: uint8*" in stub
 
 
 def test_nonnull_on_static_function():

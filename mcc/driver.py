@@ -271,7 +271,8 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
                   target: str | None = None,
                   defines: dict[str, int] | None = None,
                   freestanding: bool = False,
-                  warnings: list[Note] | None = None) -> ir.Module:
+                  warnings: list[Note] | None = None,
+                  error_classes: frozenset[str] = frozenset()) -> ir.Module:
     """Load a source file and lower it to an LLVM IR module.
 
     Args:
@@ -288,6 +289,10 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
             order, when generation succeeds; ``None`` discards them. Warnings
             collected before a hard compile error are dropped with the raised
             :class:`LangError`.
+        error_classes: The opt-in warning classes promoted to error level (the
+            strict posture), forwarded to :class:`CodeGen` so posture-keyed
+            codegen (e.g. the ``@extern`` ``@nonnull`` hint) settles before any
+            warning is printed.
 
     Returns:
         The generated, unverified LLVM IR module.
@@ -297,7 +302,7 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
     facts = compute_target_facts(target, defines)
     program = load_program(path, tuple(search_paths), facts)
     cg = CodeGen(program, path.name, root_source=str(path.resolve()),
-                 target=target, defines=defines)
+                 target=target, defines=defines, error_classes=error_classes)
     module = cg.generate()
     if warnings is not None:
         warnings.extend(cg.warnings)
@@ -536,6 +541,35 @@ def parse_wflags(items: list[str]) -> frozenset[str]:
     return frozenset(enabled)
 
 
+def split_werror_classes(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Peel ``-Werror=<class>`` tokens out of an argument vector.
+
+    ``-Werror`` is a bare argparse boolean (the whole-build promotion), so an
+    attached ``=<class>`` value would be rejected before it could be read. This
+    lifts the selective spelling out ahead of ``parse_args``: each
+    ``-Werror=<class>`` token contributes its class name, and everything else
+    (including a bare ``-Werror``) passes through untouched. The names are
+    validated by :func:`parse_wflags` alongside the ``-W`` flags, so an unknown
+    one fails exactly like an unknown ``-W<name>``.
+
+    Args:
+        argv: The raw argument vector (typically ``sys.argv[1:]``).
+
+    Returns:
+        A ``(classes, rest)`` pair: the class names named by ``-Werror=<class>``
+        tokens, in order, and the remaining arguments to hand to ``argparse``.
+    """
+    prefix = "-Werror="
+    classes: list[str] = []
+    rest: list[str] = []
+    for token in argv:
+        if token.startswith(prefix):
+            classes.append(token[len(prefix):])
+        else:
+            rest.append(token)
+    return classes, rest
+
+
 def _format_diagnostic(where: Path, severity: str, line: int, message: str) -> str:
     """Render one diagnostic line as ``{where}: {severity}: line N: {message}``.
 
@@ -599,7 +633,8 @@ def _report_lang_error(err: LangError, fallback: Path) -> None:
 
 
 def _report_warnings(warnings: list[Note], fallback: Path, werror: bool,
-                     enabled: frozenset[str] = frozenset()) -> bool:
+                     enabled: frozenset[str] = frozenset(),
+                     error_classes: frozenset[str] = frozenset()) -> bool:
     """Print collected warnings to stderr; return whether the build must fail.
 
     Each warning renders as ``file: warning: line N: message``, in emission
@@ -610,26 +645,33 @@ def _report_warnings(warnings: list[Note], fallback: Path, werror: bool,
     print once: a call site inside a generic body re-emits its warning per
     instantiation, and the reader needs the offending line reported once, not
     once per type. (Both the filter and the dedup are print-time only -- the
-    collected list keeps every emission.) Under ``-Werror`` every warning
-    that would have printed is instead promoted to
-    ``file: error: line N: message [-Werror]`` (an enabled class renders
-    ``[-Werror=<name>]``) and the build fails after all of them have printed
-    (collect-all-then-fail) -- promotion covers exactly what printed, so a
-    disabled class never fails a ``-Werror`` build.
+    collected list keeps every emission.)
+
+    A printed warning is *promoted* to ``file: error: line N: message`` (and
+    fails the build after all of them have printed -- collect-all-then-fail)
+    when either global ``-Werror`` is set (promoting everything that printed)
+    or the warning's class is in ``error_classes`` (a selective
+    ``-Werror=<class>``). A promoted unconditional warning renders
+    ``[-Werror]``; a promoted class renders ``[-Werror=<name>]``. Promotion
+    covers exactly what printed, so a disabled class never fails the build.
 
     Args:
         warnings: The warnings collected during a successful generation.
         fallback: The file blamed when a warning carries no source of its own
             (the entry source file).
-        werror: Whether ``-Werror`` promotes the warnings to errors.
+        werror: Whether global ``-Werror`` promotes every printed warning.
         enabled: The opt-in warning classes turned on by ``-W`` flags.
+        error_classes: The opt-in classes promoted to error level on their own
+            (via ``-Werror=<class>``), even without global ``-Werror``. A
+            subset of ``enabled`` (``-Werror=<class>`` also enables the class),
+            so every member here always prints and then fails the build.
 
     Returns:
-        ``True`` when ``werror`` promoted at least one warning, so the caller
+        ``True`` when at least one printed warning was promoted, so the caller
         must take the failure exit path without writing any outputs.
     """
     seen: set[tuple[str | None, int, str]] = set()
-    printed = False
+    failed = False
     for warning in warnings:
         if warning.wclass is not None and warning.wclass not in enabled:
             continue
@@ -637,24 +679,28 @@ def _report_warnings(warnings: list[Note], fallback: Path, werror: bool,
         if key in seen:
             continue
         seen.add(key)
-        if werror:
+        promoted = werror or (
+            warning.wclass is not None and warning.wclass in error_classes
+        )
+        if promoted:
             tail = f"[-Werror={warning.wclass}]" if warning.wclass else "[-Werror]"
             line = _format_diagnostic(_where(warning.source, fallback), "error",
                                       warning.line, f"{warning.message} {tail}")
+            failed = True
         else:
             message = (f"{warning.message} [-W{warning.wclass}]"
                        if warning.wclass else warning.message)
             line = _format_diagnostic(_where(warning.source, fallback), "warning",
                                       warning.line, message)
         print(line, file=sys.stderr)
-        printed = True
-    return werror and printed
+    return failed
 
 
 def emit_interface(source: Path, search_paths: tuple[Path, ...],
                    target: str | None, defines: dict[str, int],
                    output: Path | None, werror: bool = False,
-                   wenabled: frozenset[str] = frozenset()) -> int:
+                   wenabled: frozenset[str] = frozenset(),
+                   error_classes: frozenset[str] = frozenset()) -> int:
     """Write a ``.mci`` interface stub for ``source`` and return an exit status.
 
     Compiles the source the same way as a normal build (so ``@if`` is resolved
@@ -673,6 +719,10 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
         output: The ``.mci`` path to write, or ``None`` for ``source.mci``.
         werror: Whether ``-Werror`` promotes warnings to the failure path.
         wenabled: The opt-in warning classes turned on by ``-W`` flags.
+        error_classes: The opt-in classes promoted to error level (global
+            ``-Werror`` over the enabled classes plus any ``-Werror=<class>``),
+            forwarded to :class:`CodeGen` for posture-keyed codegen and to
+            :func:`_report_warnings` for selective promotion.
 
     Returns:
         0 on success, 1 on a reported error.
@@ -684,7 +734,7 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
         imports = Parser(tokenize(text)).parse_program().imports
         program = load_program(source, search_paths, compute_target_facts(target, defines))
         cg = CodeGen(program, source.name, root_source=str(source.resolve()),
-                     target=target, defines=defines)
+                     target=target, defines=defines, error_classes=error_classes)
         cg.generate()
         stub = render_interface(cg, text, imports)
     except OSError as err:
@@ -694,7 +744,7 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
         _report_lang_error(err, source)
         return 1
 
-    if _report_warnings(cg.warnings, source, werror, wenabled):
+    if _report_warnings(cg.warnings, source, werror, wenabled, error_classes):
         return 1  # promoted by -Werror: fail without writing the stub
 
     out = output or source.with_suffix(".mci")
@@ -764,14 +814,19 @@ def main() -> int:
                           "sets an integer (repeatable). An @if name with no -D reads as 0")
     cli.add_argument("-Werror", dest="werror", action="store_true",
                      help="promote warnings to errors: each warning reports as an "
-                          "error and the build fails without writing any output")
+                          "error and the build fails without writing any output. "
+                          "The selective form -Werror=NAME promotes just one "
+                          "enabled class to error level (repeatable)")
     cli.add_argument("-W", dest="wflags", action="append", default=[], metavar="NAME",
                      help="enable an opt-in warning class, e.g. "
                           "-Wunchecked-dereference (repeatable); -Wall enables "
                           "every class. An enabled class names its flag in each "
                           "warning it prints, and -Werror promotes exactly what "
                           "printed")
-    args = cli.parse_args()
+    # -Werror is a bare argparse boolean, so the attached -Werror=<class> form
+    # is lifted out ahead of parsing (see split_werror_classes).
+    werror_items, argv = split_werror_classes(sys.argv[1:])
+    args = cli.parse_args(argv)
 
     # Split the positionals: exactly one .mc source; everything else (objects,
     # archives, shared libraries) is handed to the linker untouched.
@@ -815,10 +870,18 @@ def main() -> int:
 
     try:
         defines = parse_defines(args.define)
-        wenabled = parse_wflags(args.wflags)
+        # -Werror=<class> both enables the class and marks it error-level, so
+        # it folds into the enabled set as well as the error-level set.
+        werror_classes = parse_wflags(werror_items)
+        wenabled = parse_wflags(args.wflags) | werror_classes
     except ValueError as err:
         print(f"mcc: error: {err}", file=sys.stderr)
         return 1
+
+    # The strict-posture classes: those a selective -Werror=<class> promoted,
+    # plus every enabled class under a whole-build -Werror. Threaded into
+    # codegen (posture-keyed emission) and the warning report (promotion).
+    error_classes = werror_classes | (wenabled if args.werror else frozenset())
 
     search_paths = list(args.import_path)
     if not args.nostdlib:
@@ -826,12 +889,12 @@ def main() -> int:
 
     if args.emit_interface:
         return emit_interface(args.source, tuple(search_paths), args.target, defines,
-                              args.output, args.werror, wenabled)
+                              args.output, args.werror, wenabled, error_classes)
 
     warnings: list[Note] = []
     try:
         module = compile_to_ir(args.source, search_paths, args.target, defines,
-                               args.freestanding, warnings)
+                               args.freestanding, warnings, error_classes)
     except OSError as err:
         print(f"mcc: error: cannot read {args.source}: {err.strerror}", file=sys.stderr)
         return 1
@@ -843,7 +906,7 @@ def main() -> int:
     # produced -- so they precede the IR under --emit-llvm and the program's
     # own output under --run. -Werror promotes them and fails here, writing
     # no object, executable, or IR.
-    if _report_warnings(warnings, args.source, args.werror, wenabled):
+    if _report_warnings(warnings, args.source, args.werror, wenabled, error_classes):
         return 1
 
     if args.emit_llvm:

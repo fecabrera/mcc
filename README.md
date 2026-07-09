@@ -152,6 +152,7 @@ mcc main.mc --general-regs-only         # never use FP/SIMD registers
 | `--freestanding`          | Don't assume a hosted C library, so LLVM won't rewrite standard-named calls (e.g. `printf("…\n")` → `puts`) into symbols a bare-metal program never defines. The `-ffreestanding` equivalent. |
 | `-D NAME[=VALUE]`         | Define a name for [`@if`](docs/language.md#conditional-compilation) conditions: `NAME` alone is `1`, `NAME=VALUE` sets an integer. Repeatable; a name with no `-D` reads as `0`.              |
 | `-Werror`                 | Promote [warnings](docs/language.md#error-directives) to errors: each renders as `file: error: line N: msg [-Werror]`, the build fails with exit 1, and no output is written.                 |
+| `-Werror=NAME`            | Promote just one [warning class](docs/language.md#selective--werrorclass) to error level, without a whole-build `-Werror` (repeatable). Enables the class and marks it error-level; composes with `-Werror`; an unknown name is an error.        |
 | `-W NAME`                 | Enable an opt-in [warning class](docs/language.md#opt-in-warning-classes) (repeatable); `-Wall` enables them all. An enabled class prints a `[-W<name>]` tail and promotes under `-Werror` as `[-Werror=<name>]`; an unknown name is an error.  |
 
 `--target` accepts any LLVM triple and emits an object file instead of a

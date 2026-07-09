@@ -1597,6 +1597,67 @@ enables it, and under `-Werror` it promotes as
 See [examples/control-flow/dead_code.mc](../examples/control-flow/dead_code.mc)
 for each killing construct and the non-cases.
 
+#### -Wextern-nonnull
+
+[`@nonnull`](#nonnull-parameters) on an `@extern` declaration is a promise
+about foreign C code the compiler cannot see the body of, so its call-site
+enforcement is **graded** by three postures over one warning class, rather
+than the flat hard error a native `@nonnull` keeps. A native `@nonnull`
+never joins the class: its callee body holds the parameter as a load-bearing
+non-null fact, so a possibly-null argument stays a hard error at every
+posture.
+
+Two things never grade, at any posture:
+
+- Passing the `null` **literal** to an annotated extern slot is always a hard
+  error — it is equally broken C, never porting noise.
+- The LLVM `nonnull`/`dereferenceable` argument attributes are sound only
+  under unconditional caller proof, so they ride an extern declare **only at
+  the strict posture** (below). A native `@nonnull` always carries them.
+
+The postures move the possibly-null case:
+
+| posture | flag | possibly-null argument | extern LLVM hint |
+| --- | --- | --- | --- |
+| relaxed | *(default, no flag)* | silently accepted | not emitted |
+| warn | `-Wextern-nonnull` (or `-Wall`) | `[-Wextern-nonnull]` warning | not emitted |
+| strict | `-Werror=extern-nonnull`, or global `-Werror` with the class enabled | hard error | emitted |
+
+Relaxed is the default a mechanical C port builds under with no flag at all,
+so it never hits a null-proof wall on `strcpy`/`strlen`/`memcpy` calls —
+strictness on the C boundary is what a codebase reaches for, not what a port
+escapes from. The warn posture reports each possibly-null crossing:
+
+```
+example.mc: warning: line 5: passing a possibly-null pointer as argument 1 of 'ext': the parameter is @nonnull on an @extern declaration [-Wextern-nonnull]
+```
+
+The strict posture restores the unconditional caller proof the default
+trades away, which is exactly what makes it sound to re-emit the LLVM hints
+on the extern declares — so it recovers the codegen quality relaxed gives
+up. It is reachable two ways: the whole-build `-Werror` (this repository's CI
+runs it) promotes every *enabled* class, so `-Werror -Wextern-nonnull` is
+strict; and the selective `-Werror=<class>` input form makes strict a
+targeted posture on the C boundary without promoting the whole build.
+
+The annotation itself ships unconditionally in source and in
+[`.mci`](#interfaces) stubs — the declared promise never varies per build;
+only its enforcement does.
+
+##### Selective -Werror=<class>
+
+`-Werror=<name>` promotes a single warning class to error level, without the
+whole-build promotion of a bare `-Werror`. It both enables the class and
+marks it error-level (repeatable, one class per flag), and is general to any
+registered class — `-Werror=unchecked-dereference` works the same way. An
+unknown name is the same hard CLI error an unknown `-W<name>` gives
+(`mcc: error: unknown warning class 'name'`). It composes with a global
+`-Werror`, which still promotes every enabled class. The two spellings match
+the output render that already spoke `[-Werror=<name>]`.
+
+See [examples/systems/extern_nonnull.mc](../examples/systems/extern_nonnull.mc)
+for the three postures on a foreign declaration.
+
 ### Deprecated functions
 
 `@deprecated("message")` is a declaration attribute on a function: the
