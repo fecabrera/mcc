@@ -424,8 +424,14 @@ def is_flexible_array(lang_type: LangType) -> bool:
     return is_array(lang_type) and lang_type.count == 0
 
 
-def is_struct(lang_type: LangType) -> bool:
-    """Report whether a type is a struct.
+def is_aggregate(lang_type: LangType) -> bool:
+    """Report whether a type is a named aggregate -- a struct or a union.
+
+    Both carry a field list, so the field-generic behavior they share --
+    by-value copies, ``sizeof``, ``const``-parameter hidden references, member
+    lookup -- keys off this predicate. The narrower :func:`is_struct` (record
+    only) and :func:`is_union` split the two where layout or the struct-only
+    forms (``extends``, prefix upcast, sequential layout) diverge.
 
     Args:
         lang_type: The type to test.
@@ -436,13 +442,30 @@ def is_struct(lang_type: LangType) -> bool:
     return lang_type.fields is not None
 
 
+def is_struct(lang_type: LangType) -> bool:
+    """Report whether a type is a record ``struct`` -- an aggregate, not a union.
+
+    Deliberately excludes unions so a struct-only code path (sequential layout,
+    ``extends``, prefix upcast) can never silently accept one; use
+    :func:`is_aggregate` for behavior a union shares with a struct.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type has a field list and is not a union.
+    """
+    return lang_type.fields is not None and not lang_type.union
+
+
 def is_union(lang_type: LangType) -> bool:
     """Report whether a type is a ``union``.
 
-    A union is an aggregate riding on the struct machinery (``is_struct`` is
-    also true for it), so struct-generic behavior -- by-value copies,
-    ``sizeof``, ``const``-parameter hidden references -- applies unchanged,
-    while layout and member access branch on this predicate.
+    A union is an aggregate riding on the struct machinery (:func:`is_aggregate`
+    is also true for it), so aggregate-generic behavior -- by-value copies,
+    ``sizeof``, ``const``-parameter hidden references -- applies unchanged, while
+    layout and member access branch on this predicate. It is *not* a
+    :func:`is_struct` (that predicate is record-only).
 
     Args:
         lang_type: The type to test.
@@ -555,7 +578,7 @@ def type_align(lang_type: LangType) -> int:
         return POINTER_SIZE
     if is_array(lang_type):
         return type_align(lang_type.element)
-    if is_struct(lang_type):
+    if is_aggregate(lang_type):
         if lang_type.packed:
             return max(1, lang_type.align or 1)
         natural = max((type_align(ft) for _, ft in lang_type.fields), default=1)
@@ -579,7 +602,7 @@ def over_aligned(lang_type: LangType) -> bool:
     Returns:
         ``True`` for an over-aligned struct, ``False`` otherwise.
     """
-    if not is_struct(lang_type):
+    if not is_aggregate(lang_type):
         return False
     if lang_type.packed:  # its IR body is packed (alignment 1) already
         return (lang_type.align or 1) > 1
@@ -640,7 +663,7 @@ def field_offset(struct_type: LangType, fname: str, line: int) -> int:
     Raises:
         LangError: When ``struct_type`` is not a struct or has no such field.
     """
-    if not is_struct(struct_type):
+    if not is_aggregate(struct_type):
         raise LangError(f"offsetof needs a struct, not {struct_type}", line)
     if is_union(struct_type):
         # Every member sits at offset 0; only validate that the field exists.

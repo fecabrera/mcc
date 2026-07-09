@@ -42,6 +42,7 @@ from mcc.nodes import (
     StructDecl,
     TypeAlias,
     TypeRef,
+    UnionDecl,
     Var,
 )
 
@@ -206,7 +207,7 @@ class InterfaceWriter:
             for t in decl.type_param_bounds.values():
                 _collect_refs(t, names)
             names -= set(decl.type_params)
-        elif isinstance(decl, StructDecl):
+        elif isinstance(decl, (StructDecl, UnionDecl)):
             for _, t in decl.fields:
                 _collect_refs(t, names)
             if decl.base is not None:

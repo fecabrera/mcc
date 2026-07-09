@@ -96,6 +96,22 @@ def test_union_is_emitted_in_full():
     assert "fn value_int(v: value*) -> int64;" in out
 
 
+def test_union_stub_round_trips_to_union_decl():
+    # The consumer re-parses the emitted stub: a union's verbatim declaration
+    # must come back as a UnionDecl (its own node), not a StructDecl, so it
+    # keeps its distinct type kind across the .mci boundary.
+    from mcc.nodes import StructDecl, UnionDecl
+
+    out = iface("union value { i: int64; f: float64; }")
+    (decl,) = Parser(tokenize(out)).parse_program().structs
+    assert isinstance(decl, UnionDecl)
+    assert not isinstance(decl, StructDecl)
+    assert [(n, str(t)) for n, t in decl.fields] == [
+        ("i", "int64"),
+        ("f", "float64"),
+    ]
+
+
 def test_enum_is_emitted_in_full():
     out = iface("enum Color: int32 { Red = 0, Blue = 7 }")
     assert "enum Color: int32 { Red = 0, Blue = 7 }" in out

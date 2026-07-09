@@ -130,7 +130,7 @@ class Program:
     """
 
     imports: list[tuple[str, int]]
-    structs: list["StructDecl"]
+    structs: list["StructDecl | UnionDecl"]
     functions: list["Func"]
     globals: list["GlobalVar"]
     consts: list["Const"] = field(default_factory=list)
@@ -194,6 +194,67 @@ class StructDecl:
     source: str | None = None
     type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
     span: tuple[int, int] | None = field(default=None, compare=False)
+
+
+@dataclass
+class UnionDecl:
+    """A ``union`` type declaration -- its own node, parallel to ``StructDecl``.
+
+    A union carries the same declaration attributes a struct does, minus the
+    struct-only forms that are already rejected for it at parse time: it has no
+    ``extends`` base and no member defaults. Splitting it off ``StructDecl``
+    means ``isinstance(u, StructDecl)`` is false, so a struct-only code path
+    (sequential layout, ``extends``, prefix upcast) can never silently accept a
+    union -- the type kind, not a runtime ``union`` flag, now enforces it.
+
+    The shared aggregate-instantiation path in code generation reads
+    :attr:`union`, :attr:`base`, and :attr:`defaults` uniformly across both node
+    kinds; a union answers them intrinsically (a union, no base, no defaults), so
+    that path stays a single body without branching on the node type.
+
+    Attributes:
+        name: The union's name.
+        type_params: Generic type parameters, e.g. the ``T`` in ``union u<T>``.
+        fields: ``(name, type)`` pairs -- the union's members, all sharing one
+            storage at offset 0.
+        line: Source line for diagnostics.
+        private: ``@private`` -- usable only within its source file.
+        static: ``@static`` -- file-scoped name other files may reuse.
+        align: ``@align(N)`` -- raised alignment, a power of two, or ``None``.
+        packed: ``@packed`` -- alignment 1.
+        volatile: ``@volatile`` -- member accesses cannot be optimized away.
+        source: Defining file, stamped by the driver.
+        type_param_defaults: ``{type parameter: TypeRef}`` for parameters
+            declared ``<T = type>`` (trailing-only, earlier-parameter references).
+    """
+
+    name: str
+    type_params: list[str]
+    fields: list[tuple[str, TypeRef]]
+    line: int
+    private: bool = False
+    static: bool = False
+    align: int | None = None
+    packed: bool = False
+    volatile: bool = False
+    source: str | None = None
+    type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
+    span: tuple[int, int] | None = field(default=None, compare=False)
+
+    @property
+    def union(self) -> bool:
+        """A union is intrinsically a union (the shared-path discriminant)."""
+        return True
+
+    @property
+    def base(self) -> None:
+        """A union has no ``extends`` base (rejected at parse time)."""
+        return None
+
+    @property
+    def defaults(self) -> dict:
+        """A union has no member defaults (rejected at parse time)."""
+        return {}
 
 
 @dataclass

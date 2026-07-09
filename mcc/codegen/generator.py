@@ -80,6 +80,7 @@ from mcc.nodes import (
     TypeName,
     TypeRef,
     Unary,
+    UnionDecl,
     Unreachable,
     Var,
     While,
@@ -122,6 +123,7 @@ from mcc.codegen.types import (
     fold_untyped_shift,
     function_type,
     is_any,
+    is_aggregate,
     is_array,
     is_flexible_array,
     is_function,
@@ -539,7 +541,7 @@ class CodeGen:
         self.bound_types: dict[int, dict[str, LangType]] = {}
         # (id(template Func), bound types) -> mangled instance name
         self.instances: dict[tuple[int, tuple[str, ...]], str] = {}
-        self.struct_templates: dict[str, StructDecl] = {}
+        self.struct_templates: dict[str, "StructDecl | UnionDecl"] = {}
         self.struct_types: dict[str, LangType] = {}  # mangled name -> instance
         # Enums: name -> EnumType. @static enums are file-scoped, keyed by
         # (source, name) so other files may reuse the name (like @static structs).
@@ -557,7 +559,7 @@ class CodeGen:
         # @static declarations: file-scoped names, keyed by (source, name)
         self.static_funcs: dict[tuple[str | None, str], str] = {}  # -> symbol
         self.static_templates: dict[tuple[str | None, str], Func] = {}
-        self.static_structs: dict[tuple[str | None, str], StructDecl] = {}
+        self.static_structs: dict[tuple[str | None, str], "StructDecl | UnionDecl"] = {}
         self.symbol_bases: dict[
             tuple[str | None, str], str
         ] = {}  # static name mangling
@@ -1418,7 +1420,7 @@ class CodeGen:
         resolved: dict[str, LangType] = {}
         for tparam, ref in func.type_param_bounds.items():
             bound = self.lang_type(ref, func.line)
-            if not is_struct(bound):
+            if not is_aggregate(bound):
                 raise LangError(
                     f"{bound} is not a struct; cannot extend it", func.line
                 )
@@ -1658,7 +1660,7 @@ class CodeGen:
             for item in taken:
                 if isinstance(item, Conditional):
                     pending.append(item)
-                elif isinstance(item, StructDecl):
+                elif isinstance(item, (StructDecl, UnionDecl)):
                     self.program.structs.append(item)
                 elif isinstance(item, GlobalVar):
                     self.program.globals.append(item)
@@ -2066,7 +2068,7 @@ class CodeGen:
         return frozenset(
             i
             for i, ((name, _), ptype) in enumerate(zip(func.params, params))
-            if (name in func.const_params and is_struct(ptype))
+            if (name in func.const_params and is_aggregate(ptype))
             or name in func.mut_params
         )
 
@@ -2824,7 +2826,7 @@ class CodeGen:
             ref = dataclasses_replace(ref, dims=[outer, *ref.dims[1:]])
         return self.lang_type(ref, line)
 
-    def resolve_base(self, decl: StructDecl) -> "LangType | None":
+    def resolve_base(self, decl: "StructDecl | UnionDecl") -> "LangType | None":
         """Resolve a struct's ``extends`` base to its struct type, or ``None``.
 
         Called with the deriving struct's type bindings and source already in
@@ -2837,7 +2839,7 @@ class CodeGen:
         if decl.base is None:
             return None
         base_type = self.lang_type(decl.base, decl.line)
-        if not is_struct(base_type):
+        if not is_aggregate(base_type):
             raise LangError(
                 f"{base_type} is not a struct; cannot extend it",
                 decl.line,
@@ -2967,7 +2969,7 @@ class CodeGen:
                 "first element (&value[0]) instead",
                 line,
             )
-        if is_struct(lang_type):
+        if is_aggregate(lang_type):
             raise LangError(
                 f"cannot box a {lang_type} in an any; box a pointer to it "
                 "(&value) instead",
@@ -3024,7 +3026,7 @@ class CodeGen:
         return TypedValue(self.builder.load(slot), ANY)
 
     def instantiate_struct(
-        self, decl: StructDecl, args: tuple[LangType, ...], line: int
+        self, decl: "StructDecl | UnionDecl", args: tuple[LangType, ...], line: int
     ) -> LangType:
         """Return the struct instance for a set of type arguments.
 
@@ -3245,8 +3247,8 @@ class CodeGen:
         coincidentally matching field prefix, now decides participation.
         """
         if not is_struct(base) or not is_struct(derived):
-            return False
-        if base.union or derived.union:
+            # ``is_struct`` is record-only, so a union base or derived is already
+            # rejected here -- the prefix-upcast relation never spans a union.
             return False
         target = strip_const(base)
         current: "LangType | None" = strip_const(derived)
@@ -3256,7 +3258,9 @@ class CodeGen:
             current = current.base
         return False
 
-    def field_type(self, ftype: TypeRef, is_last: bool, decl: StructDecl) -> LangType:
+    def field_type(
+        self, ftype: TypeRef, is_last: bool, decl: "StructDecl | UnionDecl"
+    ) -> LangType:
         """Resolve a struct field's type, lowering a flexible array member.
 
         A trailing field written ``field: T[]`` is a flexible array member: an
@@ -3316,7 +3320,7 @@ class CodeGen:
         Raises:
             LangError: When ``owner`` is not a struct or has no such field.
         """
-        if not is_struct(owner):
+        if not is_aggregate(owner):
             raise LangError(f"{owner} is not a struct", line)
         for index, (name, ftype) in enumerate(owner.fields):
             if name == fname:
@@ -4108,7 +4112,7 @@ class CodeGen:
                 glob = ir.GlobalVariable(self.module, const.type, name=symbol)
                 glob.linkage = self.shared_linkage(var.source)
                 self.static_globals[key] = (glob, var_type, var.volatile)
-            if is_struct(var_type):
+            if is_aggregate(var_type):
                 # A union's ad-hoc storage type and a @packed/@align aggregate
                 # both have a natural LLVM alignment below the type's true
                 # alignment, so pin it explicitly.
@@ -4475,7 +4479,7 @@ class CodeGen:
             struct_type = self.infer_struct_lit_type(decl, items, expr.line)
         else:
             struct_type = self.lang_type(ref, expr.line)
-        if not is_struct(struct_type):
+        if not is_aggregate(struct_type):
             raise LangError(
                 f"a struct literal needs a struct type, not {struct_type}", expr.line
             )
@@ -4563,7 +4567,7 @@ class CodeGen:
                 default_expr.line, "default for field",
             )
 
-    def lookup_struct_decl(self, name: str) -> "StructDecl | None":
+    def lookup_struct_decl(self, name: str) -> "StructDecl | UnionDecl | None":
         """Find a struct declaration by name, preferring a file-scoped one.
 
         A same-named ``@static`` struct in the current file shadows a global
@@ -5063,7 +5067,7 @@ class CodeGen:
             # caller's storage), or a global (its address may be known
             # anywhere) -- can rewrite a field some other path fact reads
             # through an alias: every projection fact dies.
-            if is_struct(strip_const(var_type)) and (
+            if is_aggregate(strip_const(var_type)) and (
                 stmt.name not in self.locals
                 or stmt.name in self.addr_taken
                 or stmt.name in self.mut_locals
@@ -5216,7 +5220,7 @@ class CodeGen:
             self.builder.unreachable()
         elif isinstance(stmt, Case):
             subject = self.gen_expr(stmt.subject)
-            if is_struct(subject.type) or subject.type is VOID:
+            if is_aggregate(subject.type) or subject.type is VOID:
                 raise LangError(f"cannot match a {subject.type} in a case", stmt.line)
             end_bb = self.builder.append_basic_block("case.end")
             reaches_end = False
@@ -5889,7 +5893,7 @@ class CodeGen:
         if is_slice(struct_t):
             self.gen_for_slice(stmt, iterable, struct_t)
             return
-        if not is_struct(struct_t):
+        if not is_aggregate(struct_t):
             raise LangError(
                 "'for ... in' needs a struct iterable with '<struct>_it' and "
                 f"'<struct>_next' functions, not {iterable.type}",
@@ -6297,7 +6301,7 @@ class CodeGen:
         if is_slice(struct_t):
             self.gen_for_slice(stmt, iterable, struct_t, enumerated=True)
             return
-        if not is_struct(struct_t):
+        if not is_aggregate(struct_t):
             raise LangError(
                 "enumerate() needs a struct iterable with '<struct>_it' and "
                 f"'<struct>_next' functions, not {iterable.type}",
@@ -7114,7 +7118,7 @@ class CodeGen:
             if base_t is None:
                 return None
             owner = base_t.pointee if (expr.arrow and is_pointer(base_t)) else base_t
-            if not is_struct(owner):
+            if not is_aggregate(owner):
                 return None
             try:
                 _, ftype = self.struct_field(owner, expr.field, 0)
@@ -7378,7 +7382,7 @@ class CodeGen:
                 "cannot sub-slice a string literal; borrow it first: "
                 '("..." as slice<char>)[a:b]'
             )
-        if is_struct(base.type):
+        if is_aggregate(base.type):
             return (
                 f"cannot sub-slice {base.type}; borrow it first: "
                 "(xs as slice<T>)[a:b]"
@@ -7711,7 +7715,7 @@ class CodeGen:
             self.builder.store(tv.value, slot)
             base_ptr = self.builder.bitcast(slot, target.ir.as_pointer())
             return TypedValue(self.builder.load(base_ptr), target)
-        if is_struct(src) or is_struct(target):
+        if is_aggregate(src) or is_aggregate(target):
             raise LangError(f"cannot cast {src} to {target}", expr.line)
         if isinstance(src.ir, ir.IntType) and target is BOOL:
             zero = ir.Constant(src.ir, 0)
@@ -7956,7 +7960,7 @@ class CodeGen:
             return self.make_slice(target, ptr, ir.Constant(UINT64.ir, length))
         src = self.gen_expr(value_expr)
         owner, struct_val = src.type, src.value
-        if is_pointer(owner) and is_struct(owner.pointee):
+        if is_pointer(owner) and is_aggregate(owner.pointee):
             owner = owner.pointee  # a list<T>* (or slice<T>*) borrows like the value
             struct_val = self.gen_load(src.value)
         # The source borrows to the slice when it *is* a slice<T> or names one
@@ -8332,7 +8336,7 @@ class CodeGen:
                 names a different concrete type, or a field is unknown, set
                 twice, or not a compile-time constant.
         """
-        if not is_struct(expected):
+        if not is_aggregate(expected):
             raise LangError(f"a struct literal cannot initialize a {expected}", line)
         # Guard against a literal naming a different concrete type than the
         # annotation; skip a generic literal with no arguments, where the
@@ -9235,7 +9239,7 @@ class CodeGen:
                 value = extend(tv.value, INT32.ir)
             elif tv.type is BOOL:
                 value = self.builder.zext(tv.value, INT32.ir)
-            elif is_struct(tv.type):
+            elif is_aggregate(tv.type):
                 raise LangError(
                     "cannot pass a struct to a variadic function; pass a pointer", line
                 )
@@ -9446,7 +9450,7 @@ class CodeGen:
             owner = strip_const(t)
             if is_pointer(owner):
                 owner = strip_const(owner.pointee)
-            if not is_struct(owner) or owner.volatile:
+            if not is_aggregate(owner) or owner.volatile:
                 return None
             for name, ftype in owner.fields:
                 if name == fname:

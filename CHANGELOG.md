@@ -529,6 +529,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **Unions parse into their own AST node and type kind** (internal refactor, no
+  language change) — a `union` now becomes its own `UnionDecl` node, parallel to
+  `StructDecl` rather than a `StructDecl` carrying a `union` flag, and the type
+  predicate that meant "any aggregate" splits in two: `is_aggregate` is the old
+  "has a field list" test (structs *and* unions), while `is_struct` is now
+  record-only (structs, never unions). A struct-only code path — sequential
+  layout, `extends`, the prefix upcast, and the nominal-subtype relation — keys
+  off `is_struct`, so it can no longer silently accept a union; the shared
+  aggregate machinery (by-value copies, `sizeof`, `const`-parameter hidden
+  references, member lookup, the `.mci` round-trip) keys off `is_aggregate` and
+  is unchanged. Surface syntax, semantics, error messages, and emitted IR are
+  all identical — the whole union test suite passes untouched and the union
+  examples compile byte-for-byte the same. This removes the former hazard where
+  the load-bearing `is_struct(union) == True` let a union reach a layout path
+  that assumed record shape.
 - **Layout-identical structs without `extends` no longer interconvert** — a
   documented-only behavior change from nominal struct subtyping (above). A
   struct laid out exactly like another — same field prefix — but with no

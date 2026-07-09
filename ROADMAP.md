@@ -754,10 +754,16 @@ already do).
         `var_addr` bitcast normalizes the divergent storage; see
         [Unions](docs/language.md#unions) and
         [Structs](docs/language.md#structs)
-  - [ ] dedicated union declaration — migrate unions off the shared struct
+  - [x] dedicated union declaration — migrate unions off the shared struct
         declaration onto their own AST node and type kind, so a struct-only
         code path (sequential layout, `extends`, prefix upcast) can never
-        silently accept a union. A pure compiler refactor, no language change
+        silently accept a union. A pure compiler refactor, no language change:
+        a `union` now parses into its own `UnionDecl` node (parallel to
+        `StructDecl`), and the "any aggregate" predicate split into
+        `is_aggregate` (struct or union) versus a record-only `is_struct`, so
+        the struct-only layout/`extends`/upcast/nominal-subtype paths key off
+        the narrower test. Surface syntax, semantics, and emitted IR are
+        unchanged
 - [ ] Bitfields — `field: uint32 : 5;`, packing consecutive narrow fields into
       one storage unit, for hardware registers, protocol headers, and C-layout
       interop (many syscall/kernel structs use them; `@packed` doesn't

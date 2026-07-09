@@ -65,6 +65,7 @@ from mcc.nodes import (
     TypeName,
     TypeRef,
     Unary,
+    UnionDecl,
     Unreachable,
     Var,
     While,
@@ -285,6 +286,7 @@ class Parser:
                 )
             target = {
                 StructDecl: structs,
+                UnionDecl: structs,
                 Func: functions,
                 GlobalVar: globals_,
                 Const: consts,
@@ -981,13 +983,14 @@ class Parser:
         packed: bool = False,
         volatile: bool = False,
         union: bool = False,
-    ) -> StructDecl:
+    ) -> "StructDecl | UnionDecl":
         """Parse a ``struct`` or ``union`` declaration with its fields.
 
-        A ``union`` shares the struct machinery (one declaration node, generic
-        type parameters, the same annotations) but its members share one
-        storage, so the struct-only forms -- ``extends``, field defaults, and
-        flexible array members -- are rejected for it.
+        A ``union`` shares the surface syntax (generic type parameters, the same
+        annotations) but its members share one storage, so the struct-only forms
+        -- ``extends``, field defaults, and flexible array members -- are
+        rejected for it, and it parses into its own :class:`UnionDecl` node so a
+        struct-only code path can never accept it.
 
         Args:
             private: Whether ``@private`` was applied.
@@ -998,7 +1001,7 @@ class Parser:
             union: ``True`` to parse a ``union`` declaration.
 
         Returns:
-            The parsed ``StructDecl``.
+            The parsed ``StructDecl``, or ``UnionDecl`` for a ``union``.
 
         Raises:
             LangError: On ``extends`` or a member default in a ``union``.
@@ -1052,6 +1055,22 @@ class Parser:
                 fields.append((fname, ftype))
                 self.expect(";")
             self.expect("}")
+        if union:
+            # A union has no `extends` base and no member defaults (both
+            # rejected above), so its node carries neither -- it is its own
+            # kind, not a struct wearing a flag.
+            return UnionDecl(
+                name,
+                type_params,
+                fields,
+                line,
+                private=private,
+                static=static,
+                align=align,
+                packed=packed,
+                volatile=volatile,
+                type_param_defaults=type_param_defaults,
+            )
         return StructDecl(
             name,
             type_params,
@@ -1064,7 +1083,6 @@ class Parser:
             packed=packed,
             volatile=volatile,
             defaults=defaults,
-            union=union,
             type_param_defaults=type_param_defaults,
         )
 

@@ -3,6 +3,7 @@
 import pytest
 
 from mcc.errors import LangError
+from mcc.nodes import StructDecl, UnionDecl
 from helpers import compile_ir, parse, run
 
 
@@ -20,6 +21,25 @@ def test_union_declaration():
 def test_struct_declaration_is_not_a_union():
     (decl,) = parse("struct point { x: int32; y: int32; }").structs
     assert not decl.union
+
+
+def test_union_parses_to_its_own_node():
+    # A union is its own AST kind, not a StructDecl wearing a flag, so a
+    # struct-only code path that dispatches on `isinstance(_, StructDecl)`
+    # can never silently accept it. It answers the shared-path attributes
+    # (union, base, defaults) intrinsically.
+    (decl,) = parse("union u { i: int64; f: float64; }").structs
+    assert isinstance(decl, UnionDecl)
+    assert not isinstance(decl, StructDecl)
+    assert decl.union is True
+    assert decl.base is None
+    assert decl.defaults == {}
+
+
+def test_struct_parses_to_struct_decl_not_union_decl():
+    (decl,) = parse("struct point { x: int32; y: int32; }").structs
+    assert isinstance(decl, StructDecl)
+    assert not isinstance(decl, UnionDecl)
 
 
 def test_generic_union_declaration():
