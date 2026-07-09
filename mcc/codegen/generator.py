@@ -3475,6 +3475,13 @@ class CodeGen:
                 key = (var.source, var.name)
                 if key in self.static_globals:
                     raise LangError(f"variable {var.name!r} already defined", var.line)
+                self.global_privacy[var.name] = (var.private, var.source)
+                if var.init is not None and is_union(var_type):
+                    # A union global is stored as its written member plus pad,
+                    # not the union's own IR type, so its storage is created in
+                    # the deferred pass once the constant's type is known.
+                    deferred_static_inits.append((None, var, var_type))
+                    continue
                 symbol = self.static_base(var.name, var.source)
                 glob = ir.GlobalVariable(self.module, var_type.ir, name=symbol)
                 glob.linkage = self.shared_linkage(var.source)
@@ -3483,7 +3490,6 @@ class CodeGen:
                 else:
                     glob.initializer = ir.Constant(var_type.ir, None)
                 self.static_globals[key] = (glob, var_type, var.volatile)
-                self.global_privacy[var.name] = (var.private, var.source)
                 continue
             if var.name in self.globals:
                 if self.globals[var.name][1] != var_type:
@@ -4089,7 +4095,25 @@ class CodeGen:
             self.declare_static_global(var)
         for glob, var, var_type in deferred_static_inits:
             self.current_source = var.source
-            glob.initializer = self.const_initializer(var.init, var_type, var.line)
+            const = self.const_initializer(var.init, var_type, var.line)
+            if glob is None:
+                # A union global whose storage type is the constant's type (its
+                # written member plus pad); create the storage now.
+                key = (var.source, var.name)
+                if key in self.static_globals:
+                    raise LangError(
+                        f"variable {var.name!r} already defined", var.line
+                    )
+                symbol = self.static_base(var.name, var.source)
+                glob = ir.GlobalVariable(self.module, const.type, name=symbol)
+                glob.linkage = self.shared_linkage(var.source)
+                self.static_globals[key] = (glob, var_type, var.volatile)
+            if is_struct(var_type):
+                # A union's ad-hoc storage type and a @packed/@align aggregate
+                # both have a natural LLVM alignment below the type's true
+                # alignment, so pin it explicitly.
+                glob.align = type_align(var_type)
+            glob.initializer = const
         # Error directives run once every type, const, enum, and global is
         # known, so @static_assert conditions can fold sizeof/alignof/offsetof
         # and const/enum references; before function bodies, so a failed layout
@@ -6824,6 +6848,12 @@ class CodeGen:
             private, source = self.global_privacy[name]
             self.check_access(private, source, f"variable {name!r}", line)
             glob, var_type, volatile = entry
+            if is_union(var_type) and glob.value_type != var_type.ir:
+                # A union global stored as its written member plus pad: present
+                # its address as the union type, so a whole-value load and
+                # by-value passing see the declared layout. This is the single
+                # site that normalizes the divergent storage type.
+                glob = self.builder.bitcast(glob, var_type.ir.as_pointer())
             return glob, var_type, volatile or var_type.volatile
         if name in self.consts:
             raise LangError(f"cannot assign to constant {name!r}", line)
@@ -8154,15 +8184,15 @@ class CodeGen:
             The constant value.
 
         Raises:
-            LangError: When ``expr`` is not a constant of ``expected``, or
-                ``expected`` is a union (not supported yet).
+            LangError: When ``expr`` is not a constant of ``expected``.
         """
-        if is_union(expected):
-            raise LangError(
-                "a global union initializer is not supported yet; "
-                "assign the member at runtime instead",
-                line,
-            )
+        if isinstance(expr, StructLit):
+            # A struct or union literal folds to an aggregate constant: each
+            # field recurses through here, so nested struct/array/slice fields
+            # and a struct inside a union all compose. A union constant is typed
+            # as its written member plus trailing pad (see
+            # :meth:`const_union_lit`), not the union's own IR type.
+            return self.const_struct_lit(expr, expected, line)
         if is_any(expected):
             # Boxing a constant needs the const-initializer path to build the
             # tagged 24-byte aggregate; until then, the same shape as the
@@ -8275,6 +8305,134 @@ class CodeGen:
         return self.const_coerce(
             self.eval_const(expr, line), expected, line, "@static initializer"
         ).value
+
+    def const_struct_lit(
+        self, expr: StructLit, expected: LangType, line: int
+    ) -> ir.Constant:
+        """Fold a struct or union literal to an aggregate constant.
+
+        The constant counterpart of :meth:`gen_struct_lit` for a ``@static``
+        initializer: omitted fields read as zero (or their declared default),
+        and each field value recurses through :meth:`const_initializer`, so a
+        nested struct, array, or slice field composes. The annotation
+        ``expected`` supplies the concrete (possibly generic) type, so no
+        inference from the literal is needed.
+
+        Args:
+            expr: The ``StructLit`` node.
+            expected: The declared aggregate type.
+            line: Source line for diagnostics.
+
+        Returns:
+            The aggregate constant. A union constant is typed as its written
+            member plus trailing pad, not the union's own IR type.
+
+        Raises:
+            LangError: When ``expected`` is not a struct/union, the literal
+                names a different concrete type, or a field is unknown, set
+                twice, or not a compile-time constant.
+        """
+        if not is_struct(expected):
+            raise LangError(f"a struct literal cannot initialize a {expected}", line)
+        # Guard against a literal naming a different concrete type than the
+        # annotation; skip a generic literal with no arguments, where the
+        # annotation supplies them.
+        decl = self.lookup_struct_decl(expr.type_ref.name)
+        if not (decl is not None and decl.type_params and not expr.type_ref.args):
+            named = self.lang_type(expr.type_ref, line)
+            if named != expected:
+                raise LangError(
+                    f"@static initializer: expected {expected}, got {named}", line
+                )
+        seen: set[str] = set()
+        provided: dict = {}
+        for fname, value_expr in expr.fields:
+            if fname in seen:
+                raise LangError(
+                    f"field {fname!r} is set twice in the struct literal", line
+                )
+            seen.add(fname)
+            provided[fname] = value_expr
+        known = {fname for fname, _ in expected.fields}
+        for fname in provided:
+            if fname not in known:
+                raise LangError(f"struct {expected} has no field {fname!r}", line)
+        if is_union(expected):
+            return self.const_union_lit(expr, expected, line)
+        # Fill each IR element in layout order: a named or defaulted field folds
+        # to its constant, padding and omitted fields stay zero -- the same
+        # result the runtime literal reaches by zeroing the storage first.
+        values = [ir.Constant(elem, None) for elem in expected.ir.elements]
+        defaults = self.struct_defaults(expected)
+        for pos, (fname, ftype) in enumerate(expected.fields):
+            if fname in provided:
+                field_expr = provided[fname]
+            elif fname in defaults:
+                field_expr = defaults[fname]
+            else:
+                continue
+            if is_flexible_array(ftype):
+                raise LangError(
+                    f"field {fname!r} is a flexible array member with no "
+                    "storage; allocate the struct with trailing room and fill "
+                    f"it through the {fname!r} pointer",
+                    line,
+                )
+            values[expected.elem_indices[pos]] = self.const_initializer(
+                field_expr, ftype, line
+            )
+        return ir.Constant(expected.ir, values)
+
+    def const_union_lit(
+        self, expr: StructLit, union_type: LangType, line: int
+    ) -> ir.Constant:
+        """Fold a union literal to a constant sized to the whole union.
+
+        Like the runtime union literal, the (at most one) named member is
+        written and the rest of the storage is zero. The written member is
+        usually not the union's representative (widest) member, so the constant
+        cannot take the union's own IR type; it takes an ad-hoc
+        ``{member, [pad x i8]}`` struct type instead (what clang emits), and
+        :meth:`var_addr` bitcasts the global back to the union type on use. When
+        the member *is* the representative -- or the literal is empty -- the
+        union's own IR type fits and no bitcast is needed.
+
+        Args:
+            expr: The union ``StructLit`` node (fields already validated).
+            union_type: The resolved union type.
+            line: Source line for diagnostics.
+
+        Returns:
+            The union constant.
+
+        Raises:
+            LangError: When the literal sets more than one member or the member
+                value is not a compile-time constant.
+        """
+        if len(expr.fields) > 1:
+            raise LangError("a union literal sets at most one member", line)
+        if not expr.fields:
+            # An empty `u{}` zero-fills the whole union, so its own IR type fits.
+            return ir.Constant(union_type.ir, None)
+        fname, value_expr = expr.fields[0]
+        _, ftype = self.struct_field(union_type, fname, line)
+        member = self.const_initializer(value_expr, ftype, line)
+        elements = union_type.ir.elements
+        if elements and member.type == elements[0]:
+            # The written member is the representative: fill the union's own
+            # body (the member plus any trailing @align pad element), so the
+            # global keeps the union's IR type.
+            parts = [member] + [ir.Constant(elem, None) for elem in elements[1:]]
+            return ir.Constant(union_type.ir, parts)
+        pad = type_size(union_type) - type_size(ftype)
+        fields = [member.type]
+        parts = [member]
+        if pad:
+            pad_ty = ir.ArrayType(ir.IntType(8), pad)
+            fields.append(pad_ty)
+            parts.append(ir.Constant(pad_ty, None))
+        init_ty = ir.LiteralStructType(fields, packed=union_type.ir.packed)
+        return ir.Constant(init_ty, parts)
 
     def gen_const_scalar(self, expr) -> TypedValue:
         """Build an adaptable constant for an integer or char literal.

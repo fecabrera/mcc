@@ -217,3 +217,161 @@ def test_inferred_static_list_literal_needs_an_annotation():
 def test_uninitialized_static_still_needs_a_type():
     with pytest.raises(LangError, match="needs a type"):
         compile_ir("@static let x;\nfn main() -> int32 { return 0; }")
+
+
+# ----------------------------------------------- struct-literal globals
+
+
+def test_static_struct_literal_global():
+    ir_text = compile_ir(
+        "struct point { x: int32; y: int32; }\n"
+        "@static let p: struct point = point { x = 3, y = 4 };\n"
+        "fn main() -> int32 { return p.x + p.y; }"
+    )
+    assert 'global %"point" {i32 3, i32 4}' in ir_text
+
+
+def test_static_struct_literal_global_runs():
+    assert (
+        run(
+            "struct point { x: int32; y: int32; }\n"
+            "@static let p: struct point = point { x = 3, y = 4 };\n"
+            "fn main() -> int32 { return p.x + p.y; }"
+        )
+        == 7
+    )
+
+
+def test_static_struct_literal_omitted_field_is_zero():
+    # An omitted field with no default reads as zero, like the runtime literal.
+    assert (
+        run(
+            "struct point { x: int32; y: int32; }\n"
+            "@static let p: struct point = point { x = 5 };\n"
+            "fn main() -> int32 { return p.x + p.y; }"
+        )
+        == 5
+    )
+
+
+def test_static_struct_literal_applies_field_default():
+    # An omitted field that declares a default folds that default.
+    assert (
+        run(
+            "struct config { limit: int32 = 100; used: int32; }\n"
+            "@static let c: struct config = config { used = 5 };\n"
+            "fn main() -> int32 { return c.limit + c.used; }"
+        )
+        == 105
+    )
+
+
+def test_static_struct_literal_nested_struct_and_array_fields():
+    assert (
+        run(
+            "struct pt { x: int32; y: int32; }\n"
+            "struct box { corner: struct pt; sizes: int32[3]; }\n"
+            "@static let b: struct box = "
+            "box { corner = pt { x = 1, y = 2 }, sizes = [10, 20, 30] };\n"
+            "fn main() -> int32 { return b.corner.x + b.corner.y + b.sizes[2]; }"
+        )
+        == 33
+    )
+
+
+def test_static_generic_struct_literal_global():
+    assert (
+        run(
+            "struct pair<A, B> { a: A; b: B; }\n"
+            "@static let p: struct pair<int32, int32> = "
+            "pair<int32, int32> { a = 6, b = 7 };\n"
+            "fn main() -> int32 { return p.a + p.b; }"
+        )
+        == 13
+    )
+
+
+def test_static_struct_literal_wrong_type_is_rejected():
+    with pytest.raises(LangError, match="expected a, got b"):
+        compile_ir(
+            "struct a { x: int32; }\n"
+            "struct b { x: int32; }\n"
+            "@static let g: struct a = b { x = 1 };\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_static_struct_literal_unknown_field_is_rejected():
+    with pytest.raises(LangError, match="has no field 'z'"):
+        compile_ir(
+            "struct point { x: int32; y: int32; }\n"
+            "@static let p: struct point = point { z = 1 };\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_static_struct_literal_duplicate_field_is_rejected():
+    with pytest.raises(LangError, match="'x' is set twice"):
+        compile_ir(
+            "struct point { x: int32; y: int32; }\n"
+            "@static let p: struct point = point { x = 1, x = 2 };\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_static_struct_literal_into_non_struct_is_rejected():
+    with pytest.raises(LangError, match="a struct literal cannot initialize a"):
+        compile_ir(
+            "struct point { x: int32; y: int32; }\n"
+            "@static let n: int32 = point { x = 1 };\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_static_generic_struct_literal_infers_args_from_annotation():
+    # The literal gives no type arguments; the annotation supplies them, so the
+    # concrete-type guard is skipped rather than resolving the bare literal.
+    assert (
+        run(
+            "struct pair<A, B> { a: A; b: B; }\n"
+            "@static let p: struct pair<int32, int32> = pair { a = 6, b = 7 };\n"
+            "fn main() -> int32 { return p.a + p.b; }"
+        )
+        == 13
+    )
+
+
+def test_static_struct_literal_non_constant_field_is_rejected():
+    with pytest.raises(LangError, match="must be a compile-time constant"):
+        compile_ir(
+            "struct point { x: int32; y: int32; }\n"
+            "fn side() -> int32 { return 1; }\n"
+            "@static let p: struct point = point { x = side() };\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_static_struct_and_union_global_survives_interface(tmp_path):
+    # @static globals are file-local, so an emitted interface drops them while
+    # keeping the public types they use; the round trip stays well-formed.
+    (tmp_path / "a.mc").write_text(
+        "struct point { x: int32; y: int32; }\n"
+        "union num { i: int64; b: uint8; }\n"
+        "@static let p: struct point = point { x = 1, y = 2 };\n"
+        "@static let g: union num = num { b = 3 };\n"
+        "fn identity(v: int32) -> int32 { return v; }\n"
+    )
+    import subprocess
+    import sys
+
+    out = subprocess.run(
+        [sys.executable, "-m", "mcc", str(tmp_path / "a.mc"), "--emit-interface"],
+        capture_output=True,
+        text=True,
+    )
+    assert out.returncode == 0, out.stderr
+    stub = (tmp_path / "a.mci").read_text()
+    # The types export; the file-local globals do not.
+    assert "struct point" in stub
+    assert "union num" in stub
+    assert "@static" not in stub

@@ -2888,6 +2888,23 @@ should be self-contained — a literal, a `const`, or another in-scope value —
 and not refer to the struct's own type parameters. A defaulted field that is
 omitted does not take part in type-argument inference.
 
+A struct literal whose fields are all constant expressions may initialize a
+`@static` global, folded to a data constant at compile time rather than filled
+in at runtime — omitted fields still zero (or take their `= default`), and
+nested struct, array, and slice fields fold recursively:
+
+```c
+@static let origin: struct point  = point  { x = 0, y = 0 };
+@static let setup:  struct config = config { name = "db" };  // capacity = 16
+@static let unit:   struct box    = box {
+    corner = point { x = 1, y = 1 },
+    sizes  = [10, 20, 30],
+};
+```
+
+A [union literal](#unions) folds the same way. See
+[examples/types/static_initializers.mc](../examples/types/static_initializers.mc).
+
 `@align(N)` raises a struct's alignment to `N` bytes — a power of two; asking
 for less than the natural alignment is an error. `sizeof` rounds up to a
 multiple of the alignment, and field offsets and array strides stay
@@ -3131,9 +3148,20 @@ one instantiation per type argument) and take the same `@packed` (alignment
 1), `@align(N)`, and `@volatile` annotations. A `const` union parameter passes
 by hidden reference like a `const` struct. What a union does **not** take are
 the struct-only forms: `extends` (in either direction), member defaults
-(`m: T = v`), and flexible array members are all rejected, and a
-global/`@static` union initializer is not supported yet (assign the member at
-runtime instead).
+(`m: T = v`), and flexible array members are all rejected.
+
+A union literal may also initialize a `@static` global, folded to a data
+constant at compile time (like a [struct-literal global](#structs)):
+
+```c
+@static let whole: union value = value { i = 42 };   // the widest member
+@static let bits:  union value = value { b = [1, 0, 0, 0, 0, 0, 0, 0] };
+@static let blank: union value = value { };          // all zeroes
+```
+
+The written member need not be the widest one: the constant is sized to the
+whole union, the member's bytes first and the rest zero — the same storage the
+runtime literal produces.
 
 Like a by-value struct, a by-value union is not
 [C-ABI compatible](../README.md#c-abi-compatibility) across the C boundary

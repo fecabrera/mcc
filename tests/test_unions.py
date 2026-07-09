@@ -288,12 +288,183 @@ def test_union_is_not_a_prefix_upcast_source():
         )
 
 
-def test_static_union_initializer_is_rejected():
-    message = "a global union initializer is not supported yet"
-    with pytest.raises(LangError, match=message):
+def test_static_union_initializer_representative_member():
+    # The written member is the union's representative (widest) member, so the
+    # constant keeps the union's own IR type -- no ad-hoc storage type.
+    ir_text = compile_ir(
+        "union u { i: int64; b: uint8; }\n"
+        "@static let g: union u = u { i = 42 };\n"
+        "fn main() -> int32 { return g.i as int32; }"
+    )
+    assert 'global %"u" {i64 42}' in ir_text
+
+
+def test_static_union_initializer_representative_runs():
+    assert (
+        run(
+            "union u { i: int64; b: uint8; }\n"
+            "@static let g: union u = u { i = 42 };\n"
+            "fn main() -> int32 { return g.i as int32; }"
+        )
+        == 42
+    )
+
+
+def test_static_union_initializer_non_representative_member():
+    # A narrower member than the representative cannot type the constant as the
+    # union's IR type; it takes an ad-hoc {member, [pad x i8]} struct type sized
+    # to the whole union, and reads back through a bitcast to the union type.
+    ir_text = compile_ir(
+        "union u { i: int64; b: uint8; }\n"
+        "@static let g: union u = u { b = 200 };\n"
+        "fn main() -> int32 { return g.b as int32; }"
+    )
+    assert "{i8, [7 x i8]} {i8 200, [7 x i8] zeroinitializer}" in ir_text
+    assert 'bitcast {i8, [7 x i8]}*' in ir_text
+    assert 'to %"u"*' in ir_text
+
+
+def test_static_union_initializer_non_representative_runs():
+    assert (
+        run(
+            "union u { i: int64; b: uint8; }\n"
+            "@static let g: union u = u { b = 200 };\n"
+            "fn main() -> int32 { return g.b as int32; }"
+        )
+        == 200
+    )
+
+
+def test_static_union_initializer_empty():
+    # An empty `u{}` zero-fills the whole union, so its own IR type fits.
+    ir_text = compile_ir(
+        "union u { i: int64; b: uint8; }\n"
+        "@static let g: union u = u { };\n"
+        "fn main() -> int32 { return g.i as int32; }"
+    )
+    assert 'global %"u" zeroinitializer' in ir_text
+    assert run(
+        "union u { i: int64; b: uint8; }\n"
+        "@static let g: union u = u { };\n"
+        "fn main() -> int32 { return g.i as int32; }"
+    ) == 0
+
+
+def test_static_union_initializer_align_pins_alignment():
+    # A {member, pad} storage type has a natural LLVM alignment below the
+    # union's true alignment; the global pins the union alignment explicitly.
+    ir_text = compile_ir(
+        "@align(16) union u { i: int64; b: uint8; }\n"
+        "@static let g: union u = u { b = 1 };\n"
+        "fn main() -> int32 { return 0; }"
+    )
+    assert ", align 16" in ir_text
+
+
+def test_static_union_initializer_packed_member():
+    ir_text = compile_ir(
+        "@packed union u { w: uint32; b: uint8; }\n"
+        "@static let g: union u = u { b = 9 };\n"
+        "fn main() -> int32 { return g.b as int32; }"
+    )
+    assert "<{i8, [3 x i8]}>" in ir_text
+    assert run(
+        "@packed union u { w: uint32; b: uint8; }\n"
+        "@static let g: union u = u { b = 9 };\n"
+        "fn main() -> int32 { return g.b as int32; }"
+    ) == 9
+
+
+def test_static_union_initializer_whole_value_copy():
+    # A whole-value load of a union global reads it through the union type.
+    assert (
+        run(
+            "union u { i: int64; b: uint8; }\n"
+            "@static let g: union u = u { b = 7 };\n"
+            "fn main() -> int32 {\n"
+            "    let v = g;\n"
+            "    return v.b as int32;\n"
+            "}"
+        )
+        == 7
+    )
+
+
+def test_static_union_initializer_passed_by_value():
+    # Passing a union global by value to a const-union hidden-reference param
+    # goes through the same address normalization.
+    assert (
+        run(
+            "union u { i: int64; b: uint8; }\n"
+            "fn read(const v: union u) -> int32 { return v.b as int32; }\n"
+            "@static let g: union u = u { b = 5 };\n"
+            "fn main() -> int32 { return read(g); }"
+        )
+        == 5
+    )
+
+
+def test_static_union_initializer_struct_member():
+    # A struct inside a union folds through the same const path.
+    assert (
+        run(
+            "struct pt { x: int32; y: int32; }\n"
+            "union u { p: struct pt; whole: uint64; }\n"
+            "@static let g: union u = u { p = pt { x = 3, y = 4 } };\n"
+            "fn main() -> int32 { return g.p.x + g.p.y; }"
+        )
+        == 7
+    )
+
+
+def test_static_union_initializer_generic():
+    # A generic union monomorphizes to a concrete type before the const path.
+    assert (
+        run(
+            "union tag<T> { val: T; raw: uint64; }\n"
+            "@static let g: union tag<int32> = tag<int32> { val = 9 };\n"
+            "fn main() -> int32 { return g.val; }"
+        )
+        == 9
+    )
+
+
+def test_static_union_initializer_sets_two_members_is_rejected():
+    with pytest.raises(LangError, match="a union literal sets at most one member"):
+        compile_ir(
+            "union u { i: int64; b: uint8; }\n"
+            "@static let g: union u = u { i = 1, b = 2 };\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_static_union_initializer_unknown_member_is_rejected():
+    with pytest.raises(LangError, match="has no field 'z'"):
         compile_ir(
             "union u { i: int64; }\n"
-            "@static let g: union u = u { i = 1 };\n"
+            "@static let g: union u = u { z = 1 };\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_static_union_initializer_non_constant_member_is_rejected():
+    with pytest.raises(LangError, match="must be a compile-time constant"):
+        compile_ir(
+            "union u { i: int64; }\n"
+            "fn side() -> int64 { return 1; }\n"
+            "@static let g: union u = u { i = side() };\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_static_any_initializer_is_still_rejected():
+    # Out of scope for the union/struct global work: the any-typed global
+    # initializer stays rejected.
+    with pytest.raises(
+        LangError, match="a global any initializer is not supported yet"
+    ):
+        compile_ir(
+            "@static let g: any = 5;\n"
             "fn main() -> int32 { return 0; }"
         )
 

@@ -84,3 +84,6 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// See also: static_initializers.mc, where these same literals initialize
+// `@static` globals -- folded to data constants at compile time.

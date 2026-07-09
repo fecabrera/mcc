@@ -10,6 +10,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Struct and union `@static` global initializers** — a struct or union
+  literal may now initialize a `@static`/global variable, folded to a data
+  constant at compile time instead of requiring a runtime assignment. This
+  lifts the former "a global union initializer is not supported yet" rejection
+  and, in the same change, fills the const-initializer path's missing
+  struct-literal arm (so `@static let p: struct point = point { x = 1, y = 2 };`
+  compiles at all). Fields fold recursively — nested struct, array, and slice
+  fields all compose, omitted fields stay zero or take their `= default`, and
+  generic aggregates monomorphize before folding. A union constant is sized to
+  the whole union with the written member's bytes first and the rest zero,
+  exactly the storage the runtime literal produces; because the written member
+  is usually narrower than the union's widest (representative) member, the
+  constant takes an ad-hoc `{member, [pad x i8]}` storage type (what clang
+  emits), and a single normalizing bitcast in `var_addr` presents the global
+  as the union type for whole-value loads and by-value passing. The `any`-typed
+  global initializer stays rejected. See
+  [Unions](docs/language.md#unions), [Structs](docs/language.md#structs), and
+  [examples/types/static_initializers.mc](examples/types/static_initializers.mc).
 - **Pointer arithmetic** — pointers join the binary and compound operator
   surface with C's element-scaled semantics and no bespoke syntax. `p + n` and
   `p - n` advance a pointer by `n` elements (`p + n` is exactly `&p[n]`, so `n`

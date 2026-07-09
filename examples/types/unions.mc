@@ -53,4 +53,5 @@ fn main() -> int32 {
 
 // See also: any.mc for the builtin `any` box, the tagged counterpart to this
 // raw storage sharing: it remembers which type it holds and recovers it
-// safely through `case type`.
+// safely through `case type`; and static_initializers.mc for union literals
+// that initialize `@static` globals, folded to data constants at compile time.

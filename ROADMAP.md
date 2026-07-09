@@ -746,10 +746,14 @@ already do).
             under two `type_bindings` overlays, validating the core
             before the deferral machinery; implemented, see
             [The any type](docs/language.md#the-any-type)
-  - [ ] global/`@static` union initializers — teach the const-initializer
-        path to emit a union constant (zero-fill plus the one written member).
-        Until then a global/`@static` union initializer is rejected with an
-        explicit compile error
+  - [x] global/`@static` union initializers — teach the const-initializer
+        path to emit a union constant (zero-fill plus the one written member),
+        and, in the same change, a struct-literal constant (the const path had
+        no struct-literal arm before). A union constant is typed as its written
+        member plus trailing pad, not the union's own IR type, so a single
+        `var_addr` bitcast normalizes the divergent storage; see
+        [Unions](docs/language.md#unions) and
+        [Structs](docs/language.md#structs)
   - [ ] dedicated union declaration — migrate unions off the shared struct
         declaration onto their own AST node and type kind, so a struct-only
         code path (sequential layout, `extends`, prefix upcast) can never
