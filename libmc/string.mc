@@ -232,18 +232,22 @@ fn equals(const self: string, const str: slice<const char>) -> bool {
 }
 
 /**
- * Compares two strings for byte-for-byte equality, the string-vs-string
- * member of the equality protocol. Borrows both sides into the generic
- * slice `equals`, so neither string is copied.
+ * Compares a string against any char-slice for byte-for-byte equality, the
+ * string-vs-char-slice member of the equality protocol. `T` is bounded to
+ * `slice<char>`, so `str` may be another `string`, a `list<char>`, or a
+ * `slice<char>` -- anything that `extends` the char slice binds `T` and needs
+ * no explicit borrow at the call site. Both sides then borrow into the generic
+ * slice `equals`, so neither is copied.
  *
  * @param self: string to compare
- * @param str:  string to compare against
+ * @param str:  any value whose type extends `slice<char>` (a `string`,
+ *              `list<char>`, or `slice<char>`) to compare against
  *
- * @return true if both strings have the same length and bytes, false
+ * @return true if both sides have the same length and bytes, false
  *         otherwise
  */
 @inline
-fn equals(const self: string, const str: string) -> bool {
+fn equals<T extends slice<char>>(const self: string, const str: T) -> bool {
     return equals(self as slice<const char>, str as slice<const char>);
 }
 

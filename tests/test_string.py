@@ -203,6 +203,58 @@ def test_string_equals_and_init_copy():
     ) == 0
 
 
+def test_string_equals_over_char_slices():
+    # The string-vs-char-slice member is `equals<T extends slice<char>>(string,
+    # T)`: one bounded-generic overload standing in for a hand-written overload
+    # per right-hand type. The bound admits anything that extends `slice<char>`
+    # -- another `string` (itself `list<char>`) and a bare `slice<char>` -- so
+    # each binds `T` and compares with no explicit borrow at the call site.
+    assert run(
+        """
+        import "string";
+        fn main() -> int32 {
+            let a: struct string;
+            string_init(a, "hi");
+            let b: struct string;
+            string_init(b, "hi");
+            let c: struct string;
+            string_init(c, "hixyz");
+            if (!equals(a, b)) return 1;                        // string vs string (T = string)
+            if (!equals(a, (c as slice<char>)[0:2])) return 2;  // string vs slice<char> "hi"
+            if (equals(a, (c as slice<char>)[0:3]))  return 3;  // differ in length: "hi" != "hix"
+            if (equals(a, c as slice<char>))         return 4;  // "hi" != "hixyz"
+            string_reset(a);
+            string_append(a, "ho");                             // same length, bytes differ
+            if (equals(a, b)) return 5;                         // "ho" != "hi"
+            string_destroy(a);
+            string_destroy(b);
+            string_destroy(c);
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_string_equals_rejects_non_char_slice():
+    # The bound is nominal and element-typed: a `slice<int32>` neither extends
+    # `slice<char>` nor is one, so it is not a viable right-hand side -- the
+    # call fails to resolve rather than silently comparing raw bytes.
+    with pytest.raises(
+        LangError, match="slice<int32> does not satisfy the bound slice<char>"
+    ):
+        run(
+            """
+            import "string";
+            fn main() -> int32 {
+                let a: struct string;
+                string_init(a, "hi");
+                let nums: int32[2] = [1, 2];
+                return equals(a, nums as slice<int32>) as int32;
+            }
+            """
+        )
+
+
 def test_string_init_from_literal_drops_the_nul():
     # A bare literal resolves to the slice<char> overload of string_init
     # (literal adaptation beats char* decay), so it drops its trailing NUL:
