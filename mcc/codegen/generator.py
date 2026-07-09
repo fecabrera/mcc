@@ -4463,27 +4463,51 @@ class CodeGen:
                 is given twice, or a type parameter cannot be inferred.
         """
         ref = expr.type_ref
-        # Evaluate each field's value once, in source order, rejecting repeats.
+        # Carry each field's RAW AST node, not a pre-evaluated value: a string
+        # or array literal in a slice-typed field must reach the store step as
+        # its raw node to borrow (as in a `let`, return, or argument), and its
+        # field type is only known once the struct type is resolved. Reject
+        # repeats in source order.
         seen: set[str] = set()
-        items = []  # (field name, value, source line)
+        raw_items = []  # (field name, value expr, source line)
         for fname, value_expr in expr.fields:
             if fname in seen:
                 raise LangError(
                     f"field {fname!r} is set twice in the struct literal", expr.line
                 )
             seen.add(fname)
-            items.append((fname, self.gen_expr(value_expr), value_expr.line))
+            raw_items.append((fname, value_expr, value_expr.line))
 
         decl = self.lookup_struct_decl(ref.name)
+        cached: dict | None = None
         if decl is not None and decl.type_params and not ref.args:
-            struct_type = self.infer_struct_lit_type(decl, items, expr.line)
+            # Generic with no explicit type args: infer from the field values.
+            # A string/array literal adapting into a slice-typed field is an
+            # inference non-participant (like an untyped constant, which carries
+            # only a default it would adapt to) -- it borrows later, once the
+            # field type is fixed by the other fields, a declared default, or
+            # explicit args. So evaluate only the non-adapting fields here, cache
+            # them for the store pass, and feed those to inference; the adapting
+            # literals are borrowed in the store pass below. A literal against a
+            # bare type parameter (``box { v = "hi" }``, field ``v: T``) does not
+            # adapt, so it still participates -- ``"hi"`` binds ``T = char*``.
+            patterns = dict(decl.fields)
+            cached = {}
+            infer_items = []  # (field name, value, line) that drive inference
+            for fname, value_expr, line in raw_items:
+                if self.defers_field_literal(value_expr, patterns.get(fname)):
+                    continue
+                tv = self.gen_expr(value_expr)
+                cached[fname] = tv
+                infer_items.append((fname, tv, line))
+            struct_type = self.infer_struct_lit_type(decl, infer_items, expr.line)
         else:
             struct_type = self.lang_type(ref, expr.line)
         if not is_aggregate(struct_type):
             raise LangError(
                 f"a struct literal needs a struct type, not {struct_type}", expr.line
             )
-        if is_union(struct_type) and len(items) > 1:
+        if is_union(struct_type) and len(raw_items) > 1:
             # The members share one storage, so writing two would just
             # overwrite; the literal names the (at most one) live member.
             raise LangError("a union literal sets at most one member", expr.line)
@@ -4492,17 +4516,84 @@ class CodeGen:
         if over_aligned(struct_type):
             slot.align = type_align(struct_type)
         self.builder.store(ir.Constant(struct_type.ir, None), slot)  # zero omitted fields
-        for fname, tv, line in items:
+        for fname, value_expr, line in raw_items:
+            # A field pre-evaluated for inference reuses its cached value (so its
+            # side effects ran once, in source order); every other field lowers
+            # now, borrowing a string/array literal into a slice-typed field.
+            if cached is not None and fname in cached:
+                tv = cached[fname]
+            else:
+                tv = self.eval_struct_field(struct_type, fname, value_expr, line)
             self.store_struct_field(slot, struct_type, fname, tv, line, "field")
         # Fill any omitted field that declares a default; the rest keep the zero.
         for fname, default_expr in self.struct_defaults(struct_type).items():
             if fname in seen:
                 continue
+            tv = self.eval_struct_field(
+                struct_type, fname, default_expr, default_expr.line
+            )
             self.store_struct_field(
-                slot, struct_type, fname, self.gen_expr(default_expr),
-                default_expr.line, "default for field",
+                slot, struct_type, fname, tv, default_expr.line,
+                "default for field",
             )
         return TypedValue(self.builder.load(slot), struct_type)
+
+    def eval_struct_field(self, struct_type, fname, value_expr, line):
+        """Lower a struct-literal field value against its declared field type.
+
+        A string or array literal whose field is a char slice / ``slice<T>``
+        borrows into that field with no explicit ``as`` -- the struct-literal
+        position of the same adaptation a ``let``, return, element, or argument
+        allows (see :meth:`gen_borrow_slice`). Every other field lowers the
+        ordinary way; :meth:`store_struct_field` then coerces the result to the
+        field type.
+
+        Args:
+            struct_type: The resolved (concrete) struct/union type.
+            fname: The field being filled.
+            value_expr: The field's raw value expression.
+            line: Source line for diagnostics.
+
+        Returns:
+            The field value as a ``TypedValue``.
+        """
+        _index, ftype = self.struct_field(struct_type, fname, line)
+        if self.str_literal_adapts(value_expr, ftype) or self.array_literal_adapts(
+            value_expr, ftype
+        ):
+            return self.gen_borrow_slice(value_expr, ftype, line)
+        return self.gen_expr(value_expr)
+
+    def defers_field_literal(self, value_expr, pattern) -> bool:
+        """Whether a generic struct-literal field sits out type inference.
+
+        A string or array literal whose declared field pattern is a
+        ``slice<...>`` is an inference non-participant: it carries no type that
+        may anchor a parameter (an array literal has no element inference, a
+        string literal would only bind ``char*``), so it is skipped here and
+        borrowed later, once the field's type is fixed by the other fields, a
+        declared default, or explicit type args -- exactly as an untyped
+        constant is skipped in :meth:`infer_struct_lit_type`. The check is on
+        the *declared pattern*, not a resolved type, because the struct type is
+        still being inferred; a literal against a bare type parameter (``box {
+        v = "hi" }``, field ``v: T``) is therefore not a slice pattern and does
+        participate -- ``"hi"`` binds ``T = char*``, keeping ``box<char*>``.
+
+        Args:
+            value_expr: The field's raw value expression.
+            pattern: The field's declared type ``TypeRef`` (or ``None`` when the
+                literal names a field the struct does not declare).
+
+        Returns:
+            ``True`` when the field should be deferred to the borrow pass.
+        """
+        if not (isinstance(pattern, TypeRef) and pattern.name == "slice"):
+            return False
+        if isinstance(value_expr, Ternary):
+            return self.defers_field_literal(
+                value_expr.then, pattern
+            ) and self.defers_field_literal(value_expr.otherwise, pattern)
+        return isinstance(value_expr, (StrLit, ArrayLit))
 
     def store_struct_field(self, slot, struct_type, fname, tv, line, what):
         """Coerce ``tv`` to field ``fname``'s type and store it into ``slot``."""
@@ -4562,9 +4653,12 @@ class CodeGen:
             return
         self.builder.store(ir.Constant(struct_type.ir, None), slot)  # zero first
         for fname, default_expr in defaults.items():
+            tv = self.eval_struct_field(
+                struct_type, fname, default_expr, default_expr.line
+            )
             self.store_struct_field(
-                slot, struct_type, fname, self.gen_expr(default_expr),
-                default_expr.line, "default for field",
+                slot, struct_type, fname, tv, default_expr.line,
+                "default for field",
             )
 
     def lookup_struct_decl(self, name: str) -> "StructDecl | UnionDecl | None":

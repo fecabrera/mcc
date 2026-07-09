@@ -376,6 +376,189 @@ def test_struct_literal_adapts_untyped_constant():
     assert run(source) == 5
 
 
+# ------------------------------------------- string/array literal field adaptation
+
+
+def test_string_literal_field_borrows_into_char_slice():
+    # A string literal in a `slice<const char>` field borrows with no `as`, the
+    # struct-literal position of the same adaptation a let/argument allows: the
+    # length is NUL-free (2 for "ls").
+    source = """
+        struct cmd { name: slice<const char>; argc: int32; }
+        fn main() -> int32 {
+            let c = struct cmd { name = "ls", argc = 3 };
+            return c.argc + (c.name.length as int32);
+        }
+    """
+    assert run(source) == 5
+
+
+def test_array_literal_field_borrows_into_slice():
+    source = """
+        struct nums { xs: slice<int32>; n: int32; }
+        fn main() -> int32 {
+            let m = struct nums { xs = [10, 20, 30], n = 3 };
+            return m.xs[0] + m.xs[2] + m.n;
+        }
+    """
+    assert run(source) == 43
+
+
+def test_string_literal_field_is_source_order_preserving():
+    # A string literal is side-effect-free, so a non-generic literal evaluates
+    # its fields strictly left to right -- the field after the string still runs
+    # after it. (Two ordinary fields; the string sits between them.)
+    source = """
+        struct rec { a: int32; name: slice<const char>; b: int32; }
+        fn main() -> int32 {
+            let r = struct rec { a = 1, name = "hey", b = 2 };
+            return r.a + (r.name.length as int32) + r.b;
+        }
+    """
+    assert run(source) == 6
+
+
+def test_literal_field_never_infers_a_slice_type():
+    # The invariant: a literal field never drives generic inference. `box { v =
+    # "hello" }` has field `v: T` (a bare parameter, not a slice), so the string
+    # binds T = char* -- it monomorphizes to box<char*>, exactly as before, and
+    # does NOT become box<slice<...>>.
+    source = """
+        struct box<T> { v: T; }
+        fn main() -> int32 {
+            let b = struct box { v = "hello" };
+            return 0;
+        }
+    """
+    ir = compile_ir(source)
+    assert "box<char*>" in ir
+    assert "box<slice" not in ir
+
+
+def test_array_literal_against_bare_type_param_stays_rejected():
+    # An array literal against a bare type parameter cannot lower (nothing fixes
+    # the element type or storage), so it stays the same error as anywhere else
+    # an array literal has no receiving array/slice type.
+    source = """
+        struct box<T> { v: T; }
+        fn f() { let b = struct box { v = [1, 2, 3] }; }
+    """
+    with pytest.raises(LangError, match="an array literal is only allowed"):
+        compile_ir(source)
+
+
+def test_generic_struct_infers_from_typed_field_while_literal_adapts():
+    # T is inferred from the typed non-literal field `val`; the string field,
+    # whose declared type is the concrete `slice<const char>`, sits out
+    # inference and borrows once the struct type is fixed.
+    source = """
+        struct row<T> { name: slice<const char>; val: T; }
+        fn main() -> int32 {
+            let seven: int32 = 7;
+            let r = struct row { name = "x", val = seven };
+            return r.val + (r.name.length as int32);
+        }
+    """
+    assert run(source) == 8
+
+
+def test_explicit_generic_args_array_literal_field():
+    source = """
+        struct nums<T> { xs: slice<T>; n: int32; }
+        fn main() -> int32 {
+            let m = struct nums<int32> { xs = [1, 2, 3], n = 3 };
+            return m.xs[1] + m.n;
+        }
+    """
+    assert run(source) == 5
+
+
+def test_nested_struct_literal_with_string_field():
+    source = """
+        struct inner { name: slice<const char>; }
+        struct outer { i: struct inner; k: int32; }
+        fn main() -> int32 {
+            let o = struct outer { i = struct inner { name = "hi" }, k = 4 };
+            return o.k + (o.i.name.length as int32);
+        }
+    """
+    assert run(source) == 6
+
+
+def test_union_literal_string_member_borrows():
+    source = """
+        union u { s: slice<const char>; n: int32; }
+        fn main() -> int32 {
+            let x = union u { s = "abc" };
+            return x.s.length as int32;
+        }
+    """
+    assert run(source) == 3
+
+
+def test_default_field_string_literal_borrows():
+    # An omitted field whose declared default is a string literal borrows the
+    # same way as a provided one.
+    source = """
+        struct cfg { name: slice<const char> = "def"; k: int32; }
+        fn main() -> int32 {
+            let c = struct cfg { k = 9 };
+            return c.k + (c.name.length as int32);
+        }
+    """
+    assert run(source) == 12
+
+
+def test_static_struct_string_literal_field():
+    # The @static/const path already folds a string-literal field to a constant
+    # {pointer, length} view; pin it.
+    source = """
+        struct cmd { name: slice<const char>; argc: int32; }
+        @static let g: struct cmd = struct cmd { name = "ls", argc = 1 };
+        fn main() -> int32 { return g.argc + (g.name.length as int32); }
+    """
+    assert run(source) == 3
+
+
+def test_static_struct_array_literal_field():
+    # The array-literal sibling also folds through the const path: an anonymous
+    # constant global backs the view.
+    source = """
+        struct nums { xs: slice<const int32>; n: int32; }
+        @static let g: struct nums = struct nums { xs = [5, 6], n = 2 };
+        fn main() -> int32 { return g.xs[0] + g.xs[1] + g.n; }
+    """
+    assert run(source) == 13
+
+
+def test_string_literal_field_ternary_borrows():
+    # The adaptation reaches through a ternary of string literals, borrowing arm
+    # by arm, so the merged view carries the chosen literal's own length.
+    source = """
+        struct cmd { name: slice<const char>; flag: int32; }
+        fn main() -> int32 {
+            let c = struct cmd { name = 1 > 0 ? "yes" : "no", flag = 4 };
+            return c.flag + (c.name.length as int32);
+        }
+    """
+    assert run(source) == 7
+
+
+def test_generic_struct_ternary_string_field_sits_out_inference():
+    # A ternary-of-string-literals field against a concrete slice field in a
+    # generic struct: it borrows arm by arm and still sits out inference, so T
+    # comes from the typed `val` field.
+    source = """
+        struct row<T> { name: slice<const char>; val: T; }
+        fn main() -> int32 {
+            let seven: int32 = 7;
+            let r = struct row { name = 1 > 0 ? "yes" : "no", val = seven };
+            return r.val + (r.name.length as int32);
+        }
+    """
+    assert run(source) == 10
+
+
 # --------------------------------------------------------------------- errors
 
 

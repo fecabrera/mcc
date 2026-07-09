@@ -2698,6 +2698,28 @@ literal argument contributes nothing to type inference, so a **generic**
 `slice<T>` parameter needs `T` from an explicit type argument or a companion
 argument (`count<int32>([1, 2, 3])`; bare `count([1, 2, 3])` cannot infer `T`).
 
+A **[struct-literal](#structs) field** is another adapting position: a string or
+array literal (or a ternary of them) in a field whose declared type is a char
+slice / `slice<T>` borrows into that field with no `as`, and a `= default` field
+whose default is such a literal borrows the same way — the field type stands in
+for the annotation. As at an argument, a literal field contributes nothing to a
+**generic** struct's type inference: `box { v = "hi" }` on `struct box<T> { v: T; }`
+still binds `T = char*` (a bare type parameter, not a slice, is no adaptation
+target), and `struct nums<T> { xs: slice<T>; }` cannot infer `T` from `nums { xs
+= [1, 2] }` alone. A literal field adapts only once the field type is a concrete
+slice — from the declaration, from a companion typed field that fixes the
+parameter (`row { name = "x", val = seven }` on `struct row<T> { name: slice<const
+char>; val: T; }` infers `T = int32` from `val`, and `name` borrows), or from
+explicit type arguments. One evaluation-order seam: to infer a generic struct's
+type arguments, mcc must evaluate the non-literal fields *before* borrowing the
+literal ones, so in the generic-without-explicit-args case an array-literal
+field's element expressions run after a later non-literal field's — the same
+narrow reorder the argument path documents. String-literal fields are
+side-effect-free, and the non-generic (or explicit-type-argument) path evaluates
+strictly left to right, so both are order-safe. A `@static` struct or union
+literal folds a string- or array-literal field to a constant `{pointer, length}`
+view the same way its scalar counterpart does.
+
 One position still does not take the shortcut. `return [1, 2] as slice<int32>;`
 is a compile error — the view would point into the returning call's hidden
 backing array, which dies with the return and is named by nothing else (a
@@ -3809,7 +3831,10 @@ context with no `as` at all (the way an untyped constant takes its type): at a
 function argument (including a `const`-by-reference slice parameter, so
 `writeln("hi")` works), a `let` slot, a `return`, an **array element** whose
 element type is a char slice (`let dirs: slice<char>[2] = ["bin", "usr/bin"];`,
-including nested literals), or a `@static` initializer — the
+including nested literals), a **[struct-literal](#structs) field** whose type is
+a char slice (`cmd { name = "ls" }`; see [Slices](#slices) for the shared rules,
+including how a literal field stays out of a generic struct's inference), or a
+`@static` initializer — the
 scalar `@static let g: slice<const char> = "hi";` and a `@static` array of
 slices both become constant `{pointer, length}` views into the string constants
 (safe: the pointee is a global constant, so there is no lifetime question). A

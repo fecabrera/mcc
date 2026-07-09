@@ -10,6 +10,33 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **String and array literals adapt in struct-literal fields** — a string or
+  array literal (or a ternary of them) in a struct-literal field whose declared
+  type is a char slice / `slice<T>` now borrows into that field with no explicit
+  `as`, the last position in the string/array-literal adaptation family (joining
+  `let`, `return`, array element, and function argument). `cmd { name = "ls" }`
+  on `struct cmd { name: slice<const char>; ... }` borrows the string
+  (NUL-dropped, so `.length` is `2`), and `nums { xs = [1, 2, 3] }` on
+  `struct nums { xs: slice<int32>; ... }` views a hidden backing array; a
+  `= default` field whose default is such a literal adapts the same way. To
+  make this possible, `gen_struct_lit` was restructured to thread each field's
+  *raw* AST node to the store step and resolve the struct type first, instead of
+  pre-evaluating every field before any field type was known. A literal field
+  never drives a generic struct's type inference: `box { v = "hi" }` on
+  `struct box<T> { v: T; }` still monomorphizes to `box<char*>` (a bare type
+  parameter is no adaptation target), and a literal adapts only once the field
+  type is a concrete slice — from the declaration, a companion typed field that
+  fixes the parameter (`row { name = "x", val = seven }` infers `T` from `val`),
+  or explicit type arguments. **Evaluation order:** inferring a generic struct's
+  type arguments requires evaluating the non-literal fields before borrowing the
+  literal ones, so in the generic-without-explicit-args case an array-literal
+  field's element expressions run after a later non-literal field's — a narrow,
+  documented reorder mirroring the argument path; string-literal fields are
+  side-effect-free and the non-generic path evaluates strictly left to right.
+  `@static` struct and union literals already folded such fields to constant
+  `{pointer, length}` views and are unchanged. See
+  [Slices](docs/language.md#slices), [Strings](docs/language.md#strings), and
+  [examples/types/struct_literals.mc](examples/types/struct_literals.mc).
 - **Struct and union `@static` global initializers** — a struct or union
   literal may now initialize a `@static`/global variable, folded to a data
   constant at compile time instead of requiring a runtime assignment. This

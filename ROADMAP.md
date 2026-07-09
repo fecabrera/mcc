@@ -857,15 +857,25 @@ already do).
         distributes over a ternary of owned arrays the same way. `@static`
         stays literal-only (a runtime branch has no constant view);
         implemented, see [Operators](docs/language.md#operators)
-  - [ ] string-literal struct fields — the remaining position: a string
-        literal in a struct-literal field whose type is a char slice
-        (`struct cmd { name: slice<const char>; ... }` built from
-        `{ name: "ls", ... }`). Blocked on evaluation order: `gen_struct_lit`
-        evaluates every field expression *before* field types are resolved
-        (discarding the AST node the adaptation gate needs), and generic
-        struct literals infer their type arguments **from** those evaluated
-        field types — the very evaluation the gate would have to precede. Needs
-        a deferred-evaluation restructure of the struct-literal path first
+  - [x] string-literal (and array-literal) struct fields — the remaining
+        position: a string or array literal in a struct-literal field whose type
+        is a char slice / `slice<T>` (`struct cmd { name: slice<const char>; ... }`
+        built from `{ name = "ls", ... }`, or `struct nums { xs: slice<int32>; }`
+        from `{ xs = [1, 2, 3] }`) borrows into the field with no `as`, the same
+        adaptation a `let`/argument/element allows. `gen_struct_lit` now threads
+        the *raw* field AST node to the store step (resolving the struct type
+        first) instead of pre-evaluating every field: a non-generic (or
+        explicit-type-argument) literal takes one order-preserving pass; a
+        generic-without-explicit-args literal splits into inference then borrow,
+        with a literal field sitting out inference (a bare-type-parameter field
+        keeps `box { v = "hi" }` at `box<char*>`) — so a companion typed field or
+        explicit args must fix the parameter. The narrow eval-order reorder
+        (a later non-literal field evaluated before an earlier array-literal
+        field's elements, in the generic-inference case) is documented; string
+        fields are side-effect-free. `@static` struct/union literals already
+        folded such fields to constant views. Implemented, see
+        [Slices](docs/language.md#slices) and
+        [examples/types/struct_literals.mc](examples/types/struct_literals.mc)
   - [x] array literals — the generalization: `let dirs: slice<char*> = ["/bin"];`
         (or `["/bin", "/usr/bin"]` passed to a `slice<T>` parameter)
         materializes a hidden fixed-size backing array, entry-alloca'd in the
@@ -881,12 +891,11 @@ already do).
         `return [..] as slice<T>;` spelling (nothing else names the backing
         array, so the returned view is a guaranteed dangle), and the bare
         `let v = [1, 2];`, which stays an ambiguous error (the annotation
-        picks the storage: array = owned, slice = borrowed view). Out of
-        scope: struct-literal fields (the same `gen_struct_lit`
-        evaluation-order blocker as the string-literal sibling above; both
-        ride the future deferred-evaluation restructure) and assignment
-        statements (the family-wide gap recorded in the intro). Lands staged
-        (this box ticks when the last stage lands):
+        picks the storage: array = owned, slice = borrowed view). A struct-literal
+        field now adapts too (the `gen_struct_lit` deferred-evaluation restructure
+        landed with the string-literal sibling above); one gap still stands:
+        assignment statements (the family-wide gap recorded in the intro). Lands
+        staged (this box ticks when the last stage lands):
     - [x] stage 1: cast, `let`, element, and `@static` positions — explicit
           `as slice<T>` anywhere an expression goes, the annotation-driven
           `let` (`let nums: slice<int32> = [0x10, 0x1F, 0xFF];`), array

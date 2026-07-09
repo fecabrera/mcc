@@ -11,6 +11,11 @@ struct point { x: int32; y: int32; }
 struct pair<A, B> { a: A; b: B; }
 struct line { from: struct point; to: struct point; }
 
+// A field whose type is a char slice / slice<T> accepts a string or array
+// literal directly: it borrows into the field with no explicit `as`, the same
+// adaptation a `let` or a function argument allows.
+struct command { name: slice<const char>; args: slice<const int32>; }
+
 // A field may declare a default with `= value`; a literal that omits the field
 // uses the default instead of zero.
 struct config { capacity: int32 = 16; verbose: int32 = 0; name: char*; }
@@ -78,6 +83,22 @@ fn main() -> int32 {
     *h = point { x = 10, y = 20 };
     println("heap point = (%d, %d)", h->x, h->y);
 
+    // A string or array literal in a slice-typed field borrows into it with no
+    // explicit `as`. The string borrow drops the trailing NUL, so `.length` is
+    // the text length (2 for "ls"); the array literal views a hidden backing
+    // array, so its `.length` is the exact element count.
+    let cmd = command { name = "ls", args = [1, 2, 3] };
+    writestr(cmd.name);
+    println(": %llu args", cmd.args.length);   // "ls: 3 args"
+
+    // In a generic struct a literal field never drives type inference: it sits
+    // out, like a bare untyped constant, and borrows once the type is fixed by
+    // the *typed* fields. Here A = int32 comes from `n`; the string adapts to
+    // the concrete slice<const char> field.
+    let row = pair<int32, slice<const char>> { a = n, b = "row" };
+    writestr(row.b);
+    println(" #%d", row.a);                    // "row #7"
+
     // The one place a bare literal is not allowed is a `for x in ... {` header,
     // where the `{` always starts the loop body; parenthesize to iterate a
     // literal there: `for x in (A { ... }) { ... }`.
@@ -86,4 +107,6 @@ fn main() -> int32 {
 }
 
 // See also: static_initializers.mc, where these same literals initialize
-// `@static` globals -- folded to data constants at compile time.
+// `@static` globals -- folded to data constants at compile time; and
+// string_tables.mc / memory/slices.mc for the slice borrow the string- and
+// array-literal fields above rely on.
