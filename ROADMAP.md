@@ -65,6 +65,13 @@ its reference section in the [language reference](docs/language.md).
       yields a new slice over the same storage (`s[1:]`, `s[:2]`, `s[:]`),
       omitted bounds defaulting to `0`/`.length`; a plain rvalue, unchecked
       like `s[i]`
+- [x] [Literal adaptation to `slice<T>`](docs/language.md#slices) — a string or
+      array literal in a slice-typed slot adapts to it, the compiler
+      materializing (array) or borrowing (string) the backing storage, across
+      the family of positions: argument, `let`, `return`, array element,
+      `@static`, struct field, and assignment. Array-literal assignment is the
+      one documented non-goal (a frame-local backing would dangle past a
+      longer-lived target)
 - [x] [Structs](docs/language.md#structs) — `.`/`->` access, generics, struct
       literals (`point { x = 6, y = 4 }`, the `struct` keyword optional, omitted
       fields zeroed or set to a field's `= default`, generic type arguments
@@ -831,115 +838,6 @@ already do).
       keeps each element's static type and a compile-time arity, where erasing
       every slot to `any` would collapse into a fixed-length `slice<any>`. Also
       the door to a statically-typed variadic later (no erasure), if wanted
-- [x] Literal adaptation to `slice<T>` — a literal in a slice-typed slot
-      borrows from context, the compiler materializing the backing storage.
-      The family is complete for string and array literals: the shipped
-      positions are argument / `let` / `return` / array element / `@static` /
-      struct field / **assignment**. Array-literal assignment is the sole
-      documented non-goal (a frame-local backing would dangle past a
-      longer-lived target); see the assignment sub-item below:
-  - [x] string literals — `"hi"` adapts to a `slice<char>`/`slice<const char>`
-        expected by a `let` or a parameter (NUL dropped), borrowing the string
-        constant's bytes; implemented, see [Slices](docs/language.md#slices)
-  - [x] string-literal elements — the adaptation reaches nested/element
-        positions: `let dirs: slice<char>[2] = ["bin", "usr/bin"];` (an owned
-        array *of slices* whose elements are string literals) works with no
-        per-element `as`, nested literals included, each element borrowing
-        its **global string constant** (no backing-storage or lifetime
-        question). The `@static` route emits constant `{pointer, length}`
-        views, so a `@static` array of slices — and, as a bonus, the scalar
-        `@static let g: slice<const char> = "hi";` — works too; implemented,
-        see [Strings](docs/language.md#strings)
-  - [x] ternaries of string literals — the adaptation reaches through a
-        conditional expression whose arms are all string literals
-        (`string_append(s, b ? "true" : "false")`, nested ternaries included):
-        each arm borrows in its own branch, so the merged view carries the
-        chosen literal's own length. An explicit `as slice<char>` borrow
-        distributes over a ternary of owned arrays the same way. `@static`
-        stays literal-only (a runtime branch has no constant view);
-        implemented, see [Operators](docs/language.md#operators)
-  - [x] string-literal (and array-literal) struct fields — the remaining
-        position: a string or array literal in a struct-literal field whose type
-        is a char slice / `slice<T>` (`struct cmd { name: slice<const char>; ... }`
-        built from `{ name = "ls", ... }`, or `struct nums { xs: slice<int32>; }`
-        from `{ xs = [1, 2, 3] }`) borrows into the field with no `as`, the same
-        adaptation a `let`/argument/element allows. `gen_struct_lit` now threads
-        the *raw* field AST node to the store step (resolving the struct type
-        first) instead of pre-evaluating every field: a non-generic (or
-        explicit-type-argument) literal takes one order-preserving pass; a
-        generic-without-explicit-args literal splits into inference then borrow,
-        with a literal field sitting out inference (a bare-type-parameter field
-        keeps `box { v = "hi" }` at `box<char*>`) — so a companion typed field or
-        explicit args must fix the parameter. The narrow eval-order reorder
-        (a later non-literal field evaluated before an earlier array-literal
-        field's elements, in the generic-inference case) is documented; string
-        fields are side-effect-free. `@static` struct/union literals already
-        folded such fields to constant views. Implemented, see
-        [Slices](docs/language.md#slices) and
-        [examples/types/struct_literals.mc](examples/types/struct_literals.mc)
-  - [x] array literals — the generalization: `let dirs: slice<char*> = ["/bin"];`
-        (or `["/bin", "/usr/bin"]` passed to a `slice<T>` parameter)
-        materializes a hidden fixed-size backing array, entry-alloca'd in the
-        enclosing frame, and borrows it, replacing today's two-step
-        `let dirs: char*[2] = [...]; let view = dirs as slice<char*>;`. The
-        view's length is the exact element count (a documented seam beside
-        the two-step `char[N]` borrow, which keeps the NUL that direct
-        string-literal adaptation drops); an empty `[]` produces the
-        `{null, 0}` slice, varargs-style; mutable `slice<T>` targets are
-        allowed (the backing storage is fresh, the existing borrow rules
-        apply, zero new policy), except toward `@static`, which stays
-        const-only. Two rejections stand: the direct
-        `return [..] as slice<T>;` spelling (nothing else names the backing
-        array, so the returned view is a guaranteed dangle), and the bare
-        `let v = [1, 2];`, which stays an ambiguous error (the annotation
-        picks the storage: array = owned, slice = borrowed view). A struct-literal
-        field now adapts too (the `gen_struct_lit` deferred-evaluation restructure
-        landed with the string-literal sibling above). Assignment stays a
-        deliberate non-goal for array literals: a frame-local backing would
-        dangle past a longer-lived target, the same hazard that rejects the
-        direct `return [..] as slice<T>;` spelling (string-literal assignment
-        ships, since a string constant is static-lifetime). Lands staged (this
-        box ticks when the last stage lands):
-    - [x] stage 1: cast, `let`, element, and `@static` positions — explicit
-          `as slice<T>` anywhere an expression goes, the annotation-driven
-          `let` (`let nums: slice<int32> = [0x10, 0x1F, 0xFF];`), array
-          element position (`let m: slice<int32>[2] = [[1, 2], [3, 4]];`),
-          and the const-only `@static` route (an anonymous constant global
-          backs the view; a mutable `@static` target is rejected toward
-          `slice<const T>`); implemented, see
-          [Slices](docs/language.md#slices)
-    - [x] stage 2: bare argument position — `f([1, 2, 3])` against a
-          `slice<T>` parameter. Lands on the direct call path
-          (`marshal_args`) and the overload-set path (the pre-evaluation
-          carve-out, `literal_adapts_to_pattern`, winner emission)
-          **together**: open overload sets mean a second overload flips a
-          name onto the set path, the parity trap the string-literal family
-          already hit once. Resolved: **uniform allow** — a plain (non-`mut`)
-          `slice<T>` parameter accepts a literal (the fresh backing array is
-          writable), a `mut slice<T>` parameter still rejects it. Literal
-          elements contribute nothing to generic inference (a bare
-          `f([1, 2, 3])` cannot infer `T`; pass `f<int32>(...)` or a companion
-          argument), so element anchoring stays a possible later extension;
-          implemented, see [Slices](docs/language.md#slices)
-  - [x] assignment position — string-literal assignment to an existing slice
-        lvalue, the last position in the family, now covering all five lvalue
-        forms: plain (`s = "hi";`), deref (`*out = "hi";`), index
-        (`a[i] = "hi";`), member (`c.name = "hi";`), and a mut return
-        (`f(...) = "hi";`). String-literal assignment is coherent: the literal
-        repoints the lvalue at its global string constant (static lifetime, no
-        backing-storage or lifetime question), exactly the borrow the
-        `let`/argument/element/field positions already do, and safe even
-        through a pointer or past the frame. Including the member form closes a
-        real inconsistency the struct-field work opened (`cmd { name = "hi" }`
-        worked, but `c.name = "hi"` did not); implemented, see
-        [Slices](docs/language.md#slices).
-        **Not planned: array-literal assignment** (`s = [1, 2, 3];`) — the
-        materialized backing is frame-local, but an assignment target can
-        outlive the current frame (a `mut slice<T>*` out-parameter, or a
-        variable declared in an outer scope), so the borrowed view would
-        dangle, the same lifetime hazard that rejects the direct
-        `return [..] as slice<T>;` spelling; `let`/argument stay safe only
-        because the binding and its backing share a frame
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:
