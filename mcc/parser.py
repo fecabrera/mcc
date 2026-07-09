@@ -2098,6 +2098,14 @@ class Parser:
             self.expect(")")
             return expr
         if tok.kind == "{":
+            # A bare, type-inferred struct literal `{ field = expr, ... }`: the
+            # type comes from context (a typed let/assignment/return/argument/
+            # element/field), the way `[...]` and `"..."` adapt. Told apart from
+            # a block-expression by shape (see `_bare_struct_lit_ahead`) and
+            # disabled where a `{` would be ambiguous with a loop body (the same
+            # `struct_lit_ok` gate the `Name { ... }` form uses).
+            if self.struct_lit_ok and self._bare_struct_lit_ahead():
+                return self.parse_struct_lit_body(None, tok.line)
             # A block-expression: { stmts; emit value; }. A `{` only reaches
             # here in expression position; in statement position parse_statement
             # claims it first as a block statement.
@@ -2194,6 +2202,22 @@ class Parser:
             The parsed ``StructLit``.
         """
         self.expect("{")
+        return self.parse_struct_lit_body(TypeRef(name, args), line)
+
+    def parse_struct_lit_body(self, type_ref, line: int) -> StructLit:
+        """Parse ``field = expr, ... }`` with the opening ``{`` already consumed.
+
+        Shared by the named forms and the bare, type-inferred form ``{ field =
+        expr, ... }`` (``type_ref`` is ``None``, and the struct type comes from
+        context). A trailing comma is allowed, and an empty body zero-initializes.
+
+        Args:
+            type_ref: The struct type ``TypeRef``, or ``None`` for a bare literal.
+            line: Source line for diagnostics.
+
+        Returns:
+            The parsed ``StructLit``.
+        """
         fields = []
         # Field values sit inside the literal's braces, so a bare `T { ... }`
         # value is unambiguous again here.
@@ -2205,7 +2229,47 @@ class Parser:
                 if not self.accept(","):  # a trailing comma is allowed
                     break
         self.expect("}")
-        return StructLit(TypeRef(name, args), fields, line)
+        return StructLit(type_ref, fields, line)
+
+    def _bare_struct_lit_ahead(self) -> bool:
+        """Whether the just-consumed ``{`` opens a bare struct literal.
+
+        In expression position ``{`` is otherwise a block-expression ``{ stmts;
+        emit v; }``. The two are told apart syntactically: a struct literal's
+        fields are ``IDENT = expr`` separated by commas, a block's statements by
+        semicolons. So a bare literal opens with ``IDENT =`` and reaches its
+        first *top-level* separator as a ``,`` or the closing ``}`` -- never a
+        ``;`` (which would make it a block whose first statement is an
+        assignment ``x = expr;``). An empty ``{}`` stays a block.
+
+        The cursor sits just past the ``{``; this only peeks.
+
+        Returns:
+            ``True`` when the following tokens form a bare struct-literal body.
+        """
+        toks = self.tokens
+        i = self.pos
+        if toks[i].kind != "IDENT" or toks[i + 1].kind != "=":
+            return False
+        depth = 0
+        while True:
+            kind = toks[i].kind
+            if kind == "EOF":
+                return False
+            if kind in ("(", "[", "{"):
+                depth += 1
+            elif kind in (")", "]"):
+                depth -= 1
+            elif kind == "}":
+                if depth == 0:
+                    return True  # closed with no top-level `;`: a struct literal
+                depth -= 1
+            elif depth == 0:
+                if kind == ",":
+                    return True
+                if kind == ";":
+                    return False
+            i += 1
 
     def try_type_args(self) -> list[TypeRef]:
         """Speculatively parse ``<type, ...>`` generic arguments at a call site.

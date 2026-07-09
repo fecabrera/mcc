@@ -75,7 +75,10 @@ its reference section in the [language reference](docs/language.md).
 - [x] [Structs](docs/language.md#structs) — `.`/`->` access, generics, struct
       literals (`point { x = 6, y = 4 }`, the `struct` keyword optional, omitted
       fields zeroed or set to a field's `= default`, generic type arguments
-      inferred from typed field values),
+      inferred from typed field values, or the bare `{ x = 6, y = 4 }` form where
+      context fixes the type — the aggregate sibling of the slice-literal
+      adaptation above, across the same family of positions, with overloads
+      resolved by field names),
       `@packed`/`@align`/`@volatile`, `extends` (prefix specialization),
       struct value upcast, flexible array members (a trailing `field: T[]` that
       adds 0 to `sizeof` and decays to a `T*` at the struct's tail)

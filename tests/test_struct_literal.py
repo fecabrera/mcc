@@ -575,3 +575,213 @@ def test_duplicate_field_is_rejected():
 def test_non_struct_type_is_rejected():
     with pytest.raises(LangError, match="needs a struct type"):
         compile_ir("fn f() { let p = struct int32 { x = 1 }; }")
+
+
+# --------------------------------------------- bare, type-inferred `{ ... }`
+
+
+def test_bare_struct_literal_parses_without_a_type():
+    (stmt,) = parse(
+        "fn f() { let p: point = { x = 6, y = 4 }; }"
+    ).functions[0].body
+    lit = stmt.value
+    assert isinstance(lit, StructLit)
+    assert lit.type_ref is None  # the type comes from the annotation
+    assert [name for name, _ in lit.fields] == ["x", "y"]
+
+
+def test_bare_struct_literal_single_field_no_comma_parses():
+    # `{ x = 9 }` closes with no top-level separator, so it is a struct
+    # literal, not a block whose lone statement is an assignment.
+    (stmt,) = parse("fn f() { let p: point = { x = 9 }; }").functions[0].body
+    assert isinstance(stmt.value, StructLit) and stmt.value.type_ref is None
+
+
+def test_bare_struct_literal_in_let():
+    source = POINT + """
+        fn main() -> int32 {
+            let p: point = { x = 6, y = 4 };
+            return p.x * 10 + p.y;
+        }
+    """
+    assert run(source) == 64
+
+
+def test_bare_struct_literal_omitted_field_is_zero():
+    source = POINT + """
+        fn main() -> int32 {
+            let p: point = { x = 5 };
+            return p.x * 10 + p.y;
+        }
+    """
+    assert run(source) == 50
+
+
+def test_bare_struct_literal_in_assignment():
+    source = POINT + """
+        fn main() -> int32 {
+            let p: point = { x = 1, y = 2 };
+            p = { x = 3, y = 4 };
+            return p.x * 10 + p.y;
+        }
+    """
+    assert run(source) == 34
+
+
+def test_bare_struct_literal_in_return():
+    # A struct is a value copy, so it adapts in `return` (unlike an array
+    # literal, whose borrowed view would dangle).
+    source = POINT + """
+        fn make() -> point { return { x = 7, y = 8 }; }
+        fn main() -> int32 { let p = make(); return p.x * 10 + p.y; }
+    """
+    assert run(source) == 78
+
+
+def test_bare_struct_literal_as_argument():
+    source = POINT + """
+        fn take(const p: point) -> int32 { return p.x * 10 + p.y; }
+        fn main() -> int32 { return take({ x = 2, y = 3 }); }
+    """
+    assert run(source) == 23
+
+
+def test_bare_struct_literal_nested_field():
+    source = """
+        struct point { x: int32; y: int32; }
+        struct seg { a: point; b: point; }
+        fn main() -> int32 {
+            let s: seg = { a = { x = 1, y = 2 }, b = { x = 3, y = 4 } };
+            return s.a.x * 1000 + s.a.y * 100 + s.b.x * 10 + s.b.y;
+        }
+    """
+    assert run(source) == 1234
+
+
+def test_bare_struct_literal_as_array_element():
+    source = POINT + """
+        fn main() -> int32 {
+            let ps: point[2] = [{ x = 1, y = 2 }, { x = 3, y = 4 }];
+            return ps[0].x * 1000 + ps[0].y * 100 + ps[1].x * 10 + ps[1].y;
+        }
+    """
+    assert run(source) == 1234
+
+
+def test_bare_struct_literal_stores():
+    source = """
+        struct point { x: int32; y: int32; }
+        struct holder { p: point; }
+        fn main() -> int32 {
+            let h: holder = { p = { x = 1, y = 1 } };
+            h.p = { x = 2, y = 3 };            // StoreMember
+            let arr: point[1] = [{ x = 0, y = 0 }];
+            arr[0] = { x = 4, y = 5 };         // StoreIndex
+            let pp: point* = &h.p;
+            *pp = { x = 6, y = 7 };            // StoreDeref
+            return h.p.x * 1000 + h.p.y * 100 + arr[0].x * 10 + arr[0].y;
+        }
+    """
+    assert run(source) == 6745
+
+
+def test_bare_union_literal():
+    source = """
+        union u { i: int32; b: bool; }
+        fn main() -> int32 { let v: u = { i = 41 }; return v.i; }
+    """
+    assert run(source) == 41
+
+
+def test_bare_struct_literal_static_initializer():
+    source = """
+        struct point { x: int32; y: int32; }
+        @static let origin: struct point = { x = 3, y = 9 };
+        fn main() -> int32 { return origin.x * 10 + origin.y; }
+    """
+    assert run(source) == 39
+
+
+def test_bare_struct_literal_picks_overload_by_fields():
+    # `{ x, y }` fits point but not box, so the call resolves unambiguously.
+    source = """
+        struct point { x: int32; y: int32; }
+        struct box { w: int32; h: int32; }
+        fn area(const p: point) -> int32 { return p.x * p.y; }
+        fn area(const b: box) -> int32 { return b.w + b.h; }
+        fn main() -> int32 {
+            return area({ x = 3, y = 4 }) * 100 + area({ w = 5, h = 6 });
+        }
+    """
+    assert run(source) == 1211
+
+
+def test_bare_struct_literal_argument_to_generic_concrete_param():
+    source = """
+        struct point { x: int32; y: int32; }
+        fn tagged<T>(t: T, const p: point) -> int32 { return (t as int32) + p.x; }
+        fn main() -> int32 { return tagged(100, { x = 7, y = 0 }); }
+    """
+    assert run(source) == 107
+
+
+def test_bare_struct_literal_field_values_with_calls_and_indexing():
+    # A field value bearing its own parens/brackets keeps the disambiguation
+    # scan at the right depth (the `,` inside `f(...)` is not a field separator).
+    source = POINT + """
+        fn f(a: int32) -> int32 { return a; }
+        fn main() -> int32 {
+            let arr: int32[2] = [10, 20];
+            let p: point = { x = f(1), y = arr[1] };
+            return p.x + p.y;
+        }
+    """
+    assert run(source) == 21
+
+
+def test_unterminated_bare_struct_literal_is_a_syntax_error():
+    # The disambiguation scan runs off the end (no top-level `,`/`;`/`}`), so the
+    # `{` falls back to a block-expression, which then fails to close.
+    with pytest.raises(LangError):
+        compile_ir(POINT + "fn f() { let p: point = { x = 1")
+
+
+def test_block_expression_still_parses():
+    # A `{` opening a statement (not `IDENT =`) stays a block-expression.
+    source = "fn main() -> int32 { let n: int32 = { emit 5; }; return n; }"
+    assert run(source) == 5
+
+
+def test_block_expression_with_leading_assignment_stays_a_block():
+    # First statement is an assignment `w = 8;` -- a `;` at top level, so this
+    # is a block, not a bare struct literal.
+    source = """
+        fn main() -> int32 {
+            let w: int32 = 0;
+            let r: int32 = { w = 8; emit w; };
+            return r;
+        }
+    """
+    assert run(source) == 8
+
+
+def test_bare_struct_literal_with_no_context_is_rejected():
+    with pytest.raises(LangError, match="bare struct literal .* has no type here"):
+        compile_ir(POINT + "fn f() -> int32 { return ({ x = 1 }).x; }")
+
+
+def test_bare_struct_literal_unknown_field_reports_precisely():
+    # In a fixed-type position a bad field reaches gen_struct_lit for a precise
+    # error, not the generic "no type here".
+    with pytest.raises(LangError, match="no field 'z'"):
+        compile_ir(POINT + "fn f() { let p: point = { x = 1, z = 2 }; }")
+
+
+def test_bare_struct_literal_ternary_arms_do_not_adapt():
+    # A bare literal in a ternary arm is a documented non-goal: name the arms.
+    with pytest.raises(LangError, match="bare struct literal .* has no type here"):
+        compile_ir(
+            POINT
+            + "fn f() -> int32 { let p: point = 1 > 0 ? { x = 1 } : { x = 2 };"
+            + " return p.x; }"
+        )

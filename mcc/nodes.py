@@ -1034,15 +1034,19 @@ class StructLit:
     """A struct literal ``struct Name[<args>] { field = expr, ... }``.
 
     Produces a struct value with the listed fields set and every omitted field
-    zero-initialized.
+    zero-initialized. A *bare* literal ``{ field = expr, ... }`` leaves
+    ``type_ref`` ``None`` and takes its struct type from context (a typed
+    ``let``/assignment/return/argument/element/field), the way ``[...]`` and
+    ``"..."`` adapt.
 
     Attributes:
-        type_ref: The struct type (its name and any generic arguments).
+        type_ref: The struct type (its name and any generic arguments), or
+            ``None`` for a bare, type-inferred literal.
         fields: ``(field name, value expression)`` pairs, in source order.
         line: Source line for diagnostics.
     """
 
-    type_ref: TypeRef
+    type_ref: "TypeRef | None"
     fields: list
     line: int
 

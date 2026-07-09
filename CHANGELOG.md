@@ -10,6 +10,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Bare, type-inferred struct literals** — a struct literal may drop its type
+  name where the position already fixes the struct type: `let p: point = { x =
+  1, y = 2 };` instead of `point { x = 1, y = 2 }`, the aggregate sibling of the
+  way `[...]` and `"..."` adapt to a `slice<T>`. It is allowed in every position
+  a slice literal is — a type-annotated `let`, an assignment (`p = { ... }`,
+  `*out = { ... }`, `a[i] = { ... }`, `s.field = { ... }`, and a mut return), a
+  `return`, a function argument, an array/slice element, and a nested struct
+  field — and, being a value copy rather than a borrow, adapts in a `return`
+  with no lifetime concern. Unions work the same (`let v: u = { i = 5 };`), and a
+  bare literal of constant fields initializes a `@static` global. As an argument
+  it resolves against the parameter's struct type and, among **overloads**, is
+  picked by its field names (`{ x, y }` fits `point`, not a `box` of `w`/`h`); it
+  can never itself infer a generic type parameter (it carries no type). A bare
+  `{` is told from a block-expression syntactically — struct fields are
+  comma-separated, block statements semicolon-terminated — so existing
+  block-expressions are unaffected. Two positions do not infer it: a `for x in
+  <expr> { ... }` header (as with the keyword-free named form) and a ternary arm
+  (name the type there). See
+  [examples/types/struct_literals.mc](examples/types/struct_literals.mc).
 - **libc `div` / `ldiv` / `lldiv` bindings** — the integer division functions
   that return their quotient and remainder together, now bindable because a
   by-value struct return crosses the `@extern` C boundary correctly. Adds the

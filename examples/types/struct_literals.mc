@@ -26,6 +26,11 @@ fn length2(p: struct point) -> int32 { return p.x * p.x + p.y * p.y; }
 // ...and as a return value.
 fn origin() -> struct point { return point { }; }   // all zero
 
+// Where the struct type is already known from context, the name can be dropped:
+// a bare `{ field = value, ... }` takes its type from the position, the way
+// `[...]` and `"..."` adapt. Here the return type fixes it.
+fn shifted(p: struct point) -> struct point { return { x = p.x + 1, y = p.y + 1 }; }
+
 fn main() -> int32 {
     // The basic form: an initializer.
     let p = point { x = 3, y = 4 };
@@ -99,9 +104,33 @@ fn main() -> int32 {
     writestr(row.b);
     println(" #%d", row.a);                    // "row #7"
 
+    // The type-inferred form: drop the type name where the position already
+    // fixes it. A typed `let` is the clearest case...
+    let bp: struct point = { x = 5, y = 6 };
+    println("bare let = (%d, %d)", bp.x, bp.y);
+
+    // ...and it works in every position a slice literal adapts in: a plain
+    // assignment, a function argument, a `return` (shifted, above), an array
+    // element, and a nested field -- each takes its struct type from context.
+    bp = { x = 7, y = 8 };                               // assignment
+    println("bare assign = (%d, %d)", bp.x, bp.y);
+    println("length2 = %d", length2({ x = 6, y = 8 }));  // argument
+    let s = shifted({ x = 0, y = 0 });                   // argument + bare return
+    println("shifted = (%d, %d)", s.x, s.y);
+    let seg2: struct line = { from = { x = 1, y = 2 }, to = { x = 3, y = 4 } };
+    println("bare segment (%d,%d) -> (%d,%d)",
+            seg2.from.x, seg2.from.y, seg2.to.x, seg2.to.y);
+    let quad: struct point[2] = [{ x = 1, y = 1 }, { x = 2, y = 2 }];
+    println("bare elems = (%d,%d) (%d,%d)",
+            quad[0].x, quad[0].y, quad[1].x, quad[1].y);
+
+    // Overloading still resolves a bare literal by its field names: `{ x, y }`
+    // fits point, so `length2` is picked with no type name written.
+
     // The one place a bare literal is not allowed is a `for x in ... {` header,
     // where the `{` always starts the loop body; parenthesize to iterate a
-    // literal there: `for x in (A { ... }) { ... }`.
+    // literal there: `for x in (A { ... }) { ... }`. A bare literal in a ternary
+    // arm is not inferred either -- name the arms (`cond ? point { ... } : ...`).
 
     return 0;
 }

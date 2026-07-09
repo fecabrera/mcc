@@ -2914,6 +2914,39 @@ typed field nor a default can't be inferred, so spell those cases out with
 explicit type arguments. A field whose own type is a struct takes a nested
 literal.
 
+Where the struct type is already fixed by context, the name may be **dropped**
+entirely — a bare `{ field = value, ... }` takes its type from the position, the
+way `[...]` and `"..."` adapt to a `slice<T>`. It is allowed in every position a
+slice literal is: a type-annotated `let`, an assignment (including `*p = { ... }`,
+`a[i] = { ... }`, `s.field = { ... }`, and a mut return), a `return`, a function
+argument, an array or slice element, and a nested struct field. Unlike a slice
+borrow a struct literal is a plain value copy, so it also adapts in a `return`
+with no lifetime concern.
+
+```c
+let p: point = { x = 6, y = 4 };     // the annotation fixes the type
+p = { x = 3, y = 4 };                // so does the target of an assignment
+let s: seg = { a = { x = 1, y = 2 }, b = { x = 3, y = 4 } };  // nested
+let ps: point[2] = [{ x = 1, y = 2 }, { x = 3, y = 4 }];      // elements
+fn shifted(p: point) -> point { return { x = p.x + 1, y = p.y + 1 }; }
+```
+
+A bare literal used as an argument is resolved against the parameter's struct
+type, and among **overloads** it is picked by its field names: `{ x = 1, y = 2 }`
+fits a `point` parameter but not a `box` of `w`/`h`, so the call is unambiguous
+(a wrong field _value_ type is still reported once the type is fixed). A bare
+literal can never itself infer a generic type parameter — it carries no type — so
+a plain `f({ ... })` on `fn f<T>(x: T)` is an error; the concrete struct must
+come from the parameter (`fn f(p: point)`), an annotation, or the other typed
+arguments.
+
+Two positions do **not** infer a bare literal: a `for x in <expr> { ... }`
+header (the same ambiguity the keyword-free form has, above) and a
+[ternary](#operators) arm (`cond ? { ... } : { ... }`) — name the type there
+(`cond ? point { ... } : point { ... }`). A bare literal in a position with no
+struct type to take — a bare expression statement, a `sizeof`, an un-annotated
+`let` — is an error that names the positions where one is expected.
+
 A field may declare a **default value** with `name: type = expr;`. When a struct
 literal omits that field, its default is used instead of zero (an explicit value
 in the literal still wins); fields with no default stay zero. `extends` carries
@@ -2951,6 +2984,7 @@ nested struct, array, and slice fields fold recursively:
     corner = point { x = 1, y = 1 },
     sizes  = [10, 20, 30],
 };
+@static let start:  struct point  = { x = 1, y = 2 };        // bare form works too
 ```
 
 A [union literal](#unions) folds the same way. See

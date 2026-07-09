@@ -4580,7 +4580,7 @@ class CodeGen:
             raise LangError("block expression never emits a value", expr.line)
         return TypedValue(self.gen_load(ctx.slot), ctx.type)
 
-    def gen_struct_lit(self, expr: StructLit) -> TypedValue:
+    def gen_struct_lit(self, expr: StructLit, struct_type: LangType = None) -> TypedValue:
         """Lower a struct literal ``struct Name { field = expr, ... }``.
 
         Allocates a temporary, zero-initializes it (so omitted fields read as
@@ -4589,8 +4589,15 @@ class CodeGen:
         integer constant adapts as it would in an assignment. A generic struct's
         type arguments are inferred from the field values when none are given.
 
+        A *bare* literal ``{ field = expr, ... }`` carries no type of its own;
+        the caller passes the ``struct_type`` the position fixes (a typed
+        ``let``/assignment/return/argument/element/field). With no such context a
+        bare literal is an error -- there is nothing to build.
+
         Args:
             expr: The ``StructLit`` node.
+            struct_type: The resolved aggregate type for a bare literal, else
+                ``None`` (a named literal resolves its own type).
 
         Returns:
             The constructed struct as a ``TypedValue``.
@@ -4600,6 +4607,13 @@ class CodeGen:
                 is given twice, or a type parameter cannot be inferred.
         """
         ref = expr.type_ref
+        if ref is None and struct_type is None:
+            raise LangError(
+                "a bare struct literal `{ ... }` has no type here; write the type "
+                "(point { ... }) or use it where one is expected -- a typed let, "
+                "assignment, return, argument, element, or field",
+                expr.line,
+            )
         # Carry each field's RAW AST node, not a pre-evaluated value: a string
         # or array literal in a slice-typed field must reach the store step as
         # its raw node to borrow (as in a `let`, return, or argument), and its
@@ -4615,9 +4629,11 @@ class CodeGen:
             seen.add(fname)
             raw_items.append((fname, value_expr, value_expr.line))
 
-        decl = self.lookup_struct_decl(ref.name)
         cached: dict | None = None
-        if decl is not None and decl.type_params and not ref.args:
+        decl = None if ref is None else self.lookup_struct_decl(ref.name)
+        if struct_type is not None:
+            pass  # a bare literal: the context already fixed the concrete type
+        elif decl is not None and decl.type_params and not ref.args:
             # Generic with no explicit type args: infer from the field values.
             # A string/array literal adapting into a slice-typed field is an
             # inference non-participant (like an untyped constant, which carries
@@ -4695,10 +4711,12 @@ class CodeGen:
             The field value as a ``TypedValue``.
         """
         _index, ftype = self.struct_field(struct_type, fname, line)
-        if self.str_literal_adapts(value_expr, ftype) or self.array_literal_adapts(
-            value_expr, ftype
+        if (
+            self.struct_literal_adapts(value_expr, ftype)
+            or self.str_literal_adapts(value_expr, ftype)
+            or self.array_literal_adapts(value_expr, ftype)
         ):
-            return self.gen_borrow_slice(value_expr, ftype, line)
+            return self.gen_adapted_literal(value_expr, ftype, line)
         return self.gen_expr(value_expr)
 
     def defers_field_literal(self, value_expr, pattern) -> bool:
@@ -5104,8 +5122,10 @@ class CodeGen:
                     )
                 # Evaluate the result before the defers run, so a defer that
                 # frees a buffer cannot clobber what is being returned.
-                if self.str_literal_adapts(stmt.value, self.ret_type):
-                    tv = self.gen_borrow_slice(stmt.value, self.ret_type, stmt.line)
+                if self.struct_literal_adapts(
+                    stmt.value, self.ret_type
+                ) or self.str_literal_adapts(stmt.value, self.ret_type):
+                    tv = self.gen_adapted_literal(stmt.value, self.ret_type, stmt.line)
                 else:
                     tv = self.gen_expr(stmt.value)
                     if tv.type is VOID:
@@ -5237,7 +5257,16 @@ class CodeGen:
                     self.builder.store(tv.value, slot)
                     self.bind_local(stmt.name, slot, declared)
                     return
-            tv = self.gen_expr(stmt.value)
+            if stmt.type_name is not None and self.struct_literal_adapts(
+                stmt.value, self.lang_type(stmt.type_name, stmt.line)
+            ):
+                # `let p: point = { x = 1, y = 2 };`: the bare literal builds the
+                # annotated struct (the coerce below re-adds any `const`), the
+                # aggregate sibling of the slice adaptations above.
+                declared = self.lang_type(stmt.type_name, stmt.line)
+                tv = self.gen_struct_lit(stmt.value, struct_type=strip_const(declared))
+            else:
+                tv = self.gen_expr(stmt.value)
             if stmt.type_name is not None:
                 declared = self.lang_type(stmt.type_name, stmt.line)
                 if declared is VOID:
@@ -5308,11 +5337,14 @@ class CodeGen:
                 raise LangError(
                     f"cannot assign to read-only variable {stmt.name!r}", stmt.line
                 )
-            if self.str_literal_adapts(stmt.value, var_type):
+            if self.struct_literal_adapts(
+                stmt.value, var_type
+            ) or self.str_literal_adapts(stmt.value, var_type):
                 # `s = "hi";`: the literal repoints s at its global string
                 # constant (static lifetime), the same borrow a `let`/argument
                 # already does -- safe even when the target outlives the frame.
-                tv = self.gen_borrow_slice(stmt.value, var_type, stmt.line)
+                # `p = { x = 1, y = 2 };` likewise rebuilds the struct in place.
+                tv = self.gen_adapted_literal(stmt.value, var_type, stmt.line)
             else:
                 tv = self.coerce(
                     self.gen_expr(stmt.value),
@@ -5501,11 +5533,14 @@ class CodeGen:
                     f"{ptr.type.pointee}",
                     stmt.line,
                 )
-            if self.str_literal_adapts(stmt.value, ptr.type.pointee):
+            if self.struct_literal_adapts(
+                stmt.value, ptr.type.pointee
+            ) or self.str_literal_adapts(stmt.value, ptr.type.pointee):
                 # `*out = "hi";`: repoint the slice behind the pointer at the
                 # literal's global constant -- static lifetime, so safe even
-                # when the pointee outlives this frame.
-                value = self.gen_borrow_slice(
+                # when the pointee outlives this frame. `*out = { ... };` writes
+                # the built struct through the pointer.
+                value = self.gen_adapted_literal(
                     stmt.value, ptr.type.pointee, stmt.line
                 )
             else:
@@ -5530,10 +5565,13 @@ class CodeGen:
                 raise LangError(
                     "cannot assign through a read-only slice<const T>", stmt.line
                 )
-            if self.str_literal_adapts(stmt.value, element):
+            if self.struct_literal_adapts(
+                stmt.value, element
+            ) or self.str_literal_adapts(stmt.value, element):
                 # `a[i] = "hi";`: the element is a char slice repointed at the
-                # literal's global constant (static lifetime).
-                value = self.gen_borrow_slice(stmt.value, element, stmt.line)
+                # literal's global constant (static lifetime). `a[i] = { ... };`
+                # stores the built struct into the element.
+                value = self.gen_adapted_literal(stmt.value, element, stmt.line)
             else:
                 value = self.coerce(
                     self.gen_expr(stmt.value),
@@ -5551,11 +5589,14 @@ class CodeGen:
             addr, ftype, align, volatile = self.gen_member_addr(
                 stmt.base, stmt.field, stmt.arrow, stmt.line
             )
-            if self.str_literal_adapts(stmt.value, ftype):
+            if self.struct_literal_adapts(
+                stmt.value, ftype
+            ) or self.str_literal_adapts(stmt.value, ftype):
                 # `c.name = "hi";`: repoint the char-slice field at the
                 # literal's global constant, the same borrow the struct-literal
-                # field (`cmd { name = "hi" }`) already does.
-                value = self.gen_borrow_slice(stmt.value, ftype, stmt.line)
+                # field (`cmd { name = "hi" }`) already does. `s.origin = { ... }`
+                # writes a nested struct into the field.
+                value = self.gen_adapted_literal(stmt.value, ftype, stmt.line)
             else:
                 value = self.coerce(
                     self.gen_expr(stmt.value),
@@ -5572,10 +5613,13 @@ class CodeGen:
             # it once (gen_addr's Call arm checks the resolved callee
             # actually returns mut), coerce, store through it.
             addr, t, _, _ = self.gen_addr(stmt.call, stmt.line)
-            if self.str_literal_adapts(stmt.value, t):
+            if self.struct_literal_adapts(stmt.value, t) or self.str_literal_adapts(
+                stmt.value, t
+            ):
                 # `f(...) = "hi";`: repoint the char slice behind the mut
                 # return at the literal's global constant (static lifetime).
-                value = self.gen_borrow_slice(stmt.value, t, stmt.line)
+                # `f(...) = { ... };` stores the built struct through it.
+                value = self.gen_adapted_literal(stmt.value, t, stmt.line)
             else:
                 value = self.coerce(
                     self.gen_expr(stmt.value),
@@ -8115,6 +8159,80 @@ class CodeGen:
             ) and self.array_literal_adapts(expr.otherwise, expected)
         return isinstance(expr, ArrayLit) and is_slice(expected)
 
+    def struct_literal_adapts(self, expr, expected: LangType) -> bool:
+        """Whether a bare struct literal ``{ field = expr, ... }`` adapts here.
+
+        The aggregate sibling of :meth:`str_literal_adapts`: a *bare* struct
+        literal (no written type) takes the struct/union type the position fixes
+        -- a typed ``let``, an assignment, a ``return``, a function argument, an
+        array/slice element, or another struct's field -- and builds it (see
+        :meth:`gen_struct_lit`). Unlike a slice borrow it is a plain value copy,
+        so it adapts even in a ``return`` and needs no lifetime care. The named
+        form ``point { ... }`` carries its own type and never routes through
+        here. A bare literal in a ternary arm does not adapt (name the arms).
+
+        This routing check stays coarse (any aggregate target) so that in a
+        fixed-type position an unknown field or wrong value type reaches
+        :meth:`gen_struct_lit` and gets a precise error. Overload resolution,
+        where the target is *chosen*, uses the stricter :meth:`struct_literal_fits`
+        to discriminate.
+
+        Args:
+            expr: The initializer/element/argument/field expression.
+            expected: The type the context expects.
+
+        Returns:
+            ``True`` if ``expr`` is a bare struct literal and ``expected`` is an
+            aggregate type.
+        """
+        return (
+            isinstance(expr, StructLit)
+            and expr.type_ref is None
+            and is_aggregate(strip_const(expected))
+        )
+
+    def struct_literal_fits(self, expr, expected: LangType) -> bool:
+        """Whether a bare struct literal's fields all belong to ``expected``.
+
+        The discriminating form of :meth:`struct_literal_adapts`, used only to
+        filter overload candidates: ``{ x = 1, y = 2 }`` fits ``point`` but not a
+        ``box`` of ``w``/``h``, so the call resolves to the ``point`` overload.
+        A wrong *value* type is still left to :meth:`gen_struct_lit` to report at
+        emission, once the winner is fixed.
+
+        Args:
+            expr: The argument expression.
+            expected: The candidate parameter's resolved type.
+
+        Returns:
+            ``True`` when ``expr`` is a bare struct literal every field of which
+            is a field of ``expected``.
+        """
+        if not self.struct_literal_adapts(expr, expected):
+            return False
+        known = {fname for fname, _ in strip_const(expected).fields}
+        return all(fname in known for fname, _ in expr.fields)
+
+    def gen_adapted_literal(self, expr, expected: LangType, line: int) -> TypedValue:
+        """Lower a literal that adapts to ``expected`` in a typed position.
+
+        The single entry the value sinks share: a bare struct literal builds the
+        expected aggregate (:meth:`gen_struct_lit`); a string or array literal
+        borrows the expected slice (:meth:`gen_borrow_slice`). The caller has
+        already checked that one of the ``*_literal_adapts`` predicates holds.
+
+        Args:
+            expr: The literal (or a ternary of slice literals).
+            expected: The type the position fixes.
+            line: Source line for diagnostics.
+
+        Returns:
+            The adapted value.
+        """
+        if self.struct_literal_adapts(expr, expected):
+            return self.gen_struct_lit(expr, struct_type=strip_const(expected))
+        return self.gen_borrow_slice(expr, expected, line)
+
     def defers_array_literal(self, expr) -> bool:
         """Whether an argument is an array literal (or a ternary of them).
 
@@ -8139,6 +8257,24 @@ class CodeGen:
                 expr.otherwise
             )
         return isinstance(expr, ArrayLit)
+
+    def defers_struct_literal(self, expr) -> bool:
+        """Whether an argument is a bare struct literal ``{ field = expr, ... }``.
+
+        The struct sibling of :meth:`defers_array_literal`: a bare literal has no
+        type of its own, so it cannot lower until overload resolution fixes the
+        receiving parameter. It stands in as a ``NULLT`` placeholder (skipped by
+        inference, since it can never bind a type parameter) and builds against
+        the resolved parameter at emission. A named ``point { ... }`` carries its
+        type and lowers eagerly, so it never defers.
+
+        Args:
+            expr: The raw argument expression.
+
+        Returns:
+            ``True`` if ``expr`` is a bare struct literal.
+        """
+        return isinstance(expr, StructLit) and expr.type_ref is None
 
     def gen_borrow_slice(self, value_expr, target: LangType, line: int) -> TypedValue:
         """Lower a borrow ``value as slice<T>`` into a non-owning view.
@@ -8436,6 +8572,14 @@ class CodeGen:
             )
             if is_array(arr_type.element):
                 self.store_list_literal(slot, element, arr_type.element, line)
+            elif self.struct_literal_adapts(element, arr_type.element):
+                # A bare struct-literal element builds the element's aggregate
+                # type, so `let ps: point[2] = [{ x = 1, y = 2 }, { x = 3 }];`
+                # needs no per-element type name.
+                tv = self.gen_struct_lit(
+                    element, struct_type=strip_const(arr_type.element)
+                )
+                self.gen_store(tv.value, slot)
             elif self.str_literal_adapts(element, arr_type.element):
                 # A string-literal element adapts to a slice<char> element
                 # (Stage 4 borrow-in) the way it does in a top-level slot:
@@ -8628,14 +8772,16 @@ class CodeGen:
             raise LangError(f"a struct literal cannot initialize a {expected}", line)
         # Guard against a literal naming a different concrete type than the
         # annotation; skip a generic literal with no arguments, where the
-        # annotation supplies them.
-        decl = self.lookup_struct_decl(expr.type_ref.name)
-        if not (decl is not None and decl.type_params and not expr.type_ref.args):
-            named = self.lang_type(expr.type_ref, line)
-            if named != expected:
-                raise LangError(
-                    f"@static initializer: expected {expected}, got {named}", line
-                )
+        # annotation supplies them, and a bare literal, which has no name to
+        # check (the annotation is its only type).
+        if expr.type_ref is not None:
+            decl = self.lookup_struct_decl(expr.type_ref.name)
+            if not (decl is not None and decl.type_params and not expr.type_ref.args):
+                named = self.lang_type(expr.type_ref, line)
+                if named != expected:
+                    raise LangError(
+                        f"@static initializer: expected {expected}, got {named}", line
+                    )
         seen: set[str] = set()
         provided: dict = {}
         for fname, value_expr in expr.fields:
@@ -9562,14 +9708,16 @@ class CodeGen:
                 args.append(self.mut_ref_arg(arg_expr, params[i], line, context))
                 continue
             if i < len(params) and (
-                self.str_literal_adapts(arg_expr, params[i])
+                self.struct_literal_adapts(arg_expr, params[i])
+                or self.str_literal_adapts(arg_expr, params[i])
                 or self.array_literal_adapts(arg_expr, params[i])
             ):
-                # A string literal adapts to a char slice, or an array literal
-                # to a slice<T>, from the parameter type (the implicit borrow).
-                # A `const` slice parameter is passed by hidden reference, so
-                # spill the borrowed view to a temporary first.
-                tv = self.gen_borrow_slice(arg_expr, params[i], line)
+                # A string literal adapts to a char slice, an array literal to a
+                # slice<T>, or a bare struct literal to the parameter's struct
+                # (the implicit borrow / build). A parameter passed by hidden
+                # reference (a `const` slice or struct) takes the value's
+                # address, so spill the adapted value to a temporary first.
+                tv = self.gen_adapted_literal(arg_expr, params[i], line)
                 if i in hidden:
                     args.append(self.spill_to_temp(tv, params[i], line, context))
                 else:
@@ -10527,13 +10675,14 @@ class CodeGen:
                         strip_const(t),
                     )
                 )
-            elif self.defers_array_literal(arg):
-                # An array literal cannot lower without a receiving slice type,
-                # and the winning parameter is not yet chosen. Stand it in as a
-                # NULLT placeholder: the inference loop skips NULLT (so literal
-                # elements contribute nothing to generic inference), and
-                # emission borrows it against the resolved parameter (see
-                # literal_adapts_to_pattern and the winner-emission arm) --
+            elif self.defers_array_literal(arg) or self.defers_struct_literal(arg):
+                # An array or bare struct literal cannot lower without a
+                # receiving type, and the winning parameter is not yet chosen.
+                # Stand it in as a NULLT placeholder: the inference loop skips
+                # NULLT (so a literal contributes nothing to generic inference --
+                # a bare struct literal can never itself bind a type parameter),
+                # and emission builds/borrows it against the resolved parameter
+                # (see literal_adapts_to_pattern and the winner-emission arm) --
                 # exactly as a string literal pre-evaluates to a char*.
                 arg_tvs.append(TypedValue(ir.Constant(RAWPTR.ir, None), NULLT))
             else:
@@ -10780,17 +10929,20 @@ class CodeGen:
                 # loaded, once, when the argument was evaluated); a direct
                 # lend passes the caller's storage address.
                 args.append(tv.value if i in decayed else addrs[i][0])
-            elif self.str_literal_adapts(expr.args[i], p) or self.array_literal_adapts(
-                expr.args[i], p
+            elif (
+                self.struct_literal_adapts(expr.args[i], p)
+                or self.str_literal_adapts(expr.args[i], p)
+                or self.array_literal_adapts(expr.args[i], p)
             ):
-                # Literal-to-slice adaptation, in parity with marshal_args: a
-                # string literal borrows to the parameter's char slice view and
-                # an array literal to its slice<T> view (each a ternary of them
-                # too); a const slice parameter travels by hidden reference, so
-                # the view spills to a temporary first. (The char* / NULLT
+                # Literal adaptation, in parity with marshal_args: a string
+                # literal borrows to the parameter's char slice view, an array
+                # literal to its slice<T> view (each a ternary of them too), and
+                # a bare struct literal builds the parameter's struct; a const
+                # slice/struct parameter travels by hidden reference, so the
+                # adapted value spills to a temporary first. (The char* / NULLT
                 # placeholder the literal pre-evaluated to for inference goes
                 # unused.)
-                tv = self.gen_borrow_slice(expr.args[i], p, expr.line)
+                tv = self.gen_adapted_literal(expr.args[i], p, expr.line)
                 if i in hidden:
                     args.append(self.spill_to_temp(tv, p, expr.line, context))
                 else:
@@ -11187,7 +11339,7 @@ class CodeGen:
         Returns:
             ``True`` when the argument adapts to the resolved parameter.
         """
-        if not isinstance(arg, (StrLit, ArrayLit, Ternary)):
+        if not isinstance(arg, (StrLit, ArrayLit, StructLit, Ternary)):
             return False
         outer_bindings = self.type_bindings
         outer_source = self.current_source
@@ -11200,8 +11352,10 @@ class CodeGen:
         finally:
             self.type_bindings = outer_bindings
             self.current_source = outer_source
-        return self.str_literal_adapts(arg, resolved) or self.array_literal_adapts(
-            arg, resolved
+        return (
+            self.str_literal_adapts(arg, resolved)
+            or self.array_literal_adapts(arg, resolved)
+            or self.struct_literal_fits(arg, resolved)
         )
 
     def shape_matches(
