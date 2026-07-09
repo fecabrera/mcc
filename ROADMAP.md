@@ -219,9 +219,16 @@ already do).
         omitted from an explicit type-argument list, and a bare defaulted
         struct name is a complete written type
   - [ ] bounds — constrain a parameter with `fn myfunc<T extends mystruct>(x: T)`
-        (a struct and its `extends` specializations); the explicit-set form,
-        once sketched here as `T in (t1, t2, ...)`, is settled under a
-        different spelling as the closed-type-groups sub-item below
+        (a struct and the structs in its declared `extends` lineage). The bound
+        is **nominal**: satisfied only by `mystruct` and its declared `extends`
+        specializations, never by a struct that merely shares its field prefix,
+        per the single
+        [nominal struct subtyping](#structs-arrays-and-data-layout) model the
+        upcast and slice-borrow also move to (without it this bound would reject
+        a layout twin that the upcast beside it still accepts, the asymmetry
+        that model exists to remove). The explicit-set form, once sketched here
+        as `T in (t1, t2, ...)`, is settled under a different spelling as the
+        closed-type-groups sub-item below
     - [x] [closed type groups](docs/language.md#closed-type-groups) — a
           pipe-separated closed group of types after
           the parameter name, `fn f<T: int64 | int32>(x: T)`, constrains
@@ -735,6 +742,50 @@ already do).
         declaration onto their own AST node and type kind, so a struct-only
         code path (sequential layout, `extends`, prefix upcast) can never
         silently accept a union. A pure compiler refactor, no language change
+- [ ] Nominal struct subtyping — make the struct subtype relation follow the
+      declared `extends` lineage rather than a matching layout prefix. Two
+      struct sites accept any struct whose fields are the leading prefix of
+      another today (`is_struct_prefix`): the value/pointer upcast and the
+      borrow of a struct to a `slice<T>`. That structural test is broader than
+      the relation the language declares, since a struct that merely shares a
+      base's field prefix, with no `extends` clause, silently upcasts and
+      borrows. This narrows both sites to the nominal rule, so only a type in
+      the target's declared `extends` chain participates (including a
+      bare-parameter base, `struct wrapper<T> extends T`, resolved per
+      instantiation, and a transparent `type` alias, which resolves to the same
+      underlying struct); a coincidental layout twin is rejected. The prefix
+      layout stays the mechanism (base fields first, so the upcast is still a
+      zero-cost reinterpret and the borrow still reads `{data, length}` straight
+      across) but stops being the definition. Unions still never participate.
+      The only behavior change in the repo is one new rejection: a non-`extends`
+      struct that happens to match a prefix (a `buf` laid out like
+      `slice<char>`, say) can no longer be upcast or borrowed. Every shipped
+      `extends`, upcast, and slice-borrow already routes through a declared
+      base, so the conversion is behavior-preserving on all current code,
+      examples, and `libmc`. The slice-borrow's structural check predates
+      `extends`: before `list<T> extends slice<T>` could be declared it was the
+      only way to recognize a list-shaped struct as borrowable, so it is now
+      vestigial scaffolding, and the docs line "the borrow is structural, not
+      keyed to a particular type name" ([slices](docs/language.md#slices)) is
+      stale pre-`extends` prose, not a design guarantee, corrected by this
+      change. Mechanically the declared base chain (today computed per
+      instantiation by `resolve_base` but not retained on the frozen
+      `LangType`) is recorded so each site walks lineage instead of comparing
+      field lists, one predicate replacing `is_struct_prefix` at all three; no
+      grammar, `.mci`, or type-kind change, since the lineage derives from the
+      already-serialized `extends` clause. This settles a single nominal
+      subtyping model across the language: it removes the asymmetry the planned
+      [bounds](#types-and-generics) would otherwise introduce (a `T extends S`
+      bound rejecting a layout twin while the upcast beside it accepts one), it
+      matches the declared-not-inferred stance of
+      [closed type groups](docs/language.md#closed-type-groups) and generic
+      [defaults](docs/language.md#type-parameter-defaults), and it is the
+      foundation the [polymorphic base views](#functions-and-methods) dispatch
+      chain relies on, whose tables are prefix-compatible down the declared
+      single `extends` chain that a structural notion would fight. Small and
+      near-term, it may land in the same change set as `bounds`, but stays its
+      own line so the shift to two shipped sites is visible and correctly
+      ordered as the prerequisite
 - [ ] Bitfields — `field: uint32 : 5;`, packing consecutive narrow fields into
       one storage unit, for hardware registers, protocol headers, and C-layout
       interop (many syscall/kernel structs use them; `@packed` doesn't
@@ -1572,7 +1623,7 @@ already do).
         `B` entering a `const A` slot pairs the object pointer with `B`'s
         table, the compiler knowing the concrete type right there), and a
         view re-lent onward forwards both words unchanged. Tables are
-        prefix-compatible down the single `extends` chain (inherited
+        prefix-compatible down the single [nominal](#structs-arrays-and-data-layout) `extends` chain (inherited
         methods keep their slot, an override replaces the entry, new
         methods append), which is what lets a `const B` view re-lend as
         `const A` keeping the same table pointer. The object never
