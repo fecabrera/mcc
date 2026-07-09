@@ -160,18 +160,28 @@ class EnumType:
 class Alias:
     """A resolved ``type`` alias: its target type plus visibility.
 
+    A generic alias also carries its type-parameter list and their defaults;
+    a use site binds the parameters, then resolves the target through them
+    (the alias stays transparent -- no instance of its own is minted).
+
     Attributes:
         target: The aliased ``TypeRef``, resolved lazily on each use.
         private: ``@private`` -- usable only within ``source``.
         source: The file the alias was declared in.
         line: The line the alias was declared on -- where its target
             resolves, for diagnostics and instantiation backtraces.
+        type_params: Generic type parameters, e.g. the ``T`` in ``entry<T>``.
+            Empty for a plain alias.
+        type_param_defaults: ``{type parameter: TypeRef}`` for parameters
+            declared ``<T = type>``.
     """
 
     target: TypeRef
     private: bool
     source: "str | None"
     line: int
+    type_params: list = field(default_factory=list)
+    type_param_defaults: dict = field(default_factory=dict)
 
 
 def pointer_to(lang_type: LangType) -> LangType:

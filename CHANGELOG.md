@@ -10,6 +10,27 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Generic type aliases** — a `type` declaration may now carry a
+  type-parameter list, naming a *family* of existing types:
+  `type entry<T> = pair<char*, T>;` (a wider generic partially applied) and
+  `type cmp<T> = fn(T, T) -> bool;` (a comparator shape over any element). The
+  alias stays **transparent** — a type-level function expanded at each use,
+  minting no monomorphized artifact of its own — so `entry<int32>` *is*
+  `pair<char*, int32>` and the two spellings share one struct instantiation.
+  Arity is checked at the use site (a bare `entry` or a wrong argument count is
+  an error, e.g. `type alias 'entry' expects 1 type argument(s), got 0`,
+  replacing the old blanket "type alias is not generic"), the target resolves
+  with only the alias's own parameters bound (an outer generic's same-named
+  parameter never leaks in), and the name-based cyclic-alias rule still rejects
+  `type node<T> = pair<T, node<T>*>;`. An unused parameter is inert
+  (transparency makes `boxed<bool>` and `boxed<char>` the same type, unlike a
+  struct's nominally-distinct instantiations). Alias parameters take
+  [defaults](docs/language.md#type-parameter-defaults)
+  (`type record<T = int64> = ...;`); parameter **bounds** do not extend to
+  alias parameters yet (deferred to the bounds item). The `.mci` round-trip
+  renders the parameter list and stops counting the alias's own parameters as
+  external references. See
+  [Generic aliases](docs/language.md#generic-aliases).
 - **libmc swept warn-free under `-Wunchecked-dereference`** — every
   warning-bearing standard-library module now asserts its invariant-backed
   dereferences with the postfix `!`, so importing them and enabling the class

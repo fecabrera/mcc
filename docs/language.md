@@ -1142,7 +1142,9 @@ yourcode.mc: note: line 5: in instantiation of hash<box>
 Generic functions, generic structs, and [type aliases](#type-aliases) each
 contribute a frame, and they interleave freely — an error reached through
 `string` (an alias for `list<char>`) shows a `list<char>` frame at the alias
-declaration, then a `string` frame at the use site. Instantiations are
+declaration, then a `string` frame at the use site. A
+[generic alias](#generic-aliases) renders its arguments in the frame
+(`in instantiation of entry<int32>`). Instantiations are
 memoized, so a cached instance reports the first path that triggered it (the
 same convention as C++ and Rust), and an error outside any instantiation
 prints exactly as before, with no notes.
@@ -3296,6 +3298,53 @@ An error inside an alias's target — say the generic struct it names fails to
 instantiate — reports the alias by name in its
 [instantiation backtrace](#instantiation-backtraces), so a chain through
 `string` says `string`.
+
+### Generic aliases
+
+A `type` declaration may carry a type-parameter list, naming a *family* of
+existing types — a wider generic partially applied, or a comparator shape over
+any element:
+
+```c
+struct pair<A, B> { first: A; second: B; }
+
+type entry<T> = pair<char*, T>;      // fix the key, leave the value open
+type cmp<T>   = fn(T, T) -> bool;    // a comparator over any T
+```
+
+A generic alias stays **transparent**: it is a type-level function expanded at
+each use, minting no monomorphized artifact of its own. `entry<int32>` *is*
+`pair<char*, int32>` — the two spellings share **one** struct instantiation
+(expansion happens in the type resolver, before the instantiation cache is
+keyed), so a value typed `entry<int32>` and one typed `pair<char*, int32>`
+combine without a cast. Everything else follows from transparency: an alias
+instantiation works in an `extends` slot, appears as a field inside another
+generic, and composes with the outer generic's parameters (`entry<U>` with `U`
+the outer parameter).
+
+Arity is checked at the **use site**: a bare `entry` or a wrong argument count
+is an error (`type alias 'entry' expects 1 type argument(s), got 0`), replacing
+the plain-alias "is not generic" message. The target resolves at the
+declaration site with **only the alias's own parameters bound** — the use site
+resolves the arguments, then hands over — so an outer generic's same-named
+parameter never leaks into the target. The name-based cyclic-alias rule still
+holds, so a self-referential generic alias
+(`type node<T> = pair<T, node<T>*>;`) is an error; recursive types remain
+structs' job, via the self-reference-through-a-pointer rule.
+
+An unused parameter is accepted, as on structs and functions, but is **inert**
+where a struct's is not: transparency makes `boxed<bool>` and `boxed<char>` the
+*same* type (`type boxed<T> = int32;`), whereas a struct's unused-parameter
+instantiations stay nominally distinct.
+
+Alias parameters take [defaults](#type-parameter-defaults) too
+(`type record<T = int64> = pair<char*, T>;`), with the same trailing-only,
+earlier-parameters-only rules; a fully-defaulted tail may be omitted at the use
+site, and a bare defaulted alias name is a complete written type. Parameter
+**bounds** do not extend to alias parameters yet — a transparent alias mints no
+instance for the eager check to attach to. The `.mci` round-trip renders the
+parameter list and stops counting the alias's own parameters as external
+references, mirroring structs.
 
 ## Imports
 

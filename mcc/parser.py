@@ -1088,10 +1088,22 @@ class Parser:
         """
         line = self.advance().line  # the 'type' identifier
         name = self.expect("IDENT").text
+        # A generic alias names a family: `type entry<T> = pair<char*, T>;`.
+        # Bounds (closed type groups) do not extend to alias parameters yet, so
+        # only the names and their defaults are carried.
+        type_params, type_param_defaults, _ = self.parse_type_params()
         self.expect("=")
         target = self.parse_type_ref()
         self.expect(";")
-        return TypeAlias(name, target, line, private=private, static=static)
+        return TypeAlias(
+            name,
+            target,
+            line,
+            type_params=type_params,
+            type_param_defaults=type_param_defaults,
+            private=private,
+            static=static,
+        )
 
     def parse_function(
         self,

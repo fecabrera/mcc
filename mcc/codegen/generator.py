@@ -2260,7 +2260,14 @@ class CodeGen:
                 type/alias in the same scope.
         """
         self.current_source = decl.source
-        alias = Alias(decl.target, decl.private, decl.source, decl.line)
+        alias = Alias(
+            decl.target,
+            decl.private,
+            decl.source,
+            decl.line,
+            type_params=decl.type_params,
+            type_param_defaults=decl.type_param_defaults,
+        )
         if decl.static:
             key = (decl.source, decl.name)
             if key in self.static_type_aliases or key in self.static_structs:
@@ -2469,18 +2476,49 @@ class CodeGen:
             self.check_access(enum.private, enum.source, f"enum {ref.name!r}", line)
             base = enum.underlying
         elif (alias := self.lookup_alias(ref.name)) is not None:
-            if ref.args:
-                raise LangError(f"type alias {ref.name!r} is not generic", line)
             self.check_access(
                 alias.private, alias.source, f"type alias {ref.name!r}", line
             )
+            # Arity is checked at the use site (a bare generic alias or a wrong
+            # argument count is an error, replacing the old blanket "not
+            # generic"). A shorter list is allowed only when the omitted tail is
+            # entirely defaulted -- defaults are trailing, so the count suffices.
+            total = len(alias.type_params)
+            required = total - len(alias.type_param_defaults)
+            if total == 0:
+                if ref.args:
+                    raise LangError(
+                        f"type alias {ref.name!r} is not generic", line
+                    )
+            elif not required <= len(ref.args) <= total:
+                expected = (
+                    f"between {required} and {total}"
+                    if alias.type_param_defaults
+                    else f"{total}"
+                )
+                raise LangError(
+                    f"type alias {ref.name!r} expects {expected} "
+                    f"type argument(s), got {len(ref.args)}",
+                    line,
+                )
             if ref.name in self.resolving_aliases:
                 raise LangError(
                     f"type alias {ref.name!r} refers to itself (cyclic alias)", line
                 )
+            # Resolve the arguments in the *use-site* context first (outer
+            # bindings and source in scope), then hand over: the target resolves
+            # with only the alias's own parameters bound, so an outer generic's
+            # same-named parameter never leaks in. `bindings` is *replaced*, not
+            # merged (save/restore, like instantiate_struct).
+            args = tuple(self.lang_type(a, line) for a in ref.args)
+            bindings = dict(zip(alias.type_params, args))
+            if len(args) < total:
+                self.fill_default_bindings(alias, bindings, line)
             self.resolving_aliases.add(ref.name)
             outer_source = self.current_source
+            outer_bindings = self.type_bindings
             self.current_source = alias.source  # target may name private types
+            self.type_bindings = bindings
             try:
                 # The target resolves at the alias's own declaration site, so
                 # an error (or backtrace frame) inside it pairs the declaring
@@ -2489,16 +2527,19 @@ class CodeGen:
             except LangError as err:
                 # An error in the target belongs to the alias's file; then a
                 # backtrace frame for the alias itself, so a chain that goes
-                # through e.g. `string` (= list<char>) names `string`.
+                # through e.g. `string` (= list<char>) names `string`, and a
+                # generic alias renders its arguments (`entry<int32>`).
                 if err.source is None:
                     err.source = alias.source
-                err.notes.append(
-                    Note(f"in instantiation of {ref.name}", line, outer_source)
-                )
+                note_name = ref.name
+                if args:
+                    note_name += "<" + ", ".join(str(a) for a in args) + ">"
+                err.notes.append(Note(f"in instantiation of {note_name}", line, outer_source))
                 raise
             finally:
                 self.resolving_aliases.discard(ref.name)
                 self.current_source = outer_source
+                self.type_bindings = outer_bindings
         else:
             raise LangError(f"unknown type {ref.name!r}", line)
         if ref.const:

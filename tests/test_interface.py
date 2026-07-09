@@ -523,6 +523,38 @@ def test_type_param_default_pulls_its_type_into_the_closure(tmp_path):
     assert run_path(main) == 8
 
 
+def test_generic_alias_renders_its_parameter_list(tmp_path):
+    # The `.mci` renders the alias's type-parameter list verbatim (it travels
+    # from the source span) and does not treat the alias's own parameter as an
+    # unresolved external reference to ship.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "struct pair<A, B> { first: A; second: B; }\n"
+        "type entry<T> = pair<char*, T>;\n"
+        "fn make(v: int32) -> entry<int32> {\n"
+        '    let e: entry<int32>; e.first = "k"; e.second = v; return e;\n'
+        "}"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    text = out.read_text()
+    assert "type entry<T> = pair<char*, T>;" in text
+    assert "fn make(v: int32) -> entry<int32>;" in text
+    # `T` is the alias's own parameter, never a global type the stub must pull in.
+    assert "type T" not in text and "struct T" not in text
+    lib.unlink()  # force the import to resolve through the stub
+    main = tmp_path / "main.mc"
+    # The generic struct and the alias travel verbatim, so the consumer resolves
+    # `entry<int32>` through the stub and instantiates it locally. (`make` is a
+    # concrete prototype with no body here, so the consumer uses the types
+    # directly rather than calling it.)
+    main.write_text(
+        'import "lib";\n'
+        "fn main() -> int32 { let e: entry<int32>; e.second = 42; return e.second; }"
+    )
+    assert run_path(main) == 42
+
+
 # --------------------------------------------------------- ordering / misc
 
 def test_declarations_keep_source_order():

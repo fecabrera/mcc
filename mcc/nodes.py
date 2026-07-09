@@ -233,10 +233,21 @@ class TypeAlias:
     The alias is structural, not a new distinct type: ``type cb = fn(int32) ->
     int32;`` makes ``cb`` interchangeable with the function-pointer type it names.
 
+    A generic alias carries a type-parameter list (``type entry<T> = pair<char*,
+    T>;``), naming a family of types. It stays transparent: ``entry<int32>`` *is*
+    ``pair<char*, int32>``, expanded in the type resolver, minting no
+    monomorphized artifact of its own.
+
     Attributes:
         name: The alias name, usable anywhere a type is.
         target: The aliased type.
         line: Source line for diagnostics.
+        type_params: Generic type parameters, e.g. the ``T`` in ``entry<T>``.
+            Empty for a plain alias.
+        type_param_defaults: ``{type parameter: TypeRef}`` for parameters
+            declared ``<T = type>``. Trailing-only and may reference only
+            earlier parameters (both enforced at parse time), as on functions
+            and structs.
         private: ``@private`` -- usable only within its source file.
         static: ``@static`` -- file-scoped name other files may reuse.
         source: Defining file, stamped by the driver.
@@ -246,6 +257,8 @@ class TypeAlias:
     name: str
     target: TypeRef
     line: int
+    type_params: list[str] = field(default_factory=list)
+    type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
     private: bool = False
     static: bool = False
     source: str | None = None

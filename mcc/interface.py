@@ -218,6 +218,9 @@ class InterfaceWriter:
             _collect_refs(decl.value, names)
         elif isinstance(decl, TypeAlias):
             _collect_refs(decl.target, names)
+            for t in decl.type_param_defaults.values():
+                _collect_refs(t, names)
+            names -= set(decl.type_params)
         elif isinstance(decl, GlobalVar):
             if decl.type_name is not None:
                 _collect_refs(decl.type_name, names)

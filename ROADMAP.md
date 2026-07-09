@@ -162,7 +162,7 @@ already do).
 - [ ] Generic type parameters — beyond the monomorphized basics:
   - [x] generics on functions and structs — implemented, see
         [Generics](docs/language.md#generics)
-  - [ ] generic type aliases — a type-parameter list on a `type` declaration,
+  - [x] generic type aliases — a type-parameter list on a `type` declaration,
         naming a family of existing types (a wider generic partially applied,
         a comparator shape over any element):
     ```c

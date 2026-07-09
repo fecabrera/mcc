@@ -174,6 +174,8 @@ module.exports = grammar({
         repeat($.annotation),
         'type',
         field('name', alias($.identifier, $.type_identifier)),
+        // A generic alias carries a type-parameter list: `type entry<T> = ...`.
+        optional($.type_parameters),
         '=',
         field('value', $._type),
         ';',
