@@ -897,6 +897,66 @@ def test_ternary_of_literals_adapts_through_overloaded_call():
     ) == 1
 
 
+def test_const_slice_value_matches_const_slice_overload():
+    # Regression: a slice<const T> *value* (not a literal) must match a
+    # slice<const T> parameter on the overload-set path. shape_matches rebuilt
+    # the parameter's element as TypeRef(name) -- dropping the `const` -- so an
+    # exact slice<const char> argument failed to match a slice<const char>
+    # candidate while a mutable slice<char> (widened) matched. Filtered the
+    # right candidate out and raised "no overload".
+    assert run(
+        """
+        fn describe(const s: slice<const char>) -> int32 {
+            return s.length as int32;
+        }
+        fn describe(n: int32) -> int32 { return 0 - n; }
+        fn main() -> int32 {
+            let v: slice<const char> = "hello";
+            return describe(v);
+        }
+        """
+    ) == 5
+
+
+def test_mutable_slice_value_widens_into_const_slice_overload():
+    # The other direction still holds: a mutable slice<char> value adds const
+    # (a safe widening) to reach a slice<const char> candidate in the set. The
+    # sentinel returns prove the slice overload -- not the int32 one -- is
+    # chosen, independent of the borrowed view's length.
+    assert run(
+        """
+        fn describe(const s: slice<const char>) -> int32 { return 42; }
+        fn describe(n: int32) -> int32 { return 0 - n; }
+        fn main() -> int32 {
+            let buf: char[3] = ['a', 'b', 'c'];
+            let v: slice<char> = buf as slice<char>;
+            return describe(v);
+        }
+        """
+    ) == 42
+
+
+def test_const_slice_value_rejected_by_mutable_slice_overload():
+    # Dropping const stays rejected: a slice<const char> argument must not
+    # match a slice<char> candidate (the filter allows adding const, never
+    # removing it), so the set offers no viable overload.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "no overload of 'describe' with signature "
+            "describe(slice<const char>)"
+        ),
+    ):
+        compile_ir(
+            """
+            fn describe(s: slice<char>) -> int32 { return s.length as int32; }
+            fn describe(@nonnull p: char*) -> int32 { return 0; }
+            fn use(v: slice<const char>) -> int32 { return describe(v); }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
 def test_hidden_ref_sharing_unchanged_when_not_overloaded():
     # A non-overloaded const-struct call still passes the caller's storage
     # directly (the direct-call fast path, no spill).

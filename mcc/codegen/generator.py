@@ -10864,7 +10864,7 @@ class CodeGen:
             resolved = self.lang_type(TypeRef(pattern.name), line)
         except LangError:
             return False
-        if peeled == resolved:
+        if strip_const(peeled) == resolved and (pattern.const or not peeled.const):
             return True
         if adaptable and is_integer(resolved) and is_integer(peeled):
             return True

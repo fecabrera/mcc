@@ -591,6 +591,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   spelling, never the mangled symbol. See
   [Template symbols](docs/language.md#template-symbols).
 
+### Fixed
+
+- **Overload resolution against a `slice<const T>` parameter** — an argument
+  whose type is exactly `slice<const T>` now matches a `slice<const T>`
+  parameter on the overload-set path. The candidate filter rebuilt each
+  slice element's type from its name alone, dropping the `const` qualifier,
+  so it compared the parameter's bare `T` against the argument's `const T`
+  and filtered the correct candidate out — reporting `no overload of 'f'
+  with signature f(slice<const T>)` even though the overload existed. (A
+  mutable `slice<T>` argument still widens into a `slice<const T>` parameter,
+  and a `slice<const T>` argument is still rejected by a `slice<T>` parameter,
+  matching the coercion rules exactly.) Single, non-overloaded functions were
+  never affected.
+
 ## [0.6.1] - 2026-07-06
 
 ### Added
