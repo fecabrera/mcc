@@ -10,6 +10,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **String literals adapt in slice assignment** — a string literal (or a
+  ternary of them) now borrows into an existing char-slice lvalue with no
+  explicit `as`, the final position in the string/array-literal adaptation
+  family (joining `let`, `return`, array element, function argument, `@static`,
+  and struct field). `s = "hi";` repoints `s` at the literal's global string
+  constant (NUL-dropped, so `.length` is the new literal's) — the same borrow a
+  `let` does. Because a string constant is static-lifetime, the reborrow is
+  safe even when the target outlives the frame, so it reaches all five
+  assignment lvalue forms: a plain name, a deref (`*out = "hi";`), an index
+  (`a[i] = "hi";`), a member (`c.name = "hi";`), and a mut return
+  (`f(...) = "hi";`). The member form closes a real inconsistency the
+  struct-field work opened — `cmd { name = "hi" }` (struct literal) worked, but
+  `c.name = "hi"` (member assignment) did not. **Array-literal assignment stays
+  a compile error** (`s = [1, 2, 3];`): the materialized backing array is
+  frame-local, but an assignment target can outlive the frame, so the borrowed
+  view would dangle — the same lifetime hazard that rejects
+  `return [..] as slice<T>;`. See [Slices](docs/language.md#slices) and
+  [examples/memory/slice_assignment.mc](examples/memory/slice_assignment.mc).
 - **String and array literals adapt in struct-literal fields** — a string or
   array literal (or a ternary of them) in a struct-literal field whose declared
   type is a char slice / `slice<T>` now borrows into that field with no explicit

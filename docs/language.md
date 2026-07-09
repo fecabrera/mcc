@@ -2720,6 +2720,23 @@ strictly left to right, so both are order-safe. A `@static` struct or union
 literal folds a string- or array-literal field to a constant `{pointer, length}`
 view the same way its scalar counterpart does.
 
+**Assignment** to an existing char-slice lvalue is the last adapting position,
+for string literals only. `s = "hi";` reborrows: it repoints `s` at the
+literal's global string constant (dropping the NUL, so the length is the new
+literal's), the same borrow a `let` or argument does. Because a string constant
+is static-lifetime, the reborrow is safe even when the target outlives the
+current frame, so it reaches every assignment form — a plain name, a deref
+(`*out = "hi";`), an index (`a[i] = "hi";`), a member (`c.name = "hi";`, the
+mirror of the `cmd { name = "hi" }` struct literal), and a mut return
+(`f(...) = "hi";`) — and a ternary of string literals adapts arm by arm here
+too. **Array-literal assignment is not supported** (`s = [1, 2, 3];` is a
+compile error): the materialized backing array is frame-local, but an
+assignment target can outlive the frame (a `mut slice<T>*` out-parameter, an
+outer-scope variable), so the borrowed view would dangle — the same lifetime
+hazard that rejects `return [..] as slice<T>;`. The `let`/argument positions
+stay safe only because the binding and its backing share a frame. See
+[examples/memory/slice_assignment.mc](../examples/memory/slice_assignment.mc).
+
 One position still does not take the shortcut. `return [1, 2] as slice<int32>;`
 is a compile error — the view would point into the returning call's hidden
 backing array, which dies with the return and is named by nothing else (a

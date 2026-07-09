@@ -10,6 +10,9 @@ import "std";
 // see types/string_tables.mc for that side.
 // See also: memory/sub_slices.mc -- s[start:end] narrows any slice,
 // including one borrowed from a literal, into a view over the same storage.
+// See also: memory/slice_assignment.mc -- a string literal reborrows into a
+// char-slice lvalue by assignment; an array-literal assignment is rejected
+// (its frame-local backing would dangle past a longer-lived target).
 
 // One consumer for the whole tour. It takes slice<const int32>, so mutable
 // views pass too (they widen implicitly, as slices.mc shows).

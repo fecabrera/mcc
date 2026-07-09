@@ -5171,12 +5171,18 @@ class CodeGen:
                 raise LangError(
                     f"cannot assign to read-only variable {stmt.name!r}", stmt.line
                 )
-            tv = self.coerce(
-                self.gen_expr(stmt.value),
-                var_type,
-                stmt.line,
-                f"assignment to {stmt.name}",
-            )
+            if self.str_literal_adapts(stmt.value, var_type):
+                # `s = "hi";`: the literal repoints s at its global string
+                # constant (static lifetime), the same borrow a `let`/argument
+                # already does -- safe even when the target outlives the frame.
+                tv = self.gen_borrow_slice(stmt.value, var_type, stmt.line)
+            else:
+                tv = self.coerce(
+                    self.gen_expr(stmt.value),
+                    var_type,
+                    stmt.line,
+                    f"assignment to {stmt.name}",
+                )
             self.gen_store(tv.value, slot, volatile=volatile)
         elif isinstance(stmt, CompoundAssign):
             self.gen_compound_assign(stmt)
@@ -5358,12 +5364,20 @@ class CodeGen:
                     f"{ptr.type.pointee}",
                     stmt.line,
                 )
-            value = self.coerce(
-                self.gen_expr(stmt.value),
-                ptr.type.pointee,
-                stmt.line,
-                "assignment through pointer",
-            )
+            if self.str_literal_adapts(stmt.value, ptr.type.pointee):
+                # `*out = "hi";`: repoint the slice behind the pointer at the
+                # literal's global constant -- static lifetime, so safe even
+                # when the pointee outlives this frame.
+                value = self.gen_borrow_slice(
+                    stmt.value, ptr.type.pointee, stmt.line
+                )
+            else:
+                value = self.coerce(
+                    self.gen_expr(stmt.value),
+                    ptr.type.pointee,
+                    stmt.line,
+                    "assignment through pointer",
+                )
             self.gen_store(value.value, ptr.value, volatile=ptr.type.pointee.volatile)
             # A through-memory store can land in any guarded field (the
             # pointer may alias one): every projection fact dies.
@@ -5379,9 +5393,17 @@ class CodeGen:
                 raise LangError(
                     "cannot assign through a read-only slice<const T>", stmt.line
                 )
-            value = self.coerce(
-                self.gen_expr(stmt.value), element, stmt.line, "assignment to element"
-            )
+            if self.str_literal_adapts(stmt.value, element):
+                # `a[i] = "hi";`: the element is a char slice repointed at the
+                # literal's global constant (static lifetime).
+                value = self.gen_borrow_slice(stmt.value, element, stmt.line)
+            else:
+                value = self.coerce(
+                    self.gen_expr(stmt.value),
+                    element,
+                    stmt.line,
+                    "assignment to element",
+                )
             self.gen_store(value.value, addr, volatile=element.volatile)
             self.narrowed_paths.clear()  # an element store may alias a field
         elif isinstance(stmt, StoreMember):
@@ -5392,12 +5414,18 @@ class CodeGen:
             addr, ftype, align, volatile = self.gen_member_addr(
                 stmt.base, stmt.field, stmt.arrow, stmt.line
             )
-            value = self.coerce(
-                self.gen_expr(stmt.value),
-                ftype,
-                stmt.line,
-                f"assignment to field {stmt.field!r}",
-            )
+            if self.str_literal_adapts(stmt.value, ftype):
+                # `c.name = "hi";`: repoint the char-slice field at the
+                # literal's global constant, the same borrow the struct-literal
+                # field (`cmd { name = "hi" }`) already does.
+                value = self.gen_borrow_slice(stmt.value, ftype, stmt.line)
+            else:
+                value = self.coerce(
+                    self.gen_expr(stmt.value),
+                    ftype,
+                    stmt.line,
+                    f"assignment to field {stmt.field!r}",
+                )
             self.gen_store(value.value, addr, align=align, volatile=volatile)
             # The stored-to field (or a union sibling, or an alias through
             # another base) may be a guarded one: every projection fact dies.
@@ -5407,12 +5435,17 @@ class CodeGen:
             # it once (gen_addr's Call arm checks the resolved callee
             # actually returns mut), coerce, store through it.
             addr, t, _, _ = self.gen_addr(stmt.call, stmt.line)
-            value = self.coerce(
-                self.gen_expr(stmt.value),
-                t,
-                stmt.line,
-                "assignment through a mut return",
-            )
+            if self.str_literal_adapts(stmt.value, t):
+                # `f(...) = "hi";`: repoint the char slice behind the mut
+                # return at the literal's global constant (static lifetime).
+                value = self.gen_borrow_slice(stmt.value, t, stmt.line)
+            else:
+                value = self.coerce(
+                    self.gen_expr(stmt.value),
+                    t,
+                    stmt.line,
+                    "assignment through a mut return",
+                )
             self.gen_store(value.value, addr)
             # A store through a returned reference can land in any guarded
             # field (the reference may alias one): every projection fact

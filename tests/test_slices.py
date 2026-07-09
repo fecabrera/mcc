@@ -1538,3 +1538,139 @@ def test_sub_slice_not_a_compile_time_constant():
             fn main() -> int32 { return 0; }
             """
         )
+
+
+# ------------------------------ string-literal assignment (Stage 4, assignment)
+#
+# A string literal repoints an existing char-slice lvalue at its global string
+# constant (static lifetime, so safe even when the target outlives the frame),
+# the same borrow the let/argument/element/field positions already do. It
+# reaches every assignment lvalue form: plain name, deref, index, member, and a
+# mut return. Array literals stay rejected here (a frame-local backing would
+# dangle past a longer-lived target).
+
+
+def test_string_literal_assignment_to_char_slice():
+    # Plain assignment: `s = "hi";` reborrows, dropping the NUL, so the length
+    # is the new literal's, not the old one's.
+    source = """
+    fn main() -> int32 {
+        let s: slice<char> = "hi";
+        s = "hello";
+        return s.length as int32;   // 5, not 2
+    }
+    """
+    assert run(source) == 5
+
+
+def test_string_literal_assignment_to_const_char_slice():
+    source = """
+    fn main() -> int32 {
+        let s: slice<const char> = "a";
+        s = "abcd";
+        return (s.length as int32) * 10 + (s[0] as int32 - 'a' as int32);   // 40
+    }
+    """
+    assert run(source) == 40
+
+
+def test_string_literal_assignment_through_deref():
+    # `*out = "hi";` repoints the slice behind the pointer; the pointee's const
+    # check reads the whole-type const (not the element const), so a
+    # slice<const char>* target is fine.
+    source = """
+    fn set(out: slice<const char>*) { *out = "world"; }
+    fn main() -> int32 {
+        let s: slice<const char> = "x";
+        set(&s);
+        return s.length as int32;   // 5
+    }
+    """
+    assert run(source) == 5
+
+
+def test_string_literal_assignment_to_slice_element():
+    source = """
+    fn main() -> int32 {
+        let arr: slice<char>[2] = ["x", "y"];
+        arr[0] = "first";
+        return (arr[0].length as int32) * 10 + (arr[1].length as int32);   // 51
+    }
+    """
+    assert run(source) == 51
+
+
+def test_string_literal_assignment_to_struct_field():
+    # The headline gap-closer: `c.name = "hi"` (member assign) now works, the
+    # same adaptation the struct literal `cmd { name = "hi" }` already allowed.
+    source = """
+    struct cmd { name: slice<const char>; }
+    fn main() -> int32 {
+        let c: cmd = cmd { name = "ls" };
+        c.name = "grep";
+        return c.name.length as int32;   // 4
+    }
+    """
+    assert run(source) == 4
+
+
+def test_string_literal_assignment_through_mut_return():
+    source = """
+    fn pick(xs: slice<char>*, i: int32) -> mut slice<char> { return xs[i]; }
+    fn main() -> int32 {
+        let arr: slice<char>[2] = ["a", "b"];
+        pick(arr, 1) = "second";
+        return arr[1].length as int32;   // 6
+    }
+    """
+    assert run(source) == 6
+
+
+def test_ternary_of_string_literals_adapts_in_assignment():
+    # The ternary rides along for free: str_literal_adapts recurses on the arms.
+    source = """
+    fn main() -> int32 {
+        let s: slice<char> = "hi";
+        let flag: bool = false;
+        s = flag ? "y" : "yes";
+        return s.length as int32;   // 3
+    }
+    """
+    assert run(source) == 3
+
+
+def test_static_slice_reassigned_from_string_literal():
+    # A runtime reassignment of a @static char-slice global: the initializer
+    # stays a constant view, the reassignment reborrows at runtime.
+    source = """
+    @static let g: slice<const char> = "x";
+    fn main() -> int32 {
+        g = "yy";
+        return g.length as int32;   // 2
+    }
+    """
+    assert run(source) == 2
+
+
+def test_array_literal_assignment_rejected():
+    # Array-literal assignment stays a compile error at every lvalue form: the
+    # frame-local backing would dangle past a longer-lived target. The generic
+    # array-literal message fires (no bespoke dangle message here).
+    for lvalue in ("s = [1, 2, 3];", "*out = [1, 2, 3];", "c.xs = [1, 2, 3];"):
+        with pytest.raises(
+            LangError, match="an array literal is only allowed where an array or slice"
+        ):
+            compile_ir(
+                """
+                struct box { xs: slice<int32>; }
+                fn main() -> int32 {
+                    let s: slice<int32> = [0];
+                    let out: slice<int32>* = &s;
+                    let c: box = box { xs = [9] };
+                    """
+                + lvalue
+                + """
+                    return 0;
+                }
+                """
+            )

@@ -831,12 +831,13 @@ already do).
       keeps each element's static type and a compile-time arity, where erasing
       every slot to `any` would collapse into a fixed-length `slice<any>`. Also
       the door to a statically-typed variadic later (no erasure), if wanted
-- [ ] Literal adaptation to `slice<T>` — a literal in a slice-typed slot
+- [x] Literal adaptation to `slice<T>` — a literal in a slice-typed slot
       borrows from context, the compiler materializing the backing storage.
-      The shipped positions are argument / `let` / `return` / array element /
-      `@static` / struct field; one position in the family remains, plain
-      **assignment** to an existing slice variable (`s = "hi";`), tracked as
-      the last sub-item below:
+      The family is complete for string and array literals: the shipped
+      positions are argument / `let` / `return` / array element / `@static` /
+      struct field / **assignment**. Array-literal assignment is the sole
+      documented non-goal (a frame-local backing would dangle past a
+      longer-lived target); see the assignment sub-item below:
   - [x] string literals — `"hi"` adapts to a `slice<char>`/`slice<const char>`
         expected by a `let` or a parameter (NUL dropped), borrowing the string
         constant's bytes; implemented, see [Slices](docs/language.md#slices)
@@ -893,9 +894,12 @@ already do).
         `let v = [1, 2];`, which stays an ambiguous error (the annotation
         picks the storage: array = owned, slice = borrowed view). A struct-literal
         field now adapts too (the `gen_struct_lit` deferred-evaluation restructure
-        landed with the string-literal sibling above); one gap still stands:
-        assignment statements (the family-wide gap recorded in the intro). Lands
-        staged (this box ticks when the last stage lands):
+        landed with the string-literal sibling above). Assignment stays a
+        deliberate non-goal for array literals: a frame-local backing would
+        dangle past a longer-lived target, the same hazard that rejects the
+        direct `return [..] as slice<T>;` spelling (string-literal assignment
+        ships, since a string constant is static-lifetime). Lands staged (this
+        box ticks when the last stage lands):
     - [x] stage 1: cast, `let`, element, and `@static` positions — explicit
           `as slice<T>` anywhere an expression goes, the annotation-driven
           `let` (`let nums: slice<int32> = [0x10, 0x1F, 0xFF];`), array
@@ -917,13 +921,18 @@ already do).
           `f([1, 2, 3])` cannot infer `T`; pass `f<int32>(...)` or a companion
           argument), so element anchoring stays a possible later extension;
           implemented, see [Slices](docs/language.md#slices)
-  - [ ] assignment position — plain assignment to an existing slice variable
-        (`s = "hi";`), the last position in the family. String-literal
-        assignment is coherent: the literal repoints `s` at its global string
-        constant (static lifetime, no backing-storage or lifetime question),
-        exactly the borrow the `let`/argument/element positions already do, and
-        safe even through a pointer (`*out = "hi";`); the work is to extend the
-        same string-literal sink to the assignment path (deref-assign included).
+  - [x] assignment position — string-literal assignment to an existing slice
+        lvalue, the last position in the family, now covering all five lvalue
+        forms: plain (`s = "hi";`), deref (`*out = "hi";`), index
+        (`a[i] = "hi";`), member (`c.name = "hi";`), and a mut return
+        (`f(...) = "hi";`). String-literal assignment is coherent: the literal
+        repoints the lvalue at its global string constant (static lifetime, no
+        backing-storage or lifetime question), exactly the borrow the
+        `let`/argument/element/field positions already do, and safe even
+        through a pointer or past the frame. Including the member form closes a
+        real inconsistency the struct-field work opened (`cmd { name = "hi" }`
+        worked, but `c.name = "hi"` did not); implemented, see
+        [Slices](docs/language.md#slices).
         **Not planned: array-literal assignment** (`s = [1, 2, 3];`) — the
         materialized backing is frame-local, but an assignment target can
         outlive the current frame (a `mut slice<T>*` out-parameter, or a

@@ -109,4 +109,6 @@ fn main() -> int32 {
 // See also: static_initializers.mc, where these same literals initialize
 // `@static` globals -- folded to data constants at compile time; and
 // string_tables.mc / memory/slices.mc for the slice borrow the string- and
-// array-literal fields above rely on.
+// array-literal fields above rely on. The field assignment `cmd.name = "hi"`
+// mirrors the `command { name = "ls" }` literal above; see
+// memory/slice_assignment.mc for that and the other assignment lvalue forms.
