@@ -25,7 +25,7 @@ fn read_byte(data: uint8*, size: uint64, i: uint64) -> uint8 {
     if (i >= size) {
         fail("index out of range", 2);
     }
-    return data[i];
+    return data![i];
 }
 
 fn first(@nonnull p: int32*) -> int32 {

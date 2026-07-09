@@ -19,7 +19,7 @@ struct packet {
 // overlap; offsetof is exact. (`alignof` counts the element type, so the tail
 // is always aligned for a T.)
 fn make_packet(n: uint64) -> struct packet* {
-    let p = alloc<byte>(offsetof(struct packet, data) + n * sizeof(int32))
+    let p = alloc<byte>(offsetof(struct packet, data) + n * sizeof(int32))!
         as struct packet*;
     p->length = n;
     let i: uint64 = 0;
@@ -34,7 +34,7 @@ fn main() -> int32 {
     // The FAM contributes nothing to sizeof -- it is just the uint64 length.
     println("sizeof(struct packet) = %llu", sizeof(struct packet));
 
-    let p = make_packet(5);
+    let p = make_packet(5)!;
     print("data:");
     let i: uint64 = 0;
     while (i < p->length) {           // 0 1 4 9 16

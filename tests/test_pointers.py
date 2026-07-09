@@ -476,26 +476,24 @@ def test_compound_pointer_move_rejects_nonnull_param():
         )
 
 
-def test_compound_pointer_move_kills_narrowed_fact():
-    # `p += n` kills a flow-narrowed local's non-null fact, so a later use at a
-    # @nonnull slot needs re-proof.
-    with pytest.raises(
-        LangError, match=r"cannot pass a possibly-null pointer"
-    ):
-        compile_ir(
-            """
-            fn need(@nonnull p: int32*) -> int32 { return *p; }
-            fn main() -> int32 {
-                let b: int32[4];
-                let p: int32* = &b[0];
-                if (p != null) {
-                    p += 1;
-                    return need(p);
-                }
-                return 0;
+def test_compound_pointer_move_keeps_narrowed_fact():
+    # `p += n` is pointer arithmetic -- it cannot null a non-null p (the same
+    # axiom that proves `p + n`), so the narrowed fact survives the move and
+    # the later @nonnull use compiles.
+    compile_ir(
+        """
+        fn need(@nonnull p: int32*) -> int32 { return *p; }
+        fn main() -> int32 {
+            let b: int32[4];
+            let p: int32* = &b[0];
+            if (p != null) {
+                p += 1;
+                return need(p);
             }
-            """
-        )
+            return 0;
+        }
+        """
+    )
 
 
 # -------------------------------------------------------------------- imports

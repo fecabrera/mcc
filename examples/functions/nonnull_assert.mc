@@ -21,7 +21,7 @@ fn main() -> int32 {
     // The canonical case: alloc<T> returns a plain int32*, which cannot
     // cross into a @nonnull slot on its own.
     let p = alloc<int32>(1);
-    *p = 42;
+    *p! = 42;    // the hatch already: a write through an unproven heap pointer
 
     // first(p);         // error: a plain int32* carries no proof
     let a = first(p!);   // the assertion is the whole proof, at zero cost

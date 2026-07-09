@@ -48,7 +48,7 @@ fn describe(args...) {
             // `point` and `point*` are DISTINCT tags. A pointer argument boxes
             // by value under its own pointer tag (as in any.mc) and lands here,
             // never in the struct arm above.
-            when point* p: println("point*  ->(%d, %d)", p->x, p->y);
+            when point* p: println("point*  ->(%d, %d)", p!->x, p!->y);
 
             when int32 n:  println("int32   %d", n);
             else:          println("some other type");

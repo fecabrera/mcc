@@ -3,11 +3,13 @@
 # per source module plus its .mci interface stub, then a static (.a) and shared
 # library. Sources live under lib/ (lib/std mcc modules, lib/libc C bindings);
 # --nostdlib -I lib resolves the std/ and libc/ import prefixes against them.
-# Builds ok today; linking a program against the archive is not ready yet.
+# -Wall -Werror keeps the stdlib itself warn-free under every opt-in class,
+# matching the example-compile loop in CI. Builds ok today; linking a program
+# against the archive is not ready yet.
 CC=${CC:-cc}
 AR=${AR:-ar}
 MCC="python -m mcc"
-MCFLAGS="--nostdlib -I lib"
+MCFLAGS="--nostdlib -I lib -Wall -Werror"
 OUT=dist/lib
 
 run_echo() {

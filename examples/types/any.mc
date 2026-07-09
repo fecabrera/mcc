@@ -30,7 +30,7 @@ fn describe(a: any) {
         when bool b:        println("bool:        %s", b ? "true" : "false");
         when char* s:       println("char*:       %s", s);
         when slice<char> t: println("slice<char>: %llu chars", t.length);
-        when point* p:      println("point*:      (%d, %d)", p->x, p->y);
+        when point* p:      println("point*:      (%d, %d)", p!->x, p!->y);
         else:               println("some other type");
     }
 }

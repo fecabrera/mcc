@@ -28,14 +28,14 @@ struct entry<T> extends T {
 // A payload-only function: it takes a `reading*` and has no idea the value
 // lives inside a list entry.
 fn describe(r: struct reading*) {
-    println("station %d read %d degrees", r->station, r->celsius);
+    println("station %d read %d degrees", r!->station, r!->celsius);
 }
 
 // Prepend a heap-allocated entry. The payload fields are set directly on
 // the entry -- they are the entry's own fields, laid out at its start.
 fn push(head: struct entry<struct reading>*, celsius: int32, station: int32)
         -> struct entry<struct reading>* {
-    let e = new<struct entry<struct reading>>();
+    let e = new<struct entry<struct reading>>()!;
     e->celsius = celsius;
     e->station = station;
     e->next = head;

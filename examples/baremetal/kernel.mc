@@ -23,15 +23,17 @@ fn uart() -> struct pl011* {
     return 0x09000000 as struct pl011*;
 }
 
+// The postfix `!` asserts the MMIO base is non-null -- statically, at zero
+// cost: no check is emitted, which is exactly right freestanding.
 fn put_char(c: uint8) {
-    until ((uart()->fr & 0x20) == 0) {}  // wait for room in the FIFO
-    uart()->dr = c as uint32;
+    until ((uart()!->fr & 0x20) == 0) {} // wait for room in the FIFO
+    uart()!->dr = c as uint32;
 }
 
 fn print(s: uint8*) {
     let i = 0 as uint64;
-    while (s[i] != 0) {
-        put_char(s[i]);
+    while (s![i] != 0) {
+        put_char(s![i]);
         i += 1;
     }
 }

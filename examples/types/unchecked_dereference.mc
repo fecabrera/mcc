@@ -6,8 +6,10 @@ import "libc/stdio";
 // relation `@nonnull` parameters use (functions/nonnull.mc). Unlike the
 // author-placed `@warning` of warnings.mc, an opt-in class is an analysis
 // over legal code, so it stays silent until a `-W<name>` flag enables it.
-// That is why this file is CI-safe with live warning sites: the plain build
-// (and CI's bare `-Werror` build) compiles it clean.
+// That is why this file can keep live warning sites: the plain build
+// compiles it clean, and CI carves it out of its `-Wall -Werror` example
+// loop into a plain `-Werror` compile (a class demo cannot build with its
+// own class promoted to error), like the other own-class demos.
 //
 // Prerequisites: warnings.mc (the warning channel and -Werror),
 // functions/nonnull.mc and nonnull_narrowing.mc (the proof relation and the
@@ -29,9 +31,9 @@ import "libc/stdio";
 //     (-Werror promotes exactly what an enabled class printed, naming the
 //      class in the tail; exit status 1, no executable written)
 //
-// This file imports only libc on purpose: until the stdlib's own sweep
-// lands, enabling the class on a program that imports the container modules
-// surfaces libmc-internal warnings alongside yours.
+// The standard library compiles warn-free under the class (each
+// invariant-backed dereference asserts with `!`), so enabling it on a
+// program that imports the containers reports only your own sites.
 
 struct node {
     value: int32;
@@ -93,6 +95,13 @@ fn main() -> int32 {
     let s = a as slice<int32>;
     let mid = s[1];     // slice indexing never warns either
 
+    // Derived addresses are proven too: an array reached through a
+    // member/index chain (`grid[1]` here, a struct's array field, a
+    // flexible `p->data`) decays by address arithmetic, not a load, so
+    // indexing on through it is silent.
+    let grid: int32[2][2] = [[1, 2], [3, 4]];
+    let corner = grid[1][1];
+
     // A `let` seeded from a proven source (here `&x`) starts proven, so
     // local dereferences of it are silent with no guard at all.
     let x: int32 = 5;
@@ -112,7 +121,7 @@ fn main() -> int32 {
 
     printf("describe=%d bump=%d sum2=%d\n", d, b, two);
     printf("value_or=%d/%d next_value=%d trusted=%d\n", got, missed, nv, t);
-    printf("mid=%d v=%d\n", mid, v);
+    printf("mid=%d v=%d corner=%d\n", mid, v, corner);
     return 0;
 }
 
@@ -125,4 +134,7 @@ fn main() -> int32 {
 // reporting otherwise-legal code;
 // functions/nonnull.mc for the proof relation and its always-non-null
 // sources; functions/nonnull_narrowing.mc for the guard shapes that
-// silence a site; functions/nonnull_assert.mc for the postfix `!` hatch.
+// silence a site; functions/nonnull_assert.mc for the postfix `!` hatch;
+// systems/byte_scan.mc for the pointer-walking loop, where one seeded
+// `start!` stays proven across `p += 1` (arithmetic cannot null a
+// non-null pointer).

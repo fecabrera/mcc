@@ -8,7 +8,7 @@ import "std/io";
 // pointers is undefined behavior.
 fn blit(@noalias dst: uint8*, @noalias src: uint8*, n: uint64) {
     for i in range(n) {
-        dst[i] = src[i];
+        dst![i] = src![i];
     }
 }
 

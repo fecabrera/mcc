@@ -4,8 +4,8 @@ import "std/io";
 // caller's counter. Used below to show that a compound assignment evaluates its
 // target exactly once.
 fn bump(counter: int32*) -> int32 {
-    let i = *counter;
-    *counter = i + 1;
+    let i = *counter!;      // `!` asserts the pointer is non-null (callers pass &i)
+    *counter! = i + 1;
     return i;
 }
 

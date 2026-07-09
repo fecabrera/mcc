@@ -24,7 +24,7 @@ fn sum(xs: int32*, n: int32) -> int32 {
     let total: int32 = 0;
     let i: int32 = 0;
     while (i < n) {
-        total += xs[i];
+        total += xs![i];
         i += 1;
     }
     return total;

@@ -4,14 +4,14 @@ import "std/memory";
 fn fill_squares(nums: int32*, n: int32) {
     let i: int32 = 0;
     while (i < n) {
-        nums[i] = i * i;
+        nums![i] = i * i;
         i += 1;
     }
 }
 
 fn main() -> int32 {
     // Heap allocation through the generic alloc<T> from lib/std/memory.mc.
-    let nums = alloc<int32>(5);
+    let nums = alloc<int32>(5)!;
     fill_squares(nums, 5);
 
     let i: int32 = 0;

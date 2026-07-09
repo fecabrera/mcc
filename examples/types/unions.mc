@@ -20,7 +20,7 @@ fn float_bits(x: float64) -> int64 {
 
 // Members read and write through `.` and `->` exactly like struct fields.
 fn low_byte(v: value*) -> uint8 {
-    return v->b[0];
+    return v!->b[0];
 }
 
 // Unions are generic like structs: one instantiation per type argument, each

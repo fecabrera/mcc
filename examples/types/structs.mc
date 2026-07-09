@@ -30,7 +30,7 @@ fn main() -> int32 {
     println("start = (%d, %d)", start.x, start.y);
 
     // Heap-allocate a struct; `->` reads and writes fields through a pointer.
-    let p = alloc<struct point>(1);
+    let p = alloc<struct point>(1)!;
     *p = start;             // copy the value in...
     p->y = 4;               // ...or set fields one at a time through the pointer
     println("point = (%d, %d)", p->x, p->y);
@@ -51,9 +51,9 @@ fn main() -> int32 {
 
     // A linked list of three nodes, terminated by null. Each node's value is
     // written with a struct literal -- generic, with a pointer `next` field.
-    let a = new<struct node<int32>>();
-    let b = new<struct node<int32>>();
-    let c = new<struct node<int32>>();
+    let a = new<struct node<int32>>()!;
+    let b = new<struct node<int32>>()!;
+    let c = new<struct node<int32>>()!;
 
     // `next` points to a typed node, so the type argument is inferred...
     *a = struct node { value = 1, next = b };

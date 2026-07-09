@@ -83,7 +83,7 @@ fn main() -> int32 {
 
     // A literal is a value, so it can be written through a pointer -- the
     // pattern an eventual `new point { ... }` sugar would build on.
-    let h = alloc<struct point>(1);
+    let h = alloc<struct point>(1)!;
     defer dealloc(h);
     *h = point { x = 10, y = 20 };
     println("heap point = (%d, %d)", h->x, h->y);

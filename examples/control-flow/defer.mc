@@ -8,7 +8,7 @@ import "std/list";
 // unwinds in the opposite order of acquisition.
 
 fn process(n: int32) -> int32 {
-    let buffer: byte* = alloc<byte>(64);   // `byte` is the alias for uint8: raw memory
+    let buffer: byte* = alloc<byte>(64)!;  // `byte` is the alias for uint8: raw memory
     defer dealloc(buffer);            // freed no matter which return we take
 
     if (n < 0) {
@@ -37,15 +37,15 @@ fn build_labels(n: uint64) {
         let i: uint64 = 0;
         while (i < labels.length) {
             defer i += 1;                 // bump at the end of each iteration
-            println("  free %s", labels.data[i]);
-            dealloc(labels.data[i]);
+            println("  free %s", labels.data![i]);
+            dealloc(labels.data![i]);
         }
         list_destroy(labels);               // runs after the loop, last of all
     }
 
     let i: uint64 = 0;
     while (i < n) {
-        let label: byte* = alloc<byte>(2);
+        let label: byte* = alloc<byte>(2)!;
         label[0] = ('a' as byte) + (i as byte);   // raw byte buffer
         label[1] = 0;
         list_push(labels, label);

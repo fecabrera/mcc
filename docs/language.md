@@ -398,7 +398,10 @@ fn main() -> int32 {
 
 The accepted proofs are the always-non-null sources: `&x` (the address of
 named storage), a string or array literal, an array decaying to a pointer
-(local, `@static`, or global), transitively a `@nonnull` parameter of
+(local, `@static`, or global — including an array reached through a
+member/index chain: `grid[0]`, `unit.sizes`, a flexible `p->data`; an
+array step is address arithmetic off the chain's base, never a load, so
+its decay is a derived address like `p + n`), transitively a `@nonnull` parameter of
 the calling function (so a `@nonnull` callee forwards its own parameter
 onward with no check), a plain pointer local or a pointer-typed field
 projection flow-narrowed by a null check (below), an `as` cast to a
@@ -453,15 +456,21 @@ the pointer between the check and the use:
   entirely: once its address exists, a stored pointer could null `p`
   without ever naming it.
 - **The fact dies on anything that could null the variable**: reassigning
-  `p` (including `p += n`), passing `p` as a `mut` argument, or a shadowing
-  `let p`. An invalidation inside a nested block persists outward, and it is
-  path-insensitive: invalidating `p` in one branch of an inner `if` drops
-  the fact for the code after it, whichever branch runs.
+  `p`, passing `p` as a `mut` argument, or a shadowing `let p`. A
+  reassignment kills only *with its store* — the right-hand side evaluates
+  first, so `cur = cur->next` reads through the still-narrowed name — and
+  the pointer compounds `p += n` / `p -= n` are exempt entirely:
+  arithmetic off a non-null pointer is the same always-non-null derived
+  address `p + n` is, so the fact survives the move. An invalidation
+  inside a nested block persists outward, and it is path-insensitive:
+  invalidating `p` in one branch of an inner `if` drops the fact for the
+  code after it, whichever branch runs.
 - **A loop drops exactly the facts it could invalidate.** A loop's body and
   condition re-run on the back edge, where a later iteration may already
   have nulled the pointer, so at loop entry (`while`, `until`, `for`) a
   pre-scan of the whole loop kills the facts for every name the loop
-  reassigns (`p = ...`, `p += n`), shadows with a `let p`, or lends as a
+  reassigns (`p = ...`; a pointer's `p += n` is arithmetic and keeps its
+  fact, here as everywhere), shadows with a `let p`, or lends as a
   bare `mut` argument, anywhere in the subtree (nested branches, `case`
   arms, `defer` bodies, and both branches of an `@if` included; `mut`
   positions are resolved by callee name across all overloads,
@@ -1598,7 +1607,10 @@ example.mc: warning: line 3: dereference of a possibly-null pointer (narrow it w
 What proves (and therefore silences a site): a `@nonnull` parameter, a
 local or field projection flow-narrowed by a null-check guard
 (`if (p != null)`, `if (b->data != null)`), a `let` binding seeded from an
-always-non-null source, an array decaying to a pointer, and the postfix
+always-non-null source, an array decaying to a pointer — including one
+reached through a member/index chain (`grid[0][1]`, `unit.sizes[2]`, a
+flexible `p->data[i]`: the array step is address arithmetic, so only the
+chain's own `->` hops are sites) — and the postfix
 `p!` assertion — which doubles as the per-site suppressor. Indexing a
 [slice](#slices) never warns (the borrow's data pointer is the slice's
 invariant), and arrays index directly. Narrowing's conservative limits
@@ -1701,10 +1713,12 @@ example.mc: warning: line 5: passing a possibly-null pointer as argument 1 of 'e
 The strict posture restores the unconditional caller proof the default
 trades away, which is exactly what makes it sound to re-emit the LLVM hints
 on the extern declares — so it recovers the codegen quality relaxed gives
-up. It is reachable two ways: the whole-build `-Werror` (this repository's CI
-runs it) promotes every *enabled* class, so `-Werror -Wextern-nonnull` is
-strict; and the selective `-Werror=<class>` input form makes strict a
-targeted posture on the C boundary without promoting the whole build.
+up. It is reachable two ways: the whole-build `-Werror` promotes every *enabled*
+class, so `-Werror -Wextern-nonnull` is strict — and `-Wall -Werror`, which
+this repository's CI runs over every example, the wheel smoke tests, and the
+`build.sh` stdlib build, is strict for all three classes at once; and the
+selective `-Werror=<class>` input form makes strict a targeted posture on
+the C boundary without promoting the whole build.
 
 The annotation itself ships unconditionally in source and in
 [`.mci`](#interfaces) stubs — the declared promise never varies per build;
@@ -2428,9 +2442,12 @@ Pointer arithmetic is an always-non-null source: `p + n` proves non-null at a
 [`@nonnull`](#nonnull-parameters) slot exactly as `&p[n]` does, and `*(p + n)`
 never warns under [`-Wunchecked-dereference`](#-wunchecked-dereference) — the
 derived address is proven like `*&p[n]` (v1 does not look through to the base
-pointer). `p += n` is an ordinary reassignment: it drops a narrowed local's
-non-null fact, and stays rejected on a `@nonnull` parameter (which cannot be
-reassigned).
+pointer). By the same axiom `p += n` / `p -= n` keep a narrowed local's
+non-null fact (the moved pointer is the derived address `p + n` is), including
+across a loop back edge — the pointer-walking scan
+`let p = start!; while (p < end) { ...*p...; p += 1; }` stays warn-free on one
+seed. A compound move stays rejected on a `@nonnull` parameter (which cannot
+be reassigned).
 
 Everything else keeps its rejection. Addition is pointer-left only: `p + n` is
 the accepted shape and the commuted `n + p` is rejected (the pointer is the

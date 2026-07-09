@@ -10,6 +10,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Whole-build `-Wall -Werror` in CI and the stdlib build** — the CI
+  example-compile loop, the wheel smoke tests (CI's package job and
+  `test.sh`), and `build.sh` now run `-Wall -Werror`, promoting all three
+  opt-in warning classes (`-Wunchecked-dereference`, `-Wdead-code`,
+  `-Wextern-nonnull`) to hard errors over the whole build — examples,
+  bare-metal kernel, cross-compiled ABI example, and standard library alike.
+  The example suite went warn-free for it: each invariant-backed dereference
+  asserts with postfix `!` or seeds a narrowed `let ...!` binding (and
+  `libc/errno`'s two `*errno_location()` sites join the earlier container
+  sweep). The three own-class demos that keep live triggers on purpose —
+  `systems/extern_nonnull.mc`, `control-flow/dead_code.mc`,
+  `types/unchecked_dereference.mc` — are compiled at plain `-Werror` instead
+  (a warning-class demo cannot build with its own class promoted to error),
+  extending the carve-out `extern_nonnull.mc` already had.
+
 - **Boxing a struct into `any` by reference** — a struct now boxes into a
   `const any` target, lifting the v1 aggregate rejection for the call-scoped
   borrow case. The box is **by hidden reference**: the payload holds a pointer
@@ -676,6 +691,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **`-Wunchecked-dereference` / `@nonnull` proof precision** — three
+  false-positive classes are gone, surfaced by the `-Wall` example sweep.
+  (1) An array reached through a member/index chain is a proven base:
+  `grid[0][1]`, `unit.sizes[2]`, and a flexible `p->data[i]` decay by
+  address arithmetic (a GEP off the chain's base, the derived address
+  `p + n` is), not by a load, so only genuine pointer hops in the chain are
+  sites. (2) A reassignment kills a narrowed fact only *with its store*:
+  the right-hand side evaluates first, so the list-walking
+  `cur = cur->next` no longer warns while `p = null; *p` still does.
+  (3) The pointer compounds `p += n` / `p -= n` keep a narrowed fact —
+  including across a loop back edge — by the same axiom that proves
+  `p + n`, so the canonical `let p = start!; while (p < end) { ...*p...;
+  p += 1; }` scan stays warn-free on one seed (a `@nonnull` parameter
+  still rejects the reassignment outright). The precision feeds the
+  `@nonnull` proof relation too, so these sources now also cross into
+  `@nonnull` slots. Existing programs only lose warnings/errors, never
+  gain any.
 - **Unions parse into their own AST node and type kind** (internal refactor, no
   language change) — a `union` now becomes its own `UnionDecl` node, parallel to
   `StructDecl` rather than a `StructDecl` carrying a `union` flag, and the type

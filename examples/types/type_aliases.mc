@@ -21,7 +21,7 @@ fn apply(op: binop, x: int32, y: int32) -> int32 { return op(x, y); }
 struct point { x: int32; y: int32; }
 type point_ref = struct point*;
 
-fn dist2(p: point_ref) -> word { return p->x * p->x + p->y * p->y; }
+fn dist2(p: point_ref) -> word { return p!->x * p!->x + p!->y * p!->y; }
 
 // An alias may name another alias.
 type number = word;

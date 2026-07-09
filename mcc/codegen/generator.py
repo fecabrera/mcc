@@ -5370,33 +5370,40 @@ class CodeGen:
                     "reassignment could drop the non-null guarantee",
                     stmt.line,
                 )
-            # A reassignment may store null: any flow-narrowed fact dies
-            # here, with every projection fact rooted at the name.
-            self.narrowed_nonnull.discard(stmt.name)
-            self.kill_paths_rooted(stmt.name)
             slot, var_type, volatile = self.var_addr(stmt.name, stmt.line)
-            # Overwriting a struct whose storage is reachable through a
-            # pointer -- an address-taken local, a mut parameter (the
-            # caller's storage), or a global (its address may be known
-            # anywhere) -- can rewrite a field some other path fact reads
-            # through an alias: every projection fact dies.
-            if is_aggregate(strip_const(var_type)) and (
-                stmt.name not in self.locals
-                or stmt.name in self.addr_taken
-                or stmt.name in self.mut_locals
-            ):
-                self.narrowed_paths.clear()
             if var_type.const:
                 raise LangError(
                     f"cannot assign to read-only variable {stmt.name!r}", stmt.line
                 )
+
+            # A reassignment may store null: any flow-narrowed fact dies with
+            # the store, with every projection fact rooted at the name -- and,
+            # for a struct whose storage is reachable through a pointer (an
+            # address-taken local, a mut parameter, or a global), every
+            # projection fact at all, since the overwrite can rewrite a field
+            # some other fact reads through an alias. The kill runs after the
+            # right-hand side is *judged* (it evaluates before the store, so
+            # `cur = cur->next` reads through the still-narrowed name) but
+            # before anything writes the target's storage.
+            def kill_target_facts():
+                self.narrowed_nonnull.discard(stmt.name)
+                self.kill_paths_rooted(stmt.name)
+                if is_aggregate(strip_const(var_type)) and (
+                    stmt.name not in self.locals
+                    or stmt.name in self.addr_taken
+                    or stmt.name in self.mut_locals
+                ):
+                    self.narrowed_paths.clear()
+
             if self.struct_literal_adapts(
                 stmt.value, var_type
             ) or self.str_literal_adapts(stmt.value, var_type):
                 # `s = "hi";`: the literal repoints s at its global string
                 # constant (static lifetime), the same borrow a `let`/argument
                 # already does -- safe even when the target outlives the frame.
-                # `p = { x = 1, y = 2 };` likewise rebuilds the struct in place.
+                # `p = { x = 1, y = 2 };` likewise rebuilds the struct in
+                # place, so here the facts die before the rebuild starts.
+                kill_target_facts()
                 tv = self.gen_adapted_literal(stmt.value, var_type, stmt.line)
             else:
                 tv = self.coerce(
@@ -5405,6 +5412,7 @@ class CodeGen:
                     stmt.line,
                     f"assignment to {stmt.name}",
                 )
+                kill_target_facts()
             self.gen_store(tv.value, slot, volatile=volatile)
         elif isinstance(stmt, CompoundAssign):
             self.gen_compound_assign(stmt)
@@ -6149,11 +6157,18 @@ class CodeGen:
                     "reassignment could drop the non-null guarantee",
                     line,
                 )
-            # `p += n` moves the pointer; any flow-narrowed fact dies here,
-            # with every projection fact rooted at the name.
-            self.narrowed_nonnull.discard(target.name)
+            # `p += n` moves the pointer: every projection fact rooted at the
+            # name dies (the fields now read different storage). The name's
+            # own flow-narrowed fact survives when the target is a pointer --
+            # the only compound forms a pointer admits are `+=`/`-=`, and
+            # arithmetic off a non-null pointer is the same always-non-null
+            # derived address `p + n` is. A non-pointer compound (`x += 1`)
+            # has no fact to keep, so the discard below is scoped to it for
+            # symmetry with plain assignment.
             self.kill_paths_rooted(target.name)
             slot, var_type, volatile = self.var_addr(target.name, line)
+            if not is_pointer(strip_const(var_type)):
+                self.narrowed_nonnull.discard(target.name)
             if var_type.const:
                 raise LangError(
                     f"cannot assign to read-only variable {target.name!r}", line
@@ -10173,9 +10188,11 @@ class CodeGen:
         included), modeled on :func:`collect_addr_taken`. A name is killed by
         exactly the events that invalidate a narrowed fact during generation:
         an assignment (``Assign``), a compound assignment to the bare
-        variable, a shadowing ``let`` (conservative: any redeclaration of
-        the name), or lending the bare variable to a ``mut`` position of any
-        callable sharing the callee's name (see :meth:`call_mut_positions`).
+        variable (unless it is pointer-typed: a pointer's ``+=``/``-=`` is
+        arithmetic and keeps its fact, as in the compound path itself), a
+        shadowing ``let`` (conservative: any redeclaration of the name), or
+        lending the bare variable to a ``mut`` position of any callable
+        sharing the callee's name (see :meth:`call_mut_positions`).
         Passing the name as a plain, ``const``, or ``@nonnull`` argument,
         ``*p = x``, and member/index stores do not kill -- none can change
         which address the variable holds. Facts that survive the kill set
@@ -10193,7 +10210,14 @@ class CodeGen:
         if isinstance(obj, Assign):
             kills.add(obj.name)
         elif isinstance(obj, CompoundAssign) and isinstance(obj.target, Var):
-            kills.add(obj.target.name)
+            # A compound assignment to a pointer variable is `+=`/`-=` (the
+            # only forms a pointer admits): arithmetic off a non-null pointer
+            # stays non-null, exactly as `p + n` proves, so the fact
+            # survives -- matching the compound-assignment path itself. Any
+            # other (or unknown) target type kills conservatively.
+            target_type = self.var_type_of(obj.target.name)
+            if target_type is None or not is_pointer(strip_const(target_type)):
+                kills.add(obj.target.name)
         elif isinstance(obj, Let):
             kills.add(obj.name)
         elif isinstance(obj, Call):
@@ -10289,9 +10313,62 @@ class CodeGen:
                 return True
             var_type = self.var_type_of(expr.name)
             return var_type is not None and is_array(var_type)
-        if isinstance(expr, Member):
-            return self.nonnull_path_of(expr) in self.narrowed_paths
+        if isinstance(expr, (Index, Member)):
+            # An array reached through a member/index chain (`grid[0]` as the
+            # base of `grid[0][1]`, the field `unit.sizes`, a flexible
+            # `p->data`) decays to a derived address -- a GEP off the chain's
+            # base, the same always-non-null source `p + n` is. The chain is
+            # judged by static type alone: array-typed steps are address
+            # arithmetic, never loads.
+            chain = self.static_chain_type(expr)
+            if chain is not None and is_array(chain):
+                return True
+            if isinstance(expr, Member):
+                return self.nonnull_path_of(expr) in self.narrowed_paths
         return False
+
+    def static_chain_type(self, expr) -> "LangType | None":
+        """The static type of a variable-rooted member/index chain.
+
+        Walks ``Var``/``Member``/``Index`` steps (plus a postfix ``!``, an
+        identity) syntactically, without emitting IR: a variable types as
+        itself, a member as its field (through one pointee hop for ``->``),
+        an index as the array element, pointee, or slice element. Anything
+        else -- a call, a cast, arithmetic -- ends the walk.
+
+        Args:
+            expr: The expression rooting or continuing the chain.
+
+        Returns:
+            The chain's static type, or ``None`` when it cannot be judged
+            syntactically.
+        """
+        if isinstance(expr, NonnullAssert):
+            return self.static_chain_type(expr.operand)
+        if isinstance(expr, Var):
+            var_type = self.var_type_of(expr.name)
+            return strip_const(var_type) if var_type is not None else None
+        if isinstance(expr, Index):
+            base = self.static_chain_type(expr.base)
+            if base is None:
+                return None
+            if is_array(base):
+                return strip_const(base.element)
+            if is_slice(base):
+                return strip_const(base.fields[0][1].pointee)
+            if is_pointer(base):
+                return strip_const(base.pointee)
+            return None
+        if isinstance(expr, Member):
+            base = self.static_chain_type(expr.base)
+            if base is not None and expr.arrow:
+                base = strip_const(base.pointee) if is_pointer(base) else None
+            if base is None or is_slice(base) or not base.fields:
+                return None
+            for field_name, field_type in base.fields:
+                if field_name == expr.field:
+                    return strip_const(field_type)
+        return None
 
     def check_nonnull_arg(
         self, arg_expr, context: str, line: int, proven: "bool | None" = None,

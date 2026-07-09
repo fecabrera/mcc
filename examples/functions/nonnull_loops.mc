@@ -52,11 +52,11 @@ fn drain(p: int32*) -> int32 {
 fn sum_until_null(slots: int32**) -> int32 {
     let total: int32 = 0;
     let i: int32 = 0;
-    let cur: int32* = slots[0];
+    let cur: int32* = slots![0];
     while (cur != null) {
         total += first(cur); // ok: the header proves cur on every pass
         i += 1;
-        cur = slots[i];      // fine: re-proven before the next use
+        cur = slots![i];     // fine: re-proven before the next use
     }
     return total;
 }

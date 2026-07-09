@@ -30,7 +30,7 @@ fn sum(xs: slice<const int32>) -> int32 {
 // a pointer). Both call paths adapt, so adding this overload cannot silently
 // break pick([...]).
 fn pick(xs: slice<int32>) -> int32 { return xs[xs.length - 1]; }
-fn pick(p: int32*) -> int32 { return *p; }
+fn pick(p: int32*) -> int32 { return *p!; }
 
 // A @static literal lands in read-only data: the elements must be constant
 // expressions, and the target must be slice<const T>. A mutable

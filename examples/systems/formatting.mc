@@ -29,9 +29,9 @@ struct point {
 // whole-program set, so the caller's modifier steers the fields too.
 fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
     string_push(str, '(');
-    format(str, value->x, modifier);
+    format(str, value!->x, modifier);
     string_append(str, ", ");
-    format(str, value->y, modifier);
+    format(str, value!->y, modifier);
     string_push(str, ')');
 }
 

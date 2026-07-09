@@ -919,18 +919,19 @@ def test_loop_condition_mut_lend_kills_fact_at_entry():
         )
 
 
-def test_loop_body_compound_assign_kills_fact_at_entry():
-    # `p += n` moves the pointer; the pre-scan treats it like an assignment.
-    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
-        compile_ir(
-            FIRST + "fn get(p: int32*) -> int32 {\n"
-            "    if (p == null) { return 0; }\n"
-            "    let i: int32 = 0;\n"
-            "    while (i < 2) { first(p); p += 1; i = i + 1; }\n"
-            "    return 0;\n"
-            "}\n"
-            "fn main() -> int32 { return 0; }"
-        )
+def test_loop_body_pointer_compound_assign_keeps_fact_at_entry():
+    # `p += n` is pointer arithmetic: it cannot null a non-null p (the same
+    # axiom that proves `p + n`), so the guard's fact survives the pre-scan
+    # and the body's @nonnull call compiles.
+    compile_ir(
+        FIRST + "fn get(p: int32*) -> int32 {\n"
+        "    if (p == null) { return 0; }\n"
+        "    let i: int32 = 0;\n"
+        "    while (i < 2) { first(p); p += 1; i = i + 1; }\n"
+        "    return 0;\n"
+        "}\n"
+        "fn main() -> int32 { return 0; }"
+    )
 
 
 def test_loop_body_shadowing_let_kills_fact_at_entry():

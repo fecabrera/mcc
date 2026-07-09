@@ -17,7 +17,7 @@ struct point3 extends point { z: int32; }
 
 // A function over the base. It knows nothing about point3.
 fn length2(p: struct point*) -> int32 {
-    return p->x * p->x + p->y * p->y;
+    return p!->x * p!->x + p!->y * p!->y;
 }
 
 // Defaults travel with the fields: a derived literal fills omitted base

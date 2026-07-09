@@ -20,7 +20,7 @@
  * @return the current errno
  */
 fn errno() -> int32 {
-    return *errno_location();
+    return *errno_location()!;   // libc guarantees the location exists
 }
 
 /**
@@ -30,7 +30,7 @@ fn errno() -> int32 {
  * @param value: the new errno value
  */
 fn set_errno(value: int32) {
-    *errno_location() = value;
+    *errno_location()! = value;
 }
 
 /***************************************

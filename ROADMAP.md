@@ -2255,23 +2255,29 @@ already do).
             error `-W<name>` already gives), and the output render already
             spoke `[-Werror=<name>]`, so this only added the matching input
             spelling
-    - [ ] CI `-Wall` flip — turn `-Wall` on in the example-compile loop
-          (`ci.yml`) and `test.sh`, which promotes every opt-in class over
-          the whole build, not just `libmc`. Unblocked by the shipped
-          [`libmc` sweep](#metaprogramming-and-builtins) but distinct from
-          it: `-Wall` pulls all three classes at once
-          (`-Wunchecked-dereference`,
-          [`-Wdead-code`](#metaprogramming-and-builtins), and
-          `-Wextern-nonnull`), so the *examples* must go warn-free too, not
-          only the stdlib. The honest scope: the ~62 example
-          `unchecked-dereference` sites take their `!` or a guard, the
-          dead-code across examples is gated, and the three remaining class
-          demos that keep live triggers (`types/unchecked_dereference.mc`,
-          `control-flow/dead_code.mc`, `types/warnings.mc`) are carved out
-          of the `-Werror` compile loop the way `systems/extern_nonnull.mc`
-          already is (a demo cannot compile under its own class turned
-          error-level), extending that established carve-out to the other
-          classes
+    - [x] CI `-Wall` flip — `-Wall -Werror` is on in the example-compile
+          loop, the bare-metal and cross-ABI steps (`ci.yml`), the wheel
+          smoke tests (the package job and `test.sh`), and `build.sh`,
+          promoting every opt-in class over the whole build, not just
+          `libmc`. The examples went warn-free for it: their
+          `unchecked-dereference` sites took their `!` or a seeded
+          `let ...!` binding, and `libc/errno`'s two `*errno_location()`
+          sites joined the container sweep. Landing it surfaced (and fixed)
+          three checker false-positive classes: a member/index chain over
+          arrays is address arithmetic and now proves its decay
+          (`grid[0][1]`, `unit.sizes[2]`, a flexible `p->data[i]`), a
+          reassignment's right-hand side is judged before the fact dies
+          (`cur = cur->next`), and pointer `+=`/`-=` keep a narrowed fact by
+          the `p + n` axiom — so the sweep needed fewer hatches than the
+          projected ~62, and dead-code gating across examples turned out to
+          be a non-issue (only the class demo has live triggers). The two
+          own-class demos with live triggers
+          (`types/unchecked_dereference.mc`, `control-flow/dead_code.mc`)
+          are compiled at plain `-Werror`, extending the carve-out
+          `systems/extern_nonnull.mc` already had (a demo cannot compile
+          under its own class turned error-level); `types/warnings.mc`,
+          projected as a third carve-out, needed none — it compiles under
+          `-Wall -Werror` untouched
 - [ ] [Inline assembly](docs/language.md#inline-assembly) — arch-specific (pair with `@if` on
       `TARGET_ARCH`), preferring intrinsics where they exist:
   - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an

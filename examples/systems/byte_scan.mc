@@ -9,10 +9,10 @@ import "libc/stdio";
 // A memchr-style scan: return a pointer to the first `target` byte in the
 // half-open range `[start, end)`, or null if it holds none. The `while (p <
 // end)` loop is the pointer-ordering idiom, and `p += 1` walks one byte at a
-// time. Every dereference here is proven: `p < end` bounds the scan, and the
-// deref of a pointer formed by arithmetic never warns.
+// time. `p < end` bounds the scan but is no null proof (ordering does not
+// narrow), so the binding seeds one with `start!`; arithmetic on p keeps it.
 fn find_byte(start: uint8*, end: uint8*, target: uint8) -> uint8* {
-    let p = start;
+    let p = start!;
     while (p < end) {
         if (*p == target) {
             return p;

@@ -20,7 +20,7 @@ struct entry<K, V> extends cell<K, V> {
 
 // A function over one base instantiation; the matching entry upcasts to it.
 fn describe(c: struct cell<int32, uint8*>*) {
-    println("%d -> %s", c->key, c->value);
+    println("%d -> %s", c!->key, c!->value);
 }
 
 fn main() -> int32 {

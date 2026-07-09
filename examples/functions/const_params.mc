@@ -26,7 +26,7 @@ fn length_squared(const v: struct vec3) -> float64 {
 // distinction as C's `counter* const` versus `const counter*`.
 struct counter { hits: int64; }
 fn record(const c: struct counter*) {
-    c->hits += 1;   // allowed: writes the pointee, not the pointer
+    c!->hits += 1;   // allowed: writes the pointee, not the pointer
 }
 
 // On a scalar, `const` simply makes the parameter read-only.

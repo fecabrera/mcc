@@ -21,7 +21,7 @@ struct buf { data: char*; length: uint64; }
 // parameter must be dereferenced: `return *p` reaches the caller's
 // storage, but `return p` would reference the parameter's own frame slot.
 fn buf_at(mut self: struct buf, i: uint64) -> mut char {
-    return self.data[i];
+    return self.data![i];
 }
 
 // A mut parameter is itself legal as the returned lvalue (zero hops): it
@@ -85,7 +85,7 @@ fn main() -> int32 {
     // Projections: a struct-typed mut return takes `.field`, and a
     // pointer-typed one indexes through the loaded pointer.
     buf_ref(b).length = 2;
-    buf_data(b)[1] = 'z';
+    buf_data(b)![1] = 'z';
     buf_first(b) = 'q';                 // through the composed accessor
     println("bytes        -> %c%c%c (length %d)",
             bytes[0], bytes[1], bytes[2], b.length as int32);

@@ -25,13 +25,13 @@ struct command { name: slice<const char>; }
 // An out-parameter, for the deref form: writing through `*out` reborrows the
 // caller's slice.
 fn set_label(out: slice<const char>*) {
-    *out = "labelled";
+    *out! = "labelled";
 }
 
 // A mut-return accessor, for the mut-return form: its call is an assignable
 // lvalue. Array parameters cannot be `mut`, so the run is passed by pointer.
 fn slot(rows: slice<char>*, i: int32) -> mut slice<char> {
-    return rows[i];
+    return rows![i];
 }
 
 // A static char-slice global starts as one borrow and is reassignable at

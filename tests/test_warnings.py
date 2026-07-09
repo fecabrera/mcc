@@ -593,6 +593,121 @@ def test_slice_indexing_never_warns():
     assert class_warnings(src) == []
 
 
+# --- derived-address chains: an array step is address arithmetic, not a load ---
+
+def test_nested_array_indexing_does_not_warn():
+    # grid[0] decays to a derived address into grid's own storage -- the same
+    # always-non-null source the variable's own decay is.
+    src = """
+    fn main() -> int32 {
+        let grid: int32[2][2] = [[1, 2], [3, 4]];
+        return grid[1][1] - 4;
+    }
+    """
+    assert class_warnings(src) == []
+
+
+def test_array_field_indexing_does_not_warn():
+    # unit.sizes decays to &unit.sizes[0]: named storage, never null.
+    src = """
+    struct box { corner: int32; sizes: int32[3]; }
+    fn main() -> int32 {
+        let unit: struct box;
+        unit.sizes[2] = 5;
+        return unit.sizes[2] - 5;
+    }
+    """
+    assert class_warnings(src) == []
+
+
+def test_flexible_array_member_indexing_does_not_warn():
+    # p->data is p + offset, the derived address `p + n` is; only the arrow
+    # itself needs a proof, and the assertion supplies it.
+    src = """
+    struct packet { length: uint64; data: int32[]; }
+    fn fill(p: struct packet*) {
+        p!->data[0] = 1;
+    }
+    fn main() -> int32 { return 0; }
+    """
+    assert class_warnings(src) == []
+
+
+def test_flexible_array_member_charges_only_the_arrow():
+    # An unproven arrow warns for p; the tail index adds no second site.
+    src = """
+    struct packet { length: uint64; data: int32[]; }
+    fn peek(p: struct packet*) -> int32 { return p->data[0]; }
+    fn main() -> int32 { return 0; }
+    """
+    assert [line for _, line in class_warnings(src)] == [3]
+
+
+def test_union_array_member_indexing_does_not_warn():
+    src = """
+    union value { i: int64; b: uint8[8]; }
+    fn low(v: union value*) -> uint8 { return v!->b[0]; }
+    fn main() -> int32 { return 0; }
+    """
+    assert class_warnings(src) == []
+
+
+def test_pointer_hop_in_a_chain_still_warns():
+    # p![0] loads a pointer from memory; indexing that load is not address
+    # arithmetic, so the outer index is an unproven site.
+    src = """
+    fn peek(p: int32**) -> int32 { return p![0][1]; }
+    fn main() -> int32 { return 0; }
+    """
+    assert [line for _, line in class_warnings(src)] == [2]
+
+
+# --- fact lifetimes around stores: the RHS evaluates before the fact dies ---
+
+def test_reassignment_rhs_reads_through_the_dying_fact():
+    # `cur = cur->next` dereferences cur before the store overwrites it, so
+    # the header-narrowed fact still covers the read.
+    src = """
+    struct node { value: int32; next: struct node*; }
+    fn walk(head: struct node*) -> int32 {
+        let cur = head;
+        until (cur == null) { cur = cur->next; }
+        return 0;
+    }
+    fn main() -> int32 { return 0; }
+    """
+    assert class_warnings(src) == []
+
+
+def test_reassigned_local_fact_still_dies_with_the_store():
+    src = """
+    fn get(p: int32*) -> int32 {
+        if (p != null) {
+            p = null;
+            return *p;
+        }
+        return 0;
+    }
+    fn main() -> int32 { return 0; }
+    """
+    assert [line for _, line in class_warnings(src)] == [5]
+
+
+def test_pointer_compound_assign_keeps_the_fact():
+    # `p += 1` is address arithmetic: a seeded fact survives it, straight-line
+    # and across the loop back edge.
+    src = """
+    fn scan(start: uint8*) -> uint8 {
+        let p = start!;
+        let i: int32 = 0;
+        while (i < 4) { p += 1; i = i + 1; }
+        return *p;
+    }
+    fn main() -> int32 { return 0; }
+    """
+    assert class_warnings(src) == []
+
+
 # --- -Wdead-code: statements silently dropped after a diverging construct ---
 
 DEAD = "dead-code"

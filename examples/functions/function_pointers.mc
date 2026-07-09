@@ -87,7 +87,7 @@ fn main() -> int32 {
     // A heap table: alloc<T> returns a typed T*, here a pointer to function
     // pointers -- no sizeof or cast needed. The element type is the grouped
     // (fn(...) -> ...) so the * from T* binds outside it.
-    let table = alloc<fn(int32, int32) -> int32>(2);
+    let table = alloc<fn(int32, int32) -> int32>(2)!;
     table[0] = add;
     table[1] = sub;
     println("table[0](2, 3) = %d, table[1](2, 3) = %d", table[0](2, 3), table[1](2, 3));

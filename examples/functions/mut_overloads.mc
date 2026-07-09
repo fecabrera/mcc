@@ -7,7 +7,7 @@ import "std/io";
 // Builds on mut_params.mc (what `mut` means) and types/generics.mc
 // (generic functions); pointers are covered in memory/pointers.mc.
 fn set<T>(mut a: T) { a = 7 as T; }    // for the caller's own variable
-fn set<T>(p: T*)    { *p = 9 as T; }   // for storage reached by pointer
+fn set<T>(p: T*)    { *p! = 9 as T; }  // for storage reached by pointer
 
 // Resolution first drops candidates the argument cannot match: an rvalue
 // (a literal, a call result, an `&x`, a bare function name) denotes no

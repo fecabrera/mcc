@@ -25,7 +25,7 @@ struct disc   extends circle { fill: int32; }
 // so the body may read the base's fields through a T value. The bound rides
 // the same monomorphization every generic uses -- one instance per T.
 fn describe<T extends shape>(x: T*) -> int32 {
-    return x->area;
+    return x!->area;
 }
 
 // Overload ranking gains a middle tier: concrete beats BOUNDED beats
