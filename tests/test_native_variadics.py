@@ -242,15 +242,35 @@ def test_a_deferred_call_collects_safely():
 
 # ------------------------------------------------------------ rejections
 
-def test_struct_extra_hits_the_escape_hatch_error():
+def test_struct_extra_boxes_by_reference():
+    # A struct extra is a by-reference position (the trailing slice<const
+    # any> is call-scoped), so it boxes -- the payload holds a pointer to the
+    # caller's storage, recovered with no copy by `case type`.
+    assert run(
+        """
+        struct p { x: int32; }
+        fn first(args...) -> int32 {
+            case type (args[0]) { when p v: return v.x; else: return -1; }
+        }
+        fn main() -> int32 {
+            let s = struct p { x = 42 };
+            return first(s) == 42 ? 0 : 1;
+        }
+        """
+    ) == 0
+
+
+def test_union_extra_still_hits_the_escape_hatch_error():
+    # A union does not box (its tag would not name the live member), so it
+    # keeps the pointer escape-hatch error even in a variadic position.
     with pytest.raises(
         LangError,
-        match=r"cannot box a p in an any; box a pointer to it \(&value\) instead",
+        match=r"cannot box a u in an any; box a pointer to it \(&value\) instead",
     ):
         compile_ir(
-            "struct p { x: int32; }\n"
+            "union u { i: int32; f: float64; }\n"
             "fn f(args...) {}\n"
-            "fn main() -> int32 { let s = struct p { x = 1 }; f(s); return 0; }"
+            "fn main() -> int32 { let s = union u { i = 1 }; f(s); return 0; }"
         )
 
 

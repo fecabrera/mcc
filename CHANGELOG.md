@@ -10,6 +10,27 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Boxing a struct into `any` by reference** — a struct now boxes into a
+  `const any` target, lifting the v1 aggregate rejection for the call-scoped
+  borrow case. The box is **by hidden reference**: the payload holds a pointer
+  to the value's existing storage (the same convention a `const`/`mut` struct
+  parameter already travels through), tagged as the struct type itself
+  (`point`, not `point*`), so `case type` recovers it as a read-only alias
+  with no copy — a `when point p:` arm reads the caller's fields directly and
+  can hand `p` on to a `format(const value: point, …)` overload sharing that
+  same storage. The archetypal `const any` position is the `slice<const any>`
+  a variadic collects into, so `println("{}", p)` now boxes `p` by reference
+  and dispatches it to a user formatter (native `println`). A bare variable's
+  storage is shared directly; an rvalue struct (a literal, a function return)
+  spills to a call-scoped temporary first. `point` and `point*` keep distinct
+  tags, and a generic `when T v:` arm recovers a struct tag by reference too.
+  Scoping the borrow to a slot that cannot outlive the call is what keeps it
+  sound: an **owning** `any` of a struct (`let a: any = s;`, a `return`, a
+  global) stays rejected with a reworded error pointing at the `const any`
+  allowance, and **unions** and **fixed arrays** keep their pointer
+  escape-hatch errors. See [The any type](docs/language.md#the-any-type) and
+  [examples/types/any_struct_boxing.mc](examples/types/any_struct_boxing.mc).
+
 - **Bare, type-inferred struct literals** — a struct literal may drop its type
   name where the position already fixes the struct type: `let p: point = { x =
   1, y = 2 };` instead of `point { x = 1, y = 2 }`, the aggregate sibling of the

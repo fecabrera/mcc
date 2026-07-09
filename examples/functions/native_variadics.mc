@@ -46,5 +46,7 @@ fn main() -> int32 {
 }
 
 // See also: variadic.mc for the C `...` form (opaque, forward-only);
-// types/any.mc for the full boxable set and `case type`; the docs section
+// types/any.mc for the full boxable set and `case type`;
+// types/any_struct_boxing.mc for a struct argument boxing by hidden reference
+// into this `slice<const any>`, recovered with no copy; the docs section
 // "Native variadic arguments" for the pass-through and boxing rules.

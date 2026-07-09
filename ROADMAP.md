@@ -435,9 +435,15 @@ already do).
         statically, leaving a bare `else` arm as the only descriptor-only
         case. The v1 boxable
         set is primitives, pointers (each pointer type its own tag), and
-        slices; structs and arrays are rejected (by value the payload is
+        slices; an **owning** `any` of a struct or array (a `let`, a
+        return, a global) stays rejected (by value the payload is
         unbounded, by pointer the lifetime goes implicit; `&s` is the
-        explicit escape). Values wrap implicitly at the coerce choke point,
+        explicit escape), while a struct boxed **by reference into a
+        `const any` target** (the `slice<const any>` a native variadic
+        collects into) is the call-scoped, non-escaping
+        borrow-context case now broken out and taken in the struct-boxing
+        sub-item below (the owning/sound case stays gated there). Values
+        wrap implicitly at the coerce choke point,
         an untyped literal anchoring via the adaptable-placeholder rule
         (`5` boxes as `int32`, the same rule as call-site inference, needed
         for `println("{}", 5)`); there is no unwrap outside `case type` in
@@ -463,8 +469,39 @@ already do).
           path to box a constant; until then rejected with an explicit
           compile error, the same shape as the global union initializer gap
           below
-    - [ ] struct boxing — lift the v1 struct/array rejection once the
-          by-value-vs-by-pointer payload and lifetime questions are settled
+    - [x] struct boxing — lifts the v1 struct rejection for the
+          call-scoped borrow case (implemented, see
+          [The any type](docs/language.md#the-any-type)). A struct boxes into
+          an `any` **only when the target is a `const any`**, a
+          by-hidden-reference position (the same slot a `const`/`mut` struct
+          parameter already travels through, per `hidden_ref_indices` in the
+          generator). There the aggregate boxes **by reference**: the payload
+          holds a pointer to the caller's existing storage, tagged as the
+          struct type itself (`point`, not `point*`), so it unboxes with no
+          copy and dispatches to a user `format(const value: point, ...)`
+          overload. The motivating case is `println("{}", p)`, whose variadic
+          args collect into `slice<const any>`, exactly such a by-reference
+          position. Scoping the borrow to a slot that cannot outlive the call
+          contains the lifetime-escape this item was gated on by construction
+          (the residual, copying a `const any` param into an owning slot, is
+          the same `slice<const T>` borrow discipline mcc already accepts). An
+          **owning** `any` of an aggregate (`let a: any = p;`, returning an
+          `any`, a global/`@static` `any`) stays rejected: the payload then
+          either exceeds 16 bytes by value or holds a borrow that escapes. Two
+          follow-ups stay open:
+      - [ ] owning aggregate boxing — the general ceiling-lift: a by-value
+            payload when it fits (≤16B), or a sound borrow-marked `any` for
+            the rest. Blocked on a representation question the by-reference
+            cut sidesteps: today an aggregate tag unambiguously means "payload
+            is a pointer to caller storage", which is what makes the
+            by-reference cut sound, but once owning by-value boxing exists a
+            `point`-tagged `any` could be either by-value or by-reference, so
+            the tag alone no longer says which and the unbox path needs a
+            borrow/representation marker beyond the type-id tag
+      - [ ] unions and fixed arrays — extend aggregate boxing past structs.
+            A union tag does not name its live member, and a fixed array
+            compounds the by-value-vs-by-reference payload question above, so
+            both wait behind the struct cut
     - [ ] checked `as` — recover a value outside `case type`. The core
           primitive is the initializer-style head `t = v as T` inside
           `with (...)`, with `v` an `any` (binding name first, chosen

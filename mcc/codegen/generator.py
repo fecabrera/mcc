@@ -3045,19 +3045,29 @@ class CodeGen:
             )
         return tag
 
-    def check_boxable(self, lang_type: LangType, line: int) -> LangType:
+    def check_boxable(
+        self, lang_type: LangType, line: int, *, borrow: bool = False
+    ) -> LangType:
         """Validate a type against the ``any`` boxable set.
 
-        The v1 set is primitives (the integers, ``bool``, ``char``,
+        The by-value set is primitives (the integers, ``bool``, ``char``,
         ``float64``), pointers (each pointer type gets its own tag), and
-        slices. Structs, unions, and arrays are rejected -- by value the
-        payload is unbounded, by pointer the lifetime goes implicit, so
-        ``&value`` is the explicit escape. An ``any`` never boxes another
-        ``any`` (``any`` to ``any`` is a plain copy, not nesting).
+        slices. A **struct** additionally boxes -- but only ``borrow=True``,
+        the call-scoped by-hidden-reference case: the payload holds a pointer
+        to the caller's storage (see :meth:`gen_box_any`), so the target must
+        be a ``const any`` slot that cannot outlive it (the ``slice<const
+        any>`` a variadic collects into). An **owning** struct box, a union,
+        or a fixed array is rejected -- by value the payload is unbounded, by
+        pointer the lifetime goes implicit, so ``&value`` is the explicit
+        escape. An ``any`` never boxes another ``any`` (``any`` to ``any`` is
+        a plain copy, not nesting).
 
         Args:
             lang_type: The candidate type (possibly ``const``-qualified).
             line: Source line for diagnostics.
+            borrow: Whether the box target is a call-scoped ``const any``
+                by-reference position, which lets a struct box by hidden
+                reference instead of being rejected.
 
         Returns:
             The ``const``-stripped type to tag and box.
@@ -3084,6 +3094,18 @@ class CodeGen:
                 "first element (&value[0]) instead",
                 line,
             )
+        if is_struct(lang_type):
+            # A struct boxes by hidden reference into a call-scoped `const any`
+            # (a variadic argument); an owning any of it would escape the
+            # borrow, so that stays rejected with the pointer escape hatch.
+            if borrow:
+                return lang_type
+            raise LangError(
+                f"cannot box a {lang_type} into an owning any; a struct only "
+                "boxes by reference into a const any (e.g. a variadic "
+                "argument), or box a pointer to it (&value) instead",
+                line,
+            )
         if is_aggregate(lang_type):
             raise LangError(
                 f"cannot box a {lang_type} in an any; box a pointer to it "
@@ -3099,21 +3121,37 @@ class CodeGen:
             return lang_type
         raise LangError(f"cannot box a {lang_type} in an any", line)
 
-    def gen_box_any(self, tv: TypedValue, line: int) -> TypedValue:
+    def gen_box_any(
+        self,
+        tv: TypedValue,
+        line: int,
+        *,
+        borrow: bool = False,
+        ref: "ir.Value | None" = None,
+    ) -> TypedValue:
         """Box a value into a fresh ``any``: store the tag, then the payload.
 
         The box is assembled in a stack slot -- zero-filled first, so the
         payload bytes past the value are deterministic -- and loaded back as
-        the 24-byte ``any`` value. The payload slot is reinterpreted as the
-        source type by a pointer cast, the same move a union member store
-        makes. The GEP indices here and the layout in ``types.ANY`` are the
-        two sites of the dual-site layout invariant.
+        the 24-byte ``any`` value. A scalar/pointer/slice payload slot is
+        reinterpreted as the source type by a pointer cast, the same move a
+        union member store makes. A **struct** (only with ``borrow=True``)
+        boxes by hidden reference instead: the payload holds a *pointer* to
+        the value's storage -- the caller's own storage when ``ref`` supplies
+        it (no copy), otherwise a call-scoped temporary the rvalue spills into
+        -- tagged as the struct type itself (``point``, not ``point*``), so
+        ``case type`` recovers it as a reference with no copy. The GEP indices
+        here and the layout in ``types.ANY`` are the two sites of the
+        dual-site layout invariant.
 
         Args:
-            tv: The value to box (already validated via
-                :meth:`check_boxable`; an array must have been rejected
-                before it decayed).
+            tv: The value to box (validated via :meth:`check_boxable`; an
+                array must have been rejected before it decayed).
             line: Source line for diagnostics.
+            borrow: Whether the box target is a call-scoped ``const any``
+                by-reference position (lets a struct box by hidden reference).
+            ref: For a struct box, a pointer to the value's existing storage
+                to share directly; ``None`` spills the value to a temporary.
 
         Returns:
             The boxed ``any`` as a ``TypedValue``.
@@ -3121,8 +3159,8 @@ class CodeGen:
         if tv.decayed is not None:
             # The value is the pointer an array decayed to; reject by the
             # array type, not the pointer it silently became.
-            self.check_boxable(tv.decayed, line)
-        boxed = self.check_boxable(tv.type, line)
+            self.check_boxable(tv.decayed, line, borrow=borrow)
+        boxed = self.check_boxable(tv.type, line, borrow=borrow)
         tag = self.any_tag(boxed, line)
         # Feed the boxed-only registry. Every boxing site funnels through
         # this method (the coerce choke point and the variadic-extras
@@ -3136,8 +3174,21 @@ class CodeGen:
         payload_ptr = self.builder.gep(
             slot, [I32_ZERO, ir.Constant(ir.IntType(32), 1)], inbounds=True
         )
-        typed_ptr = self.builder.bitcast(payload_ptr, boxed.ir.as_pointer())
-        self.builder.store(tv.value, typed_ptr)
+        if is_aggregate(boxed):
+            # Box by hidden reference: a pointer fits the 16-byte payload. An
+            # rvalue with no storage of its own spills to a call-scoped temp.
+            if ref is None:
+                ref = self.entry_alloca(boxed.ir)
+                if over_aligned(boxed):
+                    ref.align = type_align(boxed)
+                self.builder.store(tv.value, ref)
+            slot_ptr = self.builder.bitcast(
+                payload_ptr, boxed.ir.as_pointer().as_pointer()
+            )
+            self.builder.store(ref, slot_ptr)
+        else:
+            typed_ptr = self.builder.bitcast(payload_ptr, boxed.ir.as_pointer())
+            self.builder.store(tv.value, typed_ptr)
         return TypedValue(self.builder.load(slot), ANY)
 
     def instantiate_struct(
@@ -4990,9 +5041,11 @@ class CodeGen:
         # box the same way. An adaptable literal was not captured by the
         # integer branch above (`any` is not an integer type), so it anchors
         # at its default placeholder type -- `5` boxes as int32, the same rule
-        # call-site inference uses. `any` to `any` already returned above.
+        # call-site inference uses. `any` to `any` already returned above. A
+        # `const any` target is a by-reference borrow position, so a struct
+        # may box into it (by hidden reference); a bare (owning) `any` cannot.
         if is_any(expected):
-            boxed = self.gen_box_any(tv, line)
+            boxed = self.gen_box_any(tv, line, borrow=expected.const)
             if expected is ANY:
                 return boxed
             return TypedValue(boxed.value, expected)  # the const any form
@@ -5846,7 +5899,9 @@ class CodeGen:
             for type_ref in type_refs:
                 arm_type = strip_const(
                     self.check_boxable(
-                        self.lang_type(type_ref, when_line), when_line
+                        self.lang_type(type_ref, when_line),
+                        when_line,
+                        borrow=True,
                     )
                 )
                 if generic_any is not None:
@@ -5876,18 +5931,13 @@ class CodeGen:
                 next_bb = self.builder.append_basic_block("casetype.next")
                 self.builder.cbranch(cond, arm_bb, next_bb)
                 self.builder.position_at_end(arm_bb)
-                # The binding is a fresh copy of the payload, reinterpreted as
-                # the copy's type and scoped to the arm (like a for-loop's
-                # variable).
-                typed_ptr = self.builder.bitcast(
-                    payload_ptr, arm_type.ir.as_pointer()
-                )
-                var_slot = self.entry_alloca(arm_type.ir, name)
-                self.builder.store(self.builder.load(typed_ptr), var_slot)
+                # The binding is scoped to the arm (like a for-loop's
+                # variable): a fresh copy for an inline payload, an alias of
+                # the caller's storage for a by-reference struct box.
                 outer_locals, outer_names = dict(self.locals), self.scope_names
                 self.scope_names = set()
                 try:
-                    self.bind_local(name, var_slot, arm_type)
+                    self.bind_unboxed(payload_ptr, arm_type, name)
                     self.gen_block(body)
                 except LangError as err:
                     # Each copy is fully type-checked; when a shared body
@@ -5983,15 +6033,11 @@ class CodeGen:
             pending.param: boxed.pointee if pending.pointer_only else boxed,
         }
         try:
-            # The binding is a fresh copy of the payload, exactly as in the
-            # concrete lowering above.
-            typed_ptr = self.builder.bitcast(
-                pending.payload_ptr, boxed.ir.as_pointer()
-            )
-            var_slot = self.entry_alloca(boxed.ir, pending.binding)
-            self.builder.store(self.builder.load(typed_ptr), var_slot)
+            # The binding recovers the payload exactly as the concrete
+            # lowering above: a struct tag aliases the caller's storage, every
+            # other tag is an inline copy.
             self.scope_names = set()
-            self.bind_local(pending.binding, var_slot, boxed)
+            self.bind_unboxed(pending.payload_ptr, boxed, pending.binding)
             self.gen_block(pending.body)
             if not self.builder.block.is_terminated:
                 self.builder.branch(pending.end_bb)
@@ -6011,6 +6057,34 @@ class CodeGen:
         finally:
             outer.restore(self)
         pending.switch.add_case(ir.Constant(UINT64.ir, arm_tag), arm_bb)
+
+    def bind_unboxed(self, payload_ptr, arm_type: LangType, name: str):
+        """Bind a ``case type`` arm's variable to the recovered payload.
+
+        A struct was boxed **by hidden reference** (see :meth:`gen_box_any`),
+        so its payload holds a pointer to the boxing site's storage: the
+        binding aliases that storage directly -- read-only (``const``), no
+        copy, the mirror of the by-reference box and the same borrow the
+        variadic that produced the ``any`` already held. Every other boxable
+        type is stored inline, so its binding is a fresh arm-scoped copy of
+        the payload, reinterpreted as the arm's type.
+
+        Args:
+            payload_ptr: A pointer to the box's 16-byte payload slot.
+            arm_type: The arm's (``const``-stripped) recovered type.
+            name: The binding name to introduce into the arm's scope.
+        """
+        if is_aggregate(arm_type):
+            ref_ptr = self.builder.bitcast(
+                payload_ptr, arm_type.ir.as_pointer().as_pointer()
+            )
+            storage = self.builder.load(ref_ptr, name=name)
+            self.bind_local(name, storage, const_of(arm_type))
+            return
+        typed_ptr = self.builder.bitcast(payload_ptr, arm_type.ir.as_pointer())
+        var_slot = self.entry_alloca(arm_type.ir, name)
+        self.builder.store(self.builder.load(typed_ptr), var_slot)
+        self.bind_local(name, var_slot, arm_type)
 
     def gen_compound_assign(self, stmt: CompoundAssign):
         """Lower ``target op= value`` to a load, an ``op``, and a store back.
@@ -9858,9 +9932,11 @@ class CodeGen:
                 # Pass-through: the argument count equals the parameter count
                 # and the final argument already is the trailing slice type.
                 return passed(TypedValue(tv.value, actual))
-            boxed = [self.box_collected(tv, line)]
+            boxed = [self.box_collected(tv, line, extras[0])]
         else:
-            boxed = [self.box_collected(self.gen_expr(e), line) for e in extras]
+            boxed = [
+                self.box_collected(self.gen_expr(e), line, e) for e in extras
+            ]
         if not boxed:
             data = ir.Constant(ptype.fields[0][1].ir, None)
             return passed(self.make_slice(ptype, data, ir.Constant(UINT64.ir, 0)))
@@ -9875,12 +9951,22 @@ class CodeGen:
             self.make_slice(ptype, data, ir.Constant(UINT64.ir, len(boxed)))
         )
 
-    def box_collected(self, tv: TypedValue, line: int) -> ir.Value:
+    def box_collected(
+        self, tv: TypedValue, line: int, arg_expr=None
+    ) -> ir.Value:
         """Box one collected extra, copying an ``any`` through unchanged.
+
+        The trailing ``slice<const any>`` is a call-scoped by-reference
+        position, so a struct extra boxes by hidden reference (``borrow``):
+        a bare variable's storage is shared directly (no copy), any other
+        struct value spills to a call-scoped temporary inside
+        :meth:`gen_box_any`.
 
         Args:
             tv: The evaluated extra argument.
             line: Source line for diagnostics.
+            arg_expr: The extra's source expression, used to share a bare
+                variable's storage as the struct box's hidden reference.
 
         Returns:
             The 24-byte ``any`` value to store into the collection run.
@@ -9891,7 +9977,15 @@ class CodeGen:
         """
         if is_any(tv.type):
             return tv.value  # any to any is a plain copy, never a nesting
-        return self.gen_box_any(tv, line).value
+        ref = None
+        base = strip_const(tv.type)
+        if is_aggregate(base) and isinstance(arg_expr, Var):
+            # A bare variable is side-effect-free to re-address, so share its
+            # existing storage as the hidden reference rather than copy it.
+            addr, t, _, _ = self.gen_addr(arg_expr, line)
+            if strip_const(t).ir is base.ir:
+                ref = addr
+        return self.gen_box_any(tv, line, borrow=True, ref=ref).value
 
     def narrowable_guard_names(self, cond, op: str) -> set:
         """Collect the facts a null-comparison guard flow-narrows.

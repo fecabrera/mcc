@@ -5,8 +5,9 @@ import "std/io";
 // a time. Boxing is implicit: assigning, passing, returning, or storing a
 // value where an `any` is expected wraps it. The v1 boxable set is the
 // primitives, pointers (each pointer type gets its own tag), and slices.
-// Structs, unions, and arrays do not box; the escape hatch is boxing a
-// pointer to them. The only way back out is a checked test: the `case type`
+// Structs, unions, and arrays do not box by value; the escape hatch is boxing
+// a pointer to them. (A struct additionally boxes by hidden reference into a
+// `const any` target -- see any_struct_boxing.mc.) The only way back out is a checked test: the `case type`
 // switch below, or its single-pattern statement sugar `with` (see
 // with_unwrap.mc) -- there is no unchecked `as` unwrap and no tag/payload
 // field access.
@@ -62,7 +63,9 @@ fn main() -> int32 {
     // arm, never uint8* or int32*.
     describe("hello");
 
-    // A struct does not box (compile error); box a pointer to it instead.
+    // A struct does not box by value; box a pointer to it instead. (A struct
+    // does box by hidden reference into a `const any`, e.g. a variadic's
+    // slice<const any> -- see any_struct_boxing.mc.)
     let origin = point { x = 3, y = 4 };
     describe(&origin);
 
@@ -84,5 +87,7 @@ fn main() -> int32 {
 // and `when T v:` fallbacks over every tag no concrete arm claims;
 // with_unwrap.mc for `with (t = v as T)`, the one-arm statement sugar with
 // an optional else;
+// any_struct_boxing.mc for a struct boxing by hidden reference into a
+// `const any`, recovered by a `when point p:` arm with no copy;
 // functions/native_variadics.mc for the box's headline consumer, native
 // variadic collection.

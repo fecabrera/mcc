@@ -403,12 +403,150 @@ def test_unknown_type_in_a_list_is_rejected():
         )
 
 
+# ------------------------------------------------ struct boxing by reference
+
+def test_struct_boxes_by_reference_into_a_variadic():
+    # A struct extra collects into the trailing slice<const any> by hidden
+    # reference; `case type` recovers it and reads the caller's field values.
+    assert run(
+        """
+        struct point { x: int32; y: int32; }
+        fn sum_first(args...) -> int32 {
+            case type (args[0]) {
+                when point p:  return p.x + p.y;
+                else:          return -1;
+            }
+        }
+        fn main() -> int32 {
+            let p: point = { x = 10, y = 20 };
+            return sum_first(p) == 30 ? 0 : 1;
+        }
+        """
+    ) == 0
+
+
+def test_struct_box_payload_holds_a_pointer_not_the_value():
+    # The by-reference discipline: the box stores the struct's *address* into
+    # the payload (a `point**` bitcast of the payload slot), never the 8-byte
+    # struct value -- so the recovery aliases the caller's storage.
+    ir = compile_ir(
+        """
+        struct point { x: int32; y: int32; }
+        fn take(args...) -> int32 {
+            case type (args[0]) { when point p: return p.x; else: return -1; }
+        }
+        fn main() -> int32 {
+            let p: point = { x = 1, y = 2 };
+            return take(p);
+        }
+        """
+    )
+    # The payload is reinterpreted as a pointer-to-struct on both the box and
+    # the recovery side.
+    assert '%"point"**' in ir
+
+
+def test_struct_rvalue_extra_spills_and_boxes():
+    # An rvalue struct (a function return) has no storage of its own, so it
+    # spills to a call-scoped temporary whose address is boxed.
+    assert run(
+        """
+        struct point { x: int32; y: int32; }
+        fn make(a: int32, b: int32) -> point { return point { x = a, y = b }; }
+        fn probe(args...) -> int32 {
+            case type (args[0]) {
+                when point p:  return p.x * 10 + p.y;
+                else:          return -1;
+            }
+        }
+        fn main() -> int32 {
+            return probe(make(3, 4)) == 34 ? 0 : 1;
+        }
+        """
+    ) == 0
+
+
+def test_struct_and_struct_pointer_get_distinct_tags():
+    # `point` (by-reference struct) and `point*` (a plain pointer box) tag
+    # differently, so their arms never cross.
+    assert run(
+        """
+        struct point { x: int32; y: int32; }
+        fn probe(args...) -> int32 {
+            let total: int32 = 0;
+            case type (args[0]) {
+                when point p:   total += 1;    // struct tag
+                when point* pp: total += 100;  // pointer tag
+                else:           total += -100;
+            }
+            case type (args[1]) {
+                when point p:   total += 1;
+                when point* pp: total += 100;
+                else:           total += -100;
+            }
+            return total;
+        }
+        fn main() -> int32 {
+            let q: point = { x = 0, y = 0 };
+            return probe(q, &q) == 101 ? 0 : 1;   // struct arm + pointer arm
+        }
+        """
+    ) == 0
+
+
+def test_const_any_local_borrows_a_struct():
+    # A `const any`-typed target is a by-reference position too, so a struct
+    # boxes into it; a bare `any` local would be owning and stay rejected.
+    assert run(
+        """
+        struct point { x: int32; y: int32; }
+        fn main() -> int32 {
+            let p: point = { x = 5, y = 6 };
+            let a: const any = p;
+            case type (a) {
+                when point q:  return q.x + q.y == 11 ? 0 : 1;
+                else:          return 2;
+            }
+        }
+        """
+    ) == 0
+
+
+def test_generic_arm_recovers_a_struct_by_reference():
+    # A generic `when T v:` arm matches the struct tag from the whole-program
+    # boxed set and recovers it as a reference, dispatching into a per-tag
+    # overload that reads the caller's fields.
+    assert run(
+        """
+        struct point { x: int32; y: int32; }
+        fn area(const p: point) -> int32 { return p.x * p.y; }
+        fn area(n: int32) -> int32 { return n; }
+        fn probe(args...) -> int32 {
+            case type (args[0]) {
+                when T v:  return area(v);
+                else:      return -1;
+            }
+            return -2;   // a generic arm defers, so the case is assumed to
+                         // reach its end (the documented conservatism)
+        }
+        fn main() -> int32 {
+            let p: point = { x = 3, y = 4 };
+            return probe(p) == 12 ? 0 : 1;
+        }
+        """
+    ) == 0
+
+
 # ------------------------------------------------------------ rejections
 
-def test_struct_boxing_is_rejected():
+def test_owning_struct_boxing_is_rejected():
+    # A struct only boxes by reference into a call-scoped const any (a
+    # variadic argument); an owning `any` local would outlive the borrow.
     with pytest.raises(
         LangError,
-        match=r"cannot box a p in an any; box a pointer to it \(&value\) instead",
+        match=r"cannot box a p into an owning any; a struct only boxes by "
+        r"reference into a const any \(e\.g\. a variadic argument\), or box a "
+        r"pointer to it \(&value\) instead",
     ):
         compile_ir(
             "struct p { x: int32; }\n"
@@ -477,12 +615,25 @@ def test_any_never_nests():
 
 def test_unboxable_arm_type_is_rejected():
     # An arm whose type can never be boxed is dead by construction: error.
-    with pytest.raises(LangError, match="cannot box a p in an any"):
+    # A union never boxes (a struct now does, by reference, so it is a live
+    # arm even when nothing local boxes one).
+    with pytest.raises(LangError, match="cannot box a u in an any"):
         compile_ir(
-            "struct p { x: int32; }\n"
+            "union u { i: int32; f: float64; }\n"
             "fn main() -> int32 { let a: any = 5;"
-            " case type (a) { when p v: return 1; else: return 0; } }"
+            " case type (a) { when u v: return 1; else: return 0; } }"
         )
+
+
+def test_a_struct_arm_is_live_even_without_a_local_box():
+    # A struct is a boxable category now (by reference), so a `when p v:` arm
+    # is accepted rather than rejected as unboxable -- it is simply a dead
+    # tag when nothing in the program boxes a `p`.
+    assert run(
+        "struct p { x: int32; }\n"
+        "fn main() -> int32 { let a: any = 5;"
+        " case type (a) { when p v: return 1; else: return 0; } }"
+    ) == 0
 
 
 def test_duplicate_arm_is_rejected():

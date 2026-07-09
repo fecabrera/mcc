@@ -3277,12 +3277,25 @@ fn main() -> int32 {
 }
 ```
 
-The boxable set is **primitives, pointers, and slices**. Structs, unions, and
-arrays do not box — by value the payload would be unbounded, by pointer the
-lifetime would go implicit — so box a pointer explicitly instead (`&s`; for
-an array, `&xs[0]`): the compile error names the escape hatch. An `any` never
-boxes another `any` (`any` to `any` is a plain copy), and an
-[enum](#enums) member boxes under its underlying type's tag.
+The by-value boxable set is **primitives, pointers, and slices**. A **struct**
+additionally boxes — but only into a `const any` target, **by hidden
+reference**: the payload holds a *pointer* to the value's existing storage
+(the same convention a `const`/`mut` struct parameter already travels through,
+[hidden references](#functions-and-methods)), tagged as the struct type itself
+(`point`, not `point*`), so `case type` recovers it as a reference with no
+copy. The archetypal `const any` position is the `slice<const any>` a
+[variadic](#functions-and-methods) collects into, so `println("{}", p)` boxes
+`p` by reference and dispatches it to a user `format(const value: point, …)`
+overload. An rvalue struct with no storage of its own (a literal, a function
+return) spills to a call-scoped temporary first; a bare variable's storage is
+shared directly. Scoping the borrow to a slot that cannot outlive the call is
+what keeps it sound, so an **owning** `any` of a struct — a `let a: any = s`,
+a `return`, a global — is still rejected (the payload would then hold a borrow
+that escapes), as are **unions** (the tag would not name the live member) and
+**fixed arrays**; box a pointer explicitly for those (`&s`; for an array,
+`&xs[0]`), and the compile error names the escape hatch. An `any` never boxes
+another `any` (`any` to `any` is a plain copy), and an [enum](#enums) member
+boxes under its underlying type's tag.
 
 The **only** way to recover the value is a checked tag test — the
 `case type` type-switch below, or its one-pattern sugar, the
@@ -3308,7 +3321,10 @@ It rides the [`case`](#control-flow) statement's shape — the subject is
 evaluated once, arms run without fall-through — with the type-mode specifics:
 
 - Each arm **must bind a name**; the binding holds the recovered value,
-  typed as the arm's type and scoped to the arm.
+  typed as the arm's type and scoped to the arm. A **struct** arm (`when
+  point p:`) recovers the by-reference box as a read-only (`const`) alias of
+  the boxing site's storage — no copy — so passing `p` on to a
+  `format(const value: point)` overload shares that same storage again.
 - An arm may list **several comma-separated types over one binding** —
   `when int32, int16, int8 n: printf("%d\n", n as int32);` — sharing one
   body. The binding is an implicit generic: the body compiles once per
@@ -3352,8 +3368,11 @@ evaluated once, arms run without fall-through — with the type-mode specifics:
 - The subject must be an `any`; an `any*` subject auto-dereferences, like
   member access through a pointer.
 - Two arms naming the same type are a compile error — one arm listing a type
-  twice included — as is an arm whose type could never box (a struct arm, or
-  `when any`).
+  twice included — as is an arm whose type could never box (a union, a fixed
+  array, or `when any`). A **struct** arm is live: a struct boxes by reference
+  into a `const any`, so `when point p:` recovers it (as a read-only alias of
+  the boxing site's storage), even when nothing in view boxes one — it is then
+  simply a dead tag.
 
 The tag is the 64-bit FNV-1a hash of the boxed type's canonical name,
 computed at compile time — no runtime registry, so tags are deterministic
