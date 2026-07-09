@@ -283,24 +283,30 @@ Generics don't change this: a generic is monomorphized to concrete types before
 codegen, so an instantiation obeys the same ABI as a hand-written one.
 
 **Structs passed or returned by value** are classified for the platform C ABI
-at the `@extern` boundary, on **AArch64 (Apple/AAPCS64)**. mcc's own calls keep
-their raw-aggregate convention (LLVM lays the struct out whole; `const`/`mut`
-struct parameters travel by a hidden reference) — that is self-consistent but is
-_not_ the C ABI — while a call to an `@extern` C function that takes or returns
-a struct by value now marshals each aggregate the way a C compiler does: a
-homogeneous float aggregate (all `float64`, 1–4 members) in FP registers; any
-other aggregate of 16 bytes or less in general-purpose registers; and a larger
-one indirectly (an argument by a pointer to a copy, a return through a hidden
-`sret` pointer). This is why libc's `div`/`ldiv` and similar by-value-struct
-functions now work directly (see
+at the `@extern` boundary on **AArch64 (Apple/AAPCS64)**, **x86-64 System V**,
+and **x86-64 Windows (Win64)**. mcc's own calls keep their raw-aggregate
+convention (LLVM lays the struct out whole; `const`/`mut` struct parameters
+travel by a hidden reference) — that is self-consistent but is _not_ the C ABI —
+while a call to an `@extern` C function that takes or returns a struct by value
+now marshals each aggregate the way a C compiler does. On AArch64 that means a
+homogeneous float aggregate (all `float64`, 1–4 members) in FP registers, any
+other aggregate ≤16 bytes in GPRs, and a larger one indirectly; on System V an
+eight-byte-at-a-time split into GPR (`i64`) and SSE (`double`) registers, with a
+`byval` stack copy for aggregates that are too big or that no longer fit the
+remaining registers; on Win64 a single integer register for a 1/2/4/8-byte
+aggregate and an indirect pointer otherwise. This is why libc's `div`/`ldiv` and
+similar by-value-struct functions now work directly (see
 [c_struct_abi.mc](examples/systems/c_struct_abi.mc)).
 
-The direction covered is **mcc calling C**. On any non-AArch64 target (x86-64,
-Windows) an `@extern` that passes or returns a struct by value is a compile
-error — pass a pointer (`struct point*`) there instead — and those targets are
-still [on the roadmap](ROADMAP.md#planned). (`bool` is `i1`; it matches C's
-1-byte `_Bool` inside structs but isn't strictly the `_Bool` parameter ABI,
-rarely a concern in practice.)
+The direction covered is **mcc calling C**. The AArch64 and System V paths are
+link-verified against a real C toolchain in CI (arm64 and x86-64 runners); Win64
+has no runner, so its classification is verified by IR shape only. On an
+unsupported target (riscv64, or an unknown triple) an `@extern` that passes or
+returns a struct by value is a compile error — pass a pointer (`struct point*`)
+there instead — and those targets, plus the reverse (C calling into mcc)
+direction, are still [on the roadmap](ROADMAP.md#planned). (`bool` is `i1`; it
+matches C's 1-byte `_Bool` inside structs but isn't strictly the `_Bool`
+parameter ABI, rarely a concern in practice.)
 
 ## Roadmap
 

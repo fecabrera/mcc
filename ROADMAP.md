@@ -2353,9 +2353,13 @@ already do).
         (pointer-to-copy arguments, `sret` returns); a by-value-struct `@extern`
         hard-errors on any non-AArch64 target. See
         [c_struct_abi.mc](examples/systems/c_struct_abi.mc)
-  - [ ] x86-64 (System V and Windows x64) and other targets — the same
-        classification for their register/`byval`/`sret` rules, lifting the
-        non-AArch64 compile error
+  - [x] x86-64 (System V and Windows x64) — the same classification for their
+        register/`byval`/`sret` rules, lifting the non-AArch64 compile error.
+        System V eightbyte-classifies aggregates into GPR/SSE registers with
+        frontend register accounting (demoting a no-longer-fitting aggregate to
+        a `byval` stack argument) and Win64 uses one integer register for a
+        1/2/4/8-byte aggregate; both are link-verified (System V) or IR-shape
+        tested (Win64, no CI runner). riscv64 and unknown targets still error
   - [ ] C calling mcc — exporting an mcc function that takes/returns a struct by
         value to a C caller (today mcc's own definitions keep the native
         raw-aggregate convention; only the `@extern` call *into* C is classified)

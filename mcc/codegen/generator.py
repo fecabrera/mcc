@@ -86,10 +86,9 @@ from mcc.nodes import (
     While,
 )
 
-from mcc.codegen.abi import Direct, Indirect, classify_arg, classify_return
+from mcc.codegen.abi import Direct, Indirect, abi_supported, classify_signature
 from mcc.codegen.ir_ext import VolatileLoad, VolatileStore
 from mcc.codegen.targets import (
-    classify_arch,
     compute_target_facts,
     eval_static_cond,
     eval_static_value,
@@ -2085,10 +2084,6 @@ class CodeGen:
                 out.append(p.ir)
         return out
 
-    def abi_target_arch(self) -> str:
-        """The ``ARCH_*`` name of the current compilation target."""
-        return classify_arch((self.target or _host_triple()).lower())
-
     def declare_extern_abi(
         self, func: Func, ret: LangType, params: list
     ) -> "ExternABI | None":
@@ -2100,10 +2095,11 @@ class CodeGen:
         :mod:`mcc.codegen.abi`), which the declaration lowers to coercion types
         or a hidden ``sret`` pointer and the call site marshals to.
 
-        Only AArch64/AAPCS64 is implemented: on any other target an ``@extern``
-        that passes or returns an aggregate by value is a hard error, rather
-        than silently emitting the raw-aggregate form that does not match the C
-        ABI there.
+        AArch64/AAPCS64, x86-64 System V, and x86-64 Windows (Win64) are
+        implemented (see :mod:`mcc.codegen.abi`); on any other target
+        (riscv64, unknown) an ``@extern`` that passes or returns an aggregate by
+        value is a hard error, rather than silently emitting the raw-aggregate
+        form that does not match the C ABI there.
 
         Args:
             func: The ``@extern`` declaration.
@@ -2115,13 +2111,14 @@ class CodeGen:
             ``None``.
 
         Raises:
-            LangError: When a by-value aggregate crosses the boundary on a
-                non-AArch64 target.
+            LangError: When a by-value aggregate crosses the boundary on an
+                unsupported target.
         """
         has_agg = is_aggregate(ret) or any(is_aggregate(p) for p in params)
         if not has_agg:
             return None
-        if self.abi_target_arch() != "ARCH_AARCH64":
+        target = (self.target or _host_triple()).lower()
+        if not abi_supported(target):
             raise LangError(
                 "passing a struct by value across the C boundary is not "
                 f"supported on target {self.target or _host_triple()!r} yet; "
@@ -2129,10 +2126,7 @@ class CodeGen:
                 func.line,
                 source=func.source,
             )
-        arg_classes = [
-            classify_arg(p) if is_aggregate(p) else None for p in params
-        ]
-        ret_class = classify_return(ret) if is_aggregate(ret) else None
+        arg_classes, ret_class = classify_signature(ret, params, target)
         return ExternABI(arg_classes, ret_class)
 
     def extern_ret_ir(self, ret: LangType, plan: "ExternABI | None") -> ir.Type:
@@ -3761,6 +3755,15 @@ class CodeGen:
                     fn.args[0].add_attribute("sret")
                     fn.args[0].attributes.align = plan.ret.align
                 arg_offset = 1 if sret else 0
+                if plan is not None:
+                    # An x86-64 System V MEMORY argument is a `byval(T) align N`
+                    # pointer: the struct data is copied onto the argument stack
+                    # (AArch64/Win64 indirect args stay plain pointers instead).
+                    for i, cls in enumerate(plan.args):
+                        if isinstance(cls, Indirect) and cls.by_value:
+                            a = fn.args[i + arg_offset]
+                            a.add_attribute("byval")
+                            a.attributes.align = cls.align
                 # @noalias/@nonnull are attribute-only, so allowed on @extern.
                 self.mark_noalias(fn, func, params, arg_offset)
                 self.mark_nonnull(fn, func, params, arg_offset)
@@ -9372,10 +9375,21 @@ class CodeGen:
         abi = self.extern_abi.get(symbol)
         sret_slot = None
         arg_attrs: dict[int, tuple] = {}
+        byval_aligns: dict[int, int] = {}
         if abi is not None and isinstance(abi.ret, Indirect):
             sret_slot = self.entry_alloca(abi.ret.struct_ir)
             sret_slot.align = max(sret_slot.align or 0, abi.ret.align)
             arg_attrs[0] = ("sret",)
+        if abi is not None:
+            # A System V MEMORY argument passes `byval(T) align N`: mark it at
+            # the call to match the declaration (the alignment is applied to the
+            # call instruction's argument attribute below). The index shifts
+            # past a leading sret pointer.
+            offset = 1 if sret_slot is not None else 0
+            for i, cls in enumerate(abi.args):
+                if isinstance(cls, Indirect) and cls.by_value:
+                    arg_attrs[i + offset] = ("byval",)
+                    byval_aligns[i + offset] = cls.align
         args = self.marshal_args(
             expr.args,
             params,
@@ -9402,6 +9416,10 @@ class CodeGen:
             preserves=symbol in self.fact_safe_syms,
             arg_attrs=arg_attrs or None,
         )
+        for idx, align in byval_aligns.items():
+            # `byval` carries an explicit alignment; set it on the call's
+            # argument attribute so it renders `byval(T) align N` like the decl.
+            raw.arg_attributes[idx].align = align
         if abi is not None and abi.ret is not None:
             # Reconstruct the struct return: a register return is stored back
             # into a struct slot and reloaded; a large return already sits in
@@ -9598,9 +9616,11 @@ class CodeGen:
         coercion type and reloaded through that type, so the value arrives in
         the registers the ABI expects. An :class:`~mcc.codegen.abi.Indirect`
         aggregate is spilled to a fresh caller-owned copy whose pointer is
-        passed -- matching clang's AArch64 lowering, which materializes the copy
-        in the frontend and passes a plain pointer rather than relying on the
-        ``byval`` attribute.
+        passed. For AArch64/Win64 that pointer *is* the argument (matching
+        clang's frontend-materialized copy); for an x86-64 System V MEMORY
+        argument the same pointer additionally carries a ``byval`` attribute
+        (added at the call site) so the backend copies the data onto the
+        argument stack.
 
         Args:
             arg_expr: The argument expression.

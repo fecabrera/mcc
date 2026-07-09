@@ -8,15 +8,16 @@
 // there -- mcc now speaks the C ABI, so a by-value struct lands where the C
 // side expects it. Everything below binds real libc functions and runs.
 //
-// The classification implemented is Apple/AAPCS64 (AArch64). On any other
-// target an `@extern` that passes or returns a struct by value is a compile
-// error ("...not supported on target '<triple>' yet; pass a pointer instead"),
-// rather than silently emitting the wrong form -- x86-64 and Windows are still
-// pending on the roadmap. Because a non-AArch64 build rejects these
-// declarations outright, CI cross-compiles THIS file to an AArch64 object
-// instead of building it in the main (host) example loop.
+// Three platform ABIs are classified: Apple/AAPCS64 (AArch64), x86-64 System V,
+// and x86-64 Windows (Win64). On any other target (riscv64, unknown) an
+// `@extern` that passes or returns a struct by value is a compile error
+// ("...not supported on target '<triple>' yet; pass a pointer instead"), rather
+// than silently emitting the wrong form. Because the classification is
+// target-specific, CI cross-compiles THIS file to an object for each supported
+// target instead of building it once in the main (host) example loop.
 //
-// The AAPCS64 rules mcc applies to an aggregate:
+// The AAPCS64 rules mcc applies to an aggregate (the docs cover the x86-64
+// System V eightbyte and the Win64 rules in full):
 //   - a homogeneous float aggregate (all `float64`, 1-4 members) rides in FP
 //     registers, e.g. `{x, y}` as a pair of doubles;
 //   - otherwise 16 bytes or less rides in one or two general-purpose registers;

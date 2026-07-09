@@ -79,10 +79,11 @@ jobs:
         # (the class off, its documented relaxed default), like the other opt-in
         # class demos whose classes CI does not enable.
         #
-        # systems/c_struct_abi.mc passes structs by value across the C boundary,
-        # which is classified only for AArch64 and hard-errors on other targets;
-        # it is cross-compiled to an AArch64 object in a dedicated step instead
-        # (the host loop runs on x86-64 too, where those declarations are gated).
+        # systems/c_struct_abi.mc passes structs by value across the C boundary.
+        # The classification is target-specific (AArch64, x86-64 System V, and
+        # Win64), so a dedicated step below cross-compiles it to an object for
+        # each supported target -- exercising every classifier on every runner
+        # -- instead of building it once for the host here.
         run: |
           find examples -name '*.mc' -not -path 'examples/baremetal/*' \
               -not -path 'examples/systems/extern_nonnull.mc' \
@@ -100,13 +101,19 @@ jobs:
             --target aarch64-unknown-none-elf -o "$RUNNER_TEMP/kernel.o"
 
       - name: Cross-compile the C struct-ABI example
-        # By-value struct passing is AArch64-only, so this file is gated off the
-        # x86-64 host loop; cross-compiling to an AArch64 object exercises the
-        # classifier on every runner. Its full linked round-trip runs in the
-        # test suite on the AArch64 runner.
+        # By-value struct passing is classified per target (AArch64/AAPCS64,
+        # x86-64 System V, and Win64), so cross-compile the example to an object
+        # for each -- exercising all three classifiers on every runner. The
+        # AArch64 and System V forms are additionally link-verified by the round
+        # trip in the test suite (on the matching-arch runner); Win64 has no
+        # runner, so this object emit is its only end-to-end example coverage.
         run: |
-          pipenv run python -m mcc examples/systems/c_struct_abi.mc -Werror \
-            --target aarch64-apple-darwin -o "$RUNNER_TEMP/c_struct_abi.o"
+          for triple in aarch64-apple-darwin x86_64-unknown-linux-gnu \
+                        x86_64-pc-windows-msvc; do
+            echo "== c_struct_abi.mc --target $triple =="
+            pipenv run python -m mcc examples/systems/c_struct_abi.mc -Werror \
+              --target "$triple" -o "$RUNNER_TEMP/c_struct_abi-$triple.o"
+          done
 
   # The precompiled standard library is experimental: it builds, but linking a
   # program against it is not ready (exported symbols like errno/crc32 collide

@@ -10,6 +10,30 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **C struct-passing ABI: x86-64 (System V and Windows)** — the by-value
+  struct/union `@extern` classification now covers **x86-64 System V** and
+  **x86-64 Windows (Win64)** in addition to AArch64, lifting the previous
+  non-AArch64 compile error for those targets. System V splits an aggregate of
+  ≤16 bytes into eight-byte chunks, passing each in a general-purpose (`i64`) or
+  SSE (`double`) register — so `{ float64; float64; }` returns in two SSE
+  registers and `{ int32; float64; }` uses one GPR and one SSE — and passes a
+  larger aggregate `byval` on the stack; a return over 16 bytes uses `sret`.
+  Because the LLVM backend will not demote a register aggregate when the
+  argument registers run low, the frontend now replicates the C compiler's
+  register accounting (six integer, eight SSE; an `sret` return consumes the
+  first integer register) and demotes a no-longer-fitting aggregate whole to a
+  `byval` argument rather than splitting it. Win64 passes an aggregate of
+  exactly 1/2/4/8 bytes in one integer register (no SSE for aggregates) and any
+  other size indirectly (`sret` for a return over 8 bytes). `@packed`/`@align`
+  are honored on every target. Unsupported targets (riscv64, unknown) keep the
+  reworded, target-named compile error. The AArch64 and System V paths are
+  link-verified against a C fixture in CI (arm64 and x86-64 runners); Win64,
+  which has no runner, is verified by IR shape only. The classifier moves behind
+  a new `classify_signature(ret, params, target)` dispatcher in
+  `mcc/codegen/abi.py`; the shipped AArch64 classification is unchanged. See
+  [C ABI compatibility](README.md#c-abi-compatibility),
+  [Extern declarations](docs/language.md#passing-structs-by-value-across-the-c-boundary),
+  and [examples/systems/c_struct_abi.mc](examples/systems/c_struct_abi.mc).
 - **C struct-passing ABI (AArch64), mcc calling C** — an `@extern` function may
   now take or return a `struct`/`union` **by value**, classified for the
   platform C ABI so the aggregate crosses the boundary correctly. Only the

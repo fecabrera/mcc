@@ -3749,8 +3749,11 @@ aggregate, with `const`/`mut` struct parameters travelling by a
 [hidden reference](#mut-parameters)), which is self-consistent but is not the C
 ABI. The two conventions stay distinct.
 
-The classification implemented is **AArch64 (Apple/AAPCS64)**, for the direction
-**mcc calling C**. An aggregate crossing the boundary is passed as:
+The direction covered is **mcc calling C**. Three platform ABIs are classified,
+selected by the target triple: **AArch64 (Apple/AAPCS64)**, **x86-64 System V**,
+and **x86-64 Windows (Win64)**.
+
+On **AArch64/AAPCS64** an aggregate crossing the boundary is passed as:
 
 - **FP registers** when it is a homogeneous float aggregate — every member
   (recursively, through nested structs and arrays) the same floating type, one
@@ -3774,15 +3777,35 @@ fn main() -> int32 {
 }
 ```
 
-`@packed` and `@align` are honored (they change the size/alignment the rules
-see). On any **non-AArch64** target (x86-64, Windows), an `@extern` that passes
-or returns a struct by value is a compile error —
+On **x86-64 System V** an aggregate of 16 bytes or less is split into eight-byte
+chunks and each chunk classified: a chunk holding only floating fields rides in
+an SSE register (coerced to `double`), any other chunk in a general-purpose
+register (coerced to `i64`). So `{ x: float64; y: float64; }` comes back in two
+SSE registers, while a `{ a: int32; b: float64; }` uses one GPR and one SSE. An
+aggregate over 16 bytes is passed **`byval`** — copied onto the argument stack —
+and a return over 16 bytes uses `sret`. Unlike AArch64, the frontend also tracks
+how many argument registers remain: a register-class aggregate that no longer
+fits the remaining registers is demoted whole to a `byval` memory argument
+(never split half-in-register, half-on-stack), matching the C compiler.
+
+On **x86-64 Windows (Win64)** an aggregate whose size is exactly 1, 2, 4, or 8
+bytes rides in a single integer register (Win64 gives aggregates no SSE, so even
+a float-only struct uses a GPR); any other size is passed indirectly (a pointer
+to a caller copy for an argument, `sret` for a return larger than 8 bytes).
+
+`@packed` and `@align` are honored on every target (they change the size and
+field offsets the rules see; a genuinely unaligned aggregate falls back to a
+memory argument rather than being miscompiled). On an unsupported target
+(riscv64, or an unknown triple) an `@extern` that passes or returns a struct by
+value is a compile error —
 
 ```
-example.mc: error: line 2: passing a struct by value across the C boundary is not supported on target 'x86_64-unknown-linux-gnu' yet; pass a pointer instead
+example.mc: error: line 2: passing a struct by value across the C boundary is not supported on target 'riscv64-unknown-linux' yet; pass a pointer instead
 ```
 
-— so pass a pointer (`struct point*`) there instead. See
+— so pass a pointer (`struct point*`) there instead. The AArch64 and System V
+classifications are verified end-to-end against a linked C fixture in the test
+suite; Win64, which has no CI runner, is verified by IR shape only. See
 [c_struct_abi.mc](../examples/systems/c_struct_abi.mc) for a runnable example.
 
 ### Bodyless fn prototypes
