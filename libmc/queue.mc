@@ -50,7 +50,7 @@ fn queue_destroy<T>(mut self: queue<T>) {
  */
 fn queue_push<T>(mut self: queue<T>, value: T) {
     let node = {
-        let tmp = new<queue_node<T>>();
+        let tmp = new<queue_node<T>>()!;
         *tmp = queue_node<T> { value = value };
         emit tmp;
     };
@@ -73,7 +73,7 @@ fn queue_push<T>(mut self: queue<T>, value: T) {
  * @return the dequeued value
  */
 fn queue_pop<T>(mut self: queue<T>) -> T {
-    let node = self.head;
+    let node = self.head!;
     self.head = node->next;
     
     if (self.head == null)
@@ -94,7 +94,7 @@ fn queue_pop<T>(mut self: queue<T>) -> T {
  * @return the front value
  */
 fn queue_peek<T>(const self: queue<T>) -> T {
-    return self.head->value;
+    return self.head!->value;
 }
 
 /**
@@ -114,7 +114,7 @@ fn queue_is_empty<T>(const self: queue<T>) -> bool {
  * @return iterator yielding values from oldest to newest (FIFO order)
  */
 fn queue_it<T>(self: queue<T>*) -> queue_iterator<T> {
-    return queue_iterator<T> { current = self->head };
+    return queue_iterator<T> { current = self!->head };
 }
 
 /**
@@ -125,8 +125,8 @@ fn queue_it<T>(self: queue<T>*) -> queue_iterator<T> {
  * @return true if a value was produced, false when iteration is done
  */
 fn queue_next<T>(it: queue_iterator<T>*, out: T*) -> bool {
-    if (it->current == null) return false;
-    *out = it->current->value;
-    it->current = it->current->next;
+    if (it!->current == null) return false;
+    *out! = it!->current!->value;
+    it!->current = it!->current!->next;
     return true;
 }

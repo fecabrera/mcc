@@ -41,7 +41,7 @@ fn stack_push<T>(mut self: struct stack<T>, value: T) {
     if (self.top == self.capacity)
         stack_grow<T>(self);
 
-    self.data[self.top] = value;
+    self.data![self.top] = value;
     self.top += 1;
 }
 
@@ -55,7 +55,7 @@ fn stack_push<T>(mut self: struct stack<T>, value: T) {
  */
 fn stack_pop<T>(mut self: struct stack<T>) -> T {
     self.top -= 1;
-    return self.data[self.top];
+    return self.data![self.top];
 }
 
 /**
@@ -67,7 +67,7 @@ fn stack_pop<T>(mut self: struct stack<T>) -> T {
  * @return the top value
  */
 fn stack_peek<T>(const self: struct stack<T>) -> T {
-    return self.data[self.top - 1];
+    return self.data![self.top - 1];
 }
 
 /**

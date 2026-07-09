@@ -6782,6 +6782,16 @@ class CodeGen:
                 expr.operand, line, crossed=True, top=False
             )
             return
+        if isinstance(expr, NonnullAssert):
+            # A postfix `!` asserts non-null and passes the value through
+            # unchanged (no IR), so it forms the identical lvalue: the chain
+            # continues into the asserted operand, preserving the pointer-hop
+            # and top-of-return state. This lets an invariant-backed element
+            # like `self.data![i]` be a mut return under -Wunchecked-dereference.
+            self.check_mut_return_formation(
+                expr.operand, line, crossed=crossed, top=top
+            )
+            return
         if isinstance(expr, Call):
             # The whole expression being one call is judged after overload
             # resolution (gen_addr's Call arm knows the winner); a call in

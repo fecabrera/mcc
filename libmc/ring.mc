@@ -49,7 +49,7 @@ fn ring_push<T>(mut self: ring<T>, value: T) {
     let pos = (self.head + self.length) % (self.capacity);
 
     self.length += 1;
-    self.data[pos] = value;
+    self.data![pos] = value;
 }
 
 /**
@@ -66,7 +66,7 @@ fn ring_pop<T>(mut self: ring<T>) -> T {
     self.head = (self.head + 1) % self.capacity;
     self.length -= 1;
 
-    return self.data[pos];
+    return self.data![pos];
 }
 
 /**
@@ -96,7 +96,7 @@ fn ring_has<T>(const self: ring<T>, index: uint64) -> bool {
  */
 fn ring_at<T>(mut self: ring<T>, index: uint64) -> mut T {
     let pos = (self.head + index) % (self.capacity);
-    return self.data[pos];
+    return self.data![pos];
 }
 
 /**
@@ -109,7 +109,7 @@ fn ring_at<T>(mut self: ring<T>, index: uint64) -> mut T {
  * @return the front value
  */
 fn ring_peek<T>(const self: ring<T>) -> T {
-    return self.data[self.head];
+    return self.data![self.head];
 }
 
 /**
@@ -150,7 +150,7 @@ fn ring_grow<T>(mut self: ring<T>) {
     let new_data: T* = alloc<T>(new_capacity);
 
     for i in range(self.length) {
-        new_data[i] = self.data[(self.head + i) % self.capacity];
+        new_data![i] = self.data![(self.head + i) % self.capacity];
     }
 
     dealloc(self.data);

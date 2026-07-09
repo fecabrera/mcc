@@ -23,10 +23,10 @@ fn rotl32(x: uint32, s: uint32) -> uint32 {
  */
 @static
 fn load_le(p: uint8*) -> uint32 {
-    return p[0] as uint32
-         | (p[1] as uint32 << 8)
-         | (p[2] as uint32 << 16)
-         | (p[3] as uint32 << 24);
+    return p![0] as uint32
+         | (p![1] as uint32 << 8)
+         | (p![2] as uint32 << 16)
+         | (p![3] as uint32 << 24);
 }
 
 /**
@@ -37,10 +37,10 @@ fn load_le(p: uint8*) -> uint32 {
  */
 @static
 fn store_le(p: uint8*, w: uint32) {
-    p[0] = w as uint8;
-    p[1] = (w >> 8) as uint8;
-    p[2] = (w >> 16) as uint8;
-    p[3] = (w >> 24) as uint8;
+    p![0] = w as uint8;
+    p![1] = (w >> 8) as uint8;
+    p![2] = (w >> 16) as uint8;
+    p![3] = (w >> 24) as uint8;
 }
 
 /**
@@ -102,8 +102,8 @@ fn md5(@nonnull data: uint8*, length: uint64, @nonnull digest: uint8*) {
     // Pad to a multiple of 64 bytes: 0x80, zeros, then the bit length as a
     // little-endian uint64.
     let total = ((length + 8) / 64 + 1) * 64;
-    let buf = alloc<uint8>(total);
-    bytecopy(buf!, data, length);   // allocation assumed to succeed
+    let buf = alloc<uint8>(total)!;
+    bytecopy(buf, data, length);   // allocation assumed to succeed
     buf[length] = 128;
     memset(&buf[length + 1], 0, total - length - 1);
     let bits = length * 8;

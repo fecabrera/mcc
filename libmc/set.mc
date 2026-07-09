@@ -49,7 +49,7 @@ fn set_init<K, V>(mut self: struct set<K, V>, capacity: uint64) {
     self.capacity = capacity;
 
     for i in range(capacity) {
-        self.entries[i].state = set_entry_state::EMPTY;
+        self.entries![i].state = set_entry_state::EMPTY;
     }
 }
 
@@ -82,10 +82,10 @@ fn set_set<K, V>(mut self: struct set<K, V>, key: K, value: V) {
     let tombstone_slot: uint64 = 0;
     let has_tombstone = false;
 
-    while (self.entries[slot].state != set_entry_state::EMPTY) {
-        if (self.entries[slot].state == set_entry_state::OCCUPIED) {
-            if (self.entries[slot].key == key) {
-                self.entries[slot].value = value;
+    while (self.entries![slot].state != set_entry_state::EMPTY) {
+        if (self.entries![slot].state == set_entry_state::OCCUPIED) {
+            if (self.entries![slot].key == key) {
+                self.entries![slot].value = value;
                 return;
             }
         } else if (!has_tombstone) {
@@ -98,9 +98,9 @@ fn set_set<K, V>(mut self: struct set<K, V>, key: K, value: V) {
     if (has_tombstone)
         slot = tombstone_slot;
 
-    self.entries[slot].key = key;
-    self.entries[slot].value = value;
-    self.entries[slot].state = set_entry_state::OCCUPIED;
+    self.entries![slot].key = key;
+    self.entries![slot].value = value;
+    self.entries![slot].state = set_entry_state::OCCUPIED;
     self.length += 1;
 }
 
@@ -116,10 +116,10 @@ fn set_set<K, V>(mut self: struct set<K, V>, key: K, value: V) {
 fn set_get<K, V>(const self: struct set<K, V>, key: K, mut out: V) -> bool {
     let slot = hash(key) % self.capacity;
 
-    while (self.entries[slot].state != set_entry_state::EMPTY) {
-        if (self.entries[slot].state == set_entry_state::OCCUPIED) {
-            if (self.entries[slot].key == key) {
-                out = self.entries[slot].value;
+    while (self.entries![slot].state != set_entry_state::EMPTY) {
+        if (self.entries![slot].state == set_entry_state::OCCUPIED) {
+            if (self.entries![slot].key == key) {
+                out = self.entries![slot].value;
                 return true;
             }
         }
@@ -138,10 +138,10 @@ fn set_get<K, V>(const self: struct set<K, V>, key: K, mut out: V) -> bool {
 fn set_remove<K, V>(mut self: struct set<K, V>, key: K) {
     let slot = hash(key) % self.capacity;
 
-    while (self.entries[slot].state != set_entry_state::EMPTY) {
-        if (self.entries[slot].state == set_entry_state::OCCUPIED) {
-            if (self.entries[slot].key == key) {
-                self.entries[slot].state = set_entry_state::TOMBSTONE;
+    while (self.entries![slot].state != set_entry_state::EMPTY) {
+        if (self.entries![slot].state == set_entry_state::OCCUPIED) {
+            if (self.entries![slot].key == key) {
+                self.entries![slot].state = set_entry_state::TOMBSTONE;
                 self.length -= 1;
                 return;
             }
@@ -160,10 +160,10 @@ fn set_remove<K, V>(mut self: struct set<K, V>, key: K) {
 @private
 fn set_grow<K, V>(mut self: struct set<K, V>) {
     let old_capacity = self.capacity;
-    let old_entries = self.entries;
+    let old_entries = self.entries!;
 
     let new_capacity: uint64 = old_capacity * 2;
-    let new_entries = alloc<struct set_entry<K, V>>(new_capacity);
+    let new_entries = alloc<struct set_entry<K, V>>(new_capacity)!;
 
     let i: uint64 = 0;
     while (i < new_capacity) {
@@ -215,12 +215,12 @@ fn set_it<K, V>(self: struct set<K, V>*) -> struct iterator<struct set<K, V>> {
  * @return true if a pair was produced, false once iteration is complete
  */
 fn set_next<K, V>(it: struct iterator<struct set<K, V>>*, out: struct pair<K, V>*) -> bool {
-    while (it->idx < it->obj->capacity) {
-        let entry = it->obj->entries[it->idx];
-        defer it->idx += 1;
+    while (it!->idx < it!->obj!->capacity) {
+        let entry = it!->obj!->entries![it!->idx];
+        defer it!->idx += 1;
 
         if (entry.state == set_entry_state::OCCUPIED) {
-            *out = entry as struct pair<K, V>;
+            *out! = entry as struct pair<K, V>;
             return true;
         }
     }

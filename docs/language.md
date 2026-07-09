@@ -1543,11 +1543,12 @@ the guarded pointer) apply.
 
 The class is off by default deliberately: mcc pointers are
 nullable-by-default like C's, so a default-on warning would greet every
-ported C idiom with noise. One caveat while the stdlib sweep is pending:
-enabling the class on a program that imports the container modules
-currently surfaces libmc-internal warnings too (their invariant-backed
-dereferences have not yet taken the `!` assertions), so expect stdlib
-lines in the report until that lands.
+ported C idiom with noise. The standard library dogfoods the class: every
+container (`list`, `ring`, `stack`, `queue`, `dict`, `set`) and hashing
+module (`md5`, `murmur3`, `fnv1a`) compiles warn-free under it, having
+asserted each invariant-backed dereference of its backing buffer with `!`,
+so enabling the class on a program that imports them reports only *your*
+unproven sites, never libmc-internal ones.
 
 See [examples/types/unchecked_dereference.mc](../examples/types/unchecked_dereference.mc)
 for the class in action and each way to silence a site.

@@ -97,7 +97,7 @@ fn list_has<T>(const self: list<T>, index: uint64) -> bool {
  * @return the element at index, as an assignable lvalue
  */
 fn list_at<T>(mut self: list<T>, index: uint64) -> mut T {
-    return self.data[index];
+    return self.data![index];
 }
 
 /**
@@ -113,7 +113,7 @@ fn list_get<T>(const self: list<T>, index: uint64, mut out: T) -> bool {
     if (!list_has(self, index))
         return false;
 
-    out = self.data[index];
+    out = self.data![index];
     return true;
 }
 
@@ -130,7 +130,7 @@ fn list_set<T>(mut self: list<T>, index: uint64, value: T) -> bool {
     if (!list_has(self, index))
         return false;
 
-    self.data[index] = value;
+    self.data![index] = value;
     return true;
 }
 
@@ -144,7 +144,7 @@ fn list_push<T>(mut self: list<T>, value: T) {
     if (self.length == self.capacity)
         list_grow<T>(self);
 
-    self.data[self.length] = value;
+    self.data![self.length] = value;
     self.length += 1;
 }
 
@@ -217,10 +217,10 @@ fn list_it<T>(self: list<T>*) -> struct iterator<list<T>> {
  * @return true if an element was produced, false once iteration is complete
  */
 fn list_next<T>(it: struct iterator<list<T>>*, out: T*) -> bool {
-    if (it->idx >= it->obj->length)
+    if (it!->idx >= it!->obj!->length)
         return false;
 
-    *out = it->obj->data[it->idx];
-    it->idx += 1;
+    *out! = it!->obj!->data![it!->idx];
+    it!->idx += 1;
     return true;
 }

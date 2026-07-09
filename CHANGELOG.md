@@ -10,6 +10,22 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **libmc swept warn-free under `-Wunchecked-dereference`** — every
+  warning-bearing standard-library module now asserts its invariant-backed
+  dereferences with the postfix `!`, so importing them and enabling the class
+  reports only the caller's own unproven sites, never libmc-internal ones. The
+  sweep covers the container modules (`list`, `ring`, `stack`, `queue`,
+  `dict`, `set`, and `equality`) and the hashing modules (`md5`, `murmur3`,
+  `fnv1a`): index bodies (`self.data![i]`), the iterator protocols
+  (`it!->obj!->data![i]`), the linked-node chains in `queue`, and the raw
+  `uint8*` buffer walks in hashing. Because `!` is a purely static assertion
+  that emits no instructions, the sweep is IR-identical — the code generated
+  for any program is byte-for-byte unchanged. A postfix `!` is now also
+  accepted inside a `mut`-return lvalue chain (e.g. `list_at`'s
+  `return self.data![i];`), which is likewise IR-neutral. A CLI acceptance
+  test instantiates and drives every swept module under
+  `-Werror=unchecked-dereference` to pin libmc warn-free. See
+  [-Wunchecked-dereference](docs/language.md#-wunchecked-dereference).
 - **libc bindings annotated `@nonnull`** — the `@extern` libc binding surface
   now marks its null-hostile pointer parameters `@nonnull`: the `str*`/`mem*`
   functions (`libc/string`), the `strto*`/`ato*` inputs and `getenv`

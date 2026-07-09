@@ -183,6 +183,37 @@ def test_pointer_param_root_through_arrow():
     ) == 11
 
 
+def test_nonnull_assert_in_mut_return_chain():
+    # A postfix `!` asserts non-null and passes its operand through unchanged
+    # (no IR), so it is transparent to the formation walk: `p![i]` forms the
+    # same mut lvalue as `p[i]`. This is what lets an invariant-backed element
+    # (e.g. a container's backing buffer) be a mut return while asserting the
+    # dereference under -Wunchecked-dereference.
+    assert run(
+        "fn at(p: int32*, i: uint64) -> mut int32 { return p![i]; }\n"
+        "fn main() -> int32 {\n"
+        "    let xs: int32[3];\n"
+        "    at(xs, 1) = 8;\n"
+        "    at(xs, 1) += 4;\n"
+        "    return at(xs, 1);\n"
+        "}"
+    ) == 12
+
+
+def test_nonnull_assert_in_mut_return_is_ir_neutral():
+    # The `!` emits nothing, so a mut return through `p![i]` lowers to exactly
+    # the IR of the same return through `p[i]`.
+    asserted = compile_ir(
+        "fn at(p: int32*, i: uint64) -> mut int32 { return p![i]; }\n"
+        "fn main() -> int32 { let xs: int32[2]; at(xs, 0) = 1; return 0; }"
+    )
+    plain = compile_ir(
+        "fn at(p: int32*, i: uint64) -> mut int32 { return p[i]; }\n"
+        "fn main() -> int32 { let xs: int32[2]; at(xs, 0) = 1; return 0; }"
+    )
+    assert asserted == plain
+
+
 def test_global_root():
     assert run(
         "@static let counter: int32 = 5;\n"

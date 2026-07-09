@@ -20,10 +20,10 @@ fn rotl32(x: uint32, r: uint32) -> uint32 {
  */
 @static
 fn load_le(p: uint8*) -> uint32 {
-    return p[0] as uint32
-         | (p[1] as uint32 << 8)
-         | (p[2] as uint32 << 16)
-         | (p[3] as uint32 << 24);
+    return p![0] as uint32
+         | (p![1] as uint32 << 8)
+         | (p![2] as uint32 << 16)
+         | (p![3] as uint32 << 24);
 }
 
 /**

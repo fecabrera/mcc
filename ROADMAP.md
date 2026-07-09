@@ -1845,10 +1845,11 @@ already do).
           `-Werror` there, not under the enabled class, since a
           warning-class demo cannot run with its own class turned on).
           Enablement is `-Wextern-nonnull` specifically, NOT `-Wall`: `-Wall`
-          would also pull in `-Wunchecked-dereference`, under which `libmc`
-          is not yet clean (the open
-          [`libmc` sweep](#metaprogramming-and-builtins) still owes ~60
-          invariant-backed dereferences their `!` or guard); implemented, see
+          would also pull in `-Wunchecked-dereference`, and while the shipped
+          [`libmc` sweep](#metaprogramming-and-builtins) made `libmc`
+          warn-free under that class, the examples are not yet clean, so the
+          whole-build `-Wall` flip is still pending (the
+          [CI `-Wall` flip](#metaprogramming-and-builtins)); implemented, see
           [Reaching libc](docs/language.md#reaching-libc)
     - [x] loop-body fact preservation — replaced the shipped blanket rule
           (all narrowed facts drop at loop entry) with a pre-scan of the
@@ -2262,16 +2263,23 @@ already do).
           print-time dedup above keeps a dereference inside a generic body
           to one report; implemented, see
           [-Wunchecked-dereference](docs/language.md#-wunchecked-dereference):
-      - [ ] the `libmc` sweep, the acceptance test by dogfooding: wave-1
-            `@nonnull` adoption cleared the loudest sites, but the
-            containers still hold ~60 invariant-backed dereferences that
-            warn under the class (`self.data` index bodies and iterator
-            `obj->data` chains across dict/set/list/queue/ring/stack/
-            hashing/string) until each takes its `!` assertion or guard.
-            Once
-            `libmc` compiles warn-free under `-Wunchecked-dereference`,
-            this repo's `-Werror` CI can add `-Wall`, which stays gated on
-            this sweep
+      - [x] the `libmc` sweep, the acceptance test by dogfooding: wave-1
+            `@nonnull` adoption cleared the loudest sites, and this pass
+            took the remaining 96 invariant-backed dereferences their
+            postfix `!` assertion (or a `let …!` seed) across
+            dict/set/queue/list/ring/stack/equality and
+            hashing/{md5,murmur3,fnv1a} (`self.data` index bodies and
+            iterator `obj->data` chains; `string.mc` forwards to `list`
+            and carries none of its own), so `libmc` now compiles
+            warn-free under `-Wunchecked-dereference`. Every `!` is
+            provably IR-identical (it emits zero instructions), so the
+            sweep is a pure annotation pass that changes no behavior; an
+            acceptance test compiles a container/hashing exerciser under
+            `-Werror=unchecked-dereference` and asserts it passes. This
+            unblocks but does not itself perform the CI `-Wall` flip (the
+            [example warn-free sweep](#metaprogramming-and-builtins)
+            below); implemented, see
+            [-Wunchecked-dereference](docs/language.md#-wunchecked-dereference)
     - [x] `-Wextern-nonnull` — graded enforcement for `@nonnull` on
           `@extern` declarations, three postures over one warning class.
           Built first, its own change set, ahead of the
@@ -2344,6 +2352,23 @@ already do).
             error `-W<name>` already gives), and the output render already
             spoke `[-Werror=<name>]`, so this only added the matching input
             spelling
+    - [ ] CI `-Wall` flip — turn `-Wall` on in the example-compile loop
+          (`ci.yml`) and `test.sh`, which promotes every opt-in class over
+          the whole build, not just `libmc`. Unblocked by the shipped
+          [`libmc` sweep](#metaprogramming-and-builtins) but distinct from
+          it: `-Wall` pulls all three classes at once
+          (`-Wunchecked-dereference`,
+          [`-Wdead-code`](#metaprogramming-and-builtins), and
+          `-Wextern-nonnull`), so the *examples* must go warn-free too, not
+          only the stdlib. The honest scope: the ~62 example
+          `unchecked-dereference` sites take their `!` or a guard, the
+          dead-code across examples is gated, and the three remaining class
+          demos that keep live triggers (`types/unchecked_dereference.mc`,
+          `control-flow/dead_code.mc`, `types/warnings.mc`) are carved out
+          of the `-Werror` compile loop the way `systems/extern_nonnull.mc`
+          already is (a demo cannot compile under its own class turned
+          error-level), extending that established carve-out to the other
+          classes
 - [ ] [Inline assembly](docs/language.md#inline-assembly) — arch-specific (pair with `@if` on
       `TARGET_ARCH`), preferring intrinsics where they exist:
   - [x] `@asm(...)` expression/block — an LLVM inline-asm call with an

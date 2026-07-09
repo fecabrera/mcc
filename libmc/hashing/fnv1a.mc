@@ -10,8 +10,8 @@
 fn fnv1a<T>(key: T*) -> uint64 {
     let hash: uint64 = 14695981039346656037;
     let i: uint64 = 0;
-    while (key[i]) {
-        fnv1a_k(hash, key[i] as uint64);
+    while (key![i]) {
+        fnv1a_k(hash, key![i] as uint64);
         i += 1;
     }
     return hash;

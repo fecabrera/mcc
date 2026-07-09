@@ -23,7 +23,7 @@ fn equals<T>(const self: slice<T>, const str: slice<T>) -> bool {
         return false;
 
     for i in range(self.length) {
-        if (self.data[i] != str.data[i])
+        if (self.data![i] != str.data![i])
             return false;
     }
 

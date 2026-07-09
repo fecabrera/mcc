@@ -85,7 +85,7 @@ fn dict_init<V>(mut self: dict<V>, capacity: uint64) {
     self.capacity = capacity;
 
     for i in range(capacity) {
-        self.entries[i].state = dict_entry_state::EMPTY;
+        self.entries![i].state = dict_entry_state::EMPTY;
     }
 }
 
@@ -97,8 +97,8 @@ fn dict_init<V>(mut self: dict<V>, capacity: uint64) {
  */
 fn dict_destroy<V>(mut self: dict<V>) {
     for i in range(self.capacity) {
-        if (self.entries[i].state == dict_entry_state::OCCUPIED)
-            dealloc(self.entries[i].key);
+        if (self.entries![i].state == dict_entry_state::OCCUPIED)
+            dealloc(self.entries![i].key);
     }
     dealloc(self.entries);
 
@@ -124,11 +124,11 @@ fn dict_set<V>(mut self: dict<V>, @nonnull key: char*, value: V) {
     let tombstone_slot: uint64 = 0;
     let has_tombstone = false;
 
-    while (self.entries[slot].state != dict_entry_state::EMPTY) {
-        if (self.entries[slot].state == dict_entry_state::OCCUPIED) {
+    while (self.entries![slot].state != dict_entry_state::EMPTY) {
+        if (self.entries![slot].state == dict_entry_state::OCCUPIED) {
             // OCCUPIED slots always hold an owned key copy
-            if (str_eq(self.entries[slot].key!, key)) {
-                self.entries[slot].value = value;
+            if (str_eq(self.entries![slot].key!, key)) {
+                self.entries![slot].value = value;
                 return;
             }
         } else if (!has_tombstone) {
@@ -141,9 +141,9 @@ fn dict_set<V>(mut self: dict<V>, @nonnull key: char*, value: V) {
     if (has_tombstone)
         slot = tombstone_slot;
 
-    self.entries[slot].key = str_clone(key);
-    self.entries[slot].value = value;
-    self.entries[slot].state = dict_entry_state::OCCUPIED;
+    self.entries![slot].key = str_clone(key);
+    self.entries![slot].value = value;
+    self.entries![slot].state = dict_entry_state::OCCUPIED;
     self.length += 1;
 }
 
@@ -160,11 +160,11 @@ fn dict_set<V>(mut self: dict<V>, @nonnull key: char*, value: V) {
 fn dict_get<V>(const self: dict<V>, @nonnull key: char*, mut out: V) -> bool {
     let slot = hash(key) % self.capacity;
 
-    while (self.entries[slot].state != dict_entry_state::EMPTY) {
-        if (self.entries[slot].state == dict_entry_state::OCCUPIED) {
+    while (self.entries![slot].state != dict_entry_state::EMPTY) {
+        if (self.entries![slot].state == dict_entry_state::OCCUPIED) {
             // OCCUPIED slots always hold an owned key copy
-            if (str_eq(self.entries[slot].key!, key)) {
-                out = self.entries[slot].value;
+            if (str_eq(self.entries![slot].key!, key)) {
+                out = self.entries![slot].value;
                 return true;
             }
         }
@@ -184,13 +184,13 @@ fn dict_get<V>(const self: dict<V>, @nonnull key: char*, mut out: V) -> bool {
 fn dict_remove<V>(mut self: dict<V>, @nonnull key: char*) {
     let slot = hash(key) % self.capacity;
 
-    while (self.entries[slot].state != dict_entry_state::EMPTY) {
-        if (self.entries[slot].state == dict_entry_state::OCCUPIED) {
+    while (self.entries![slot].state != dict_entry_state::EMPTY) {
+        if (self.entries![slot].state == dict_entry_state::OCCUPIED) {
             // OCCUPIED slots always hold an owned key copy
-            if (str_eq(self.entries[slot].key!, key)) {
-                dealloc(self.entries[slot].key);
-                self.entries[slot].key = null;
-                self.entries[slot].state = dict_entry_state::TOMBSTONE;
+            if (str_eq(self.entries![slot].key!, key)) {
+                dealloc(self.entries![slot].key);
+                self.entries![slot].key = null;
+                self.entries![slot].state = dict_entry_state::TOMBSTONE;
                 self.length -= 1;
                 return;
             }
@@ -209,10 +209,10 @@ fn dict_remove<V>(mut self: dict<V>, @nonnull key: char*) {
 @private
 fn dict_grow<V>(mut self: dict<V>) {
     let old_capacity = self.capacity;
-    let old_entries = self.entries;
+    let old_entries = self.entries!;
 
     let new_capacity: uint64 = old_capacity * 2;
-    let new_entries = alloc<struct dict_entry<V>>(new_capacity);
+    let new_entries = alloc<struct dict_entry<V>>(new_capacity)!;
 
     let i: uint64 = 0;
     while (i < new_capacity) {
@@ -266,12 +266,12 @@ fn dict_it<V>(self: dict<V>*) -> struct iterator<struct dict<V>> {
  * @return true if a pair was produced, false once iteration is complete
  */
 fn dict_next<V>(it: struct iterator<struct dict<V>>*, out: struct pair<char*, V>*) -> bool {
-    while (it->idx < it->obj->capacity) {
-        let entry = it->obj->entries[it->idx];
-        defer it->idx += 1;
+    while (it!->idx < it!->obj!->capacity) {
+        let entry = it!->obj!->entries![it!->idx];
+        defer it!->idx += 1;
 
         if (entry.state == dict_entry_state::OCCUPIED) {
-            *out = entry as struct pair<char*, V>;
+            *out! = entry as struct pair<char*, V>;
             return true;
         }
     }

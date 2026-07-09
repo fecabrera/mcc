@@ -822,6 +822,96 @@ def test_emit_interface_honors_warning_classes(tmp_path):
     assert not (tmp_path / "deref.mci").exists()
 
 
+# A program that instantiates every warning-bearing libmc container and hashing
+# module at a concrete type and drives its public surface (index bodies, the
+# iterator protocol, linked-node chains, and the raw-buffer hashing helpers).
+# Its own dereferences are all proven (array decay, `&elem`, string literals),
+# so the only sites that could warn are inside libmc -- the dogfooding probe
+# for the sweep that asserts every invariant-backed dereference with `!`.
+LIBMC_DEREF_EXERCISER = (
+    'import "libc/stdio";\n'
+    'import "list";\n'
+    'import "ring";\n'
+    'import "stack";\n'
+    'import "queue";\n'
+    'import "dict";\n'
+    'import "set";\n'
+    'import "equality";\n'
+    'import "hashing/md5";\n'
+    'import "hashing/murmur3";\n'
+    'import "hashing/fnv1a";\n'
+    "fn main() -> int32 {\n"
+    "    let xs: list<int32>;\n"
+    "    list_init(xs, 2);\n"
+    "    for i in range(6) { list_push(xs, i as int32); }\n"
+    "    list_at(xs, 0) = 9;\n"
+    "    let lo: int32; list_get(xs, 1, lo); list_set(xs, 1, 5);\n"
+    "    for v in &xs { lo += v; }\n"
+    "    let ys: list<int32>;\n"
+    "    list_init(ys, 2); list_push(ys, 9);\n"
+    "    let eq = equals(xs as slice<int32>, ys as slice<int32>);\n"
+    "    list_destroy(xs); list_destroy(ys);\n"
+    "    let r: ring<int32>;\n"
+    "    ring_init(r, 1);\n"
+    "    for i in range(5) { ring_push(r, i as int32); }\n"
+    "    ring_at(r, 0) = 3;\n"
+    "    let rr = ring_peek(r) + ring_pop(r); ring_destroy(r);\n"
+    "    let st: struct stack<int32>;\n"
+    "    stack_init(st, 1);\n"
+    "    for i in range(5) { stack_push(st, i as int32); }\n"
+    "    let ss = stack_peek(st) + stack_pop(st); stack_destroy(st);\n"
+    "    let q: queue<int32>;\n"
+    "    queue_init(q);\n"
+    "    for i in range(4) { queue_push(q, i as int32); }\n"
+    "    let qq: int32 = queue_peek(q);\n"
+    "    for v in &q { qq += v; }\n"
+    "    queue_destroy(q);\n"
+    "    let d: dict<int32>;\n"
+    "    dict_init(d, 2);\n"
+    "    dict_set(d, \"a\", 1); dict_set(d, \"b\", 2); dict_set(d, \"c\", 3);\n"
+    "    let dv: int32; dict_get(d, \"b\", dv); dict_remove(d, \"a\");\n"
+    "    for p in &d { dv += p.value; }\n"
+    "    dict_destroy(d);\n"
+    "    let m: struct set<int32, int32>;\n"
+    "    set_init(m, 2);\n"
+    "    for i in range(6) { set_set(m, i as int32, (i * i) as int32); }\n"
+    "    let mv: int32; set_get(m, 3, mv); set_remove(m, 1);\n"
+    "    for p in &m { mv += p.value; }\n"
+    "    set_destroy(m);\n"
+    "    let buf: uint8[5] = [104, 101, 108, 108, 111];\n"
+    "    let digest: uint8[16];\n"
+    "    md5(buf, 5, digest);\n"
+    "    let mm = murmur3(buf, 5, 0);\n"
+    "    let fv = fnv1a(\"hi\");\n"
+    "    return (rr + ss + qq + dv + mv + eq as int32\n"
+    "            + digest[0] as int32 + mm as int32 + fv as int32) * 0;\n"
+    "}\n"
+)
+
+
+def test_libmc_compiles_clean_under_unchecked_dereference(tmp_path):
+    # Dogfooding acceptance: every warning-bearing libmc module is swept to
+    # assert its invariant-backed dereferences, so instantiating and driving
+    # them raises no unchecked-dereference diagnostic from any libmc path.
+    src = tmp_path / "exerciser.mc"
+    src.write_text(LIBMC_DEREF_EXERCISER)
+    result = mcc(src, "-Wunchecked-dereference", "--emit-llvm")
+    assert result.returncode == 0
+    assert "libmc/" not in result.stderr  # no libmc site warns
+    assert result.stderr == ""            # nor does the exerciser itself
+
+
+def test_libmc_stays_clean_under_werror_unchecked_dereference(tmp_path):
+    # The strict flip: promoting the class to an error still compiles the
+    # exerciser's libmc imports cleanly -- the acceptance signal that pins
+    # libmc warn-free (before the sweep, sites like stack_peek failed here).
+    src = tmp_path / "exerciser.mc"
+    src.write_text(LIBMC_DEREF_EXERCISER)
+    result = mcc(src, "-Werror=unchecked-dereference", "--emit-llvm")
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
 # ---------------------------------------------------------------- -Wdead-code
 
 DEAD_SRC = (
