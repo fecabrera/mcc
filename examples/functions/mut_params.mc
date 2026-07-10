@@ -1,4 +1,5 @@
 import "std/io";
+import "std/utils";
 
 // A `mut` parameter is passed by hidden reference to the caller's storage:
 // the callee's writes land in the caller's variable, but `&` on it is
@@ -63,7 +64,7 @@ fn main() -> int32 {
 
     // The standard library builds on mut: `swap` exchanges two values in
     // place and `replace` stores a new value while returning the old one,
-    // both generic and pointer-free at the call site (import "std/io").
+    // both generic and pointer-free at the call site (import "std/utils").
     let a: int32 = 3;
     let b: int32 = 9;
     swap(a, b);

@@ -5,7 +5,7 @@ from helpers import run
 
 def test_swap_scalars():
     assert run(
-        'import "std/io";\n'
+        'import "std/utils";\n'
         "fn main() -> int32 {\n"
         "    let a: int32 = 3;\n"
         "    let b: int32 = 9;\n"
@@ -17,7 +17,7 @@ def test_swap_scalars():
 
 def test_swap_monomorphizes_per_type():
     assert run(
-        'import "std/io";\n'
+        'import "std/utils";\n'
         "fn main() -> int32 {\n"
         "    let a: int32 = 1;\n"
         "    let b: int32 = 2;\n"
@@ -32,7 +32,7 @@ def test_swap_monomorphizes_per_type():
 
 def test_swap_structs():
     assert run(
-        'import "std/io";\n'
+        'import "std/utils";\n'
         "struct point { x: int32; y: int32; }\n"
         "fn main() -> int32 {\n"
         "    let p = point { x = 1, y = 2 };\n"
@@ -45,7 +45,7 @@ def test_swap_structs():
 
 def test_swap_array_elements():
     assert run(
-        'import "std/io";\n'
+        'import "std/utils";\n'
         "fn main() -> int32 {\n"
         "    let a: int32[2] = [7, 9];\n"
         "    swap(a[0], a[1]);\n"
@@ -56,7 +56,7 @@ def test_swap_array_elements():
 
 def test_replace_returns_old_value():
     assert run(
-        'import "std/io";\n'
+        'import "std/utils";\n'
         "fn main() -> int32 {\n"
         "    let a: int32 = 9;\n"
         "    let old = replace(a, 100);\n"
@@ -67,7 +67,7 @@ def test_replace_returns_old_value():
 
 def test_replace_structs():
     assert run(
-        'import "std/io";\n'
+        'import "std/utils";\n'
         "struct point { x: int32; y: int32; }\n"
         "fn main() -> int32 {\n"
         "    let p = point { x = 1, y = 2 };\n"

@@ -8,6 +8,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **`swap` and `replace` moved to `std/utils`** — the generic in-place
+  helpers now live in their own module, `import "std/utils";`, instead
+  of riding along with `std/io`. Programs that reached them through
+  `import "std/io";` add the one import; `std/io` keeps the printing
+  and writing families only.
+
 ### Added
 
 - **`mut`/`const`-carrying function types — `fn(mut char)`,
