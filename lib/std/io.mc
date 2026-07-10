@@ -5,8 +5,8 @@ import "std/format";
 // the next variadic argument through the std/format overload set,
 // type-driven -- no `%`-letters. The legacy printf-style pair below is kept
 // behind -D PRINTF_PRINTLN=1 for programs mid-migration; libc's printf
-// remains the tool for width/precision formatting the `{...}` modifiers do
-// not carry yet.
+// remains the tool for the formatting the `{...}` modifiers do not carry
+// yet (float precision, string field widths).
 @if (PRINTF_PRINTLN) {
     /**
      * Formats according to format and writes the result to standard output

@@ -2349,11 +2349,20 @@ already do).
         (`{expr}`, below) cannot mix — a mixed string is a compile error,
         not a guess at the intent. Pairs with the compile-time format
         checking that string interpolation (below) also builds on
-  - [ ] format modifiers — precision and zero-padded width (`.Nf`, `Nx`, `0Nx`,
-        `0x0Nx`, `Ns`, and `sN`), e.g. `{.8f}`, `{08x}`, `{0x08x}`, `{20s}`,
-        `{s20}`; the per-type channel these travel through (the `format`
-        set's `modifier` parameter, already routing `x`/`X`/`p` and
-        `y` per type) shipped with the baseline module above
+  - [x] integer format modifiers — width and zero-padded width over every
+        base, the `[0][width][x|X|b|p]` grammar (`{8x}`, `{08x}`, `{08p}`,
+        a bare `{6}` decimal), hand-rolled in the integer digit worker (no
+        snprintf round-trip): a space width counts the whole field, a zero
+        width the digits alone (the sign and `0x` sit outside the zeros,
+        so `-42` under `{08p}` is `-0x0000002a`), negatives render
+        sign-and-magnitude (the base applies to `|value|`), and int64's
+        minimum renders exactly (its magnitude is taken by
+        two's-complement negation in uint64 space)
+  - [ ] float and string format modifiers — precision (`.Nf`, e.g.
+        `{.8f}`) and string field widths (`Ns` and `sN`, e.g. `{20s}`,
+        `{s20}`); the per-type channel they travel through (the `format`
+        set's `modifier` parameter, already routing the integer grammar
+        and `y`/`yes` per type) shipped with the baseline module above
 - [ ] String interpolation — `println(f"x = {x}")`: an `f`-prefixed string
       literal with `{expr}` holes desugars at compile time into the formatted
       `println("{}", ...)` call above (`{{`/`}}` escape a literal brace), so it

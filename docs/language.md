@@ -4038,12 +4038,19 @@ The baseline members cover the built-in types:
 - **Signed integers**: decimal. One [closed-group](#closed-type-groups)
   template takes `int32 | int16 | int8` and sign-extends into the concrete
   `int64` worker, so `-4` renders `-4` at every width.
-- **Unsigned integers**: unsigned decimal, one group for
-  `uint64 | uint32 | uint16 | uint8`.
-- Integer modifiers: `"x"` lowercase hex, `"X"` uppercase hex, `"p"`
-  pointer-style (`0x2a`). A negative narrow value was already sign-extended
-  when the modifier applies, so its hex is the full 64-bit two's-complement
-  pattern (`-4 as int32` with `"x"` is `fffffffffffffffc`).
+- **Unsigned integers**: unsigned decimal, a `uint32 | uint16 | uint8`
+  group widening into the concrete `uint64` digit worker every integer
+  member funnels into.
+- Integer modifiers, grammar `[0][width][x|X|b|p]`: the final letter picks
+  the base — `"x"` lowercase hex, `"X"` uppercase hex, `"b"` binary, `"p"`
+  pointer-style (`0x2a`) — an optional decimal width pads the rendering,
+  and a leading `0` selects zero-padding (`"8x"` gives `      ff`, `"08x"`
+  gives `000000ff`). A space width counts the whole field, a zero width
+  the digits alone — the sign and `0x` sit outside the zeros, so `-42`
+  under `"08p"` is `-0x0000002a`. A negative value renders
+  sign-and-magnitude — the base applies to `|value|`, so `-4` with `"x"`
+  is `-4` (render a two's-complement bit pattern by casting the bits
+  unsigned first), and `int64`'s minimum renders exactly.
 - **`float64`**: fixed-point (`3.5` renders `3.500000`).
 - **`bool`**: `true`/`false`; `"y"` renders `y`/`n`, and `"yes"` renders
   `yes`/`no`.
@@ -4073,7 +4080,7 @@ format(s, 255 as int32, "x");    // s is now "ff" — the literal adapts
 ```
 
 One sharp edge, a consequence of open overloading: an untyped integer
-literal is ambiguous between the `int64` and `char` members, so type the
+literal is ambiguous among the integer and `char` members, so type the
 value (`42 as int32`).
 
 Overload sets are open, so **making your own type printable is writing one
@@ -4119,11 +4126,13 @@ dispatch is the open overload set, a `format` overload you write makes your
 type printable straight through `println("{}", value)` — boxed
 [by reference](#the-any-type) with no copy.
 
-Manual field selection is planned as compile-time sugar — a positional
-`println("{0}, {0}", x)` desugaring to the sequential
-`println("{}, {}", x, x)`, no runtime machinery — and width/precision are
-planned as further `{...}` modifiers; until then, libc's `printf` remains
-the tool for width and precision (`printf("%.1f\n", f)`). The legacy
+Integer placeholders already carry width and zero-padding —
+`println("{08x}", n)` — via the `[0][width][x|X|b|p]` modifier grammar
+(above). Manual field selection is planned as compile-time sugar — a
+positional `println("{0}, {0}", x)` desugaring to the sequential
+`println("{}, {}", x, x)`, no runtime machinery — and float precision and
+string field widths as further `{...}` modifiers; until then, libc's
+`printf` remains the tool for those (`printf("%.1f\n", f)`). The legacy
 printf-style `print`/`println` pair is kept behind `-D PRINTF_PRINTLN=1`
 for programs mid-migration.
 

@@ -10,6 +10,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Integer format modifiers: base, width, and zero-padding** — the
+  `format` set's integer members now speak the `[0][width][x|X|b|p]`
+  modifier grammar, hand-rolled in one digit worker with no snprintf
+  round-trip: `"x"`/`"X"` hex, the new `"b"` binary, `"p"` pointer-style
+  (`0x2a`), an optional decimal width, and a leading `0` for zero-padding
+  — so `println("{08x}", n)` works. A space width counts the whole field
+  (sign and `0x` included); a zero width counts the digits alone, the sign
+  and `0x` sitting outside the zeros (`-42` under `{08p}` is
+  `-0x0000002a`). Negative values now render **sign-and-magnitude** — the
+  base applies to `|value|`, so `-4` with `x` is `-4`, no longer the
+  64-bit two's-complement pattern (cast the bits unsigned to render that)
+  — and the magnitude is taken by two's-complement negation in uint64
+  space, so `int64`'s minimum renders exactly. Float precision and string
+  field widths remain with libc's `printf` for now.
+
 - **Formatted `{}` `print`/`println` is now the default** — `std/io`'s
   `print` and `println` format with `{}` placeholders, type-driven through
   the `std/format` overload set: `println("{} + {} = {}", 2, 3, 2 + 3)`,

@@ -63,15 +63,22 @@ fn main() -> int32 {
     format(line, "text", "");                // a literal decays to char*
     show("mixed:", line);
 
-    // Integer modifiers, passed as bare literals: "x" lowercase hex, "X"
-    // uppercase, "p" pointer-style. A negative narrow value was already
-    // sign-extended when the modifier applies, so its hex is the full
-    // 64-bit two's-complement pattern.
+    // Integer modifiers, passed as bare literals -- the grammar is
+    // [0][width][x|X|b|p]: "x" lowercase hex, "X" uppercase, "b" binary,
+    // "p" pointer-style, with an optional width ("6x" pads the field with
+    // spaces) and a leading 0 for zero-padding ("06x" pads the digits; the
+    // sign and "0x" sit outside the zeros). A negative value renders
+    // sign-and-magnitude -- the base applies to |value| -- so its hex is
+    // '-' and the magnitude's digits, never a two's-complement pattern.
     format(line, 255 as uint8, "x");         // unsigned group: ff
     format(line, ' ', "");
-    format(line, -4 as int32, "x");          // fffffffffffffffc
+    format(line, -4 as int32, "x");          // -4
+    format(line, ' ', "");
+    format(line, 5 as int32, "b");           // 101
     format(line, ' ', "");
     format(line, 42 as int64, "p");          // 0x2a
+    format(line, ' ', "");
+    format(line, 255 as int32, "06x");       // 0000ff
     show("hex:", line);
 
     // slice<T> renders a bracketed list. Each element re-enters the set, so

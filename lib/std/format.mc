@@ -1,16 +1,35 @@
 import "std/string";
 import "std/equality";
 import "libc/stdio";
+import "libc/stdlib";
 
 // The formatting protocol's baseline overload set: every member appends
 // `value`'s rendering to `str`, steered by `modifier` (`""` for the
-// default; a string literal adapts directly, so `format(s, 255, "x")`
-// works as-is). Overload sets are open, so making a type printable is
-// adding one `format` overload for it in your own module — a concrete
-// member outranks the closed-group templates and the unbounded fallback.
+// default; a string literal adapts directly, so `format(s, 255 as int32,
+// "x")` works as-is — the value must be typed, an untyped 255 is ambiguous
+// among the integer and char members). std/io's print/println dispatch
+// here: each `{[modifiers]}` placeholder renders its argument through this
+// set, the bracket content arriving verbatim as the modifier. Overload
+// sets are open, so making a type printable is adding one `format`
+// overload for it in your own module — a concrete member outranks the
+// closed-group templates and the unbounded fallback.
 
-// Scratch space for one snprintf-rendered value.
+// Scratch space for the one snprintf-rendered member (float64).
 @private const MAX_BUF_LEN = 256;
+
+// Digit tables for the hand-rolled integer worker, lowercase / uppercase.
+@private const _hex = "0123456789abcdef";
+@private const _hexu = "0123456789ABCDEF";
+
+// The integer modifier mini-parser's states, one per grammar position:
+// `[0][width][x|X|b|p]` — the zero-pad flag, the width digits, then the
+// base letter (see _format below).
+@private
+enum int_fmt_state {
+    PADDING = 0,
+    LENGTH = 1,
+    FORMAT = 2,
+}
 
 /**
  * Fallback for types with no formatter: appends the type's name in angle
@@ -39,8 +58,8 @@ fn format<T>(mut str: string, value: T, const modifier: slice<char>) {
  *
  * @param str:      destination string
  * @param value:    signed integer to render
- * @param modifier: "p" pointer-style, "x" lowercase hex, "X" uppercase
- *                  hex; anything else renders signed decimal
+ * @param modifier: `[0][width][x|X|b|p]` (see _format below); no base
+ *                  letter renders signed decimal
  */
 @inline
 fn format<T: int32 | int16 | int8>(mut str: string, value: T, const modifier: slice<char>) {
@@ -51,53 +70,173 @@ fn format<T: int32 | int16 | int8>(mut str: string, value: T, const modifier: sl
  * Appends an int64's rendering to str.
  *
  * The signed worker: the closed-group overload above funnels the narrow
- * widths here, already sign-extended.
+ * widths here, already sign-extended. Renders sign-and-magnitude — a
+ * leading '-' and then |value| through the shared digit worker — so a
+ * base modifier applies to the magnitude: `-4` with "x" is `-4`, never a
+ * two's-complement bit pattern (render the pattern by casting the bits
+ * unsigned instead). The magnitude is taken by the two's-complement
+ * negation `(~num) + 1` in uint64 space, so int64's minimum — which has
+ * no int64 magnitude — still renders exactly.
  *
  * @param str:      destination string
  * @param value:    signed integer to render
- * @param modifier: "p" pointer-style, "x" lowercase hex, "X" uppercase
- *                  hex; anything else renders signed decimal
+ * @param modifier: `[0][width][x|X|b|p]` (see _format below); no base
+ *                  letter renders signed decimal
  */
 fn format(mut str: string, value: int64, const modifier: slice<char>) {
-    let buf: char[MAX_BUF_LEN];
-    
-    if (equals(modifier, "p"))
-        snprintf(buf, MAX_BUF_LEN, "%p", value);
-    else if (equals(modifier, "x"))
-        snprintf(buf, MAX_BUF_LEN, "%llx", value);
-    else if (equals(modifier, "X"))
-        snprintf(buf, MAX_BUF_LEN, "%llX", value);
-    else
-        snprintf(buf, MAX_BUF_LEN, "%lld", value);
-    
-    string_append(str, buf);
+    let neg = false;
+    let num = value as uint64;
+    if (value < 0) {
+        neg = true;
+        num = (~num) + 1;
+    }
+    _format(str, num, modifier, neg);
 }
 
 /**
  * Appends an unsigned integer's rendering to str.
  *
- * The unsigned half of the closed-group pair; only the default conversion
- * differs, and uint64 needs no widening, so one group takes all four
- * widths with no separate worker.
+ * The unsigned half of the closed-group pair: the narrow widths widen
+ * into the concrete uint64 worker below, mirroring the signed funnel.
  *
  * @param str:      destination string
  * @param value:    unsigned integer to render
- * @param modifier: "p" pointer-style, "x" lowercase hex, "X" uppercase
- *                  hex; anything else renders unsigned decimal
+ * @param modifier: `[0][width][x|X|b|p]` (see _format below); no base
+ *                  letter renders unsigned decimal
  */
-fn format<T: uint64 | uint32 | uint16 | uint8>(mut str: string, value: T, const modifier: slice<char>) {
-    let buf: char[MAX_BUF_LEN];
+@inline
+fn format<T: uint32 | uint16 | uint8>(mut str: string, value: T, const modifier: slice<char>) {
+    format(str, value as uint64, modifier);
+}
 
-    if (equals(modifier, "p"))
-        snprintf(buf, MAX_BUF_LEN, "%p", value);
-    else if (equals(modifier, "x"))
-        snprintf(buf, MAX_BUF_LEN, "%llx", value);
-    else if (equals(modifier, "X"))
-        snprintf(buf, MAX_BUF_LEN, "%llX", value);
-    else
-        snprintf(buf, MAX_BUF_LEN, "%llu", value);
+/**
+ * Appends a uint64's rendering to str: the public face of the digit
+ * worker every integer member funnels into.
+ *
+ * @param str:      destination string
+ * @param value:    unsigned integer to render
+ * @param modifier: `[0][width][x|X|b|p]` (see _format below); no base
+ *                  letter renders decimal
+ */
+@inline
+fn format(mut str: string, value: uint64, const modifier: slice<char>) {
+    _format(str, value, modifier, false);
+}
+
+/**
+ * The integer digit worker: renders a magnitude in the modifier's base,
+ * signed and padded, and appends it to str.
+ *
+ * Hand-rolled, no snprintf round-trip: digits are produced last-first
+ * into a scratch string in the chosen base, then appended in reverse.
+ *
+ * The modifier grammar is `[0][width][x|X|b|p]`, parsed by the
+ * int_fmt_state machine: an optional leading '0' selects zero-padding,
+ * an optional decimal width pads the rendering, and the final letter
+ * picks the base — "x"/"X" lower/uppercase hex, "b" binary, "p"
+ * pointer-style ("0x" + lowercase hex); no letter renders decimal. The
+ * two pads count differently: a space pad ("8x") widens the whole field
+ * (sign and "0x" included), while a zero pad ("08x") widens the digits
+ * alone, the sign and "0x" sitting outside the zeros — `-42` under "08p"
+ * is `-0x0000002a`.
+ *
+ * @param str:      destination string
+ * @param value:    the magnitude to render, already made unsigned
+ * @param modifier: `[0][width][x|X|b|p]`, as above
+ * @param neg:      whether to render a leading '-' before the magnitude
+ */
+@private
+fn _format(mut str: string, value: uint64, const modifier: slice<char>, neg: bool) {
+    let base: uint64 = 10;
+    let pointer = false;
+    let mayus = false;
+    let zero = false;
+    let padding: uint32 = 0;
+    let state = int_fmt_state::PADDING;
+
+    let i: uint64 = 0;
+    while (i < modifier.length) {
+        let c = modifier[i];
+        case (state) {
+        when int_fmt_state::PADDING:
+            if (c == '0') {
+                zero = true;
+            } else if (c > '0' and c <= '9') {
+                state = int_fmt_state::LENGTH;
+                continue;
+            } else {
+                state = int_fmt_state::FORMAT;
+                continue;
+            }
+        when int_fmt_state::LENGTH:
+            if (c >= '0' and c <= '9') {
+                padding *= 10;
+                padding += (c - '0') as uint32;
+            } else {
+                state = int_fmt_state::FORMAT;
+                continue;
+            }
+        when int_fmt_state::FORMAT:
+            if (c == 'p') {
+                pointer = true;
+                base = 16;
+            } else if (c == 'b') {
+                base = 2;
+            } else if (c == 'x') {
+                base = 16;
+            } else if (c == 'X') {
+                base = 16;
+                mayus = true;
+            }
+            break;
+        }
+        i += 1;
+    }
+
+    let buf: string;
+    string_init(buf);
+    defer string_destroy(buf);
+
+    let num = value;
+    while (true) {
+        string_push(buf, mayus ? _hexu![num % base] : _hex![num % base]);
+        num = num / base;
+        if (num == 0) break;
+    }
+
+    if (neg) {
+        if (pointer) {
+            if (zero) {
+                string_push(str, '-');
+                string_append(str, "0x");
+            } else {
+                string_append(buf, "x0");
+                string_push(buf, '-');
+            }
+        } else {
+            if (zero) {
+                string_push(str, '-');
+            } else {
+                string_push(buf, '-');
+            }
+        }
+    } else if (pointer) {
+        if (zero) {
+            string_append(str, "0x");
+        } else {
+            string_append(buf, "x0");
+        }
+    }
     
-    string_append(str, buf);
+    if (padding > buf.length) {
+        for i in range(padding - buf.length) {
+            string_push(str, zero ? '0' : ' ');
+        }
+    }
+
+    for i in range(buf.length) {
+        string_push(str, buf.data![buf.length - i - 1]);
+    }
 }
 
 /**

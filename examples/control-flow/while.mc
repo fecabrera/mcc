@@ -1,5 +1,4 @@
 import "std/io";
-import "libc/stdio";   // printf: `{...}` has no width options yet
 
 // A `while` loop repeats its body as long as the condition holds -- the basic
 // counting loop. `break` leaves the loop early; `continue` skips to the next
@@ -18,7 +17,7 @@ fn main() -> int32 {
     while (row <= 3) {
         let col: int32 = 1;
         while (col <= 3) {
-            printf("%2d ", row * col);
+            print("{2} ", row * col); // {2}: space-padded to a 2-wide field
             col += 1;
         }
         println("");                   // newline after each row

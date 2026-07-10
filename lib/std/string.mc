@@ -185,6 +185,22 @@ fn string_append(mut self: string, const str: slice<const char>) {
 }
 
 /**
+ * Appends any char-slice-shaped value. `T` is bounded to `slice<char>`, so
+ * `str` may be another `string`, a `list<char>`, or a `slice<char>` --
+ * anything that `extends` the char slice binds `T` and borrows in with no
+ * explicit `as` at the call site (the same pattern as the `equals` member
+ * below). It then re-lends into the slice overload above, so nothing is
+ * copied.
+ *
+ * @param self: string to append to
+ * @param str:  any value whose type extends `slice<char>` to append
+ **/
+@inline
+fn string_append<T extends slice<char>>(mut self: string, const str: T) {
+    list_append(self, str as slice<const char>);
+}
+
+/**
  * Appends the first n bytes of a raw char array to the end of the string,
  * growing it if needed.
  *

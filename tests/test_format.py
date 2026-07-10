@@ -73,9 +73,10 @@ def test_unsigned_integers_render_decimal(capfd):
 
 
 def test_integer_modifiers(capfd):
-    # "x"/"X" render hex, "p" pointer-style. A negative int32 was already
-    # sign-extended to int64 by the group overload, so its "x" is the full
-    # 64-bit two's-complement pattern -- pinned as the intended behavior.
+    # "x"/"X" render hex, "b" binary, "p" pointer-style. A negative value
+    # renders sign-and-magnitude -- the modifier applies to |value|, so its
+    # "x" is '-' plus the magnitude's digits, never a two's-complement
+    # pattern -- pinned as the intended behavior.
     run(
         PRELUDE
         + """
@@ -85,6 +86,7 @@ def test_integer_modifiers(capfd):
             format(s, 255 as uint8, "x");   string_push(s, ' ');
             format(s, 255 as int64, "X"); string_push(s, ' ');
             format(s, -4 as int32, "x");    string_push(s, ' ');
+            format(s, 5 as int32, "b");     string_push(s, ' ');
             format(s, 42 as int64, "p");
             show(s);
             string_destroy(s);
@@ -92,7 +94,34 @@ def test_integer_modifiers(capfd):
         }
         """
     )
-    assert capfd.readouterr().out == "|ff FF fffffffffffffffc 0x2a|\n"
+    assert capfd.readouterr().out == "|ff FF -4 101 0x2a|\n"
+
+
+def test_integer_width_and_zero_padding(capfd):
+    # The [0][width][base] modifier grammar. A space width counts the whole
+    # field (sign and 0x included); a zero width counts the digits alone,
+    # the sign and 0x prefix sitting outside the zeros. int64's minimum
+    # renders exactly: its magnitude is taken by two's-complement negation
+    # in uint64 space, so the value with no int64 magnitude still works.
+    run(
+        PRELUDE
+        + """
+        fn main() -> int32 {
+            let s: struct string;
+            string_init(s);
+            format(s, 255 as int32, "8x");    string_push(s, '/');
+            format(s, 255 as int32, "08x");   string_push(s, '/');
+            format(s, -42 as int32, "08p");   string_push(s, '/');
+            format(s, -42 as int64, "8");     string_push(s, '/');
+            format(s, -9223372036854775807 as int64 - 1, "x");
+            show(s);
+            string_destroy(s);
+            return 0;
+        }
+        """
+    )
+    expected = "      ff/000000ff/-0x0000002a/     -42/-8000000000000000"
+    assert capfd.readouterr().out == f"|{expected}|\n"
 
 
 def test_modifier_from_a_string_borrows_in(capfd):
