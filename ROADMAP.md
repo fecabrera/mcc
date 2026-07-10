@@ -1180,11 +1180,15 @@ already do).
             `string` wrappers re-lend `self` into the `list_*` slots, and
             `&` of a `mut` parameter is banned, so `string` cannot flip
             before `list`
-      - [ ] stage 5: `std` — the `format_arg`/`format_args` accumulator
-            flips to `mut` together with the
+      - [ ] stage 5: `std` — implemented for `format_args`: the
             [native variadics](#functions-and-methods) stage-3 format
-            work (its vehicle), since those functions break the moment
-            `string` flips
+            work (its vehicle, as planned) replaced the `format_arg`
+            WIP with the open `format` overload set and landed the
+            accumulator `mut` from the start — `format_args` and every
+            `format` member take `mut str: string` today. Ticks once
+            the rest of `std` is audited for remaining pointer selves
+            (the `*_it` iterator signatures stay pointers by design,
+            per the parent item)
   - [ ] `for … in` protocol over `mut` — `_next` still takes its element slot
         as a raw pointer (`fn list_next<T>(it: …, out: T*) -> bool`) because
         the compiler emits the `_next(&it, &slot)` call itself; teaching that
@@ -2084,31 +2088,53 @@ already do).
         exclude collecting candidates today), mirroring the
         literal-adaptation parity lesson from
         [function overloading](docs/language.md#function-overloading)'s
-        first stage, and lifting the stage-1 ban
-  - [ ] stage 3: the stdlib flip — fix the five recorded bugs in the
-        dormant `format_arg` WIP (the `char*` arm appends the
-        uninitialized `buf` instead of `s`, with the fix needing a null
-        guard, since a boxed `char*` can hold `null` while
-        `string_append`'s `char*` overload is `@nonnull`; the
-        unconditional trailing `buf` append; the unused `snprintf` length
-        `l`, fixed by the bounded `(char*, n)` append overload; `%llf` to
-        `%f`; and the silent excess-placeholder and trailing-brace edges
-        get spec'd), flip `print`/`println` to the slice signatures, and
-        migrate every printf-grammar caller to `{}` placeholders in the
-        same change set (279 `println` sites across 69 example files plus
-        test assertions; mechanical, but it cannot trail the flip, since
-        a printf string through the `{}` formatter prints its specifiers
-        literally). Two decisions defer here: whether `NATIVE_VARGS`
-        survives as a one-release migration toggle or the fact and its
-        `@else` branches delete outright at the flip (the audit leans
-        delete: a half-flipped ecosystem means two format grammars in
-        every doc), and the final `{}` grammar spec (`{x}`/`{X}`
-        modifiers already work in the WIP). Also the vehicle for the
-        [libmc receiver migration](#functions-and-methods)'s final `std`
-        stage; the downstream
-        [formatted `{}` print](#strings-and-formatting) and
-        [string interpolation](#strings-and-formatting) items key off
-        this stage, not stage 1
+        first stage, and lifting the stage-1 ban. Ranking is settled: a
+        candidate that matches without collecting beats any candidate
+        that must collect, as the outermost rank component regardless of
+        tier — an exact-arity generic beats a concrete collecting
+        fallback (the C++ ellipsis-ranks-worst analogue) — and a
+        pass-through-shaped match (final argument exactly
+        `slice<const any>` at exact arity) counts as not-collecting at
+        full specificity. Between collecting candidates, more fixed
+        parameters wins; equal fixed counts with a tying fixed-prefix
+        specificity is an ambiguity error. A collecting candidate is
+        viable when the argument count reaches its fixed count, with
+        unification and shape checks sliced to the fixed prefix, and its
+        type parameters bind from the fixed arguments only. No boxing
+        happens before the winner is known — collection is emitted from
+        already-evaluated values (only deferred array/bare-struct
+        literal extras re-generate from AST) — so resolution never
+        forces evaluation order. C-style `...` variadics stay banned
+        from overload sets (that lift belongs to the
+        [C variadics](#functions-and-methods) item below), and `.mci`
+        needs zero changes
+  - [x] stage 3: the stdlib flip — shipped, by a different route than
+        the `format_arg` repair this stage once prescribed:
+        `lib/std/format.mc` was replaced wholesale by the open `format`
+        overload set (integer base/width/zero-pad modifiers, string
+        field widths, a null-safe `char*` member), obsoleting four of
+        the five recorded WIP bugs rather than fixing them;
+        `print`/`println` flipped to
+        `fn println(const fmt: slice<const char>, args...)`, with a
+        `@private` `format_args` collector dispatching each
+        placeholder's argument through a generic
+        `with (t = args[i] as T)` arm; and every printf-grammar caller
+        (examples, docs, tests) migrated to `{}` in the same change
+        set. The two deferred decisions resolved: the migration toggle
+        landed with inverted polarity — the legacy printf pair is kept
+        behind `-D PRINTF_PRINTLN=1` rather than the new pair behind
+        `NATIVE_VARGS` — and the `{}` grammar spec lives in the shipped
+        modifier sub-items of
+        [formatted `{}` print](#strings-and-formatting). Also carried
+        the [libmc receiver migration](#functions-and-methods)'s format
+        flip (the accumulator landed `mut` from the start). The
+        downstream [formatted `{}` print](#strings-and-formatting) and
+        [string interpolation](#strings-and-formatting) items keyed off
+        this stage as planned; the remaining scraps — spec'ing the
+        silent placeholder edges (the fifth recorded bug) and the
+        `PRINTF_PRINTLN` deletion decision — are carved off as
+        sub-items there. Implemented, see
+        [Formatted print/println](docs/language.md#formatted-print--println)
 - [ ] C variadics — the C-ABI `...`/`va_list` machinery, beyond forwarding:
   - [x] variadic declarations and `va_list` forwarding — implemented, see
         [Variadic functions](docs/language.md#variadic-functions)
@@ -2427,6 +2453,11 @@ already do).
         `{}` model and kept behind `-D PRINTF_PRINTLN=1` for programs
         mid-migration; libc's `printf` stays the width/precision tool until
         the modifiers stage below lands
+    - [ ] retire the `PRINTF_PRINTLN` toggle — the legacy pair and its
+          `@if`/`@else` branches in `std/io` need a recorded deletion
+          decision (which release removes them); the flip audit's lean
+          still applies: a long half-flipped ecosystem means two format
+          grammars in every doc
   - [x] the stdlib `format` overload-set module — `lib/std/format.mc`, the
         type-driven per-type rendering layer the placeholder stages below
         dispatch into: a
@@ -2447,6 +2478,19 @@ already do).
         the next argument in sequence through the `format` set, the bracket
         content travels verbatim as the per-type modifier (`{x}`, `{yes}`),
         and `{{`/`}}` escape literal braces
+    - [ ] spec the silent formatting edges — the shipped parser's two
+          unspecified behaviors, carried over from the
+          [native variadics](#functions-and-methods) stdlib-flip stage:
+          an excess placeholder with no argument left renders nothing
+          (the collector's `i < args.length` guard), and a trailing
+          unclosed `{` silently discards the accumulated modifier text;
+          the
+          [formatted print docs](docs/language.md#formatted-print--println)
+          document neither. Open, not settled: whether the spec blesses
+          the silently-permissive behavior or turns the edges into
+          diagnostics (the compile-time format checking the positional
+          and interpolation items reference is the natural vehicle for
+          the diagnostic option)
   - [ ] positional placeholders — `{n}` selecting an argument manually, as
         compile-time sugar over the sequential form:
         `println("{0}, {0}", x)` desugars to `println("{}, {}", x, x)`
