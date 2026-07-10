@@ -189,6 +189,113 @@ def test_float64_renders_fixed_point(capfd):
     assert capfd.readouterr().out == "|3.500000|\n"
 
 
+def test_float_precision_modifiers(capfd):
+    # The [[N].M]f grammar's precision half: .M rounds to M decimals
+    # (snprintf's rounding, via %*.*f), .0f drops the point entirely, M
+    # takes several digits, and a bare "f" keeps the six-decimal default.
+    run(
+        PRELUDE
+        + """
+        fn main() -> int32 {
+            let s: struct string;
+            string_init(s);
+            format(s, 3.567, ".2f");   string_push(s, '/');
+            format(s, 2.71828, ".3f"); string_push(s, '/');
+            format(s, 3.7, ".0f");     string_push(s, '/');
+            format(s, 0.5, ".10f");    string_push(s, '/');
+            format(s, 0.5, "f");
+            show(s);
+            string_destroy(s);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "|3.57/2.718/4/0.5000000000/0.500000|\n"
+
+
+def test_float_width_and_precision(capfd):
+    # The [[N].M]f grammar's width half: N space-pads the whole field,
+    # right-aligned, sign included (snprintf's %* semantics); text at or
+    # past the width appends unpadded.
+    run(
+        PRELUDE
+        + """
+        fn main() -> int32 {
+            let s: struct string;
+            string_init(s);
+            format(s, 3.5, "8.2f");    string_push(s, '/');
+            format(s, -3.5, "8.2f");   string_push(s, '/');
+            format(s, 3.5, "3.2f");
+            show(s);
+            string_destroy(s);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "|    3.50/   -3.50/3.50|\n"
+
+
+def test_float_width_without_precision_is_tolerated(capfd):
+    # Pinned tolerance, not a promise: "12f" sits outside the ruled
+    # [[N].M]f grammar (no .M), and the parser degrades silently like its
+    # integer and string siblings -- the digits count as the field width
+    # and the precision stays the six-decimal default. Junk after the
+    # digits is likewise dropped ("12q" behaves the same; the f never
+    # disambiguates -- dispatch is type-driven).
+    run(
+        PRELUDE
+        + """
+        fn main() -> int32 {
+            let s: struct string;
+            string_init(s);
+            format(s, 3.5, "12f");   string_push(s, '/');
+            format(s, 3.5, "12q");
+            show(s);
+            string_destroy(s);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "|    3.500000/    3.500000|\n"
+
+
+def test_float_modifier_applies_per_slice_element(capfd):
+    # The generic slice<T> renderer forwards the modifier per element, so
+    # a float slice takes the [[N].M]f grammar element-wise for free.
+    run(
+        PRELUDE
+        + """
+        fn main() -> int32 {
+            let s: struct string;
+            string_init(s);
+            let a: float64[2] = [3.567, 0.5];
+            format(s, a as slice<float64>, ".1f");
+            show(s);
+            string_destroy(s);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "|[3.6, 0.5]|\n"
+
+
+def test_float_precision_through_println(capfd):
+    # The end-to-end route: io.mc's format_args passes the bracket content
+    # verbatim, so {.2f} and {8.3f} reach the float member unchanged,
+    # interleaved with other placeholders.
+    run(
+        """
+        import "std/io";
+
+        fn main() -> int32 {
+            println("pi = {.2f}, e = {8.3f}, {} of {}", 3.14159, 2.71828, 1, 2.0);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "pi = 3.14, e =    2.718, 1 of 2.000000\n"
+
+
 def test_bool_modifiers(capfd):
     # Default true/false; "y" renders y/n, "yes" renders yes/no.
     run(

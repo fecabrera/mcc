@@ -1,5 +1,4 @@
 import "std/io";
-import "libc/stdio";   // printf: `{...}` has no precision options yet
 
 // A counter with a side effect: it returns the current index and advances the
 // caller's counter. Used below to show that a compound assignment evaluates its
@@ -52,7 +51,7 @@ fn main() -> int32 {
     let f: float64 = 2.0;
     f += 0.5;
     f *= 4.0;
-    printf("f = %.1f\n", f);   // 10.0 (printf: precision needs the C formatter for now)
+    println("f = {.1f}", f);   // 10.0 (the {.1f} modifier rounds to one decimal)
 
     return 0;
 }

@@ -4275,7 +4275,13 @@ The baseline members cover the built-in types:
   sign-and-magnitude — the base applies to `|value|`, so `-4` with `"x"`
   is `-4` (render a two's-complement bit pattern by casting the bits
   unsigned first), and `int64`'s minimum renders exactly.
-- **`float64`**: fixed-point (`3.5` renders `3.500000`).
+- **`float64`**: fixed-point (`3.5` renders `3.500000`). The modifier
+  grammar is `[[N].M]f`: `.M` rounds to M decimals (`".2f"` gives `3.50`,
+  `".0f"` drops the point entirely), and an optional leading width N
+  space-pads the whole field, sign included, right-aligned (`"8.2f"`
+  gives `    3.50`). A bare `"f"` (or no modifier) renders the
+  six-decimal default. The rendering is snprintf's `%*.*f`, so the
+  rounding is the C library's.
 - **`bool`**: `true`/`false`; `"y"` renders `y`/`n`, and `"yes"` renders
   `yes`/`no`.
 - **`char`**, **`char*`**, **`slice<char>`**: appended as text. A string
@@ -4356,14 +4362,15 @@ type printable straight through `println("{}", value)` — boxed
 
 Integer placeholders already carry width and zero-padding —
 `println("{08x}", n)` — via the `[0][width][x|X|b|p]` modifier grammar,
-and string placeholders carry field widths — `println("{s20}", name)` —
-via `[N][s][N]` (both above). Manual field selection is planned as
-compile-time sugar — a positional `println("{0}, {0}", x)` desugaring to
-the sequential `println("{}, {}", x, x)`, no runtime machinery — and
-float precision as a further `{...}` modifier; until then, libc's
-`printf` remains the tool for that (`printf("%.1f\n", f)`). The legacy
-printf-style `print`/`println` pair is kept behind `-D PRINTF_PRINTLN=1`
-for programs mid-migration.
+string placeholders carry field widths — `println("{s20}", name)` — via
+`[N][s][N]`, and float placeholders carry width and precision —
+`println("{.2f}", f)`, `println("{8.2f}", f)` — via `[[N].M]f` (all
+above). Manual field selection is planned as compile-time sugar — a
+positional `println("{0}, {0}", x)` desugaring to the sequential
+`println("{}, {}", x, x)`, no runtime machinery. libc's `printf` remains
+the tool only for what the modifiers do not carry: scientific notation
+(`printf("%g\n", f)` / `%e`). The legacy printf-style `print`/`println`
+pair is kept behind `-D PRINTF_PRINTLN=1` for programs mid-migration.
 
 ## Reaching libc
 

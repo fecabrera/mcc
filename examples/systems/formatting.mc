@@ -12,6 +12,7 @@ import "libc/stdio";
 // ("" picks the default). Because the modifier is a char slice, a bare
 // string literal adapts to it directly at the call. This file makes direct
 // format() calls over mixed value types, steers integers with "x" / "p",
+// rounds and pads floats with ".2f" / "8.2f",
 // renders slices (nested too), hits the <typename> fallback, and then makes
 // its own struct printable by declaring one more overload into the set.
 // Builds on io.mc (raw printf, used here to print the results),
@@ -81,6 +82,20 @@ fn main() -> int32 {
     format(line, 255 as int32, "06x");       // 0000ff
     show("hex:", line);
 
+    // Float modifiers -- the grammar is [[N].M]f: ".M" rounds to M
+    // decimals (".0f" drops the point entirely), and an optional leading
+    // width N space-pads the whole field, sign included, right-aligned.
+    // A bare "f" (or "") keeps the six-decimal default seen above. The
+    // rendering is snprintf's %*.*f, so the rounding is the C library's;
+    // scientific notation is the one float spelling still left to raw
+    // printf (%g / %e).
+    format(line, 3.14159, ".2f");            // 3.14
+    format(line, ' ', "");
+    format(line, 3.7, ".0f");                // 4
+    format(line, ' ', "");
+    format(line, -3.5, "8.2f");              // "   -3.50": 8 wide, sign inside
+    show("float:", line);
+
     // slice<T> renders a bracketed list. Each element re-enters the set, so
     // the modifier applies per element and nesting recurses.
     let bytes: int32[3] = [10, 255, 3];
@@ -115,9 +130,10 @@ fn main() -> int32 {
 
     // println is this same set behind `{}` placeholders: each `{[modifiers]}`
     // renders the next argument, the bracket content arriving verbatim as the
-    // modifier -- the string width `{s6}` included. The point* overload above
-    // answers the last placeholder.
-    println("println:  {} {x} {yes} {s6}| {x}", -4, 255 as uint8, true, "mc", &p);
+    // modifier -- the float precision `{.2f}` and string width `{s6}`
+    // included. The point* overload above answers the last placeholder.
+    println("println:  {} {x} {.2f} {yes} {s6}| {x}",
+            -4, 255 as uint8, 3.5, true, "mc", &p);
 
     return 0;
 }

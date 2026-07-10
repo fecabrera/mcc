@@ -140,8 +140,7 @@ def test_float_arithmetic(capfd):
         "    let f: float64 = 2.0;\n"
         "    f += 0.5;\n"
         "    f *= 4.0;\n"
-        '    printf("%.1f\\n", f);\n'  # precision: the C formatter, until {:...} carries it
-
+        '    println("{.1f}", f);\n'  # precision: the {.1f} modifier carries it now
         "    return 0;\n"
         "}\n"
     )

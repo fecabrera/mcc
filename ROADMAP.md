@@ -2453,8 +2453,8 @@ already do).
   - [x] printf-style `%` formatting — the previous `print`/`println` in the
         [standard library](README.md#standard-library), superseded by the
         `{}` model and kept behind `-D PRINTF_PRINTLN=1` for programs
-        mid-migration; libc's `printf` stays the width/precision tool until
-        the modifiers stage below lands
+        mid-migration; with the modifier stages below all landed, libc's
+        `printf` stays only the scientific-notation (`%g`/`%e`) tool
     - [ ] retire the `PRINTF_PRINTLN` toggle — the legacy pair and its
           `@if`/`@else` branches in `std/io` need a recorded deletion
           decision (which release removes them); the flip audit's lean
@@ -2521,10 +2521,16 @@ already do).
         strlen-measured slice and delegating to the `slice<const char>`
         member — and a null `char*` now renders `(null)` instead of being
         undefined
-  - [ ] float format modifiers — precision (`.Nf`, e.g. `{.8f}`); the
-        per-type channel it travels through (the `format` set's `modifier`
-        parameter, already routing the integer and string grammars per
-        type) shipped with the baseline module above
+  - [x] float format modifiers — precision and field width, the `[[N].M]f`
+        grammar: `{.2f}` rounds to two decimals (`{.0f}` drops the point
+        entirely), an optional leading width space-pads the whole field,
+        sign included (`{8.2f}`), and a bare `{f}` keeps the six-decimal
+        default. Parsed in the same per-type channel the integer and
+        string grammars ride (the `format` set's `modifier` parameter),
+        and rendered through the member's existing snprintf engine — the
+        parsed width and precision feed a `%*.*f`, so the rounding is the
+        C library's. The last runtime modifier stage: libc's `printf`
+        remains only the scientific-notation (`%g`/`%e`) tool
 - [ ] String interpolation — `println(f"x = {x}")`: an `f`-prefixed string
       literal with `{expr}` holes desugars at compile time into the formatted
       `println("{}", ...)` call above (`{{`/`}}` escape a literal brace), so it

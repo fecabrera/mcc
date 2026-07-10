@@ -38,6 +38,15 @@ enum str_fmt_state {
     RPADDING = 2,
 }
 
+// The float modifier mini-parser's states, one per grammar position:
+// `[[N].M]f` — the field-width digits, then the decimal count behind the
+// '.' (see the float64 member below).
+@private
+enum float_fmt_state {
+    LENGTH = 0,
+    PRECISION = 1,
+}
+
 /**
  * Fallback for types with no formatter: appends the type's name in angle
  * brackets (e.g. `<uint8*>`) instead of a value.
@@ -249,13 +258,52 @@ fn _format(mut str: string, value: uint64, const modifier: slice<char>, neg: boo
 /**
  * Appends a float64's fixed-point rendering to str.
  *
+ * The modifier grammar is `[[N].M]f`, parsed by the float_fmt_state
+ * machine: a '.' and a decimal count round the value to M decimals
+ * (".2f" renders `3.50`, ".0f" drops the point entirely), and an
+ * optional leading decimal width space-pads the whole field, sign
+ * included ("8.2f" renders `    3.50`). An empty modifier — or a bare
+ * "f" — renders the six-decimal default. The rendering stays
+ * snprintf's: the parsed width and precision feed a `%*.*f`, so the
+ * rounding is the C library's.
+ *
  * @param str:      destination string
  * @param value:    value to render
- * @param modifier: ignored
+ * @param modifier: `[[N].M]f`, as above; `""` renders the six-decimal
+ *                  default
  */
 fn format(mut str: string, value: float64, const modifier: slice<char>) {
+    let width: int32 = 0;
+    let precision: int32 = 6;
+    let state = float_fmt_state::LENGTH;
+
+    let i: uint64 = 0;
+    while (i < modifier.length) {
+        let c = modifier[i];
+        case (state) {
+        when float_fmt_state::LENGTH:
+            if (c >= '0' and c <= '9') {
+                width *= 10;
+                width += (c - '0') as int32;
+            } else if (c == '.') {
+                precision = 0;
+                state = float_fmt_state::PRECISION;
+            } else {
+                break;
+            }
+        when float_fmt_state::PRECISION:
+            if (c >= '0' and c <= '9') {
+                precision *= 10;
+                precision += (c - '0') as int32;
+            } else {
+                break;
+            }
+        }
+        i += 1;
+    }
+
     let buf: char[MAX_BUF_LEN];
-    snprintf(buf, MAX_BUF_LEN, "%f", value);
+    snprintf(buf, MAX_BUF_LEN, "%*.*f", width, precision, value);
     string_append(str, buf);
 }
 

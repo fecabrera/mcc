@@ -6,7 +6,7 @@ import "std/format";
 // type-driven -- no `%`-letters. The legacy printf-style pair below is kept
 // behind -D PRINTF_PRINTLN=1 for programs mid-migration; libc's printf
 // remains the tool for the formatting the `{...}` modifiers do not carry
-// yet (float precision).
+// (scientific `%g`/`%e` notation).
 @if (PRINTF_PRINTLN) {
     /**
      * Formats according to format and writes the result to standard output
@@ -105,7 +105,8 @@ import "std/format";
      * Each `{}` placeholder renders the next argument through the
      * std/format overload set (type-driven), and `{modifiers}` passes the
      * bracket content through as the per-type modifier -- `{x}`/`{X}`/`{p}`
-     * on integers, `{y}`/`{yes}` on bools, applied per element on slices.
+     * on integers, `{.2f}`/`{8.2f}` on floats, `{y}`/`{yes}` on bools,
+     * applied per element on slices.
      * `{{`/`}}` print literal braces. Making your own type printable is one
      * `format` overload in your module (the set is open).
      *

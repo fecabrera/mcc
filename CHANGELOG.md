@@ -10,6 +10,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Float format modifiers — precision and field width for `{}` print** —
+  the `format` set's `float64` member now parses the `[[N].M]f` modifier
+  grammar: `{.2f}` rounds to two decimals, `{.0f}` drops the point
+  entirely, `{8.2f}` right-aligns the rendering in an 8-wide space-padded
+  field (sign included), and a bare `{f}` (or `{}`) keeps the six-decimal
+  default. The parsed width and precision feed the member's existing
+  snprintf engine as `%*.*f`, so the rounding is the C library's, and
+  out-of-grammar input degrades silently like the integer and string
+  parsers (`{12f}` is a bare field width at the default precision). This
+  was the last runtime modifier stage: libc's `printf` remains only the
+  scientific-notation (`%g`/`%e`) tool. See
+  [Formatting](docs/language.md#formatting) and
+  [examples/systems/formatting.mc](examples/systems/formatting.mc).
+
 - **Collecting functions overload and go generic (native variadics
   stage 2, the final stage)** — the stage-1 ban is lifted: a collecting
   function (trailing `args...` / `slice<const any>`) may now join an
@@ -178,8 +192,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `char*` wraps itself in a strlen-measured slice and delegates to the
   slice member, so both speak the same grammar — and a null `char*` now
   renders `(null)` instead of being undefined behavior. String field
-  widths leave the libc-`printf` escape hatch; float precision (`.Nf`) is
-  the one formatting job left with it.
+  widths leave the libc-`printf` escape hatch; float precision followed
+  in its own stage (the entry above).
 
 - **Integer format modifiers: base, width, and zero-padding** — the
   `format` set's integer members now speak the `[0][width][x|X|b|p]`
@@ -193,8 +207,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   base applies to `|value|`, so `-4` with `x` is `-4`, no longer the
   64-bit two's-complement pattern (cast the bits unsigned to render that)
   — and the magnitude is taken by two's-complement negation in uint64
-  space, so `int64`'s minimum renders exactly. Float precision and string
-  field widths remain with libc's `printf` for now.
+  space, so `int64`'s minimum renders exactly. String field widths and
+  float precision landed in their own stages (the entries above).
 
 - **Formatted `{}` `print`/`println` is now the default** — `std/io`'s
   `print` and `println` format with `{}` placeholders, type-driven through
@@ -207,10 +221,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `slice<const any>`, and a `format` overload you write makes your type
   printable straight through `println("{}", value)` (a struct boxes by
   reference, no copy). The legacy printf-style pair is kept behind
-  `-D PRINTF_PRINTLN=1` for programs mid-migration, and libc's `printf`
-  remains the width/precision tool until the `{...}` modifier stages land
-  (positional `{n}` is planned as compile-time sugar desugaring to the
-  sequential form). The example suite, the docs, and the smoke tests all
+  `-D PRINTF_PRINTLN=1` for programs mid-migration, and with the `{...}`
+  modifier stages landed (the entries above) libc's `printf` remains only
+  the scientific-notation (`%g`/`%e`) tool (positional `{n}` is planned
+  as compile-time sugar desugaring to the sequential form). The example
+  suite, the docs, and the smoke tests all
   speak `{}` now; the only visible renderings that changed are deliberate
   (`true`/`false` for bools instead of printf's `1`/`0`). See
   [Formatted print/println](docs/language.md#formatted-print--println).
