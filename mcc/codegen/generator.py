@@ -2349,11 +2349,6 @@ class CodeGen:
                     func.line,
                 )
             symbol = self.overload_symbols.get(id(member), member.name)
-            if self.is_collecting_func(member, self.signatures[symbol][1]):
-                raise LangError(
-                    f"collecting function {func.name!r} cannot be overloaded",
-                    func.line,
-                )
             if any(is_valist(p) for p in self.signatures[symbol][1]):
                 raise LangError(
                     f"function {func.name!r} cannot be overloaded: it "
@@ -2415,7 +2410,8 @@ class CodeGen:
         templates, whose parameter types cannot resolve at declaration time
         (they may name type parameters). An alias spelling is not followed
         here; a template hiding the marker behind an alias simply stays
-        explicit-slice until generics learn collection.
+        explicit-slice (the resolution path judges a template by this same
+        syntactic marker, see :meth:`collecting_candidate`).
 
         Args:
             ref: The parameter's declared type.
@@ -2435,32 +2431,28 @@ class CodeGen:
             and not ref.args[0].args
         )
 
-    def check_template_collecting(self, func: Func):
-        """Reject a generic template shaped as a collecting function.
+    def collecting_candidate(self, func: Func) -> bool:
+        """Report whether an overload candidate collects extra arguments.
 
-        Stage-1 rule: collection runs only through the direct-call path, so a
-        collecting function cannot share a generic name -- the pre-evaluate
-        path's arity-based viability would be ambiguous against the
-        last-position rule. This is the explicit diagnostic that replaces the
-        confusing arity error a call would otherwise hit.
+        A concrete candidate resolves through its declared signature
+        (:meth:`is_collecting_func`); a generic template's parameter types
+        cannot resolve before instantiation, so the syntactic marker decides
+        (:meth:`collecting_ref` -- a template hiding the marker behind an
+        alias stays explicit-slice, as documented there).
 
         Args:
-            func: The incoming generic template.
+            func: The candidate declaration (template or concrete).
 
-        Raises:
-            LangError: When the trailing parameter spells ``slice<const
-                any>`` (and is not ``mut``).
+        Returns:
+            ``True`` when calls to this candidate collect their extras.
         """
-        if (
-            func.params
-            and self.collecting_ref(func.params[-1][1])
-            and func.params[-1][0] not in func.mut_params
-        ):
-            raise LangError(
-                "a generic function cannot be a collecting function "
-                "(native variadic collection does not reach generics yet)",
-                func.line,
-            )
+        if not func.params or func.params[-1][0] in func.mut_params:
+            return False
+        if func.type_params:
+            return self.collecting_ref(func.params[-1][1])
+        symbol = self.overload_symbols.get(id(func), func.name)
+        sig = self.signatures.get(symbol)
+        return sig is not None and self.is_collecting_func(func, sig[1])
 
     def check_collecting_decl(self, func: Func, params: list):
         """Reject collecting-function shapes whose calls could never collect.
@@ -3973,7 +3965,6 @@ class CodeGen:
             if func.static:
                 self.symbol_bases[key] = self.static_base(func.name, func.source)
                 if func.type_params:
-                    self.check_template_collecting(func)
                     # A @static template is file-scoped and never joins an
                     # overload set, so no overlap check -- but its groups
                     # still resolve, filter calls, and get the eager check.
@@ -4021,7 +4012,6 @@ class CodeGen:
                 # joining stays an error -- all overloads of a name live in
                 # one defining module -- as does sharing a name with an
                 # @extern (its C symbol is fixed).
-                self.check_template_collecting(func)
                 self.check_group_decl(func)
                 self.check_bound_decl(func)
                 members = self.concrete_decls.get(func.name)
@@ -4107,14 +4097,6 @@ class CodeGen:
                     # variadics revisit when native variadics land.
                     raise LangError(
                         f"variadic function {func.name!r} cannot be overloaded",
-                        func.line,
-                    )
-                if self.is_collecting_func(func, params):
-                    # A collecting candidate would make arity-based viability
-                    # ambiguous against the last-position rule; a later stage
-                    # lifts this.
-                    raise LangError(
-                        f"collecting function {func.name!r} cannot be overloaded",
                         func.line,
                     )
                 ret = self.lang_type(func.ret_type, func.line)
@@ -4300,11 +4282,6 @@ class CodeGen:
                 if func.variadic:
                     raise LangError(
                         f"variadic function {func.name!r} cannot be overloaded",
-                        func.line,
-                    )
-                if self.is_collecting_func(func, params):
-                    raise LangError(
-                        f"collecting function {func.name!r} cannot be overloaded",
                         func.line,
                     )
                 if any(is_valist(p) for p in params):
@@ -10371,9 +10348,10 @@ class CodeGen:
             self.hidden_ref.get(symbol, frozenset()),
             mut,
             self.nonnull_ref.get(symbol, frozenset()),
-            # The trailing slice<const any> type is the collecting marker;
-            # only the direct-call path collects (function-pointer calls
-            # stay explicit-slice), and a mut trailing parameter never does.
+            # The trailing slice<const any> type is the collecting marker
+            # (function-pointer calls stay explicit-slice; overload sets
+            # collect through gen_generic_call), and a mut trailing
+            # parameter never does.
             collecting=self.collecting_params(params)
             and len(params) - 1 not in mut,
             # An @extern @nonnull slot grades a possibly-null argument by
@@ -10667,6 +10645,39 @@ class CodeGen:
         Returns:
             The LLVM value to pass for the trailing parameter.
         """
+        return self.collect_from_values(
+            [self.gen_expr(e) for e in extras], extras, ptype, hidden, label, line
+        )
+
+    def collect_from_values(
+        self,
+        tvs: list[TypedValue],
+        exprs: list,
+        ptype: LangType,
+        hidden: bool,
+        label: str,
+        line: int,
+    ) -> ir.Value:
+        """Form the trailing ``slice<const any>`` from already-evaluated extras.
+
+        The boxing/slice-forming core of :meth:`collect_variadic_args`,
+        shared with the overload-resolution path, whose extras were lowered
+        before the winner was known -- no boxing happens before then (boxing
+        is store-side and its borrow target is always ``const any``, so it
+        is candidate-independent).
+
+        Args:
+            tvs: The evaluated extra arguments, in call order.
+            exprs: Their source expressions (a bare struct variable shares
+                its storage as the box's hidden reference).
+            ptype: The trailing ``slice<const any>`` parameter type.
+            hidden: Whether that parameter travels by hidden reference.
+            label: A description of the callee, for error messages.
+            line: Source line for diagnostics.
+
+        Returns:
+            The LLVM value to pass for the trailing parameter.
+        """
         context = f"the collected arguments of {label}"
 
         def passed(tv: TypedValue) -> ir.Value:
@@ -10677,18 +10688,13 @@ class CodeGen:
                 return self.spill_to_temp(tv, ptype, line, context)
             return self.coerce(tv, ptype, line, context).value
 
-        if len(extras) == 1:
-            tv = self.gen_expr(extras[0])
-            actual = strip_const(tv.type)
+        if len(tvs) == 1:
+            actual = strip_const(tvs[0].type)
             if is_slice(actual) and is_any(actual.args[0]):
                 # Pass-through: the argument count equals the parameter count
                 # and the final argument already is the trailing slice type.
-                return passed(TypedValue(tv.value, actual))
-            boxed = [self.box_collected(tv, line, extras[0])]
-        else:
-            boxed = [
-                self.box_collected(self.gen_expr(e), line, e) for e in extras
-            ]
+                return passed(TypedValue(tvs[0].value, actual))
+        boxed = [self.box_collected(tv, line, e) for tv, e in zip(tvs, exprs)]
         if not boxed:
             data = ir.Constant(ptype.fields[0][1].ir, None)
             return passed(self.make_slice(ptype, data, ir.Constant(UINT64.ir, 0)))
@@ -11556,8 +11562,19 @@ class CodeGen:
         # which overload wins (and with it which positions are mut) is not
         # known yet. Form the address wherever ANY arity-matching candidate
         # is mut and the argument denotes storage, and defer the
-        # lvalue/value decision until after overload resolution.
-        matching = [f for f in candidates if len(f.params) == len(expr.args)]
+        # lvalue/value decision until after overload resolution. Arity
+        # matching is collecting-aware: a collecting candidate takes any
+        # count from its fixed prefix up, and its mut positions are all
+        # fixed ones (a mut trailing slice is never a marker).
+        matching = [
+            f
+            for f in candidates
+            if (
+                len(expr.args) >= len(f.params) - 1
+                if self.collecting_candidate(f)
+                else len(f.params) == len(expr.args)
+            )
+        ]
         maybe_mut = frozenset().union(*(self.mut_indices(f) for f in matching))
         arg_tvs, addrs = [], {}
         # Non-null proofs are judged per argument as it is evaluated, not at
@@ -11624,6 +11641,11 @@ class CodeGen:
                 # untyped literal's int32 leaning) let the direct pass
                 # "succeed".
                 mut_positions = self.mut_indices(func)
+                # A collecting candidate's trailing const position holds an
+                # extra (or nothing), never a decayable fixed argument.
+                fixed = len(func.params) - (
+                    1 if self.collecting_candidate(func) else 0
+                )
                 if any(
                     arg_tvs[i].type is not NULLT
                     and strip_const(arg_tvs[i].type).pointee is not None
@@ -11634,6 +11656,7 @@ class CodeGen:
                         )
                     )
                     for i in self.decay_indices(func)
+                    if i < fixed
                 ):
                     decayed_bindings = self.resolve_bindings(
                         func, expr, arg_tvs, lenient=True, decay=True
@@ -11685,7 +11708,7 @@ class CodeGen:
                 if unaddressed:
                     mut_failures.append(min(unaddressed))
                     continue
-                viable.append((self.rank(func), func, bindings))
+                viable.append((self.call_rank(func, arg_tvs), func, bindings))
             if not viable:
                 # Two-tier viability: decay readings enter resolution only
                 # when no candidate matched the pointer type directly, so
@@ -11824,15 +11847,22 @@ class CodeGen:
         # A template is never @extern (externs are non-generic direct
         # symbols), so this fork stays relaxed-free; threaded for parity.
         extern = expr.name in self.extern_decls
+        # The winner's collection decision mirrors resolution's
+        # (collecting_candidate: the syntactic marker for a template, the
+        # declared signature for a concrete member): the fixed prefix
+        # marshals through the loop below, the extras form the trailing
+        # slice after it -- in parity with marshal_args' head/tail split.
+        collecting = self.collecting_candidate(func)
+        n_fixed = len(params) - 1 if collecting else len(params)
         for i in self.nonnull_indices(func):
-            if i < len(expr.args):
+            if i < len(expr.args) and i < n_fixed:
                 self.check_nonnull_arg(
                     expr.args[i], f"argument {i + 1} of {expr.name!r}",
                     expr.line, proven=proofs[i], extern=extern,
                 )
         hidden = self.hidden_ref_indices(func, params)
         args = []
-        for i, (tv, p) in enumerate(zip(arg_tvs, params)):
+        for i, (tv, p) in enumerate(zip(arg_tvs[:n_fixed], params)):
             context = f"argument {i + 1} of {expr.name!r}"
             if i in mut_positions:
                 # A decayed pointer is forwarded by value (it was already
@@ -11879,6 +11909,31 @@ class CodeGen:
                     args.append(self.spill_to_temp(tv, p, expr.line, context))
             else:
                 args.append(self.coerce(tv, p, expr.line, context).value)
+        if collecting:
+            # Collection is emitted from the already-evaluated values (no
+            # boxing happened before the winner was known); only a deferred
+            # array/bare-struct literal extra was never evaluated, and
+            # re-generating it raises the direct path's exact
+            # receiver-less-literal error.
+            extras = []
+            for j in range(n_fixed, len(arg_tvs)):
+                raw_arg = expr.args[j]
+                if self.defers_array_literal(raw_arg) or self.defers_struct_literal(
+                    raw_arg
+                ):
+                    extras.append(self.gen_expr(raw_arg))
+                else:
+                    extras.append(arg_tvs[j])
+            args.append(
+                self.collect_from_values(
+                    extras,
+                    expr.args[n_fixed:],
+                    params[-1],
+                    n_fixed in hidden,
+                    repr(expr.name),
+                    expr.line,
+                )
+            )
         raw = self.emit_call(
             fn, args, preserves=self.effect_bits.get(id(func)) is False
         )
@@ -11974,7 +12029,7 @@ class CodeGen:
                 ok = False
                 break
             if ok:
-                viable.append((self.rank(func), func, bindings))
+                viable.append((self.call_rank(func, arg_tvs), func, bindings))
         return viable
 
     def fill_default_bindings(self, decl, bindings: dict[str, LangType], line: int):
@@ -12130,7 +12185,23 @@ class CodeGen:
         Raises:
             LangError: On a non-lenient mismatch (arity, inference, or shape).
         """
-        if len(expr.args) != len(func.params):
+        # A collecting candidate is viable from its fixed count up, and its
+        # trailing slice<const any> never unifies or shape-checks: every zip
+        # below is sliced to the fixed prefix, so an extra is never paired
+        # against the slice pattern (and type parameters bind from the fixed
+        # arguments only).
+        n_fixed = len(func.params)
+        if self.collecting_candidate(func):
+            n_fixed -= 1
+            if len(expr.args) < n_fixed:
+                if lenient:
+                    return None
+                raise LangError(
+                    f"{expr.name!r} expects at least {n_fixed} argument(s), "
+                    f"got {len(expr.args)}",
+                    expr.line,
+                )
+        elif len(expr.args) != len(func.params):
             if lenient:
                 return None
             raise LangError(
@@ -12166,6 +12237,10 @@ class CodeGen:
         actuals = [tv.type for tv in arg_tvs]
         if decay:
             for i in self.decay_indices(func):
+                if i >= n_fixed:
+                    # The collecting position is const, but its actual is an
+                    # extra (or absent); extras never decay.
+                    continue
                 bare = strip_const(actuals[i])
                 if actuals[i] is not NULLT and bare.pointee is not None:
                     actuals[i] = bare.pointee
@@ -12179,7 +12254,9 @@ class CodeGen:
             # literal adapts to it.
             for adaptable_pass in (False, True):
                 strict = not adaptable_pass and not expr.type_args
-                for (_, ptype), tv, actual in zip(func.params, arg_tvs, actuals):
+                for (_, ptype), tv, actual in zip(
+                    func.params[:n_fixed], arg_tvs, actuals
+                ):
                     if tv.adaptable == adaptable_pass and tv.type is not NULLT:
                         self.unify(
                             ptype,
@@ -12207,7 +12284,7 @@ class CodeGen:
             )
         if lenient:
             for (_, ptype), tv, actual, arg in zip(
-                func.params, arg_tvs, actuals, expr.args
+                func.params[:n_fixed], arg_tvs, actuals, expr.args
             ):
                 if self.shape_matches(
                     ptype, actual, tv.adaptable, func.type_params, expr.line
@@ -12322,6 +12399,61 @@ class CodeGen:
             return True
         return resolved == RAWPTR and is_pointer(peeled)
 
+    def call_rank(
+        self, func: Func, arg_tvs: list[TypedValue]
+    ) -> tuple[int, int, int, int]:
+        """A viable candidate's per-call sort key.
+
+        ``(no-collect, tier, specificity, fixed count)``: a candidate that
+        matches this call without collecting beats any candidate that must
+        collect, as the outermost component regardless of tier -- an
+        exact-arity generic beats a concrete collecting fallback (the C++
+        ellipsis-ranks-worst analogue). A pass-through-shaped match counts
+        as not-collecting at full specificity (see :meth:`passes_through`).
+        A collecting match scores specificity over its fixed prefix only --
+        the trailing ``slice<const any>`` pattern's own points must never
+        arbitrate against a competing prefix -- and more fixed parameters
+        break the remaining tie; equal fixed counts with a tying
+        fixed-prefix specificity stay the ambiguity error. Non-collecting
+        matches all share this call's arity, so their trailing count is
+        inert and every pre-collection ordering is preserved.
+
+        Args:
+            func: The viable candidate.
+            arg_tvs: The already-evaluated argument values.
+
+        Returns:
+            The sort key, greater meaning preferred.
+        """
+        tier, spec = self.rank(func)
+        if self.collecting_candidate(func) and not self.passes_through(
+            func, arg_tvs
+        ):
+            fixed = len(func.params) - 1
+            return (0, tier, self.specificity(func, fixed), fixed)
+        return (1, tier, spec, len(func.params))
+
+    def passes_through(self, func: Func, arg_tvs: list[TypedValue]) -> bool:
+        """Whether a call to a collecting candidate is pass-through-shaped.
+
+        Exact arity with the final argument already exactly ``slice<const
+        any>`` (or ``slice<any>``, which widens): the slice hands over
+        uncollected (see :meth:`collect_variadic_args`, which keeps the
+        detection at emission), so for ranking the match counts as
+        not-collecting at full specificity.
+
+        Args:
+            func: The collecting candidate.
+            arg_tvs: The already-evaluated argument values.
+
+        Returns:
+            ``True`` for the pass-through shape.
+        """
+        if len(arg_tvs) != len(func.params):
+            return False
+        last = strip_const(arg_tvs[-1].type)
+        return is_slice(last) and is_any(last.args[0])
+
     def rank(self, func: Func) -> tuple[int, int]:
         """An overload candidate's sort key: (tier, specificity).
 
@@ -12353,7 +12485,7 @@ class CodeGen:
             tier = 0
         return (tier, self.specificity(func))
 
-    def specificity(self, func: Func) -> int:
+    def specificity(self, func: Func, count: int | None = None) -> int:
         """Rank an overload by how specific its parameter patterns are.
 
         Concrete types beat structured patterns, which beat bare type
@@ -12361,6 +12493,8 @@ class CodeGen:
 
         Args:
             func: The candidate function.
+            count: When given, score only the first ``count`` parameters
+                (a collecting candidate's fixed prefix).
 
         Returns:
             The summed specificity score across the parameters.
@@ -12375,7 +12509,8 @@ class CodeGen:
                 value += 8
             return value
 
-        return sum(score(p) for _, p in func.params)
+        params = func.params if count is None else func.params[:count]
+        return sum(score(p) for _, p in params)
 
     def instantiate(
         self, func: Func, bindings: dict[str, LangType], line: int

@@ -2023,7 +2023,7 @@ already do).
           appears. A non-null return type extends return types the same way
           the now-shipped [`mut` returns](#functions-and-methods) did, whose
           plumbing is the precedent to follow if this happens
-- [ ] Native variadic arguments — `fn f(args: slice<const any>)` (with
+- [x] Native variadic arguments — `fn f(args: slice<const any>)` (with
       `fn f(args...)` as sugar): a trailing `slice<const any>` parameter collects
       the call's extra arguments, so `f(x, a, b, c)` (after `f`'s fixed
       parameters) gathers `a, b, c` into `args`. The caller boxes each into a
@@ -2083,9 +2083,9 @@ already do).
         `check_boxable`'s struct/array rejections firing at the
         collection site; implemented, see
         [Native variadic arguments](docs/language.md#native-variadic-arguments)
-  - [ ] stage 2: generic and overload-set parity — collection through the
+  - [x] stage 2: generic and overload-set parity — collection through the
         pre-evaluate path (its arity filter and viability arity error
-        exclude collecting candidates today), mirroring the
+        excluded collecting candidates until this stage), mirroring the
         literal-adaptation parity lesson from
         [function overloading](docs/language.md#function-overloading)'s
         first stage, and lifting the stage-1 ban. Ranking is settled: a
@@ -2107,7 +2107,9 @@ already do).
         forces evaluation order. C-style `...` variadics stay banned
         from overload sets (that lift belongs to the
         [C variadics](#functions-and-methods) item below), and `.mci`
-        needs zero changes
+        needed zero changes. Implemented, see
+        [Native variadic arguments](docs/language.md#native-variadic-arguments)
+        and [Function overloading](docs/language.md#function-overloading)
   - [x] stage 3: the stdlib flip — shipped, by a different route than
         the `format_arg` repair this stage once prescribed:
         `lib/std/format.mc` was replaced wholesale by the open `format`

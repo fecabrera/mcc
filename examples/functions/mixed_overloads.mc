@@ -53,5 +53,7 @@ fn main() -> int32 {
 // See also: overloading.mc (concrete sets and their rules), mut_overloads.mc
 // (specificity and mut inside a generic set), types/generics.mc
 // (monomorphization), types/type_groups.mc (closed type groups adding a
-// bounded tier between the concrete and generic ranks here). Full rules:
+// bounded tier between the concrete and generic ranks here),
+// native_variadics.mc (collecting `args...` members joining a set, ranked
+// below anything that matches without collecting). Full rules:
 // docs/language.md, "Function overloading".

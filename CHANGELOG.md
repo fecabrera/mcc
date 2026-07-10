@@ -10,6 +10,35 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Collecting functions overload and go generic (native variadics
+  stage 2, the final stage)** — the stage-1 ban is lifted: a collecting
+  function (trailing `args...` / `slice<const any>`) may now join an
+  overload set or share a generic name — `fn log(args...)` beside
+  `fn log(level: int32, args...)`, or `fn acc<T>(seed: T, args...)`,
+  whose `T` binds from the fixed arguments only (the extras are
+  type-erased). A collecting candidate is viable from its fixed count
+  up, and the ranking is settled: a candidate that matches without
+  collecting beats any that must collect, as the outermost rank
+  component regardless of tier — an exact-arity generic beats a
+  concrete collecting fallback (the C++ ellipsis-ranks-worst
+  analogue) — a pass-through-shaped final argument counts as
+  not-collecting at full specificity, a collecting candidate's
+  specificity counts its fixed prefix only, more fixed parameters wins
+  between collectors, and equal fixed counts with a tying fixed-prefix
+  specificity stay the ambiguity error. No boxing happens before the
+  winner is known — collection is emitted from the already-evaluated
+  arguments (only a deferred array or bare-struct literal extra
+  re-generates, reproducing the direct path's exact errors) — so
+  overload resolution never changes what, or in what order, a call
+  evaluates. C-style `...` variadics stay banned from overload sets
+  (that lift belongs to the C variadics roadmap item), and `.mci`
+  interfaces needed zero changes: the desugared type is the marker and
+  the params-key mangling already distinguishes the members. This
+  closes the native variadic arguments roadmap item. See
+  [Native variadic arguments](docs/language.md#native-variadic-arguments),
+  [Function overloading](docs/language.md#function-overloading), and
+  [examples/functions/native_variadics.mc](examples/functions/native_variadics.mc).
+
 - **Layout-equivalent struct casts (tuples stage 4, the final stage)** —
   a tuple casts to any struct with the same field types in the same
   order, and a struct back to its positional form: `(3, 4) as point`

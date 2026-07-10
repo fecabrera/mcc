@@ -721,9 +721,11 @@ that keep it C-simple:
   open, adding an import can be what turns a working `let g = f;` into
   this error.
 - **Non-overloadables:** `main` (JIT and `cc` resolve the plain symbol),
-  variadic functions (the viability filter matches arity exactly),
+  C-style variadic (`...`) functions,
   functions with a `va_list` parameter, `@extern`/`@symbol` functions
-  (their C symbol is fixed), and `@static` functions.
+  (their C symbol is fixed), and `@static` functions. A
+  [collecting function](#native-variadic-arguments) *does* overload; see
+  the ranking rule below.
 
 String and array literals keep adapting when a function becomes overloaded: a
 literal (or a ternary of literals) still borrows to a `slice<char>` /
@@ -742,12 +744,19 @@ The concrete tier wins on an exact match — including against a generic
 whose *effective* parameter list ties the concrete one — the bounded tier's
 written, closed commitment to a type set beats the fully open pattern, and
 the unbounded generic covers everything else. Explicit type arguments
-(`f<int32>(...)`) select among the generic candidates only. Two same-tier
+(`f<int32>(...)`) select among the generic candidates only. One component
+ranks outside the tiers: a [collecting](#native-variadic-arguments)
+candidate that must collect loses to *any* candidate that matches without
+collecting, whatever their tiers (an exact-arity unbounded generic beats a
+concrete collecting fallback), a pass-through-shaped final argument counts
+as not collecting, a collecting candidate's specificity counts its fixed
+prefix only, and more fixed parameters breaks a tie between collectors.
+Two same-tier
 candidates of equal specificity stay the
 ambiguity error, which is also the enforced collision rule between the
 classes (a generic whose substituted parameter list duplicates a concrete
 one is not statically detectable in general). The concrete side of a mixed
-set keeps the concrete rules: `main`, variadic, and `va_list`-taking
+set keeps the concrete rules: `main`, C-variadic, and `va_list`-taking
 functions cannot join, whichever side declares first. The symbol choice
 counts concrete signatures alone, so one concrete member beside a template
 still keeps its plain, C-linkable symbol.
@@ -931,14 +940,29 @@ The rules, all type-shaped:
   allocas with function lifetime, so calls inside loops and `defer`
   bodies are safe; as with every slice borrow, the callee must not retain
   the slice past the call.
-- **v1 restrictions.** A collecting function cannot be
-  [overloaded](#function-overloading) or share a
-  [generic](#generics) name (collection runs on the direct-call path only;
-  generics and overload sets come in a later stage). Function-pointer
+- **Overloads and generics collect too.** A collecting function may be
+  [overloaded](#function-overloading) or share a [generic](#generics)
+  name — `fn log(args...)` beside `fn log(level: int32, args...)`, or
+  `fn acc<T>(seed: T, args...)`, whose `T` binds from the fixed
+  arguments only (the extras are type-erased). A collecting candidate is
+  viable from its fixed count up, and the ranking is simple: a candidate
+  that matches **without collecting beats any that must collect**, as
+  the outermost rank component regardless of tier — an exact-arity
+  generic beats a concrete collecting fallback (the C++
+  ellipsis-ranks-worst analogue) — and a pass-through-shaped match
+  (exact arity, final argument already `slice<const any>`) counts as
+  not-collecting at full specificity. Between collecting candidates,
+  more fixed parameters wins; equal fixed counts with a tying
+  fixed-prefix specificity is the usual ambiguity error. No boxing
+  happens before the winner is known — collection is emitted from the
+  already-evaluated arguments — so overload resolution never changes
+  what, or in what order, a call evaluates.
+- **Restrictions.** Function-pointer
   types carry no marker, so a call through a `fn(...)` value passes the
   slice explicitly. A collecting function cannot also take C varargs
   (`...`), cannot be `@extern` (C sees no `slice<const any>`), and `main`
-  cannot collect. A `mut` trailing `slice<const any>` never collects —
+  cannot collect; C-style `...` variadics also stay banned from overload
+  sets. A `mut` trailing `slice<const any>` never collects —
   `mut` lends the caller's own storage — so such a function stays
   explicit-slice.
 

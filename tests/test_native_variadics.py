@@ -7,9 +7,10 @@ allocation-free. `fn f(args...)` is pure sugar for
 `fn f(const args: slice<const any>)`. The pass-through rule keeps the change
 purely additive: at exact arity a final argument that already is a
 `slice<const any>` (or `slice<any>`, which widens) hands over uncollected.
-Stage 1 collects on the direct-call path only: a collecting function is
-non-overloadable, cannot share a generic name, and function-pointer calls
-stay explicit-slice.
+Collection runs on the direct-call path and through overload resolution:
+a collecting function may be overloaded or share a generic name, ranked
+below any candidate that matches without collecting (more fixed parameters
+break ties between collectors). Function-pointer calls stay explicit-slice.
 """
 
 import pytest
@@ -295,42 +296,230 @@ def test_too_few_fixed_arguments():
         )
 
 
-def test_collecting_function_cannot_be_overloaded():
+def test_c_variadics_stay_banned_from_overload_sets():
+    # Only the collecting ban lifted; the C-ABI `...` lift belongs to the
+    # separate C-variadics roadmap item.
     with pytest.raises(
-        LangError, match="collecting function 'f' cannot be overloaded"
+        LangError, match="variadic function 'f' cannot be overloaded"
     ):
-        compile_ir("fn f(args...) {}\nfn f(x: int32) {}")
+        compile_ir("fn f(fmt: char*, ...) {}\nfn f(x: int32) {}")
 
 
-def test_collecting_function_cannot_join_a_generic_name():
-    # A concrete collecting function joining a template (a mixed set).
+# ------------------------------------------- overload and generic parity
+
+def test_a_collecting_function_can_be_overloaded():
+    # The stage-1 ban is lifted: an exact-arity concrete match beats the
+    # collector (no-collect is the outermost rank component), everything
+    # else collects.
+    assert run(
+        """
+        fn f(x: int32) -> int32 { return 100 + x; }
+        fn f(args...) -> int32 { return args.length as int32; }
+        fn main() -> int32 {
+            if (f(5) != 105) { return 1; }      // exact arity: never collects
+            if (f() != 0) { return 2; }         // zero extras
+            if (f(1, 2) != 2) { return 3; }     // extras collect
+            if (f('c') != 1) { return 4; }      // wrong type for f(int32)
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_an_exact_arity_generic_beats_a_concrete_collector():
+    # No-collect outranks the concrete-beats-generic tier: the unbounded
+    # template wins at exact arity even against a concrete collecting
+    # fallback (the C++ ellipsis-ranks-worst analogue).
+    assert run(
+        """
+        fn g<T>(a: T, b: T) -> int32 { return 1; }
+        fn g(args...) -> int32 { return 2; }
+        fn main() -> int32 {
+            if (g(1, 2) != 1) { return 1; }        // exact-arity generic
+            if (g(7) != 2) { return 2; }           // one arg: collector
+            if (g(1, 2, 3) != 2) { return 3; }     // three: collector
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_between_collectors_more_fixed_parameters_wins():
+    assert run(
+        """
+        fn log(args...) -> int32 { return args.length as int32; }
+        fn log(level: int32, args...) -> int32 {
+            return level * 100 + args.length as int32;
+        }
+        fn main() -> int32 {
+            if (log() != 0) { return 1; }           // only zero-fixed viable
+            if (log(3) != 300) { return 2; }        // both viable: more fixed
+            if (log(3, 4) != 301) { return 3; }
+            if (log('a', 'b') != 2) { return 4; }   // char misses int32 level
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_equal_fixed_counts_with_tying_specificity_are_ambiguous():
     with pytest.raises(
-        LangError, match="collecting function 'f' cannot be overloaded"
+        LangError, match="call to 'f' is ambiguous between overloads"
     ):
-        compile_ir("fn f<T>(x: T) {}\nfn f(args...) {}")
-    # And the same in declaration order: the template joins the concrete.
-    with pytest.raises(
-        LangError, match="collecting function 'f' cannot be overloaded"
-    ):
-        compile_ir("fn f(args...) {}\nfn f<T>(x: T) {}")
+        compile_ir(
+            "fn f<T>(x: T, y: int32, args...) -> int32 { return 1; }\n"
+            "fn f<T>(x: int32, y: T, args...) -> int32 { return 2; }\n"
+            "fn main() -> int32 {\n"
+            "    return f(1 as int32, 2 as int32, 'c');\n"
+            "}"
+        )
 
 
-def test_a_generic_function_cannot_collect():
+def test_pass_through_survives_in_an_overload_set():
+    # At exact arity a slice<const any> final argument still hands over
+    # uncollected -- the callee sees the original elements, never a
+    # re-boxed one-element slice.
+    assert run(
+        """
+        fn t(x: int32) -> int32 { return -1; }
+        fn t(args...) -> int32 {
+            let n: int32 = 0;
+            for a in args {
+                case type (a) { when int32 v: n = n + v; else: return -2; }
+            }
+            return n;
+        }
+        fn main() -> int32 {
+            let xs: any[2];
+            xs[0] = 5;
+            xs[1] = 6;
+            return t(xs as slice<const any>) == 11 ? 0 : 1;
+        }
+        """
+    ) == 0
+
+
+def test_a_generic_function_can_collect():
+    # T binds from the fixed arguments only; the extras recover it through
+    # the generic case-type arm.
+    assert run(
+        """
+        fn acc<T>(seed: T, args...) -> T {
+            let n: T = seed;
+            for a in args {
+                case type (a) { when T v: n = n + v; else: return seed; }
+            }
+            return n;
+        }
+        fn main() -> int32 {
+            if (acc(10, 1, 2) != 13) { return 1; }
+            if (acc(7) != 7) { return 2; }             // zero extras
+            let w: int64 = 1000000000000;
+            if (acc(w, w) != 2000000000000) { return 3; }
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_a_static_generic_function_can_collect():
+    assert run(
+        """
+        @static fn count<T>(x: T, args: slice<const any>) -> int32 {
+            return args.length as int32;
+        }
+        fn main() -> int32 { return count(1, 'a', 'b') == 2 ? 0 : 1; }
+        """
+    ) == 0
+
+
+def test_an_uninferrable_type_parameter_keeps_its_diagnostic():
+    # The extras never bind T (collection is type-erased), so a T that only
+    # the extras could name stays the existing cannot-infer error, and
+    # explicit type arguments fix it.
     with pytest.raises(
         LangError,
-        match=r"a generic function cannot be a collecting function "
-        r"\(native variadic collection does not reach generics yet\)",
+        match=r"cannot infer type parameter\(s\) T for 'u'; "
+        r"specify them explicitly, e.g. u<int32>\(\.\.\.\)",
     ):
-        compile_ir("fn f<T>(x: T, args...) {}")
+        compile_ir(
+            "fn u<T>(args...) -> int32 { return sizeof(T) as int32; }\n"
+            "fn main() -> int32 { u(1); return 0; }"
+        )
+    assert run(
+        """
+        fn u<T>(args...) -> int32 { return sizeof(T) as int32; }
+        fn main() -> int32 { return u<int64>(1, 2) == 8 ? 0 : 1; }
+        """
+    ) == 0
 
 
-def test_a_static_generic_function_cannot_collect():
+def test_a_mut_fixed_parameter_collects_through_the_set_path():
+    # The format_args shape: a mut fixed parameter needs its address formed
+    # before the winner is known, with the collecting-aware arity match.
+    assert run(
+        """
+        fn bump(name: char*) -> int32 { return -1; }
+        fn bump(mut acc: int32, args...) -> int32 {
+            for a in args {
+                case type (a) { when int32 v: acc = acc + v; else: acc = -1000; }
+            }
+            return 0;
+        }
+        fn main() -> int32 {
+            let total: int32 = 5;
+            bump(total, 1, 2);
+            return total == 8 ? 0 : 1;
+        }
+        """
+    ) == 0
+
+
+def test_deferred_literal_extras_reproduce_the_direct_path_errors():
+    # An array or bare-struct literal extra pre-evaluates to a placeholder
+    # on the resolution path; emission re-generates it, so the receiver-less
+    # literal errors match the direct path's exactly.
+    array_msg = (
+        r"an array literal is only allowed where an array or slice type "
+        r"receives it: an array or slice<T> variable initializer, an "
+        r"array/slice element, or an `as slice<T>` borrow"
+    )
+    struct_msg = (
+        r"a bare struct literal `\{ \.\.\. \}` has no type here; write the "
+        r"type \(point \{ \.\.\. \}\) or use it where one is expected -- a "
+        r"typed let, assignment, return, argument, element, or field"
+    )
+    # Direct path (single collecting function)...
+    with pytest.raises(LangError, match=array_msg):
+        compile_ir(
+            "fn f(args...) {}\n"
+            "fn main() -> int32 { f(1, [1, 2]); return 0; }"
+        )
+    # ...and the overload-set path raise the same strings.
+    with pytest.raises(LangError, match=array_msg):
+        compile_ir(
+            "fn f(x: char) {}\nfn f(args...) {}\n"
+            "fn main() -> int32 { f(1, [1, 2]); return 0; }"
+        )
+    with pytest.raises(LangError, match=struct_msg):
+        compile_ir(
+            "fn f(x: char) {}\nfn f(args...) {}\n"
+            "fn main() -> int32 { f(1, { x = 1 }); return 0; }"
+        )
+
+
+def test_sugar_and_explicit_spelling_collide_as_duplicates():
+    # One signature, two spellings: the params-key mangling sees the
+    # desugared type, so the pair is a duplicate, not a second member.
     with pytest.raises(
         LangError,
-        match=r"a generic function cannot be a collecting function "
-        r"\(native variadic collection does not reach generics yet\)",
+        match=r"function 'f\(int32, slice<const any>\)' already defined; "
+        r"overloads must differ in parameter types",
     ):
-        compile_ir("@static fn f<T>(x: T, args: slice<const any>) {}")
+        compile_ir(
+            "fn f(x: int32, args...) {}\n"
+            "fn f(x: int32, const args: slice<const any>) {}"
+        )
 
 
 def test_main_cannot_collect():
@@ -451,6 +640,37 @@ def test_collecting_round_trips_through_mci(tmp_path):
         "fn main() -> int32 {\n"
         "    if (total(1, 2, 3) != 6) { return 1; }\n"
         "    if (total(7) != 7) { return 2; }\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    assert run_path(main) == 0
+
+
+def test_a_collecting_set_member_round_trips_through_mci(tmp_path):
+    # .mci needs zero changes for collecting overloads: the desugared type
+    # is the marker and the params-key mangling distinguishes the members,
+    # so the consumer resolves the set entirely from the stub.
+    lib = tmp_path / "vlog.mc"
+    lib.write_text(
+        "@inline fn vlog(args...) -> int32 {\n"
+        "    return args.length as int32;\n"
+        "}\n"
+        "@inline fn vlog(level: int32, args...) -> int32 {\n"
+        "    return level * 100 + args.length as int32;\n"
+        "}\n"
+    )
+    out = tmp_path / "vlog.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    # An @inline member's body travels verbatim, sugar included; it
+    # re-desugars to the same marker on re-import.
+    assert "args..." in out.read_text()
+    lib.unlink()  # force the import to resolve through the stub
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "vlog";\n'
+        "fn main() -> int32 {\n"
+        "    if (vlog('a', 'b') != 2) { return 1; }\n"
+        "    if (vlog(3, 4) != 301) { return 2; }\n"
         "    return 0;\n"
         "}\n"
     )
