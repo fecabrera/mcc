@@ -494,19 +494,30 @@ class Const:
 class Let:
     """A local variable declaration: ``let name [: type] [= value];``.
 
+    Also carries destructuring: ``let a, b = t;`` binds one local per
+    position of a tuple or slice source, and a trailing ``...`` marks the
+    last binder as the rest binder taking the tail (``let a, rest... = t;``).
+    A destructuring ``let`` never has a type annotation (each binder takes
+    its position's type) and always has an initializer.
+
     Attributes:
-        name: The variable's name.
+        name: The variable's name (the first binder when destructuring).
         type_name: Optional type annotation, inferred from ``value`` when
             ``None``.
         value: The initializer, or ``None`` for ``let x: T;`` (declared but
             uninitialized).
         line: Source line for diagnostics.
+        extra: Binders after the first, in order (empty for a plain ``let``).
+        rest: Whether the last binder (``extra[-1]``, or ``name`` when
+            ``extra`` is empty) is the trailing-``...`` rest binder.
     """
 
     name: str
     type_name: TypeRef | None
     value: object | None
     line: int
+    extra: list[str] = field(default_factory=list)
+    rest: bool = False
 
 
 @dataclass

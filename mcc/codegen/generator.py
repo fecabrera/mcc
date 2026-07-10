@@ -1994,6 +1994,8 @@ class CodeGen:
                     # which may evaluate a calling default.
                     writes = True
                 bound[stmt.name] = "local"
+                for extra in stmt.extra:  # destructuring binders
+                    bound[extra] = "local"
             elif isinstance(stmt, Assign):
                 scan_expr(stmt.value, bound)
                 name_write(stmt.name, bound)
@@ -5381,6 +5383,9 @@ class CodeGen:
             if not self.builder.block.is_terminated:
                 self.builder.branch(ctx.cont_bb)
         elif isinstance(stmt, Let):
+            if stmt.extra or stmt.rest:
+                self.gen_destructure(stmt)
+                return
             if stmt.name in self.scope_names:
                 raise LangError(
                     f"variable {stmt.name!r} already declared in this scope", stmt.line
@@ -8193,6 +8198,105 @@ class CodeGen:
             )
         return f"cannot sub-slice {base.type}; only a slice can be sub-sliced"
 
+    def gen_destructure(self, stmt: Let):
+        """Lower a destructuring ``let``: one local per bound position.
+
+        Pure sugar over shipped projections: the source evaluates exactly
+        once into a hidden local, then each binder is an ordinary ``let``
+        of ``src[i]`` and the trailing rest binder one of ``src[k:]`` --
+        constant indexing and slicing for a tuple (each binder copies its
+        position, the rest binder the narrowed tuple tail), unchecked
+        indexing and sub-slicing for a slice (the rest binder is a view of
+        the same storage, and nothing checks the source is long enough).
+        Recursing through :meth:`gen_statement` keeps every rule where it
+        lives today: per-binder duplicate checks, loads shedding ``const``,
+        the tuple bounds discipline.
+
+        Args:
+            stmt: The ``Let`` carrying ``extra``/``rest``.
+
+        Raises:
+            LangError: When the source is not a tuple or slice, or a tuple's
+                arity does not match the binder count.
+        """
+        tv = self.gen_expr(stmt.value)
+        names = [stmt.name, *stmt.extra]
+        fixed = len(names) - 1 if stmt.rest else len(names)
+        if is_tuple(strip_const(tv.type)):
+            arity = len(strip_const(tv.type).fields)
+            if fixed > arity or (not stmt.rest and fixed != arity):
+                positions = (
+                    "no positions"
+                    if arity == 0
+                    else f"{arity} position" + ("" if arity == 1 else "s")
+                )
+                binders = f"{fixed} binder" + ("" if fixed == 1 else "s")
+                if stmt.rest:
+                    binders += " and a rest"
+                raise LangError(
+                    f"cannot destructure {tv.type} into {binders} "
+                    f"(it has {positions})",
+                    stmt.line,
+                )
+        elif not is_slice(tv.type):
+            raise LangError(self.destructure_error(stmt.value, tv), stmt.line)
+        # Bind the evaluated source under a hidden name (not a lexable
+        # identifier, so it cannot collide) so the synthesized projections
+        # do not re-evaluate the expression.
+        slot = self.builder.alloca(tv.type.ir, name="destructure.src")
+        if over_aligned(tv.type):
+            slot.align = type_align(tv.type)
+        self.builder.store(tv.value, slot)
+        hidden = "0destructure"
+        self.bind_local(hidden, slot, tv.type)
+        src = Var(hidden, stmt.line)
+        for i, name in enumerate(names[:fixed]):
+            self.gen_statement(
+                Let(name, None, Index(src, IntLit(i, stmt.line), stmt.line), stmt.line)
+            )
+        if stmt.rest:
+            start = IntLit(fixed, stmt.line) if fixed else None
+            self.gen_statement(
+                Let(names[-1], None, Slice(src, start, None, stmt.line), stmt.line)
+            )
+        del self.locals[hidden]
+        self.scope_names.discard(hidden)
+
+    def destructure_error(self, base_expr, base: TypedValue) -> str:
+        """Word the rejection for a non-tuple, non-slice destructuring source.
+
+        Mirrors :meth:`sub_slice_error`: owned containers reach destructuring
+        through their existing borrow spelling, so every borrow rule (the
+        ``char[N]`` NUL-drop, the read-only source, a ``list<T>``'s derived
+        state) stays exactly where it lives today.
+
+        Args:
+            base_expr: The source's AST node (to name a string literal).
+            base: The evaluated source.
+
+        Returns:
+            The error message text.
+        """
+        if base.decayed is not None:
+            return (
+                f"cannot destructure {base.decayed}; borrow it first: "
+                f"let a, b = arr as slice<{base.decayed.element}>;"
+            )
+        if isinstance(base_expr, StrLit):
+            return (
+                "cannot destructure a string literal; borrow it first: "
+                'let a, b = "..." as slice<char>;'
+            )
+        if is_aggregate(base.type):
+            return (
+                f"cannot destructure {base.type}; borrow it first: "
+                "let a, b = xs as slice<T>;"
+            )
+        return (
+            f"cannot destructure {base.type}; "
+            "only a tuple or slice can be destructured"
+        )
+
     def gen_member_addr(
         self, base_expr, fname: str, arrow: bool, line: int
     ) -> tuple[ir.Value, LangType, int | None, bool]:
@@ -10725,6 +10829,7 @@ class CodeGen:
                 kills.add(obj.target.name)
         elif isinstance(obj, Let):
             kills.add(obj.name)
+            kills.update(obj.extra)  # destructuring binders
         elif isinstance(obj, Call):
             for i in self.call_mut_positions(obj.name):
                 if i < len(obj.args) and isinstance(obj.args[i], Var):

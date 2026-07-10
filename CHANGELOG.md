@@ -10,6 +10,27 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Destructuring with the rest binder (tuples stage 3, slices too)** —
+  `let a, b = t;` binds a tuple's positions to names, no parens, one
+  ordinary local per position (`let q, r = divmod(9, 4);` — multiple
+  return values bound by name at the call site), and the trailing-`...`
+  rest binder takes the tail: `let a, rest... = t;` is `a = t[0]`,
+  `rest = t[1:]`. Pure sugar over the shipped constant indexing and
+  slicing — the source evaluates once, each binder takes its position's
+  type (annotations are rejected), binders are fresh locals a `const`
+  source never feels, and the binder count is checked against the arity
+  at compile time: exact without a rest binder, at most the arity with
+  one, the tail narrowing uniformly (`tuple<char, float64>`, the 1-tuple,
+  `tuple<>`). The same rest binder lands on slice sources
+  (`let first, rest... = s;`), the identical desugar onto unchecked
+  indexing and sub-slicing: no length check, exactly like `s[i]`, and the
+  tail is a view of the same storage where a tuple's is a copy. Arrays,
+  `list<T>`, and string literals borrow first, as everywhere
+  (`let a, b = arr as slice<int32>;`). See
+  [Tuples](docs/language.md#tuples),
+  [Sub-slicing](docs/language.md#sub-slicing), and
+  [examples/types/tuples.mc](examples/types/tuples.mc).
+
 - **`len()` on tuples** — a tuple's arity is recovered with the existing
   `len()` builtin, the same spelling arrays use: `len(())` is `0`,
   `len((x,))` is `1`, and the count is the same adaptable compile-time

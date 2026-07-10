@@ -1624,6 +1624,33 @@ class Parser:
         if tok.kind == "let":
             self.advance()
             name = self.expect("IDENT").text
+            # Destructuring: `let a, b = t;` with an optional trailing-`...`
+            # rest binder (`let a, rest... = t;`). `...` marks the last
+            # binder only, mirroring the variadic-parameter rule.
+            names, rest = [name], False
+            if self.cur.kind == "...":
+                self.advance()
+                rest = True
+            while self.accept(","):
+                if rest:
+                    raise LangError(
+                        f"'{names[-1]}...' must be the last binder", tok.line
+                    )
+                names.append(self.expect("IDENT").text)
+                if self.cur.kind == "...":
+                    self.advance()
+                    rest = True
+            if len(names) > 1 or rest:
+                if self.cur.kind == ":":
+                    raise LangError(
+                        "destructuring binders take their types from the "
+                        "source; drop the annotation",
+                        tok.line,
+                    )
+                self.expect("=")
+                value = self.parse_expr()
+                self.expect(";")
+                return Let(name, None, value, tok.line, names[1:], rest)
             type_name = self.parse_type_ref() if self.accept(":") else None
             if self.cur.kind == ";":
                 if type_name is None:

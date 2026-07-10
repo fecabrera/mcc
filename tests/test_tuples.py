@@ -1,12 +1,13 @@
-"""The builtin tuple<A, B, ...> product type (stages 1 and 2, any arity).
+"""The builtin tuple<A, B, ...> product type (stages 1-3, any arity).
 
 The core type (an interned struct with positional fields "0", "1", ...), the
 paren literal `(a, b)` with struct-literal-style context coercion, constant
-indexing `t[n]` with compile-time bounds checks, and constant slicing `t[n:m]`
-narrowing to the smaller tuple by value. Arity is fully open: `(x,)` and
-`tuple<T>` spell the 1-tuple, `()` and `tuple<>` the zero-sized empty tuple
-(the empty struct's twin). Destructuring and the `as` struct cast land in
-later stages.
+indexing `t[n]` with compile-time bounds checks, constant slicing `t[n:m]`
+narrowing to the smaller tuple by value, and destructuring `let a, b = t;`
+with the trailing-`...` rest binder -- pure sugar over the indexing and
+slicing. Arity is fully open: `(x,)` and `tuple<T>` spell the 1-tuple, `()`
+and `tuple<>` the zero-sized empty tuple (the empty struct's twin). The `as`
+struct cast lands in stage 4.
 """
 
 import pytest
@@ -1147,6 +1148,209 @@ def test_case_type_matches_a_tuple_arm():
     fn main() -> int32 { let t = (40, 2); return probe(t); }
     """
     assert run(source) == 42
+
+
+# ------------------------------------------------- destructuring (stage 3)
+
+def test_destructure_binds_each_position():
+    source = """
+    fn main() -> int32 {
+        let t = (40, 'x', 2);
+        let a, c, b = t;
+        return c == 'x' ? a + b : -1;   // each binder takes its position's type
+    }
+    """
+    assert run(source) == 42
+
+
+def test_destructure_a_call_result():
+    # The headline: multiple return values bind by name at the call site.
+    source = """
+    fn divmod(a: int32, b: int32) -> tuple<int32, int32> {
+        return (a / b, a % b);
+    }
+    fn main() -> int32 { let q, r = divmod(9, 4); return q * 10 + r; }
+    """
+    assert run(source) == 21
+
+
+def test_destructure_call_source_evaluates_once():
+    source = """
+    @static let calls: int32 = 0;
+    fn make() -> tuple<int32, int32> { calls = calls + 1; return (1, 2); }
+    fn main() -> int32 { let a, b = make(); return calls * 10 + a + b; }
+    """
+    assert run(source) == 13
+
+
+def test_rest_binder_takes_the_tail():
+    # `let a, rst... = t;` is `a = t[0]`, `rst = t[1:]` -- the stage-2 copy.
+    source = """
+    fn main() -> int32 {
+        let t = (1, 2, 3);
+        let a, rst... = t;                          // rst: tuple<int32, int32>
+        return a + rst[0] + rst[1] + len(rst) as int32;
+    }
+    """
+    assert run(source) == 8
+
+
+def test_rest_tail_narrows_all_the_way_down():
+    # On a pair the tail is the 1-tuple; binding every position leaves the
+    # empty tuple -- the arities the surface takes everywhere.
+    source = """
+    fn main() -> int32 {
+        let pair = (7, 8);
+        let a, one... = pair;                       // one: tuple<int32>
+        let x, y, none... = pair;                   // none: tuple<>
+        return a + one[0] + x + y + len(none) as int32;
+    }
+    """
+    assert run(source) == 30
+
+
+def test_lone_rest_binder_copies_the_whole_tuple():
+    # `let r... = t;` is `r = t[0:]`: legal, a plain whole copy.
+    source = """
+    fn main() -> int32 {
+        let t = (40, 2);
+        let r... = t;
+        return r[0] + r[1];
+    }
+    """
+    assert run(source) == 42
+
+
+def test_lone_rest_binder_on_the_empty_tuple():
+    source = """
+    fn main() -> int32 {
+        let u = ();
+        let r... = u;
+        return len(r) as int32;
+    }
+    """
+    assert run(source) == 0
+
+
+def test_destructure_nested_tuple_binds_whole_positions():
+    # No nested binder grammar: an inner tuple binds as one value.
+    source = """
+    fn main() -> int32 {
+        let t = ((1, 2), 3);
+        let inner, c = t;
+        return inner[0] + inner[1] + c;
+    }
+    """
+    assert run(source) == 6
+
+
+def test_rest_binder_is_a_copy_not_a_view():
+    source = """
+    fn main() -> int32 {
+        let t = (1, 2, 3);
+        let a, rst... = t;
+        rst[0] = 50;                    // writes the copy, not t
+        return t[1] + rst[0] + a;
+    }
+    """
+    assert run(source) == 53
+
+
+def test_destructure_a_const_parameter_source():
+    # Binders are fresh locals: reassignable, and writes never reach the
+    # const source.
+    source = """
+    fn f(const t: tuple<int32, int32>) -> int32 {
+        let a, b = t;
+        a = a + 1;
+        return a + b + t[0];
+    }
+    fn main() -> int32 { return f((1, 2)); }
+    """
+    assert run(source) == 5
+
+
+def test_destructure_too_few_binders_rejected():
+    with pytest.raises(
+        LangError,
+        match=r"cannot destructure tuple<int32, int32, int32> into 2 binders "
+        r"\(it has 3 positions\)",
+    ):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2, 3); let a, b = t; return a; }"
+        )
+
+
+def test_destructure_too_many_binders_rejected():
+    with pytest.raises(
+        LangError,
+        match=r"cannot destructure tuple<int32, int32> into 3 binders "
+        r"\(it has 2 positions\)",
+    ):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2); let a, b, c = t; return a; }"
+        )
+
+
+def test_rest_binder_overflow_rejected():
+    # With a rest binder the fixed binders may still not exceed the arity.
+    with pytest.raises(
+        LangError,
+        match=r"cannot destructure tuple<int32> into 2 binders and a rest "
+        r"\(it has 1 position\)",
+    ):
+        compile_ir(
+            "fn main() -> int32 { let t = (1,); let a, b, r... = t; return a; }"
+        )
+
+
+def test_destructure_the_empty_tuple_rejected():
+    with pytest.raises(
+        LangError,
+        match=r"cannot destructure tuple<> into 2 binders \(it has no positions\)",
+    ):
+        compile_ir("fn main() -> int32 { let a, b = (); return 0; }")
+
+
+def test_rest_binder_not_last_is_a_parse_error():
+    with pytest.raises(LangError, match="'a...' must be the last binder"):
+        compile_ir("fn main() -> int32 { let a..., b = (1, 2); return 0; }")
+
+
+def test_annotated_binders_rejected():
+    with pytest.raises(
+        LangError,
+        match="destructuring binders take their types from the source; "
+        "drop the annotation",
+    ):
+        compile_ir("fn main() -> int32 { let a, b: int32 = (1, 2); return 0; }")
+
+
+def test_trailing_comma_binder_is_a_parse_error():
+    with pytest.raises(LangError, match="expected 'IDENT', got '='"):
+        compile_ir("fn main() -> int32 { let a, = (1, 2); return 0; }")
+
+
+def test_uninitialized_destructure_is_a_parse_error():
+    with pytest.raises(LangError, match="expected '=', got ';'"):
+        compile_ir("fn main() -> int32 { let a, b; return 0; }")
+
+
+def test_duplicate_binder_rejected():
+    with pytest.raises(
+        LangError, match="variable 'a' already declared in this scope"
+    ):
+        compile_ir("fn main() -> int32 { let t = (1, 2); let a, a = t; return a; }")
+
+
+def test_destructure_a_scalar_rejected():
+    with pytest.raises(
+        LangError,
+        match="cannot destructure int32; only a tuple or slice can be destructured",
+    ):
+        compile_ir(
+            "fn main() -> int32 { let x: int32 = 5; let a, b = x; return a; }"
+        )
 
 
 # --------------------------------------------------- rejected in this stage

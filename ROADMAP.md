@@ -887,8 +887,9 @@ already do).
       declare like structs. Destructuring binds positions with no parens
       (`let a, b = t;`), and a trailing-`...` rest binder takes the tail as
       a slice-and-destructure: `let a, t2... = t1;` means `a = t1[0]`,
-      `t2 = t1[1:]`; the same rest binder extends to slices (taken in
-      stage 3 below). No `extends tuple<...>`: tuples are not named, and
+      `t2 = t1[1:]`; the same rest binder extends to slices (both taken in
+      stage 3 below; implemented, see [Tuples](docs/language.md#tuples)).
+      No `extends tuple<...>`: tuples are not named, and
       naming one is the type alias's job
       (`type polar = tuple<int64, float64>;` is allowed). A tuple is
       layout-equivalent to the struct with the same field types in the same
@@ -949,16 +950,24 @@ already do).
         (`0 <= n <= m <= arity`); any result arity is legal, `t[1:]` on a
         pair keeping the 1-tuple tail and `t[n:n]` the empty tuple;
         implemented, see [Tuples](docs/language.md#tuples)
-  - [ ] stage 3: destructuring and the rest binder — `let a, b = t;` (the
-        `let` grammar takes a single IDENT today, so the comma slot is
-        free) and the trailing-`...` rest binder, both pure sugar over
-        stage 1's constant indexing and stage 2's constant slicing; the
-        same rest binder over a slice right-hand side
-        (`let first, rest... = s;`) lands here too, the identical desugar
-        onto shipped [sub-slicing](docs/language.md#slices). The rest
-        binder's tail is uniform all the way down: `let a, t2... = t1;` on
-        a 2-tuple yields the 1-tuple tail and on a 1-tuple yields
-        `tuple<>`, arities the surface now takes everywhere
+  - [x] stage 3: destructuring and the rest binder — `let a, b = t;` (the
+        `let` grammar took a single IDENT, so the comma slot was free) and
+        the trailing-`...` rest binder, both pure sugar over stage 1's
+        constant indexing and stage 2's constant slicing: the source
+        evaluates once into a hidden local and each binder is an ordinary
+        `let` of a projection, so every rule (per-position types, the
+        compile-time arity check — exact without a rest binder, at most
+        the arity with one — fresh locals from a `const` source) rides the
+        shipped machinery; the same rest binder over a slice right-hand
+        side (`let first, rest... = s;`) landed here too, the identical
+        desugar onto shipped [sub-slicing](docs/language.md#sub-slicing) —
+        as unchecked as `s[i]`, the tail a view where a tuple's is a copy,
+        and non-slice sources (arrays, `list<T>`, string literals)
+        borrowing first as everywhere. The rest binder's tail is uniform
+        all the way down: `let a, t2... = t1;` on a 2-tuple yields the
+        1-tuple tail and on a 1-tuple yields `tuple<>`, arities the
+        surface takes everywhere; implemented, see
+        [Tuples](docs/language.md#tuples)
   - [ ] stage 4: layout-equivalent struct `as` and `@extern` — the
         `(a, b, ...) as A` cast as a cast arm checking field-type-sequence
         equality against the target struct, with tuples then crossing

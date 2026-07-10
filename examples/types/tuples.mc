@@ -5,8 +5,9 @@ import "std/io";
 // layout the struct with those field types would have. It is built by the
 // paren literal `(a, b)` (a top-level comma; `(x)` stays plain grouping, so
 // the 1-tuple is `(x,)` and the empty tuple `()`), read by position with a
-// compile-time-constant index, and narrowed to a smaller tuple with a
-// constant slice `t[n:m]`. Its headline job is multiple return values.
+// compile-time-constant index, narrowed to a smaller tuple with a constant
+// slice `t[n:m]`, and destructured into named locals with `let a, b = t;`.
+// Its headline job is multiple return values.
 // Prerequisites: structs.mc and struct_literals.mc (a tuple element coerces
 // exactly like a struct-literal field), arrays.mc for the index syntax.
 
@@ -71,37 +72,57 @@ fn main() -> int32 {
     let nested = ((1, 2), 3,);
     println("nested[0][1]  = {}", nested[0][1]);
 
-    // Slicing is compile-time too: q[n:m] narrows to positions n..m-1, the
+    // Slicing is compile-time too: s[n:m] narrows to positions n..m-1, the
     // same half-open [a:b] grammar as sub-slicing on slices, open ends
     // folding against the arity. Unlike a sub-slice the result is a NEW
     // tuple, positions copied out, not a view: it works on an rvalue base
-    // and is never a write target (q[1:3] = ... is rejected). Bounds must
+    // and is never a write target (s[1:3] = ... is rejected). Bounds must
     // fold to constants (they pick the result type, like indices) and are
     // checked at compile time (0 <= n <= m <= arity).
-    let q = (1, 'x', 2.5, 4);
-    let mid = q[1:3];                         // mid is tuple<char, float64>
+    let s = (1, 'x', 2.5, 4);
+    let mid = s[1:3];                         // mid is tuple<char, float64>
     println("mid           = ({}, {})", mid[0], mid[1]);
-    println("q[1:][2]      = {}", q[1:][2]);  // the open tail, then indexed
+    println("s[1:][2]      = {}", s[1:][2]);  // the open tail, then indexed
     println("divmod[:][0]  = {}", divmod(9, 4)[:][0]);   // rvalue base copy
 
     // len(t) is the arity -- the same builtin, and the same compile-time,
     // context-adapting constant, as an array's len. It folds in constant
     // expressions, so it composes with the constant bounds above:
-    // q[len(q) - 1] is the last position. Arity is a property of the type
+    // s[len(s) - 1] is the last position. Arity is a property of the type
     // alone, so an rvalue operand (a call result, a slice) works too.
-    println("len(q)        = {}", len(q) as int32);
-    println("q[len(q)-1]   = {}", q[len(q) - 1]);
+    println("len(s)        = {}", len(s) as int32);
+    println("s[len(s)-1]   = {}", s[len(s) - 1]);
     println("len(divmod)   = {}", len(divmod(9, 4)) as int32);
 
     // Arity runs all the way down: a slice keeping one position is the
     // 1-tuple (tuple<float64> here), and `()` is the empty tuple `tuple<>`
     // -- a zero-sized unit value like an empty struct, useful when generic
     // code needs a T that carries nothing (len(unit) is 0).
-    let single = q[2:3];
+    let single = s[2:3];
     let unit: tuple<> = ();
     println("single[0]     = {}", single[0]);
     println("sizeof(unit)  = {}", sizeof(unit) as int32);
     println("len(unit)     = {}", len(unit) as int32);
+
+    // Destructuring binds positions to names: comma-separated binders, no
+    // parens, one ordinary local per position. This is the headline in its
+    // final form, multiple return values bound by name at the call site,
+    // with the source (call included) evaluated exactly once. Each binder
+    // takes its position's type, so annotations are rejected, and without a
+    // rest binder the count must equal the arity exactly: `let a, b = s;`
+    // on the 4-tuple above is a compile error, not a partial bind.
+    let q, r = divmod(9, 4);
+    println("q, r          = {}, {}", q, r);
+
+    // A trailing `...` makes the last binder a rest binder taking the tail:
+    // `first = s[0]`, `rest = s[1:]`, the constant slice above, so on a
+    // tuple the tail is a COPIED smaller tuple, narrowing uniformly (a
+    // pair's tail is the 1-tuple, a 1-tuple's is tuple<>). Fixed binders
+    // then number at most the arity, naming every position leaves the empty
+    // tail, and a lone `let all... = s;` is the whole copy.
+    let first, rest... = s;               // rest: tuple<char, float64, int32>
+    println("first         = {}", first);
+    println("rest[0]       = {}", rest[0]);
 
     // The alias in action; 5 adapts to int64 per position, as above.
     let p: polar = (5, 0.5);
@@ -129,4 +150,6 @@ fn main() -> int32 {
 // follows the struct rule under `any`, boxing by hidden reference into a
 // `const any` and recovered by a `case type` arm; memory/sub_slices.mc for
 // the same [a:b] grammar on slices, where the result is a borrowed view of
-// the same storage rather than a copied-out value.
+// the same storage rather than a copied-out value; that difference carries
+// into destructuring, where a slice's rest binder views the tail this one
+// copies.

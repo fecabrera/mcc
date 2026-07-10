@@ -2,13 +2,14 @@ import "std/io";
 
 // Sub-slicing: s[start:end] on a slice yields a NEW slice viewing the same
 // storage -- { &s.data[start], end - start }. No allocation, no element copy:
-// it is the same borrow, narrowed.
+// it is the same borrow, narrowed. The destructuring rest binder
+// (`let first, rest... = s;`) is sugar over it, shown near the end.
 //
 // Prerequisites: the slice<T> view itself (memory/slices.mc) and array
 // literals borrowing into slices (memory/slice_literals.mc).
 // See also: memory/slices.mc, memory/slice_literals.mc; types/tuples.mc for
-// the same [a:b] grammar on tuples, where slicing copies out a new smaller
-// tuple value instead of borrowing a view.
+// the same [a:b] grammar on tuples, where slicing (and a destructuring rest
+// binder) copies out a new smaller tuple value instead of borrowing a view.
 
 // The usual read-only consumer. A sub-slice is a plain slice value, so it
 // passes here like any other. The result type is the receiver's verbatim:
@@ -67,6 +68,19 @@ fn main() -> int32 {
     let none = nums[2:2];
     println("empty: length {}, sum {}", none.length, sum(none));  // 0, 0
 
+    // Destructuring is sugar over indexing plus sub-slicing: with a
+    // trailing rest binder, `let first, rest... = s;` is first = s[0],
+    // rest = s[1:], the source evaluated once. The rest binder is the same
+    // kind of VIEW, so a write through it lands in the base storage. And
+    // the sugar checks nothing the operations don't: no length validation,
+    // so destructuring a source with fewer elements than binders is
+    // undefined behavior, exactly like an out-of-range s[i]. (A non-slice
+    // source borrows first, like the receivers below; a tuple source
+    // instead copies its tail, see types/tuples.mc.)
+    let first, rest... = nums;
+    rest[0] = 21;                                     // writes nums[1]
+    println("first {}, nums[1] is now {}", first, nums[1]);       // 10, 21
+
     // Receivers are slice-typed expressions ONLY. An array, list, or string
     // literal reaches sub-slicing through its existing borrow spelling; a
     // bare arr[1:] is a compile error suggesting exactly that.
@@ -85,7 +99,7 @@ fn main() -> int32 {
     // start = (flag ? 1 : 2), end = 4. (No negative indices and no step:
     // nums[::2] is a parse error, '::' lexes as one token.)
     let flag = true;
-    println("ternary start: sum {}", sum(nums[flag ? 1 : 2 : 4]));  // 169
+    println("ternary start: sum {}", sum(nums[flag ? 1 : 2 : 4]));  // 91
 
     return 0;
 }

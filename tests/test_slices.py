@@ -1540,6 +1540,139 @@ def test_sub_slice_not_a_compile_time_constant():
         )
 
 
+# --- Destructuring: let first, rest... = s ------------------------------------
+#
+# The tuple rest binder over a slice source: `let a, b, rst... = s;` is
+# `a = s[0]; b = s[1]; rst = s[2:]` -- unchecked indexing plus the sub-slice
+# view, so no code validates the source is long enough (exactly like s[i]),
+# and the rest binder shares the source's storage.
+
+def test_destructure_a_slice():
+    source = """
+    fn main() -> int32 {
+        let nums = [10, 20, 30, 40] as slice<int32>;
+        let a, b, rst... = nums;
+        return a + b + rst[0] + (rst.length as int32);   // 10+20+30+2
+    }
+    """
+    assert run(source) == 62
+
+
+def test_slice_rest_binder_is_a_view():
+    # The rest binder views the same storage: writes reach the base.
+    source = """
+    fn main() -> int32 {
+        let nums = [1, 2, 3] as slice<int32>;
+        let a, rst... = nums;
+        rst[0] = 40;
+        return nums[1] + a + nums[2];   // 40 + 1 + 3
+    }
+    """
+    assert run(source) == 44
+
+
+def test_slice_lone_rest_binder_copies_the_view():
+    source = """
+    fn main() -> int32 {
+        let nums = [40, 2] as slice<int32>;
+        let r... = nums;
+        return r[0] + r[1];
+    }
+    """
+    assert run(source) == 42
+
+
+def test_slice_rest_binder_may_be_empty():
+    # Binding every element leaves the defined empty view { &s[n], 0 }.
+    source = """
+    fn main() -> int32 {
+        let nums = [9] as slice<int32>;
+        let a, rst... = nums;
+        return a * 10 + (rst.length as int32);
+    }
+    """
+    assert run(source) == 90
+
+
+def test_destructure_call_slice_source_evaluates_once():
+    source = """
+    @static let calls: int32 = 0;
+    fn view(s: slice<int32>) -> slice<int32> { calls = calls + 1; return s; }
+    fn main() -> int32 {
+        let arr: int32[3] = [4, 5, 6];
+        let a, rst... = view(arr as slice<int32>);
+        return calls * 100 + a * 10 + rst[1];   // 100 + 40 + 6
+    }
+    """
+    assert run(source) == 146
+
+
+def test_destructure_read_only_slice_keeps_element_const():
+    # slice<const T> destructures; the rest view is still read-only.
+    with pytest.raises(
+        LangError, match="cannot assign through a read-only slice<const T>"
+    ):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let arr: int32[3] = [1, 2, 3];
+                let s = arr as slice<const int32>;
+                let a, rst... = s;
+                rst[0] = 9;
+                return a;
+            }
+            """
+        )
+
+
+def test_destructure_array_source_rejected():
+    # Owned containers borrow first, exactly like sub-slicing.
+    with pytest.raises(
+        LangError,
+        match="cannot destructure int32\\[3\\]; borrow it first: "
+        "let a, b = arr as slice<int32>;",
+    ):
+        compile_ir(
+            """
+            fn main() -> int32 {
+                let arr: int32[3] = [1, 2, 3];
+                let a, rst... = arr;
+                return a;
+            }
+            """
+        )
+
+
+def test_destructure_list_source_rejected():
+    # A slice-extending struct may carry derived state (a list's capacity)
+    # beyond the view; it borrows first too.
+    with pytest.raises(
+        LangError,
+        match="cannot destructure list<int32>; borrow it first: "
+        "let a, b = xs as slice<T>;",
+    ):
+        compile_ir(
+            """
+            import "std/list";
+            fn main() -> int32 {
+                let xs: list<int32>;
+                list_init(&xs, 4);
+                let a, rst... = xs;
+                return 0;
+            }
+            """
+        )
+
+
+def test_destructure_string_literal_rejected():
+    with pytest.raises(
+        LangError,
+        match='cannot destructure a string literal; borrow it first: '
+        'let a, b = "..." as slice<char>;',
+    ):
+        compile_ir('fn main() -> int32 { let a, rst... = "hi"; return 0; }')
+
+
 # ------------------------------ string-literal assignment (Stage 4, assignment)
 #
 # A string literal repoints an existing char-slice lvalue at its global string

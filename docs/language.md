@@ -1276,6 +1276,21 @@ p.x = 4;
 p.y = 2;
 ```
 
+A `let` also **destructures** a [tuple](#tuples) or [slice](#slices):
+comma-separated binders take the source's positions in order, and a
+trailing-`...` **rest binder** takes the tail — pure sugar over indexing and
+slicing, `let a, rest... = t;` meaning `a = t[0]; rest = t[1:];`. Each binder
+is an ordinary local typed by its position, so annotations are not accepted
+(the source supplies the types), and the source is evaluated once:
+
+```c
+let q, r = divmod(9, 4);       // multiple return values, bound by name
+let first, rest... = nums;     // slice: first element, plus the tail view
+```
+
+See [Tuples](#tuples) for the arity rules and [sub-slicing](#sub-slicing)
+for the slice form, whose bounds are as unchecked as `s[i]`.
+
 Variables are block-scoped, as in C: a `let` is visible only until the end of
 its enclosing `{ }` — including the body of an `if`/`else` branch or a
 `while`/`until` loop — so sibling and sequential blocks can reuse a name. An
@@ -2803,6 +2818,17 @@ empty result `{ &s.data[n], 0 }`: the one-past-end pointer is formed but never
 dereferenced, and it is deliberately *not* normalized to the empty literal's
 `{ null, 0 }`.
 
+A slice also **destructures**: `let first, rest... = s;` binds
+`first = s[0]` and the trailing-`...` rest binder `rest = s[1:]` — pure
+sugar over the indexing and sub-slicing above (any number of leading
+binders; the rest binder is optional), with the source evaluated once. The
+rules carry verbatim, so in particular **nothing checks the length**: like
+`s[i]`, destructuring a source with fewer elements than binders is undefined
+behavior, not an error. The rest binder is a **view** of the same storage —
+writes through it reach the base, unlike a [tuple](#tuples)'s rest binder,
+which copies — and binding every element leaves the defined empty tail
+`{ &s[n], 0 }`.
+
 Receivers are **slice-typed expressions only**. Everything else reaches
 sub-slicing by first becoming a slice through its existing borrow spelling,
 which keeps every borrow rule exactly where it lives today: a fixed array
@@ -3350,6 +3376,30 @@ purely a property of the type, so an rvalue operand needs no address —
 `len` folds in constant expressions, composing with the constant bounds
 above: `t[len(t) - 1]` is the last position, `t[1:len(t)]` the tail.
 
+**Destructuring binds positions to names** — no parens, one binder per
+position: `let a, b = t;` declares `a` and `b` as ordinary locals holding
+`t[0]` and `t[1]`. A trailing-`...` **rest binder** takes the tail instead:
+`let a, rest... = t;` is `a = t[0]`, `rest = t[1:]` — the slice above, so the
+tail is a **copied** smaller tuple, narrowing uniformly all the way down (on
+a pair the tail is the 1-tuple, on a 1-tuple it is `tuple<>`, and a lone
+`let rest... = t;` is the whole copy). Pure sugar over the constant indexing
+and slicing, with their rules carried verbatim: the source evaluates once
+(`let q, r = divmod(9, 4);` calls `divmod` a single time — the headline,
+multiple return values bound by name at the call site), each binder takes its
+position's type (annotations are rejected; a nested tuple binds whole as one
+value), and binders are fresh locals, so reassigning one never touches a
+`const` source. The binder count is checked against the arity: exactly equal
+without a rest binder, at most the arity with one (the tail may be empty).
+The same rest binder applies to [slices](#sub-slicing), where the tail is a
+view of the source's storage rather than a copy.
+
+```c
+let q, r = divmod(9, 4);        // q = 2, r = 1
+let t = (1, 'x', 2.5);
+let a, rest... = t;             // a: int32, rest: tuple<char, float64> (a copy)
+let x, y, z = t;                // no rest binder: one binder per position
+```
+
 Everything else rides the struct machinery: whole-value assignment copies,
 tuples pass and return by value, a `const tuple<...>` parameter travels by
 hidden reference (elements then read-only), `mut` parameters lend the
@@ -3378,9 +3428,8 @@ struct to name the shape), and naming a tuple is the
 [type alias](#type-aliases)'s job — `type polar = tuple<int64, float64>;`
 works anywhere the written type does. `==` stays rejected as on structs.
 The rest of the
-[roadmap item](../ROADMAP.md) lands in stages: destructuring with the rest
-binder (`let a, b = t;`) and the layout-equivalent struct cast
-(`(a, b) as A`) are not in this stage — though a tuple in an
+[roadmap item](../ROADMAP.md) lands in stages: the layout-equivalent struct
+cast (`(a, b) as A`) is not in this stage — though a tuple in an
 [`@extern`](#extern-declarations) signature already crosses as the
 layout-equivalent C struct via the existing
 [struct ABI classification](#passing-structs-by-value-across-the-c-boundary).
