@@ -11,6 +11,13 @@ its reference section in the [language reference](docs/language.md).
 - [x] [`@inline` functions](docs/language.md#functions) — LLVM `alwaysinline`, across files
 - [x] [Variadic functions](docs/language.md#variadic-functions) — C's variadic arguments: `...`
       and `va_list` forwarding
+- [x] [Native variadic arguments](docs/language.md#native-variadic-arguments) —
+      the type-erased mcc model: a trailing `slice<const any>` parameter
+      (`fn f(args...)` as sugar) collects the call's extra arguments as
+      caller-stack boxed `any`s, allocation-free, with pass-through for an
+      exact slice argument, overload-set and generic participation
+      (a non-collecting match always outranks a collecting one), and the
+      stdlib's `{}` print flipped onto it
 - [x] [Generics](docs/language.md#generics) — monomorphized, on functions and structs
 - [x] [Function overloading](docs/language.md#function-overloading) — one name,
       several parameter lists, resolved at the call site by arity and argument
@@ -51,6 +58,11 @@ its reference section in the [language reference](docs/language.md).
 - [x] [Pointers](docs/language.md#pointers) — address-of, deref, `null`,
       `sizeof`/`alignof` (of a type or a variable) and `offsetof(struct S, field)`
       as compile-time `uint64` layout constants
+- [x] [Pointer arithmetic](docs/language.md#pointer-arithmetic) — C's
+      element-scaled `p + n` / `p - n` (pointer-left only) and the compound
+      forms, pointer difference (`p - q` over identical pointer types, an
+      `int64`), and relational comparisons; function-pointer arithmetic and
+      `null` operands stay rejected
 - [x] [Function pointers](docs/language.md#function-pointers)
 - [x] [Arrays](docs/language.md#arrays) — fixed-size `T[N]` (`N` any constant
       expression), indexing, `len`, `sizeof`
@@ -99,6 +111,12 @@ its reference section in the [language reference](docs/language.md).
       one storage (all at offset 0): one-member zero-filled literals, defined
       cross-member byte reinterpretation (type punning), generics,
       `@packed`/`@align`/`@volatile`
+- [x] [Tuples](docs/language.md#tuples) — the builtin heterogeneous
+      fixed-arity product `tuple<A, B, ...>` (any arity, `()`/`(x,)`
+      included): paren literals, compile-time-constant indexing, slicing,
+      and `len`, destructuring with a trailing-`...` rest binder (slice
+      sources included), `as` casts to layout-equivalent structs, and
+      `@extern` crossing as the layout-equivalent C struct
 - [x] [Enums](docs/language.md#enums) — `enum Name[: type] { … }`, `Name::Member`
       constants over any underlying type, the name usable as a type
 - [x] [Type aliases](docs/language.md#type-aliases) — `type <name> = <type>;`,
@@ -127,8 +145,10 @@ its reference section in the [language reference](docs/language.md).
 
 ## Standard library
 
-- [x] Core — `memory` (typed `alloc`/`dealloc`), `std` (`print`/`println`,
-      `swap`/`replace`)
+- [x] Core — `memory` (typed `alloc`/`dealloc`), `io` (the formatted
+      `print`/`println`, `swap`/`replace`), `format` (the open per-type
+      `format` overload set behind the `{}` placeholders), `equality`
+      (the open `equals` set), `hash` (generic `hash<T>`)
 - [x] Containers — `list`, `stack`, `queue`, `ring`, `set`, `dict`, `string` (counting
       loops use the builtin [`range`](docs/language.md#control-flow))
 - [x] Hashing — `splitmix64`, `fnv1a`, `murmur3`, `crc32`, `md5`
@@ -244,11 +264,11 @@ already do).
         (a struct and the structs in its declared `extends` lineage). The bound
         is **nominal**: satisfied only by `mystruct` and its declared `extends`
         specializations, never by a struct that merely shares its field prefix,
-        per the single
-        [nominal struct subtyping](#structs-arrays-and-data-layout) model the
-        upcast and slice-borrow also move to (without it this bound would reject
+        per the shipped single
+        [nominal struct subtyping](docs/language.md#structs) model the
+        upcast and slice-borrow also follow (without it this bound would reject
         a layout twin that the upcast beside it still accepts, the asymmetry
-        that model exists to remove). The explicit-set form, once sketched here
+        that model removed). The explicit-set form, once sketched here
         as `T in (t1, t2, ...)`, is settled under a different spelling as the
         closed-type-groups sub-item below
     - [x] [closed type groups](docs/language.md#closed-type-groups) — a
@@ -405,9 +425,9 @@ already do).
   - [x] `any` — a tagged union over the above: a union-style payload plus a
         compile-time type-id discriminant, so the live member is recovered
         safely (`case type`). The element type of the
-        [variadic](#functions-and-methods) pack's `slice<const any>`, and the
-        deepest remaining unblocker of the strings chain: `any`, then
-        [native variadics](#functions-and-methods), then
+        [variadic](docs/language.md#native-variadic-arguments) pack's
+        `slice<const any>`, and what unblocked the since-shipped strings
+        chain: `any`, then native variadics, then
         [formatted `{}` print](#strings-and-formatting), then
         [string interpolation](#strings-and-formatting). Depends on unions
         (above) and a compile-time type-id scheme;
@@ -457,8 +477,9 @@ already do).
         universe is open); the scrutinee is an `any`, with `any*`
         auto-dereferencing per the member-access precedent. The
         `when T name:` arm is deliberately shaped so a future
-        payload-carrying-enum `when Variant(x):` reads as kin, and
-        `tuple<A, B, ...>` below stays the complementary non-erased product.
+        payload-carrying-enum `when Variant(x):` reads as kin, and the
+        shipped [tuples](docs/language.md#tuples) stay the complementary
+        non-erased product.
         A transparent enum boxes under its underlying type's tag;
         [nominal enums](#types-and-generics) give an enum its own tag, a
         silent `case type` change folded into that item's migration story.
@@ -566,12 +587,13 @@ already do).
             (both want the same trap)
     - [x] generic arms in `case type` — `when T* ptr:` matches any
           boxed pointer type, the pointer fallback after concrete pointer
-          arms (in the stdlib formatter,
+          arms (the sketched stdlib-formatter use,
           `when T* ptr: l = snprintf(buf, MAX_BUF_LEN, "%p", ptr);` after
-          `when char* s:`; that fallback lands with the
-          [native variadics](#functions-and-methods) item's stage 3,
-          which consumes this item: formatter adoption is deliberately
-          not a stage below). The lowering family is the one the
+          `when char* s:`; the
+          [native variadics](docs/language.md#native-variadic-arguments)
+          stdlib flip consumed this item, though in a simpler shape,
+          the lone generic `with` arm in `std/io`'s `format_args`;
+          formatter adoption was deliberately not a stage below). The lowering family is the one the
           [`case type` over interfaces](#functions-and-methods) sub-item
           records: a set-membership test over the compile-time FNV-1a
           tags of every pointer type that boxes into `any` anywhere in
@@ -670,14 +692,16 @@ already do).
           the mitigation is structural, concrete arms and (future)
           interface arms in front consuming the tags handled specially,
           the generic arm body written against genuinely generic
-          operations. The motivating end-state is the stdlib formatter:
-          concrete arms for bespoke types, `when T* ptr:` printing `%p`
-          as the pointer fallback, `when T v:` dispatching into the
-          shipped `format` overload set of `lib/std/format.mc` (an `else`
-          still present until the deferred carve-out above lands), and
-          every boxed type without a
-          viable formatting path a compile error instead of a runtime
-          gap. Settled in the same discussion: multi-type arms in type
+          operations. The motivating end-state shipped with the
+          native-variadics stdlib flip, condensed past the sketch here:
+          `std/io`'s `format_args` is a lone generic
+          `with (t = args[i] as T)` arm (the `with` statement's defined
+          fall-through standing in for the `else`) dispatching into the
+          open `format` overload set of `lib/std/format.mc`, per-type
+          behavior living in the set's members rather than in
+          `case type` arms, and every boxed type without a viable
+          formatting path a compile error instead of a runtime gap.
+          Settled in the same discussion: multi-type arms in type
           mode, `when int32, int16, int8 n: printf("%d", n);`, a
           comma-separated list of concrete types over one binding, the
           third member of the same arm family with identical lowering
@@ -818,176 +842,6 @@ already do).
       pairs with the [C struct-passing ABI](#tooling-and-c-interop) work; the
       read-modify-write granularity under a `@volatile` struct must be
       specified
-- [x] Pointer arithmetic — pointers join the shipped binary and compound
-      operator surface, no bespoke syntax: `p + n` and `p - n` advance by
-      elements, the compound forms `p += n` / `p -= n` follow, `p - q` is
-      the pointer difference, and the relational comparisons
-      `<` `<=` `>` `>=` extend to pointers (equality, the `!= null`
-      checks, and the ternary already work). This deliberately reverses
-      the reference's documented exclusion ("there is no pointer
-      arithmetic; use `&p[1]`"), on the finding that the exclusion buys
-      no safety: `&p[i]` already compiles to the exact typed
-      `getelementptr` that `p + i` would emit, for any `i`, so the
-      capability exists today and only two things lack a spelling,
-      pointer difference and pointer ordering (the `while (p < end)`
-      scan loop). Semantics are C's, element-scaled, one semantics under
-      two spellings: `p + n` is exactly `&p[n]` (`n` any integer type,
-      scaled by `sizeof(pointee)`; `uint8*`, the raw-memory pointer,
-      gives byte arithmetic, and there is no `void*` to make that
-      ambiguous), `p - q` requires identical pointer types and yields
-      the signed element distance as an `int64` (byte distance is
-      `uint8*` arithmetic or the shipped pointer/integer `as` casts),
-      and the relationals likewise require identical pointer types.
-      Everything else keeps today's exact rejections: `p + q`, `*` `/`
-      `%`, bitwise and shifts (tag-bit tricks keep the explicit
-      `as uint64` round-trip), any arithmetic on function pointers
-      (they keep `==`/`!=` only), and any `null` operand. Mechanically
-      small and parser-free: the forms already parse and are rejected in
-      `apply_binary`'s operand unification, so the work is a
-      pointer/integer arm ahead of coercion (emitting the same GEP as
-      indexing), widening the pointer comparison carve-out past
-      `==`/`!=`, and a `ptrtoint`/`sub`/exact-division lowering for the
-      difference; the compound forms fall out of compound assignment's
-      existing `apply_binary` reuse. Composition with the shipped
-      [`@nonnull` machinery](docs/language.md#nonnull-parameters)
-      mirrors `&p[n]` exactly: the result is an always-non-null source
-      just as `&p[n]` is today, `p += n` is an ordinary reassignment (it
-      kills a narrowed local's fact, and stays rejected on a `@nonnull`
-      parameter, which cannot be reassigned), and
-      [`-Wunchecked-dereference`](docs/language.md#-wunchecked-dereference)
-      is untouched, since arithmetic never dereferences (the deref of a
-      derived pointer warns or proves by the existing rules). Not a
-      posture change: [slices](docs/language.md#slices) remain the
-      bounds-carrying view and the preferred API over runs of elements,
-      the [libmc receiver migration](#functions-and-methods) to
-      `mut`/`const` selves proceeds regardless (this lands in buffer
-      internals and interop code, not on call surfaces), and pointer
-      arithmetic is the explicit systems and interop lane (allocators,
-      byte scanners, `memchr`-style loops, MMIO, ported C) the
-      language's C lineage already promises. v1 is runtime-expression
-      only: no pointer arithmetic inside `const` initializers or `@if`
-      conditions. Addition is pointer-left only: `p + n` is the one
-      accepted shape, and the commuted `n + p` is rejected, unlike C
-      (the pointer is the base operand being advanced, and `n - p` has
-      no meaning anyway, so addition matches subtraction's shape)
-- [x] `tuple<A, B, ...>` — a builtin heterogeneous, fixed-arity product: each
-      position keeps its own statically-known type, accessed by position
-      with the existing index syntax (`t[0]`, `t[1]`). The index must be a
-      compile-time constant (each position has its own type, so a runtime
-      index has no single result type) and bounds are checked at compile
-      time too; slicing with constant bounds narrows the type, `t[n:m]`
-      being the smaller tuple of those positions; and `len(t)` recovers the
-      arity — the same builtin, and the same adaptable compile-time
-      constant, as an array's `len`, folding in constant expressions so it
-      composes with the constant bounds (`t[len(t) - 1]`, `t[1:len(t)]`;
-      implemented, see [Tuples](docs/language.md#tuples)). Constructed by the paren
-      literal (a parenthesized expression with a top-level comma; `(x)`
-      stays grouping): `let t: tuple<A, B> = (a, b);`, inferred
-      `let t = (a, b);`, and the uninitialized `let t: tuple<A, B>;` all
-      declare like structs. Destructuring binds positions with no parens
-      (`let a, b = t;`), and a trailing-`...` rest binder takes the tail as
-      a slice-and-destructure: `let a, t2... = t1;` means `a = t1[0]`,
-      `t2 = t1[1:]`; the same rest binder extends to slices (both taken in
-      stage 3 below; implemented, see [Tuples](docs/language.md#tuples)).
-      No `extends tuple<...>`: tuples are not named, and
-      naming one is the type alias's job
-      (`type polar = tuple<int64, float64>;` is allowed). A tuple is
-      layout-equivalent to the struct with the same field types in the same
-      order, so `(a, b, ...) as A` converts to any layout-equivalent struct
-      `A` and tuples cross `@extern` boundaries as the layout-equivalent C
-      struct (both implemented — the cast in stage 4 below, the crossing
-      with stage 1 — see [Tuples](docs/language.md#tuples)). For multiple
-      return values
-      (`fn divmod(a: int32, b: int32) -> tuple<int32, int32>`) and ad-hoc
-      grouping without a one-off struct. Distinct from `slice<any>`: a
-      tuple keeps each element's static type and a compile-time arity,
-      where erasing every slot to `any` would collapse into a fixed-length
-      `slice<any>`. Arity is fully open, surface included: `tuple<T>` and
-      the trailing-comma literal `(x,)` spell the 1-tuple, `tuple<>` and
-      `()` the empty tuple — a zero-sized unit on the empty-struct
-      precedent — and the interning, layout, and unification internals
-      never assumed two or more, so the door to a statically-typed
-      variadic later (no erasure) is open with no carve-out at all: a
-      `T...` may produce 0- and 1-tuples and every surface already takes
-      them. `==` stays rejected as on
-      structs; the open `equals` overload set is the extension point. Landed
-      **staged** (each stage its own complete change set with its own
-      CHANGELOG entry; the box ticked when the last stage landed):
-  - [x] stage 1: the core type, paren literal, and constant indexing — a
-        new interned builtin `LangType` arm beside `slice` and `any` in the
-        generator's type resolution, built on `instantiate_struct`'s layout
-        core (factored as `set_struct_body`) with internal field names
-        `"0"`, `"1"`, ... so the existing GEP/member machinery works
-        unchanged (padding and alignment are the care point: the dual-site
-        layout invariant, types.py and the LLVM identified type agreeing,
-        applies); the paren literal as a new parse in the primary/paren arm
-        with struct-literal-style context coercion (adaptable literals
-        anchor `int32` with no context); constant `t[n]` routed onto the
-        member machinery, requiring a folded constant (`eval_const`), with
-        the compile-time bounds check (the arity floor stage 1 shipped
-        with was later lifted — see the parent prose: 0- and 1-tuples are
-        legal, `()`/`(x,)` construct them, `tuple<>`/`tuple<T>` spell them).
-        `tuple<...>` in type position already parsed (it failed only at
-        resolution), so no parser change was needed there, and once the
-        `LangType` existed the rest rode existing machinery free: direct
-        aggregate returns (multiple return values work immediately),
-        generic inference (`unify` recurses template and arguments,
-        variable arity included), hidden-reference `const` parameters,
-        whole-value assignment, arrays of tuples, tuples in structs,
-        `sizeof`, `.mci` round-trip, `any` boxing under the struct rule (by
-        reference into a `const any` only), `case type` — and even the
-        `@extern` crossing as the layout-equivalent C struct, since the ABI
-        classifier keys on the field list (stage 4 keeps only the `as`
-        cast); implemented, see [Tuples](docs/language.md#tuples)
-  - [x] stage 2: constant slicing — `t[n:m]` with constant bounds narrows
-        to the smaller tuple of those positions, a tuple arm in the
-        sub-slice lowering reusing the `[a:b]` grammar shipped with
-        [sub-slicing](docs/language.md#sub-slicing), open ends folding
-        against the arity (`t[1:]`, `t[:2]`, the plain copy `t[:]`). The
-        result is a new tuple value, not a view — the kept positions are
-        copied (the narrowed type could not alias the source layout
-        anyway), so a tuple slice is never a write target. Bounds share the
-        constant-index discipline (they pick the result type, so each must
-        fold) and are range- and order-checked at compile time
-        (`0 <= n <= m <= arity`); any result arity is legal, `t[1:]` on a
-        pair keeping the 1-tuple tail and `t[n:n]` the empty tuple;
-        implemented, see [Tuples](docs/language.md#tuples)
-  - [x] stage 3: destructuring and the rest binder — `let a, b = t;` (the
-        `let` grammar took a single IDENT, so the comma slot was free) and
-        the trailing-`...` rest binder, both pure sugar over stage 1's
-        constant indexing and stage 2's constant slicing: the source
-        evaluates once into a hidden local and each binder is an ordinary
-        `let` of a projection, so every rule (per-position types, the
-        compile-time arity check — exact without a rest binder, at most
-        the arity with one — fresh locals from a `const` source) rides the
-        shipped machinery; the same rest binder over a slice right-hand
-        side (`let first, rest... = s;`) landed here too, the identical
-        desugar onto shipped [sub-slicing](docs/language.md#sub-slicing) —
-        as unchecked as `s[i]`, the tail a view where a tuple's is a copy,
-        and non-slice sources (arrays, `list<T>`, string literals)
-        borrowing first as everywhere. The rest binder's tail is uniform
-        all the way down: `let a, t2... = t1;` on a 2-tuple yields the
-        1-tuple tail and on a 1-tuple yields `tuple<>`, arities the
-        surface takes everywhere; implemented, see
-        [Tuples](docs/language.md#tuples)
-  - [x] stage 4: the layout-equivalent struct `as` — the `(a, b, ...) as A`
-        cast, and its reverse `p as tuple<...>` (layout equivalence is
-        symmetric; the reverse composes with destructuring to consume an
-        existing struct by position), as a cast arm checking
-        field-type-sequence equality against the exact target struct:
-        per-position type equality one level deep (a struct-typed field
-        takes only the same struct type, never a recursively-equivalent
-        tuple), `@packed`/`@align` structs never equivalent (their offsets
-        or size diverge; without those attributes both sides run the
-        identical sequential layout, so equal field sequences mean equal
-        layouts), struct-to-struct staying nominal-only. The literal form
-        lowers its elements against the target's field types like a typed
-        `let`, the value rebuilds position by position (the tuple-slice
-        shape, no memory round-trip), and rejections name the first
-        divergence. The `@extern` half needed nothing here — tuples had
-        crossed as the layout-equivalent C struct since stage 1, the
-        struct-ABI classification keying on the field list; implemented,
-        see [Tuples](docs/language.md#tuples)
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:
@@ -1014,7 +868,7 @@ already do).
         hand-writing a pointer (see [const parameters](docs/language.md#const-parameters))
   - [ ] literal promotion: because the parameter is read-only, a literal
         argument can be promoted to its type at compile time. (For string
-        formatting this is now done by a literal adapting to `slice<const uint8>`
+        formatting this is now done by a literal adapting to `slice<const char>`
         — see [`slice<T>`](docs/language.md#slices) — so `println("{}", a)`
         needs no `struct string`.)
 - [ ] `mut` parameters and returns — the writable dual of `const`: a value
@@ -1145,7 +999,7 @@ already do).
           into the `list_*` slots), `dict`, `set`, `stack`, and `queue`,
           plus the companion struct pointers of the same APIs (`append`'s
           source, `eq`'s right-hand side, and `duplicate`'s `src` become
-          `const`; `duplicate`'s `dst` and the `format_arg`/`format_args`
+          `const`; `duplicate`'s `dst` and the `format_args`
           accumulator in `std` become `mut`). The accessor families flip
           to `const self` here and **stay read-only**: the mutable element
           accessor the now-shipped [`mut` returns](#functions-and-methods)
@@ -1202,9 +1056,9 @@ already do).
             `string` wrappers re-lend `self` into the `list_*` slots, and
             `&` of a `mut` parameter is banned, so `string` cannot flip
             before `list`
-      - [ ] stage 5: `std` — implemented for `format_args`: the
-            [native variadics](#functions-and-methods) stage-3 format
-            work (its vehicle, as planned) replaced the `format_arg`
+      - [ ] stage 5: `std` — implemented for `format_args`: the shipped
+            [native variadics](docs/language.md#native-variadic-arguments)
+            stdlib-flip stage (its vehicle, as planned) replaced the `format_arg`
             WIP with the open `format` overload set and landed the
             accumulator `mut` from the start — `format_args` and every
             `format` member take `mut str: string` today. Ticks once
@@ -1379,14 +1233,15 @@ already do).
       `format(mut str: string, value: X, const modifier: string)`
       overload family (closed signed/unsigned groups, concretes, a
       generic slice list-renderer, an unbounded `<typename>` fallback),
-      and `println`'s `format_arg` dispatches into the set through a
+      and `println`'s `format_args` dispatches into the set through a
       generic `with`/`case type` arm resolved per boxed tag at end of
       codegen over the whole-program overload set; with open sets, a
       programmer makes a type printable by writing one `format`
-      overload for it in their own module (today pointer-shaped,
-      `value: point*` boxed via `&p`, until the
+      overload for it in their own module (a `const value: point`
+      overload directly, the shipped
       [struct boxing](#structs-arrays-and-data-layout) follow-up under
-      `any` lands) — the whole chain now works cross-module, with the
+      `any` boxing the struct by reference into the `const any`
+      slot) — the whole chain now works cross-module, with the
       deliberate privacy consequence that a `@private` `format`
       overload is invisible to `println`'s dispatch (it resolves in
       the stdlib's module) while direct `format(...)` calls in the
@@ -1453,7 +1308,7 @@ already do).
         optimization: `slice<T>`'s static `{ data, length }` layout
         fully describes the view, so a compiler-constructed sub-view
         cannot misrepresent anything and slices stay primitive (the
-        shipped [sub-slicing](#structs-arrays-and-data-layout) item),
+        shipped [sub-slicing](docs/language.md#sub-slicing)),
         while a
         user struct may carry derived state beyond the view (`list`'s
         `capacity` the standing example) that only the type's author
@@ -1508,9 +1363,9 @@ already do).
       `sort<T>(items: slice<T>, cmp: fn(T, T) -> bool)` shape the
       [generic type aliases](#types-and-generics) item's `cmp<T>`
       comparator example implies; it depends on nothing new, and the
-      `@nonnull`-carrying function types item below neither fixes nor
-      worsens it, since that item's contravariance lives on the coerce
-      path, not in viability or unification
+      shipped `@nonnull`- and `mut`/`const`-carrying function types
+      neither fix nor worsen it, since their assignability checks live
+      on the coerce path, not in viability or unification
 - [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
       keyed to a struct, including `@private` methods and the special
       constructor/destructor below (the `for … in` protocol already dispatches
@@ -1548,10 +1403,11 @@ already do).
         its rvalue "copy on read" on the still-uninitialized whole `self`;
         (2) it must reconcile with the fat view's table ABI below (the
         base-typed and interface-typed views): a `mut`-using function is
-        normally not expressible as a plain `fn(...)` value, but in the
-        dispatch table the receiver is already behind the view's
-        `object*`, so the table slot's first param is a genuine `T*`
-        under an ABI the compiler controls internally. A `mut` return formed from `self` is then
+        now a legal function value of the shipped
+        [mut/const-carrying function types](docs/language.md#mutconst-carrying-function-types),
+        and in the dispatch table the receiver is anyway already behind
+        the view's `object*`, so the table slot's first param is a
+        genuine `T*` under an ABI the compiler controls internally. A `mut` return formed from `self` is then
         the natural spelling for a mutable accessor method
   - [ ] constructor — `fn <struct>::constructor(self: <struct>*, ...)`, the
         method that initializes a value: run by the `new <struct>(...)` sugar
@@ -1661,7 +1517,7 @@ already do).
         `B` entering a `const A` slot pairs the object pointer with `B`'s
         table, the compiler knowing the concrete type right there), and a
         view re-lent onward forwards both words unchanged. Tables are
-        prefix-compatible down the single [nominal](#structs-arrays-and-data-layout) `extends` chain (inherited
+        prefix-compatible down the single [nominal](docs/language.md#structs) `extends` chain (inherited
         methods keep their slot, an override replaces the entry, new
         methods append), which is what lets a `const B` view re-lend as
         `const A` keeping the same table pointer. The object never
@@ -1790,10 +1646,11 @@ already do).
           interface value itself boxes into `any` and matches its own
           interface arm, which is what makes a heterogeneous
           `slice<const any>` of interface values work and is the
-          natural endpoint for the stdlib's `format_arg` dispatch (a
-          `when printable p:` arm replacing one arm per concrete type;
-          `format_arg` lives in the
-          [native variadics](#functions-and-methods) item's stage 3).
+          natural endpoint for the stdlib's `format_args` dispatch (a
+          `when printable p:` arm; `format_args` shipped with the
+          [native variadics](docs/language.md#native-variadic-arguments)
+          stdlib flip as a lone generic `with` arm in `std/io` over the
+          open `format` set).
           Arm ordering becomes semantic: today every arm is a distinct
           concrete type so order cannot matter, but an interface arm
           overlaps concrete arms, so the spec is first-match-wins in
@@ -2098,123 +1955,20 @@ already do).
         [`-Wextern-nonnull`](#metaprogramming-and-builtins) posture;
         implemented, see [@nonnull-carrying function
         types](docs/language.md#nonnull-carrying-function-types)
-- [x] Native variadic arguments — `fn f(args: slice<const any>)` (with
-      `fn f(args...)` as sugar): a trailing `slice<const any>` parameter collects
-      the call's extra arguments, so `f(x, a, b, c)` (after `f`'s fixed
-      parameters) gathers `a, b, c` into `args`. The caller boxes each into a
-      caller-stack [`any`](#structs-arrays-and-data-layout) and passes a read-only
-      [`slice<const any>`](#structs-arrays-and-data-layout) over them —
-      allocation-free.
-      The callee walks it with `for a in args` and a
-      `case type (a) { when int32 n: … else: … }` type-switch (the open `any`
-      universe makes the `else` required). This is the runtime, type-erased
-      variadic model (printf / `{}`-placeholder formatting); a statically-typed
-      `tuple<…>` variant, processed by compile-time iteration, is a possible
-      later path. The foundations this once waited on are shipped:
-      [`any`](docs/language.md#the-any-type) landed with its tagged 24-byte
-      box, compile-time FNV-1a-64 type-ids (collision-checked, so no
-      `@typeof` is needed), implicit boxing at
-      assignment/argument/return/store (structs and arrays reject with an
-      escape-hatch message), and `case type` with its mandatory `else`. The
-      callee side described above works end to end today, verified by
-      running programs (a `slice<const any>` parameter, `for a in args`,
-      indexing, `case type` dispatch), and the whole model is already
-      expressible with a manual `any[N]`, element stores boxing, and a
-      borrow at the call site; the remaining scope is caller-side
-      collection, the `args...` sugar, and the stdlib flip. Settled v1
-      rules, all type-shaped: the trailing `slice<const any>` parameter
-      type itself marks a collecting function, `args...` being pure sugar
-      for it, which makes `.mci` support free (the interface renderer
-      already emits the desugared parameter and the type is the marker on
-      re-import; function-pointer types carry no marker, so calls through
-      `fn(...)` values stay explicit-slice, documented). The pass-through
-      rule keeps the change purely additive: when the argument count
-      equals the parameter count and the final argument is already exactly
-      `slice<const any>` (or `slice<any>`, which coerces), it passes
-      through uncollected, and every possible call to such a function
-      today has exactly that shape; anything else at that position
-      collects (a single `any` becomes a one-element slice, a
-      `slice<int32>` boxes as one slice element), and zero extras
-      synthesize an empty `{ null, 0 }` slice. A collecting function is
-      non-overloadable in v1 and cannot share a generic name, extending
-      the shipped variadic-cannot-overload rule (a collecting candidate
-      would make arity-based viability ambiguous against the last-position
-      rule); the pre-evaluate path gets an explicit diagnostic, not a
-      confusing arity error. Boxes are entry allocas with function
-      lifetime, so `defer` bodies and loops are safe; the
-      callee-must-not-retain caveat is the same one every slice borrow
-      documents. The two real costs: collection parity across both
-      marshaling paths (`marshal_args` and the generic pre-evaluate path),
-      and the `{}`-grammar migration of every existing print caller. Lands
-      **staged** (the receiver-migration pattern: each stage is its own
-      complete change set with its own CHANGELOG entry; this box ticks
-      when the last stage lands):
-  - [x] stage 1: trailing collection and the `args...` sugar — parser sugar
-        (`IDENT...` desugars to `slice<const any>`), collection in
-        `marshal_args` mirroring the literal-adaptation borrow (entry
-        `[N x any]` alloca, box each extra, form the slice; zero extras
-        synthesize the empty slice), the pass-through rule, the v1
-        overload/generic ban with its explicit diagnostic, and
-        `check_boxable`'s struct/array rejections firing at the
-        collection site; implemented, see
-        [Native variadic arguments](docs/language.md#native-variadic-arguments)
-  - [x] stage 2: generic and overload-set parity — collection through the
-        pre-evaluate path (its arity filter and viability arity error
-        excluded collecting candidates until this stage), mirroring the
-        literal-adaptation parity lesson from
-        [function overloading](docs/language.md#function-overloading)'s
-        first stage, and lifting the stage-1 ban. Ranking is settled: a
-        candidate that matches without collecting beats any candidate
-        that must collect, as the outermost rank component regardless of
-        tier — an exact-arity generic beats a concrete collecting
-        fallback (the C++ ellipsis-ranks-worst analogue) — and a
-        pass-through-shaped match (final argument exactly
-        `slice<const any>` at exact arity) counts as not-collecting at
-        full specificity. Between collecting candidates, more fixed
-        parameters wins; equal fixed counts with a tying fixed-prefix
-        specificity is an ambiguity error. A collecting candidate is
-        viable when the argument count reaches its fixed count, with
-        unification and shape checks sliced to the fixed prefix, and its
-        type parameters bind from the fixed arguments only. No boxing
-        happens before the winner is known — collection is emitted from
-        already-evaluated values (only deferred array/bare-struct
-        literal extras re-generate from AST) — so resolution never
-        forces evaluation order. C-style `...` variadics stay banned
-        from overload sets (that lift belongs to the
-        [C variadics](#functions-and-methods) item below), and `.mci`
-        needed zero changes. Implemented, see
-        [Native variadic arguments](docs/language.md#native-variadic-arguments)
-        and [Function overloading](docs/language.md#function-overloading)
-  - [x] stage 3: the stdlib flip — shipped, by a different route than
-        the `format_arg` repair this stage once prescribed:
-        `lib/std/format.mc` was replaced wholesale by the open `format`
-        overload set (integer base/width/zero-pad modifiers, string
-        field widths, a null-safe `char*` member), obsoleting four of
-        the five recorded WIP bugs rather than fixing them;
-        `print`/`println` flipped to
-        `fn println(const fmt: slice<const char>, args...)`, with a
-        `@private` `format_args` collector dispatching each
-        placeholder's argument through a generic
-        `with (t = args[i] as T)` arm; and every printf-grammar caller
-        (examples, docs, tests) migrated to `{}` in the same change
-        set. The two deferred decisions resolved: the migration toggle
-        landed with inverted polarity — the legacy printf pair is kept
-        behind `-D PRINTF_PRINTLN=1` rather than the new pair behind
-        `NATIVE_VARGS` — and the `{}` grammar spec lives in the shipped
-        modifier sub-items of
-        [formatted `{}` print](#strings-and-formatting). Also carried
-        the [libmc receiver migration](#functions-and-methods)'s format
-        flip (the accumulator landed `mut` from the start). The
-        downstream [formatted `{}` print](#strings-and-formatting) and
-        [string interpolation](#strings-and-formatting) items keyed off
-        this stage as planned; the remaining scraps — spec'ing the
-        silent placeholder edges (the fifth recorded bug) and the
-        `PRINTF_PRINTLN` deletion decision — are carved off as
-        sub-items there. Implemented, see
-        [Formatted print/println](docs/language.md#formatted-print--println)
 - [ ] C variadics — the C-ABI `...`/`va_list` machinery, beyond forwarding:
   - [x] variadic declarations and `va_list` forwarding — implemented, see
         [Variadic functions](docs/language.md#variadic-functions)
+  - [ ] `va_list` function values crash on x86-64 SysV — a known gap, not a
+        feature: taking a function value of a native `va_list`-taking
+        function crashes llvmlite on x86-64 System V, because the
+        function-type builder in the codegen type layer spells the
+        `va_list` parameter in its *storage* IR form while declaration
+        sites use the *passed* form (the generator's `va_list_passed_ir`);
+        the two forms only coincide (`i8*`) on darwin arm64, which is why
+        the host suite never trips it. Pre-existing (present before the
+        carrying-function-type lifts; surfaced during the `fn(mut T)`
+        work), and the proper fix needs target knowledge in the type
+        layer, where `function_type` today has none
   - [ ] `va_arg` interop — read individual arguments from a C-ABI `va_list`
         in mcc (today a `va_list` can only be forwarded to a C `v*` function)
 - [x] `@noreturn` and `unreachable` — `@noreturn` marks a void function that
@@ -2513,7 +2267,8 @@ already do).
 
 - [x] Formatted `print`/`println` — Rust/Python-style `{}` placeholders,
       type-driven (no `%`-letters), written in mcc over the
-      [native variadic](#functions-and-methods) `slice<const any>`; enables
+      [native variadic](docs/language.md#native-variadic-arguments)
+      `slice<const any>`; enables
       compile-time format checking later. Per-type rendering is not
       per-struct `format` methods but the shipped stdlib `format` overload
       set below, per the [open overload sets](#functions-and-methods)
@@ -2523,8 +2278,9 @@ already do).
       works directly), and an owned `struct string` borrows in with
       `str as slice<char>` — both via the
       [`slice<T>`](docs/language.md#slices) borrowing rules. **This is now
-      the default `print`/`println`**; the follow-ups nested below are the
-      compile-time stages:
+      the default `print`/`println`**, every stage nested below shipped;
+      the open sub-items are the remaining scraps, the legacy toggle's
+      deletion decision and the silent-edge spec:
   - [x] printf-style `%` formatting — the previous `print`/`println` in the
         [standard library](README.md#standard-library), superseded by the
         `{}` model and kept behind `-D PRINTF_PRINTLN=1` for programs
@@ -2557,7 +2313,8 @@ already do).
         and `{{`/`}}` escape literal braces
     - [ ] spec the silent formatting edges — the shipped parser's two
           unspecified behaviors, carried over from the
-          [native variadics](#functions-and-methods) stdlib-flip stage:
+          [native variadics](docs/language.md#native-variadic-arguments)
+          stdlib-flip stage:
           an excess placeholder with no argument left renders nothing
           (the collector's `i < args.length` guard), and a trailing
           unclosed `{` silently discards the accumulated modifier text;
