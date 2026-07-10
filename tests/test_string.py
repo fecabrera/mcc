@@ -467,3 +467,26 @@ def test_static_string_array_initializer():
     }
     """
     assert run(src) == 72 + 105
+
+
+def test_writestr_and_writeln_take_a_string_directly(capfd):
+    # The io writers' `T extends slice<char>` overloads: a string (or a
+    # list<char>, or a slice) writes with no explicit `as slice<char>`
+    # borrow at the call site, re-lending into the concrete slice member --
+    # which a bare literal still adapts to directly.
+    src = """
+    import "std/io";
+    import "std/string";
+    fn main() -> int32 {
+        let s: string;
+        string_init(s, "owned");
+        defer string_destroy(s);
+        writestr(s);
+        writechar(' ');
+        writeln(s);
+        writeln("literal");
+        return 0;
+    }
+    """
+    assert run(src) == 0
+    assert capfd.readouterr().out == "owned owned\nliteral\n"

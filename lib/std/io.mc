@@ -117,7 +117,7 @@ import "std/format";
         string_init(str);
         defer string_destroy(str);
         format_args(str, fmt, args);
-        writestr(str as slice<char>);
+        writestr(str);   // the generic writestr takes the string directly
     }
 
     /**
@@ -132,7 +132,7 @@ import "std/format";
         defer string_destroy(str);
         format_args(str, fmt, args);
         string_push(str, '\n');
-        writestr(str as slice<char>);
+        writestr(str);
     }
 }
 
@@ -147,19 +147,48 @@ fn writechar(const c: char) {
 }
 
 /**
- * Writes a string's bytes to standard output (its `length` bytes from `data`).
+ * Writes a string's bytes to standard output (its `length` bytes from
+ * `data`). `T` is bounded to `slice<char>`, so `str` may be a `string`, a
+ * `list<char>`, or a `slice<char>` -- anything that `extends` the char
+ * slice binds `T` and writes with no explicit `as` at the call site,
+ * re-lending into the concrete member below.
  *
- * @param str: string to write
+ * @param str: any value whose type extends `slice<char>` to write
  */
 @inline
-fn writestr(const str: slice<const char>) {
+fn writestr<T extends slice<char>>(const str: T) {
+    writestr(str as slice<const char>);
+}
+
+/**
+ * Writes a string slice's bytes to standard output: the concrete member a
+ * string literal adapts to directly.
+ *
+ * @param str: slice to write
+ */
+@inline
+fn writestr(const str: const slice<const char>) {
     fwrite(str.data as byte*, sizeof(char), str.length, stdout);
 }
 
 /**
- * Writes a string to standard output followed by a newline.
+ * Like the generic writestr, followed by a newline: a `string`,
+ * `list<char>`, or `slice<char>` writes a whole line with no explicit
+ * borrow at the call site.
  *
- * @param str: string to write
+ * @param str: any value whose type extends `slice<char>` to write
+ */
+@inline
+fn writeln<T extends slice<char>>(const str: T) {
+    writestr(str);
+    writechar('\n');
+}
+
+/**
+ * Writes a string slice to standard output followed by a newline: the
+ * concrete member a string literal adapts to directly.
+ *
+ * @param str: slice to write
  */
 @inline
 fn writeln(const str: slice<const char>) {

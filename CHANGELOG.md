@@ -10,6 +10,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`writestr`/`writeln` take any char-slice-shaped value** — the io
+  writers gain `T extends slice<char>` overloads, so a `string` or
+  `list<char>` writes with no explicit `as slice<char>` borrow at the call
+  site (`writeln(s)`), re-lending into the concrete slice member a bare
+  string literal still adapts to — the same bounded pattern
+  `string_append` and the string `equals` members already use.
+  `print`/`println` dogfood it internally.
+
 - **String format modifiers: field widths, and a null-safe `char*`** — the
   `format` set's string members (`char*` and `slice<const char>`) take the
   `[N][s][N]` field-width grammar: digits before the `s` right-align the
