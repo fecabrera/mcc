@@ -871,13 +871,74 @@ already do).
       (the pointer is the base operand being advanced, and `n - p` has
       no meaning anyway, so addition matches subtraction's shape)
 - [ ] `tuple<A, B, ...>` — a builtin heterogeneous, fixed-arity product: each
-      position keeps its own statically-known type, accessed by position (`t.0`,
-      `t.1`). For multiple return values
+      position keeps its own statically-known type, accessed by position
+      with the existing index syntax (`t[0]`, `t[1]`). The index must be a
+      compile-time constant (each position has its own type, so a runtime
+      index has no single result type) and bounds are checked at compile
+      time too; slicing with constant bounds narrows the type, `t[n:m]`
+      being the smaller tuple of those positions. Constructed by the paren
+      literal (a parenthesized expression with a top-level comma; `(x)`
+      stays grouping): `let t: tuple<A, B> = (a, b);`, inferred
+      `let t = (a, b);`, and the uninitialized `let t: tuple<A, B>;` all
+      declare like structs. Destructuring binds positions with no parens
+      (`let a, b = t;`), and a trailing-`...` rest binder takes the tail as
+      a slice-and-destructure: `let a, t2... = t1;` means `a = t1[0]`,
+      `t2 = t1[1:]`; the same rest binder extends to slices (taken in
+      stage 3 below). No `extends tuple<...>`: tuples are not named, and
+      naming one is the type alias's job
+      (`type polar = tuple<int64, float64>;` is allowed). A tuple is
+      layout-equivalent to the struct with the same field types in the same
+      order, so `(a, b, ...) as A` converts to any layout-equivalent struct
+      `A` and tuples cross `@extern` boundaries as the layout-equivalent C
+      struct. For multiple return values
       (`fn divmod(a: int32, b: int32) -> tuple<int32, int32>`) and ad-hoc
-      grouping without a one-off struct. Distinct from `slice<any>`: a tuple
-      keeps each element's static type and a compile-time arity, where erasing
-      every slot to `any` would collapse into a fixed-length `slice<any>`. Also
-      the door to a statically-typed variadic later (no erasure), if wanted
+      grouping without a one-off struct. Distinct from `slice<any>`: a
+      tuple keeps each element's static type and a compile-time arity,
+      where erasing every slot to `any` would collapse into a fixed-length
+      `slice<any>`. Also the door to a statically-typed variadic later (no
+      erasure), if wanted; to keep that door open, `tuple<>` and `tuple<T>`
+      reject as a shallow surface check only, and the interning, layout,
+      and unification internals never assume an arity of two or more (a
+      future `T...` may produce 0- and 1-tuples). `==` stays rejected as on
+      structs; the open `equals` overload set is the extension point. Lands
+      **staged** (each stage its own complete change set with its own
+      CHANGELOG entry; this box ticks when the last stage lands):
+  - [ ] stage 1: the core type, paren literal, and constant indexing — a
+        new interned builtin `LangType` arm beside `slice` and `any` in the
+        generator's type resolution, built on `instantiate_struct`'s layout
+        core with internal field names `"0"`, `"1"`, ... so the existing
+        GEP/member machinery works unchanged (padding and alignment are the
+        care point: the dual-site layout invariant, types.py and the LLVM
+        identified type agreeing, applies); the paren literal as a new
+        parse in the primary/paren arm with struct-literal-style context
+        coercion (adaptable literals anchor `int32` with no context);
+        constant `t[n]` as a tuple arm in the Index codegen requiring a
+        folded constant (`eval_const`), with the compile-time bounds check;
+        and the shallow arity check. `tuple<...>` in type position already
+        parses (it fails only at resolution), so no parser change is needed
+        there, and once the `LangType` exists the rest rides existing
+        machinery free: direct aggregate returns (multiple return values
+        work immediately), generic inference (`unify` recurses template and
+        arguments, variable arity included), hidden-reference `const`
+        parameters, whole-value assignment, arrays of tuples, tuples in
+        structs, `sizeof`, `.mci` round-trip, `any` boxing under the struct
+        rule (by reference into a `const any` only), and `case type`
+  - [ ] stage 2: constant slicing — `t[n:m]` with constant bounds narrows
+        to the smaller tuple of those positions, desugaring onto stage 1's
+        constant-indexing arm and reusing the `[a:b]` grammar shipped with
+        [sub-slicing](docs/language.md#slices)
+  - [ ] stage 3: destructuring and the rest binder — `let a, b = t;` (the
+        `let` grammar takes a single IDENT today, so the comma slot is
+        free) and the trailing-`...` rest binder, both pure sugar over
+        stage 1's constant indexing and stage 2's constant slicing; the
+        same rest binder over a slice right-hand side
+        (`let first, rest... = s;`) lands here too, the identical desugar
+        onto shipped [sub-slicing](docs/language.md#slices)
+  - [ ] stage 4: layout-equivalent struct `as` and `@extern` — the
+        `(a, b, ...) as A` cast as a cast arm checking field-type-sequence
+        equality against the target struct, with tuples then crossing
+        `@extern` boundaries as the layout-equivalent C struct via the
+        existing struct-ABI classification (`classify_aggregate`)
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:
