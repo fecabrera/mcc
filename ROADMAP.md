@@ -1472,6 +1472,23 @@ already do).
         `_at`-style documented UB as the stdlib baseline. Collision and
         ambiguity posture is inherited wholesale from the open sets
         above, `@override` included
+- [ ] `fn` types in overload viability and generic unification — close a
+      pre-existing resolver gap the callback story sits behind: a
+      concrete overload with a fn-typed parameter is never viable today
+      (fn-typed arguments are invisible to the viability filter), and
+      generic unification never recurses into a written fn signature,
+      so `fn pick<T>(f: fn(T) -> T)` cannot infer `T`. Both halves are
+      resolver-internal, no new syntax or types: viability learns to
+      match a function value against a fn-typed slot, and unification
+      walks a fn type's parameter and return patterns the way it
+      already walks pointer depth and generic struct arguments. This
+      gates any callback-taking generic API, the
+      `sort<T>(items: slice<T>, cmp: fn(T, T) -> bool)` shape the
+      [generic type aliases](#types-and-generics) item's `cmp<T>`
+      comparator example implies; it depends on nothing new, and the
+      `@nonnull`-carrying function types item below neither fixes nor
+      worsens it, since that item's contravariance lives on the coerce
+      path, not in viability or unification
 - [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
       keyed to a struct, including `@private` methods and the special
       constructor/destructor below (the `for … in` protocol already dispatches
@@ -1785,8 +1802,11 @@ already do).
       string/array-literal decay, array decay) construct non-null directly,
       and passing the `null` literal to a `@nonnull` parameter is a compile
       error. To keep the fact sound, a `@nonnull` parameter cannot be
-      reassigned or have its address taken, and a function with `@nonnull`
-      parameters cannot be a function value. Composes with `const` and
+      reassigned or have its address taken; a function with `@nonnull`
+      parameters cannot initially be a function value, a ban the
+      `@nonnull`-carrying function types sub-item below is slated to
+      lift by spelling the contract in the function type. Composes
+      with `const` and
       `@noalias`; allowed on `@extern` (attribute-only, like `@noalias`);
       `@nonnull mut` rejected initially; implemented, see
       [@nonnull parameters](docs/language.md#nonnull-parameters):
@@ -2023,6 +2043,37 @@ already do).
           appears. A non-null return type extends return types the same way
           the now-shipped [`mut` returns](#functions-and-methods) did, whose
           plumbing is the precedent to follow if this happens
+  - [ ] `@nonnull`-carrying function types — lift the parent's remaining
+        soundness ban (a function with `@nonnull` parameters cannot be a
+        function value) by letting the function type spell the
+        per-parameter contract: `fn(@nonnull char*, @nonnull char*)`.
+        `let f = my_func;` infers the annotated type, the current
+        rejection site becoming the inference site, so the old error
+        disappears entirely; a call through such a value runs the same
+        call-site null-proof as a direct call (the proof machinery is
+        index-keyed and indirect calls already funnel through the same
+        argument-marshalling path, so flow-narrowing and the `p!` hatch
+        apply identically). Assignability is contravariant: a plain fn
+        value flows into a `@nonnull`-typed slot (it tolerates more),
+        while a `@nonnull` fn value may not flow into a plain fn type,
+        with a hinted error explaining the contract cannot be dropped
+        because calls through the plain type would skip the proof;
+        `f as fn(char*, char*)` stays the explicit contract-stripping
+        hatch, a free bitcast whose calls skip the proof (UB if the
+        argument is actually null, mirroring `p!`). Variance is flat:
+        fn values only, no deep variance through slices or nested fn
+        types. Scope is `@nonnull` alone: `@noalias` stays an unchecked
+        hint that drops silently from a fn value, and `mut`/`const` in
+        fn types remain the [`mut` item](#functions-and-methods)'s
+        separate, non-coercible lift, which reuses the annotated-fn-type
+        grammar slot this item builds (the two sibling bans at the same
+        rejection site, hidden-reference `const`-struct/`mut` parameters
+        and `mut` returns, are ABI-level and stay). One accepted
+        asymmetry, to be documented with the feature: a fn value of a
+        `@nonnull` `@extern` (`let f = strlen;`) carries the contract,
+        so calls through the pointer check strictly, while direct
+        extern calls keep grading by the
+        [`-Wextern-nonnull`](#metaprogramming-and-builtins) posture
 - [x] Native variadic arguments — `fn f(args: slice<const any>)` (with
       `fn f(args...)` as sugar): a trailing `slice<const any>` parameter collects
       the call's extra arguments, so `f(x, a, b, c)` (after `f`'s fixed
