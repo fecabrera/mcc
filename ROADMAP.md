@@ -465,10 +465,10 @@ already do).
         Implemented as settled, see
         [The any type](docs/language.md#the-any-type); the nested items
         below are the follow-ups:
-    - [ ] global/`@static` `any` initializers — teach the const-initializer
-          path to box a constant; until then rejected with an explicit
-          compile error, the same shape as the global union initializer gap
-          below
+    - [x] global/`@static` `any` initializers — the const-initializer path
+          boxes a compile-time constant into a constant tagged aggregate,
+          under the same tags and owning-box rules as runtime boxing
+          (implemented, see [The any type](docs/language.md#the-any-type))
     - [x] struct boxing — lifts the v1 struct rejection for the
           call-scoped borrow case (implemented, see
           [The any type](docs/language.md#the-any-type)). A struct boxes into

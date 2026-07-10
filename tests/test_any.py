@@ -714,15 +714,6 @@ def test_any_has_no_fields():
         )
 
 
-def test_global_any_initializer_is_rejected():
-    with pytest.raises(
-        LangError,
-        match="a global any initializer is not supported yet; "
-        "assign the value at runtime instead",
-    ):
-        compile_ir("@static let g: any = 5;\nfn main() -> int32 { return 0; }")
-
-
 def test_function_pointer_boxing_is_rejected():
     # Function pointers are outside the v1 boxable set (primitives, data
     # pointers, slices).
@@ -742,6 +733,208 @@ def test_any_is_not_generic():
 def test_a_user_struct_cannot_shadow_any():
     with pytest.raises(LangError, match="type 'any' already defined"):
         compile_ir("struct any { x: int32; }")
+
+
+# ----------------------------------------------- global/@static initializers
+
+def test_global_any_initializer_boxes_an_untyped_int():
+    # `5` anchors at its int32 placeholder type, so the constant global
+    # carries the same tag runtime boxing would produce.
+    src = (
+        "@static let g: any = 5;\n"
+        "fn main() -> int32 {\n"
+        "    case type (g) { when int32 n: return n - 5; else: return 1; }\n"
+        "    return 2;\n"
+        "}"
+    )
+    assert str(fnv1a64("int32")) in compile_ir(src)
+    assert run(src) == 0
+
+
+def test_global_any_initializer_scalar_payloads():
+    assert run(
+        "@static let f: any = 1.5;\n"
+        "@static let c: any = 'x';\n"
+        "@static let b: any = true;\n"
+        "@static let n: any = -7;\n"
+        "fn main() -> int32 {\n"
+        "    case type (f) { when float64 v: { if (v != 1.5) { return 1; } }"
+        " else: return 2; }\n"
+        "    case type (c) { when char v: { if (v != 'x') { return 3; } }"
+        " else: return 4; }\n"
+        "    case type (b) { when bool v: { if (!v) { return 5; } }"
+        " else: return 6; }\n"
+        "    case type (n) { when int32 v: { if (v != -7) { return 7; } }"
+        " else: return 8; }\n"
+        "    return 0;\n"
+        "}"
+    ) == 0
+
+
+def test_global_any_string_literal_boxes_as_charptr():
+    # The literal folds to char* first, so the global boxes under the char*
+    # tag -- the same tag a runtime `let a: any = "hi";` produces -- not as
+    # a slice.
+    src = (
+        'import "libc/string";\n'
+        '@static let s: any = "hi";\n'
+        "fn main() -> int32 {\n"
+        "    case type (s) { when char* p: return strlen(p) as int32 - 2;"
+        " else: return 1; }\n"
+        "    return 2;\n"
+        "}"
+    )
+    assert str(fnv1a64("char*")) in compile_ir(src)
+    assert run(src) == 0
+
+
+def test_global_any_pointer_payload_folds_to_a_constant():
+    # A constant pointer cast puns into the payload via a ptrtoint constant
+    # expression; each pointer type keeps its own tag.
+    ir_text = compile_ir(
+        "@static let p: any = 0x1000 as uint32*;\n"
+        "@static let q: any = null as uint8*;\n"
+        "fn main() -> int32 { return 0; }"
+    )
+    assert "inttoptr" in ir_text
+    assert str(fnv1a64("uint32*")) in ir_text
+    assert str(fnv1a64("uint8*")) in ir_text
+
+
+def test_global_any_word_sized_integer_payloads():
+    # A 64-bit value fills the payload word as-is -- including a
+    # ptrtoint-derived constant expression, which has no plain integer to
+    # mask.
+    assert "ptrtoint" in compile_ir(
+        "@static let g: any = (0x1000 as uint32*) as uint64;\n"
+        "fn main() -> int32 { return 0; }"
+    )
+    assert run(
+        "@static let a: any = 7 as int64;\n"
+        "@static let b: any = -1 as int64;\n"
+        "fn main() -> int32 {\n"
+        "    case type (a) { when int64 v: { if (v != 7) { return 1; } }"
+        " else: return 2; }\n"
+        "    case type (b) { when int64 v: { if (v != -1) { return 3; } }"
+        " else: return 4; }\n"
+        "    return 0;\n"
+        "}"
+    ) == 0
+
+
+def test_global_any_const_ref_and_enum_initializers():
+    # A const reference folds through eval_const; a transparent enum member
+    # boxes under its underlying type's tag, as at runtime.
+    assert run(
+        "const N = 40 + 2;\n"
+        "enum color: uint8 { red = 1, green = 2 }\n"
+        "@static let a: any = N;\n"
+        "@static let b: any = color::green;\n"
+        "fn main() -> int32 {\n"
+        "    case type (a) { when int32 v: { if (v != 42) { return 1; } }"
+        " else: return 2; }\n"
+        "    case type (b) { when uint8 v: { if (v != 2) { return 3; } }"
+        " else: return 4; }\n"
+        "    return 0;\n"
+        "}"
+    ) == 0
+
+
+def test_generic_arm_sees_a_tag_boxed_only_at_global_scope():
+    # Globals fold before the generic-arm finalize fixpoint, so a type boxed
+    # nowhere else still monomorphizes a `when T v:` body.
+    assert run(
+        "@static let g: any = 300 as uint16;\n"
+        "fn width(a: any) -> int32 {\n"
+        "    case type (a) { when T v: return sizeof(T) as int32;"
+        " else: return -1; }\n"
+        "    return -2;\n"
+        "}\n"
+        "fn main() -> int32 { return width(g) - 2; }"
+    ) == 0
+
+
+def test_global_any_struct_initializer_is_rejected():
+    # Hoisted above the struct-literal constant arm: the canonical owning-box
+    # rejection, not a type mismatch against `any`.
+    with pytest.raises(
+        LangError,
+        match="cannot box a point into an owning any; a struct only boxes by "
+        "reference into a const any",
+    ):
+        compile_ir(
+            "struct point { x: int32; }\n"
+            "@static let g: any = point { x = 1 };\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_global_const_any_is_still_an_owning_slot():
+    # The struct borrow carve-out is call-scoped; a global outlives every
+    # frame, so a `const any` global rejects a struct all the same.
+    with pytest.raises(
+        LangError, match="cannot box a point into an owning any"
+    ):
+        compile_ir(
+            "struct point { x: int32; }\n"
+            "@static let g: const any = point { x = 1 };\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_global_any_union_initializer_is_rejected():
+    with pytest.raises(
+        LangError, match=r"cannot box a u in an any; box a pointer to it"
+    ):
+        compile_ir(
+            "union u { i: int64; }\n"
+            "@static let g: any = u { i = 1 };\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_global_any_array_initializer_is_rejected():
+    with pytest.raises(
+        LangError, match="an array literal cannot initialize a any"
+    ):
+        compile_ir("@static let g: any = [1, 2];\nfn main() -> int32 { return 0; }")
+
+
+def test_global_any_bare_null_initializer_is_rejected():
+    with pytest.raises(
+        LangError,
+        match="cannot box a bare null in an any; give it a pointer type first",
+    ):
+        compile_ir("@static let g: any = null;\nfn main() -> int32 { return 0; }")
+
+
+def test_global_any_function_initializer_is_rejected():
+    with pytest.raises(
+        LangError, match=r"cannot box a fn\(\) -> int32 in an any"
+    ):
+        compile_ir(
+            "fn f() -> int32 { return 1; }\n"
+            "@static let g: any = f;\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_global_any_non_constant_initializer_is_rejected():
+    with pytest.raises(
+        LangError, match="a const initializer must be a compile-time constant"
+    ):
+        compile_ir(
+            "fn side() -> int32 { return 1; }\n"
+            "@static let g: any = side();\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_global_any_bare_struct_literal_matches_runtime():
+    # A bare literal falls through to the fields check against `any` itself,
+    # the same message the runtime path produces.
+    with pytest.raises(LangError, match="struct any has no field 'x'"):
+        compile_ir("@static let g: any = { x = 1 };\nfn main() -> int32 { return 0; }")
 
 
 # ------------------------------------------------------------------- tags
@@ -809,6 +1002,29 @@ def test_any_round_trips_through_mci(tmp_path):
         "    if (as_int(40, -1) != 40) { return 1; }\n"
         "    if (as_int(2.5, -1) != -1) { return 2; }\n"
         "    return 0;\n"
+        "}\n"
+    )
+    assert run_path(main) == 0
+
+
+def test_global_any_initializer_round_trips_through_mci(tmp_path):
+    # The global emits verbatim into the stub (pulled in by the @inline body
+    # that references it); the consumer re-runs the constant boxing.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "@static let g: any = 7;\n"
+        "@inline fn boxed() -> any { return g; }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    assert "@static let g: any = 7;" in out.read_text()
+    lib.unlink()  # force the import to resolve through the stub
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\n'
+        "fn main() -> int32 {\n"
+        "    case type (boxed()) { when int32 n: return n - 7; else: return 1; }\n"
+        "    return 2;\n"
         "}\n"
     )
     assert run_path(main) == 0

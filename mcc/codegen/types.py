@@ -329,9 +329,9 @@ NULLT = LangType("null", RAWPTR.ir, signed=False, pointee=TYPES["uint8"])
 # reuse the struct machinery) and interned as this single constant: only the
 # reserved-name resolution arm in `CodeGen.lang_type` hands it out, so identity
 # (`t is ANY`) is the marker. The tag is the FNV-1a hash of the boxed type's
-# canonical name (see :func:`fnv1a64`); the layout here and the GEP indices in
-# the generator's boxing/`case type` code are the two sites of the usual
-# dual-site layout invariant.
+# canonical name (see :func:`fnv1a64`); the layout here, the GEP indices in
+# the generator's boxing/`case type` code, and the constant word layout in
+# `CodeGen.const_box_any` are the three sites of the layout invariant.
 _ANY_PAYLOAD = list_of(UINT64, 2)
 ANY = LangType(
     "any",

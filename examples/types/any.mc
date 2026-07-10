@@ -44,6 +44,23 @@ fn pick(text: bool) -> any {
     return 0;
 }
 
+// Boxing at global scope: a `@static` (or top-level) `any` takes a constant
+// initializer, folded at compile time into a constant tagged box under the
+// same tags runtime boxing produces. The same anchoring rule applies, so
+// PORTS boxes as int32 (the `const` folds through first), and a string
+// literal boxes as char* exactly as `describe("hello")` below does. The
+// owning-box rules are unchanged: a struct, union, or array literal or a
+// bare `null` is rejected with the same message as at runtime -- and a
+// global is an owning slot even declared `const any`, so the hidden-
+// reference struct carve-out (any_struct_boxing.mc) never applies here.
+const PORTS = 40 + 2;
+
+@static let g_count: any = PORTS;      // int32, via the folded const
+@static let g_ratio: any = 1.5;        // float64
+@static let g_name:  any = "static";   // char*, never a slice
+@static let g_empty: any;              // no initializer: zero-filled,
+                                       // tag 0 matches only `else`
+
 fn main() -> int32 {
     // The box is one fixed size no matter what it holds.
     println("sizeof(any)  = {}", sizeof(any) as int32);
@@ -77,6 +94,13 @@ fn main() -> int32 {
     let wide: int64 = 7;
     describe(wide);
 
+    // The globals boxed at compile time recover through the exact same
+    // `case type` arms as the runtime boxes above.
+    describe(g_count);
+    describe(g_ratio);
+    describe(g_name);
+    describe(g_empty);   // zero-filled, so `else`
+
     return 0;
 }
 
@@ -90,4 +114,6 @@ fn main() -> int32 {
 // any_struct_boxing.mc for a struct boxing by hidden reference into a
 // `const any`, recovered by a `when point p:` arm with no copy;
 // functions/native_variadics.mc for the box's headline consumer, native
-// variadic collection.
+// variadic collection;
+// static_initializers.mc for `@static` struct and union globals, the
+// aggregate counterparts of the constant boxed globals above.

@@ -10,6 +10,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Global/`@static` `any` initializers** — an `any` global now takes a
+  constant initializer: the const-initializer path boxes any compile-time
+  constant a scalar global accepts into a constant tagged 24-byte aggregate,
+  under the same tags runtime boxing produces (`@static let g: any = 5;`
+  boxes as int32 by the untyped-literal placeholder rule, a string literal
+  boxes as `char*`, a constant pointer cast under its own pointer tag), and
+  a type boxed only at global scope still reaches generic `case type` arm
+  monomorphization. The owning-box rules are unchanged: a struct, union,
+  array, or bare `null` initializer is rejected with the same messages as
+  runtime boxing — a global is an owning slot even declared `const any`.
+  See [The any type](docs/language.md#the-any-type) and
+  [examples/types/any.mc](examples/types/any.mc).
+
 - **`writestr`/`writeln` take any char-slice-shaped value** — the io
   writers gain `T extends slice<char>` overloads, so a `string` or
   `list<char>` writes with no explicit `as slice<char>` borrow at the call

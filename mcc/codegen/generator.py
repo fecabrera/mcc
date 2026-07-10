@@ -13,6 +13,7 @@ arguments, exactly like generic functions monomorphize.
 from __future__ import annotations
 
 import re
+import struct
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from dataclasses import fields as dataclass_fields
@@ -3141,8 +3142,8 @@ class CodeGen:
         it (no copy), otherwise a call-scoped temporary the rvalue spills into
         -- tagged as the struct type itself (``point``, not ``point*``), so
         ``case type`` recovers it as a reference with no copy. The GEP indices
-        here and the layout in ``types.ANY`` are the two sites of the
-        dual-site layout invariant.
+        here, the constant word layout in :meth:`const_box_any`, and the
+        layout in ``types.ANY`` are the three sites of the layout invariant.
 
         Args:
             tv: The value to box (validated via :meth:`check_boxable`; an
@@ -3162,10 +3163,11 @@ class CodeGen:
             self.check_boxable(tv.decayed, line, borrow=borrow)
         boxed = self.check_boxable(tv.type, line, borrow=borrow)
         tag = self.any_tag(boxed, line)
-        # Feed the boxed-only registry. Every boxing site funnels through
-        # this method (the coerce choke point and the variadic-extras
-        # collection are its only callers), so the registry records exactly
-        # the types a generic case-type arm can ever see at runtime.
+        # Feed the boxed-only registry. Every runtime boxing site funnels
+        # through this method (the coerce choke point and the variadic-extras
+        # collection are its only callers) and every constant one through
+        # const_box_any, so the registry records exactly the types a generic
+        # case-type arm can ever see at runtime.
         self.boxed_types.setdefault(tag, boxed)
         slot = self.entry_alloca(ANY.ir, "any.box")
         self.builder.store(ir.Constant(ANY.ir, None), slot)  # zero-fill first
@@ -8699,9 +8701,10 @@ class CodeGen:
 
         Arrays use nested literals; a ``slice<const T>`` may view an array
         literal (an anonymous constant global backs it) or a string literal;
-        scalars may be any compile-time constant expression -- a literal, a
-        ``const`` reference, an ``as`` cast, ``sizeof``, or arithmetic --
-        folded via :meth:`eval_const`.
+        an ``any`` boxes its constant (see :meth:`const_box_any`); scalars may
+        be any compile-time constant expression -- a literal, a ``const``
+        reference, an ``as`` cast, ``sizeof``, or arithmetic -- folded via
+        :meth:`eval_const`.
 
         Args:
             expr: The initializer expression.
@@ -8714,6 +8717,15 @@ class CodeGen:
         Raises:
             LangError: When ``expr`` is not a constant of ``expected``.
         """
+        if is_any(expected) and not (
+            isinstance(expr, StructLit) and expr.type_ref is None
+        ):
+            # An `any` global boxes its constant initializer. Checked before
+            # the struct-literal arm so a *named* struct/union literal gets
+            # the canonical owning-box rejection instead of a type mismatch
+            # against `any`; a bare literal falls through to const_struct_lit,
+            # which fields-checks it against `any` exactly as runtime does.
+            return self.const_box_any(expr, line)
         if isinstance(expr, StructLit):
             # A struct or union literal folds to an aggregate constant: each
             # field recurses through here, so nested struct/array/slice fields
@@ -8721,15 +8733,6 @@ class CodeGen:
             # as its written member plus trailing pad (see
             # :meth:`const_union_lit`), not the union's own IR type.
             return self.const_struct_lit(expr, expected, line)
-        if is_any(expected):
-            # Boxing a constant needs the const-initializer path to build the
-            # tagged 24-byte aggregate; until then, the same shape as the
-            # global union initializer gap above.
-            raise LangError(
-                "a global any initializer is not supported yet; "
-                "assign the value at runtime instead",
-                line,
-            )
         if isinstance(expr, ArrayLit) and is_slice(expected):
             # A slice<const T> initialized from an array literal: the Stage 1
             # adaptation in constant form -- the elements go into an anonymous
@@ -8833,6 +8836,71 @@ class CodeGen:
         return self.const_coerce(
             self.eval_const(expr, line), expected, line, "@static initializer"
         ).value
+
+    def const_box_any(self, expr, line: int) -> ir.Constant:
+        """Box a compile-time constant into an ``any`` aggregate constant.
+
+        The constant counterpart of :meth:`gen_box_any` for a global/
+        ``@static`` ``any`` initializer, built without a builder: the
+        initializer folds via :meth:`eval_const` -- an untyped ``5`` anchors
+        at its int32 placeholder type and a string literal folds to ``char*``,
+        so both box under the same tags as at runtime -- and the value's bits
+        are punned into the payload's low word. The pun matches the runtime
+        zero-fill-then-store layout only on a little-endian target; every
+        supported arch (see ``classify_arch``) is LE. Boxability and the tag
+        are shared with the runtime path via :meth:`check_boxable` /
+        :meth:`any_tag`; a global is an owning slot even when declared
+        ``const any``, so the struct borrow carve-out never applies.
+
+        Args:
+            expr: The initializer expression.
+            line: Source line for diagnostics.
+
+        Returns:
+            The 24-byte ``any`` constant (typed exactly ``ANY.ir``, so it
+            composes into enclosing aggregate constants).
+
+        Raises:
+            LangError: When the initializer is not a compile-time constant or
+                its type is outside the owning-``any`` boxable set (struct,
+                union, array, bare ``null``), with the same messages as
+                runtime boxing.
+        """
+        if isinstance(expr, StructLit):
+            # A named struct/union literal: resolve its type only to phrase
+            # the rejection by it (check_boxable always raises for an
+            # aggregate in an owning slot).
+            self.check_boxable(self.lang_type(expr.type_ref, line), line)
+        if isinstance(expr, ArrayLit):
+            raise LangError(f"an array literal cannot initialize a {ANY}", line)
+        tv = self.eval_const(expr, line)
+        boxed = self.check_boxable(tv.type, line)
+        tag = self.any_tag(boxed, line)
+        # Feed the boxed-only registry: a type boxed only at global scope
+        # must still reach generic case-type arm monomorphization (globals
+        # fold before the finalize_generic_arms fixpoint).
+        self.boxed_types.setdefault(tag, boxed)
+        if is_pointer(boxed):
+            # A pointer payload puns via a ptrtoint constant expression
+            # (legal in a global initializer). A slice never reaches here:
+            # nothing eval_const folds has a slice type.
+            word = tv.value.ptrtoint(UINT64.ir)
+        elif boxed is FLOAT64:
+            bits = struct.unpack("<Q", struct.pack("<d", tv.value.constant))[0]
+            word = ir.Constant(UINT64.ir, bits)
+        elif boxed.ir.width == 64:
+            # A 64-bit integer already fills the word; reuse it as-is, which
+            # also carries a ptrtoint-derived constant expression through.
+            word = tv.value
+        else:
+            # Narrower integer/bool/char bits zero-extended into the low
+            # word, as the runtime's zero-filled slot leaves them.
+            mask = (1 << boxed.ir.width) - 1
+            word = ir.Constant(UINT64.ir, tv.value.constant & mask)
+        payload = ir.Constant(
+            ANY.ir.elements[1], [word, ir.Constant(UINT64.ir, 0)]
+        )
+        return ir.Constant(ANY.ir, [ir.Constant(UINT64.ir, tag), payload])
 
     def const_struct_lit(
         self, expr: StructLit, expected: LangType, line: int

@@ -3403,10 +3403,16 @@ fails the compile rather than corrupting a type-switch.
 
 An `any` is an ordinary 24-byte value otherwise: pass and return it by value,
 put it in struct fields and arrays (`any[N]`), point at it (`any*`), take
-`sizeof(any) == 24`, use it in `.mci` [interfaces](#interface-files). One gap,
-the same shape as the union one: a global/`@static` `any` **initializer** is
-not supported yet — assign at runtime instead (an uninitialized global `any`
-is zero-filled and matches only `else`). The box also powers
+`sizeof(any) == 24`, use it in `.mci` [interfaces](#interface-files). A
+global/`@static` `any` also takes a constant **initializer**: the same
+compile-time constants a scalar global accepts fold into a constant tagged
+box, under the same tags runtime boxing produces — `@static let g: any = 5;`
+boxes as int32 (an untyped literal anchors at its placeholder type), a string
+literal boxes as `char*`, a constant pointer cast (`0x1000 as uint32*`) under
+its own pointer tag. The owning-box rules are unchanged: a struct, union,
+array, or bare `null` initializer is rejected exactly as at runtime, and an
+*uninitialized* global `any` is zero-filled and matches only `else`. The box
+also powers
 [native variadic arguments](#native-variadic-arguments): a call's extra
 arguments box into a caller-stack `slice<const any>` walked exactly like
 `show` above. See [examples/types/any.mc](../examples/types/any.mc).

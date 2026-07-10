@@ -82,5 +82,6 @@ fn main() -> int32 {
 }
 
 // See also: struct_literals.mc for the runtime `Name { ... }` literal these
-// globals fold at compile time, and unions.mc for member layout and byte
-// reinterpretation.
+// globals fold at compile time; unions.mc for member layout and byte
+// reinterpretation; any.mc for a `@static` `any` folding its constant
+// initializer into a constant tagged box the same way.

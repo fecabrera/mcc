@@ -477,14 +477,20 @@ def test_static_union_initializer_non_constant_member_is_rejected():
         )
 
 
-def test_static_any_initializer_is_still_rejected():
-    # Out of scope for the union/struct global work: the any-typed global
-    # initializer stays rejected.
+def test_static_any_initializer_boxes():
+    # The any-typed global gap is closed (the boxing itself is covered in
+    # test_any.py); a union literal stays outside the owning boxable set,
+    # with the same rejection as at runtime.
+    compile_ir(
+        "@static let g: any = 5;\n"
+        "fn main() -> int32 { return 0; }"
+    )
     with pytest.raises(
-        LangError, match="a global any initializer is not supported yet"
+        LangError, match="cannot box a u in an any; box a pointer to it"
     ):
         compile_ir(
-            "@static let g: any = 5;\n"
+            "union u { i: int64; }\n"
+            "@static let g: any = u { i = 1 };\n"
             "fn main() -> int32 { return 0; }"
         )
 
