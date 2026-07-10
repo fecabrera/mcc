@@ -3273,6 +3273,78 @@ Like a by-value struct, a by-value union is not
 yet; pass a pointer to it instead, as C interop code does anyway. See
 [examples/types/unions.mc](../examples/types/unions.mc).
 
+## Tuples
+
+`tuple<A, B, ...>` is a builtin **heterogeneous, fixed-arity product**: each
+position keeps its own statically-known type, accessed by position with the
+existing index syntax. It is an ad-hoc [struct](#structs) without a name —
+positions instead of field names, the same layout the struct with those field
+types would have — for grouping a few values without declaring a one-off
+struct. Its headline job is **multiple return values**:
+
+```c
+fn divmod(a: int32, b: int32) -> tuple<int32, int32> {
+    return (a / b, a % b);           // built by the paren literal
+}
+
+fn main() -> int32 {
+    let t = divmod(7, 2);
+    return t[0] * 10 + t[1];         // 31: quotient and remainder by position
+}
+```
+
+A tuple is **constructed by the paren literal** — a parenthesized expression
+with at least one top-level comma; `(x)` stays plain grouping. A trailing
+comma is allowed, as in array and struct literals. In a tuple-typed position
+(a typed `let`, assignment, `return`, argument, element, or field) each
+element lowers against its position's type exactly like a
+[struct-literal](#structs) field: untyped constants adapt, and a string or
+array literal in a slice-typed position borrows with no `as`. With no context
+the literal fixes its own type, untyped integers anchoring to their `int32`
+default. The uninitialized `let t: tuple<A, B>;` declares like a struct:
+
+```c
+let t: tuple<int64, int64> = (1, 2);            // elements coerce per position
+let u = (10, 'x');                              // inferred: tuple<int32, char>
+let v: tuple<slice<const char>, int32> = ("hi", 2);   // "hi" borrows in place
+let w: tuple<int32, int32>;                     // declared, filled later
+let grid: tuple<int32, int32>[2] = [(1, 2), (3, 4)];  // elements adapt too
+```
+
+**Indexing is compile-time only**: `t[n]` requires `n` to fold to a constant
+(each position has its own type, so a runtime index would have no single
+result type) and is bounds-checked at compile time — `t[2]` on a two-tuple is
+an error, not UB. Elements are lvalues, so reads, writes, compound
+assignment, and nesting all go by position (`t[1][0]`), and `&t[0]` follows
+the same rules as a struct field's address.
+
+Everything else rides the struct machinery: whole-value assignment copies,
+tuples pass and return by value, a `const tuple<...>` parameter travels by
+hidden reference (elements then read-only), `mut` parameters lend the
+caller's storage, `sizeof`/`alignof` report the struct layout (padding
+included), tuples nest in arrays, structs, and other tuples, and generic
+inference recurses through the shape (`fn fst<A, B>(t: tuple<A, B>) -> A`).
+Two same-shape tuples are the **same type**, across functions and modules —
+interned structurally, like `slice<T>` — and `.mci` interface stubs render
+the type by its canonical spelling. Under [the `any` type](#the-any-type) a
+tuple follows the struct rule: it boxes by reference into a `const any` (so
+`println("{}", t)` compiles, rendering the `<tuple<int32, int32>>` fallback),
+recovers in a `case type` arm, and an owning `any` of it stays rejected.
+
+Tuples are **not named types**: `extends tuple<...>` is rejected (declare a
+struct to name the shape), and naming a tuple is the
+[type alias](#type-aliases)'s job — `type polar = tuple<int64, float64>;`
+works anywhere the written type does. `==` stays rejected as on structs.
+`tuple<>` and `tuple<T>` are rejected as a shallow surface check, keeping the
+door open to a statically-typed variadic later. The rest of the
+[roadmap item](../ROADMAP.md) lands in stages: constant slicing (`t[n:m]`
+narrowing to the smaller tuple), destructuring with the rest binder
+(`let a, b = t;`), and the layout-equivalent struct cast (`(a, b) as A`) are
+not in this stage — though a tuple in an [`@extern`](#extern-declarations)
+signature already crosses as the layout-equivalent C struct via the existing
+[struct ABI classification](#passing-structs-by-value-across-the-c-boundary).
+See [examples/types/tuples.mc](../examples/types/tuples.mc).
+
 ## The any type
 
 `any` is the safe counterpart to a union: a builtin **tagged box** that holds

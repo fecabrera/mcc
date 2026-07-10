@@ -71,4 +71,6 @@ fn main() -> int32 {
 // See also: extends.mc for `extends`, which lays a base struct's fields out
 // as a derived struct's prefix; memory/intrusive_list.mc for the intrusive
 // twist on this list, where the payload is embedded as the entry's layout
-// prefix with `extends T` instead of sitting behind a `value` field.
+// prefix with `extends T` instead of sitting behind a `value` field; and
+// tuples.mc for `tuple<A, B, ...>`, the ad-hoc unnamed counterpart with
+// positions instead of field names.

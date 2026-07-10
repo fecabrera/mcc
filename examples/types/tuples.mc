@@ -1,0 +1,97 @@
+import "std/io";
+
+// `tuple<A, B, ...>` is the builtin heterogeneous fixed-arity product: an
+// ad-hoc struct without a name, positions instead of field names, the same
+// layout the struct with those field types would have. It is built by the
+// paren literal `(a, b)` (at least one top-level comma; `(x)` stays plain
+// grouping) and read by position with a compile-time-constant index. Its
+// headline job is multiple return values.
+// Prerequisites: structs.mc and struct_literals.mc (a tuple element coerces
+// exactly like a struct-literal field), arrays.mc for the index syntax.
+
+// The headline: two results, no out-param, no one-off struct declaration.
+fn divmod(a: int32, b: int32) -> tuple<int32, int32> {
+    return (a / b, a % b);
+}
+
+// Two same-shape tuples are the same type, across functions and modules, so
+// tuples pass and return by value like structs, and a `const` tuple
+// parameter travels by hidden reference (elements then read-only).
+fn manhattan(const p: tuple<int32, int32>) -> int32 {
+    return p[0] + p[1];
+}
+
+// Generic inference recurses through the shape: A and B are deduced from the
+// argument's positions. (See generics.mc.)
+fn fst<A, B>(t: tuple<A, B>) -> A {
+    return t[0];
+}
+
+// Tuples are not named types (`extends tuple<...>` is rejected); naming one
+// is the type alias's job, and the alias works anywhere the written type does.
+type polar = tuple<int64, float64>;
+
+fn main() -> int32 {
+    // Multiple return values, unpacked by position. The index must fold to a
+    // constant (each position has its own type, so a runtime index would
+    // have no single result type) and is bounds-checked at compile time:
+    // t[2] on this two-tuple is a compile error, not UB.
+    let t = divmod(7, 2);
+    println("divmod(7, 2)  = ({}, {})", t[0], t[1]);
+
+    // With no context the literal fixes its own type, untyped integers
+    // anchoring to their int32 default: u is tuple<int32, char>.
+    let u = (10, 'x');
+    println("u             = ({}, {})", u[0], u[1]);
+
+    // In a tuple-typed position each element lowers against its position's
+    // type exactly like a struct-literal field: untyped constants adapt, and
+    // a string literal borrows into a slice position with no `as`.
+    let big: tuple<int64, int64> = (1, 2);
+    let v: tuple<slice<const char>, int32> = ("hi", 2);
+    println("big           = ({}, {})", big[0], big[1]);
+    println("v             = ({}, {})", v[0], v[1]);
+
+    // Elements are lvalues: writes, compound assignment, and whole-value
+    // copies all work like struct fields. The uninitialized
+    // `let w: tuple<...>;` declares like a struct, filled later.
+    let w: tuple<int32, int32>;
+    w[0] = 10;
+    w[1] = 20;
+    w[0] += 5;
+    let copy = w;
+    copy[1] = 99;                             // a copy: w is untouched
+    println("w             = ({}, {})", w[0], w[1]);
+    println("manhattan(w)  = {}", manhattan(w));
+    println("fst(u)        = {}", fst(u));
+
+    // Tuples nest, indexed position by position; a trailing comma is
+    // allowed, as in array and struct literals.
+    let nested = ((1, 2), 3,);
+    println("nested[0][1]  = {}", nested[0][1]);
+
+    // The alias in action; 5 adapts to int64 per position, as above.
+    let p: polar = (5, 0.5);
+    println("polar         = ({}, {})", p[0], p[1]);
+
+    // Arrays of tuples: each element literal adapts against the element type.
+    let grid: tuple<int32, int32>[2] = [(1, 2), (3, 4)];
+    println("grid diagonal = {}", grid[0][0] + grid[1][1]);
+
+    // The layout is the struct layout, padding included: int32 + int64 pads
+    // the first field's slot to 8, so the pair is 16 bytes.
+    println("sizeof        = {}", sizeof(tuple<int32, int64>) as int32);
+
+    // A whole tuple has no format overload of its own, so it renders the
+    // generic typename fallback.
+    println("t             = {}", t);
+
+    return 0;
+}
+
+// See also: structs.mc for the named counterpart these ride on (declare a
+// struct when the positions deserve field names); struct_literals.mc for the
+// per-field adaptation rules tuple elements follow; type_aliases.mc for the
+// alias mechanism naming `polar` above; any_struct_boxing.mc for how a tuple
+// follows the struct rule under `any`, boxing by hidden reference into a
+// `const any` and recovered by a `case type` arm.

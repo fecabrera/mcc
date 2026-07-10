@@ -82,8 +82,8 @@ variadics (C `...` and native collecting), and function pointers.
 ## types/
 
 The type system: aliases, arrays and strings, enums, structs (and their
-literals, `extends` bases, flexible array members), unions, the `any` box, the
-`typename` builtin, and generics, plus the compile-time
+literals, `extends` bases, flexible array members), unions, tuples, the `any`
+box, the `typename` builtin, and generics, plus the compile-time
 directives that check a build's invariants, its configuration, and its use of
 deprecated or removed functions, and the opt-in warning classes that report
 on legal-but-unproven code.
@@ -104,6 +104,7 @@ on legal-but-unproven code.
 | [flexible_array_members.mc](types/flexible_array_members.mc) | a trailing `field: T[]` flexible array member: adds 0 to `sizeof`, decays to a `T*` at the struct's tail, one allocation for header plus elements |
 | [unions.mc](types/unions.mc) | `union Name { ... }` members sharing one storage (all at offset 0): literals with one live member, cross-member byte reinterpretation (float bit patterns), generic unions |
 | [static_initializers.mc](types/static_initializers.mc) | `@static` globals initialized with struct and union literals, folded to data constants: omitted/`= default` fields, nested struct/array fields, a union member narrower than the widest (zero-padded to the union's size), an empty `u{}`, struct-inside-union, and generic aggregates |
+| [tuples.mc](types/tuples.mc) | `tuple<A, B, ...>`, the ad-hoc unnamed product type: paren literals `(a, b)` with per-position struct-literal coercion, multiple return values as the headline, compile-time-constant bounds-checked indexing with lvalue elements, uninitialized declaration and whole-value copies, `const` params by hidden reference, generic inference through the shape, a `type` alias naming a shape, arrays of tuples, struct layout under `sizeof`, the `<tuple<...>>` println fallback |
 | [any.mc](types/any.mc) | the builtin `any` tagged box (24 bytes: tag + payload): implicit boxing at assignment/argument/return, the primitive/pointer/slice boxable set (each pointer type its own tag), recovery only via `case type` with its mandatory `else`, boxing `&s` as the struct escape hatch, `@static` globals folding a constant initializer into a constant tagged box under the same tags |
 | [case_type_groups.mc](types/case_type_groups.mc) | multi-type `case type` arms: comma-listed types over one binding sharing one body, the binding an implicit generic compiled once per listed type, an overload set resolving per copy (`width(n)` picks a different member per width), the duplicate-type rejection, `else` still mandatory |
 | [generic_case_arms.mc](types/generic_case_arms.mc) | generic `case type` arms: an unresolved bare name introducing an arm-scoped type parameter, `when T* ptr:` catching every unclaimed pointer tag (T bound to the pointee) and `when T v:` every remaining tag, bodies monomorphized per tag from the whole program's boxed set, first-match-wins order carving concrete arms out of the fallbacks, the zero-filled `any` keeping `else` mandatory |

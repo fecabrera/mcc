@@ -10,6 +10,28 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`tuple<A, B, ...>`: the core type, paren literal, and constant indexing
+  (stage 1)** — a builtin heterogeneous, fixed-arity product: each position
+  keeps its own statically-known type, so
+  `fn divmod(a: int32, b: int32) -> tuple<int32, int32>` returns multiple
+  values with no one-off struct. Constructed by the paren literal
+  (`(a, b)` — a parenthesized expression with a top-level comma; `(x)` stays
+  grouping) with struct-literal-style context coercion in typed positions
+  and `int32`-anchored inference without one; indexed by compile-time
+  constants only (`t[0]`, bounds-checked at compile time), elements being
+  full lvalues (`t[0] = v;`, `t[1] += 1;`, `t[1][0]` nesting). Realized as
+  an interned struct with positional fields, so whole-value assignment,
+  by-value passing, `const` hidden references, `mut` lending, `sizeof` with
+  padding, arrays/struct fields of tuples, generic inference through the
+  shape, `.mci` stubs, and the by-reference `const any` box (with `case
+  type` recovery) all ride the struct machinery; two same-shape tuples are
+  one type across modules. `extends tuple<...>`, `==`, owning `any` boxes,
+  and arity below 2 are rejected; `type polar = tuple<int64, float64>;`
+  names a tuple via the transparent alias. Slicing, destructuring, and the
+  layout-equivalent struct cast land in later stages. See
+  [Tuples](docs/language.md#tuples) and
+  [examples/types/tuples.mc](examples/types/tuples.mc).
+
 - **Global/`@static` `any` initializers** — an `any` global now takes a
   constant initializer: the const-initializer path boxes any compile-time
   constant a scalar global accepts into a constant tagged 24-byte aggregate,

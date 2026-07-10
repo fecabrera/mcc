@@ -343,7 +343,7 @@ object.__setattr__(ANY, "elem_indices", (0, 1))
 
 # Builtin type names that are not in TYPES (they are generic or platform-
 # resolved) but are still reserved, so a user struct cannot shadow them.
-RESERVED_TYPE_NAMES = frozenset({"slice", "va_list", "any"})
+RESERVED_TYPE_NAMES = frozenset({"slice", "va_list", "any", "tuple"})
 
 POINTER_SIZE = 8  # bytes; native codegen targets 64-bit platforms
 
@@ -491,6 +491,24 @@ def is_slice(lang_type: LangType) -> bool:
         ``True`` if the type is a ``slice<T>``.
     """
     return is_struct(lang_type) and lang_type.template == "slice"
+
+
+def is_tuple(lang_type: LangType) -> bool:
+    """Report whether a type is a builtin ``tuple<A, B, ...>`` product.
+
+    A tuple is realized as an ordinary struct with positional field names
+    ``"0"``, ``"1"``, ... (so member access, ``sizeof``, and by-value passing
+    reuse the struct machinery), tagged with the reserved template name
+    ``"tuple"`` that only :meth:`CodeGen.tuple_type` produces, so the name is
+    an unambiguous marker.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type is a ``tuple<A, B, ...>``.
+    """
+    return is_struct(lang_type) and lang_type.template == "tuple"
 
 
 def is_any(lang_type: LangType) -> bool:

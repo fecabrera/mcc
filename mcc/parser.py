@@ -61,6 +61,7 @@ from mcc.nodes import (
     StructDecl,
     StructLit,
     Ternary,
+    TupleLit,
     TypeAlias,
     TypeName,
     TypeRef,
@@ -2095,6 +2096,17 @@ class Parser:
         if tok.kind == "(":
             with self._struct_literals(True):
                 expr = self.parse_expr()
+                if self.cur.kind == ",":
+                    # A top-level comma makes the parenthesized expression a
+                    # tuple literal; `(x)` stays plain grouping. A trailing
+                    # comma is allowed, as in array and struct literals.
+                    elements = [expr]
+                    while self.accept(","):
+                        if self.cur.kind == ")":
+                            break
+                        elements.append(self.parse_expr())
+                    self.expect(")")
+                    return TupleLit(elements, tok.line)
             self.expect(")")
             return expr
         if tok.kind == "{":

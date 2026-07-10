@@ -1030,6 +1030,26 @@ class ArrayLit:
 
 
 @dataclass
+class TupleLit:
+    """A tuple literal ``(e0, e1, ...)``.
+
+    A parenthesized expression with at least one top-level comma; a plain
+    ``(x)`` stays grouping and never builds this node. In a tuple-typed
+    position (a typed ``let``/assignment/return/argument/element/field) each
+    element lowers against its position's type, the way a bare ``StructLit``
+    adapts; with no context the literal fixes its own ``tuple<...>`` type,
+    untyped constants anchoring to their defaults.
+
+    Attributes:
+        elements: The element expressions, in position order.
+        line: Source line for diagnostics.
+    """
+
+    elements: list
+    line: int
+
+
+@dataclass
 class StructLit:
     """A struct literal ``struct Name[<args>] { field = expr, ... }``.
 

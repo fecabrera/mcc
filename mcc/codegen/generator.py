@@ -77,6 +77,7 @@ from mcc.nodes import (
     StructDecl,
     StructLit,
     Ternary,
+    TupleLit,
     TypeAlias,
     TypeName,
     TypeRef,
@@ -133,6 +134,7 @@ from mcc.codegen.types import (
     is_pointer,
     is_slice,
     is_struct,
+    is_tuple,
     is_union,
     is_valist,
     list_of,
@@ -2707,6 +2709,20 @@ class CodeGen:
                     f"type 'slice' takes 1 type argument, got {len(ref.args)}", line
                 )
             base = self.slice_type(self.lang_type(ref.args[0], line), line)
+        elif ref.name == "tuple":
+            # The arity floor is deliberately this shallow surface check
+            # alone: the interning, layout, and unification internals never
+            # assume two or more elements, keeping the door open to a future
+            # variadic's 0- and 1-tuples.
+            if len(ref.args) < 2:
+                raise LangError(
+                    f"type 'tuple' takes at least 2 type arguments, "
+                    f"got {len(ref.args)}",
+                    line,
+                )
+            base = self.tuple_type(
+                tuple(self.lang_type(a, line) for a in ref.args), line
+            )
         elif (
             self.current_source,
             ref.name,
@@ -2968,6 +2984,16 @@ class CodeGen:
                 decl.line,
                 source=decl.source,
             )
+        if is_tuple(base_type):
+            # Tuples are not named types (a slice, by contrast, is
+            # extendable); declare a struct with the element types as fields
+            # to name the shape.
+            raise LangError(
+                f"a tuple cannot be extended, but {decl.name!r} extends "
+                f"{base_type}; declare the fields as a struct instead",
+                decl.line,
+                source=decl.source,
+            )
         return base_type
 
     def slice_type(self, element: LangType, line: int) -> LangType:
@@ -3015,6 +3041,56 @@ class CodeGen:
         object.__setattr__(slice_t, "elem_indices", (0, 1))
         self.struct_types[mangled] = slice_t
         return slice_t
+
+    def tuple_type(self, elements: tuple, line: int) -> LangType:
+        """Build (and intern) the builtin ``tuple<A, B, ...>`` product type.
+
+        A tuple is a heterogeneous, fixed-arity product realized as an
+        ordinary struct with positional field names ``"0"``, ``"1"``, ... --
+        so the GEP/member machinery, ``sizeof``, by-value passing, and
+        hidden-reference ``const`` parameters all reuse the struct machinery
+        -- tagged with the reserved template name ``"tuple"`` (see
+        :func:`is_tuple`). Instances are interned per element list alongside
+        the user structs in ``struct_types``: two same-shape tuples are the
+        same ``LangType`` object, and a tuple never enters the nominal
+        ``extends`` lineage (``base`` stays ``None``). The interning key is
+        the canonical name ``TypeRef.__str__`` renders, so ``any`` tags and
+        ``.mci`` stubs agree on one spelling.
+
+        Elements are arbitrary types (padding, over-aligned structs), so the
+        body goes through :meth:`set_struct_body` -- never a direct
+        ``set_body`` like the fixed-shape slice. Nothing here assumes an
+        arity of two or more; the surface check in :meth:`lang_type` is
+        deliberately the only gate (a future variadic may produce 0- and
+        1-tuples).
+
+        Args:
+            elements: The element types, in position order.
+            line: Source line for diagnostics.
+
+        Returns:
+            The cached or newly built ``tuple<...>`` ``LangType``.
+
+        Raises:
+            LangError: On a ``void`` element.
+        """
+        mangled = "tuple<" + ", ".join(str(e) for e in elements) + ">"
+        cached = self.struct_types.get(mangled)
+        if cached is not None:
+            return cached
+        for element in elements:
+            if strip_const(element) == VOID:
+                raise LangError("cannot make a tuple of void", line)
+        fields = tuple((str(i), e) for i, e in enumerate(elements))
+        identified = self.module.context.get_identified_type(mangled)
+        tuple_t = LangType(
+            mangled, identified, signed=False, template="tuple",
+            args=tuple(elements),
+        )
+        object.__setattr__(tuple_t, "fields", fields)  # frozen; excluded from eq
+        self.set_struct_body(tuple_t, identified)
+        self.struct_types[mangled] = tuple_t
+        return tuple_t
 
     def any_tag(self, lang_type: LangType, line: int) -> int:
         """Compute a boxable type's ``any`` tag, checking for hash collisions.
@@ -3369,6 +3445,27 @@ class CodeGen:
             identified.set_body(*elements)
             object.__setattr__(struct_type, "elem_indices", (0,) * len(fields))
             return struct_type
+        self.set_struct_body(struct_type, identified)
+        return struct_type
+
+    def set_struct_body(self, struct_type: LangType, identified) -> None:
+        """Body a struct's LLVM identified type from its resolved fields.
+
+        The IR half of the dual-site layout invariant: the body built here
+        must agree with the fields-driven ``type_size()``/``type_align()``/
+        ``field_offset()`` computations in types.py. A ``@packed`` or
+        over-aligned struct (an ``@align`` here or on a nested field) departs
+        from LLVM's natural rules, so its layout is spelled out with explicit
+        padding; everything else takes LLVM's natural layout. Shared by user
+        structs (:meth:`instantiate_struct`) and builtin tuples
+        (:meth:`tuple_type`); ``struct_type.fields`` must already be set.
+
+        Args:
+            struct_type: The struct ``LangType``, its ``fields`` resolved;
+                its ``elem_indices`` are recorded here.
+            identified: The opaque LLVM identified type to body.
+        """
+        fields, packed = struct_type.fields, struct_type.packed
         if packed or over_aligned(struct_type):
             # @packed and @align depart from LLVM's natural layout, so spell
             # the layout out: a packed body with explicit padding, keeping
@@ -3390,7 +3487,6 @@ class CodeGen:
             indices = range(len(fields))
             identified.set_body(*(ftype.ir for _, ftype in fields))
         object.__setattr__(struct_type, "elem_indices", tuple(indices))
-        return struct_type
 
     def nominal_subtype(self, base: LangType, derived: LangType) -> bool:
         """Whether ``derived`` *is* ``base`` or reaches it up its ``extends`` chain.
@@ -4747,6 +4843,83 @@ class CodeGen:
             )
         return TypedValue(self.builder.load(slot), struct_type)
 
+    def gen_tuple_lit(self, expr: TupleLit, tuple_type: LangType = None) -> TypedValue:
+        """Lower a tuple literal ``(a, b, ...)``.
+
+        With a receiving tuple type (a typed ``let``, assignment, return,
+        argument, element, or field -- the caller passes it), each element
+        lowers against its position's type exactly like a struct-literal
+        field: untyped constants adapt, and a string/array/struct/tuple
+        literal in a matching position borrows or builds (see
+        :meth:`eval_struct_field`). With no context the literal fixes its own
+        type: every element is evaluated and an adaptable constant anchors to
+        its default (``int32`` for an untyped integer), as at a call-site
+        inference.
+
+        Args:
+            expr: The ``TupleLit`` node.
+            tuple_type: The tuple type the position fixes, else ``None`` (the
+                literal anchors its own).
+
+        Returns:
+            The constructed tuple as a ``TypedValue``.
+
+        Raises:
+            LangError: On fewer than 2 elements (the literal's half of the
+                shallow arity surface check), an arity mismatch against the
+                receiving type, or an element that cannot fix a type.
+        """
+        if len(expr.elements) < 2:
+            raise LangError(
+                f"a tuple literal takes at least 2 elements, "
+                f"got {len(expr.elements)}",
+                expr.line,
+            )
+        cached: list | None = None
+        if tuple_type is not None:
+            if len(expr.elements) != len(tuple_type.fields):
+                raise LangError(
+                    f"tuple literal has {len(expr.elements)} elements, "
+                    f"but {tuple_type} has {len(tuple_type.fields)}",
+                    expr.line,
+                )
+        else:
+            # No receiving type: evaluate the elements once (in source
+            # order), anchor, and intern the shape they spell.
+            cached = [self.gen_expr(e) for e in expr.elements]
+            for tv, element in zip(cached, expr.elements):
+                if tv.type is NULLT:
+                    raise LangError(
+                        "a null tuple element needs a pointer type; annotate "
+                        "the tuple (let t: tuple<uint8*, ...> = ...) or cast "
+                        "the element (null as uint8*)",
+                        element.line,
+                    )
+                if tv.type is VOID:
+                    raise LangError(
+                        "a tuple element cannot be a void value", element.line
+                    )
+            tuple_type = self.tuple_type(
+                tuple(strip_const(tv.type) for tv in cached), expr.line
+            )
+        slot = self.builder.alloca(tuple_type.ir)
+        if over_aligned(tuple_type):
+            slot.align = type_align(tuple_type)
+        # Zero-fill first so padding bytes are deterministic, as in a struct
+        # literal (every position is then written).
+        self.builder.store(ir.Constant(tuple_type.ir, None), slot)
+        for i, value_expr in enumerate(expr.elements):
+            if cached is not None:
+                tv = cached[i]
+            else:
+                tv = self.eval_struct_field(
+                    tuple_type, str(i), value_expr, value_expr.line
+                )
+            self.store_struct_field(
+                slot, tuple_type, str(i), tv, value_expr.line, "tuple element"
+            )
+        return TypedValue(self.builder.load(slot), tuple_type)
+
     def eval_struct_field(self, struct_type, fname, value_expr, line):
         """Lower a struct-literal field value against its declared field type.
 
@@ -5320,9 +5493,10 @@ class CodeGen:
             ):
                 # `let p: point = { x = 1, y = 2 };`: the bare literal builds the
                 # annotated struct (the coerce below re-adds any `const`), the
-                # aggregate sibling of the slice adaptations above.
+                # aggregate sibling of the slice adaptations above; likewise
+                # `let t: tuple<int64, char> = (1, 'x');` builds the tuple.
                 declared = self.lang_type(stmt.type_name, stmt.line)
-                tv = self.gen_struct_lit(stmt.value, struct_type=strip_const(declared))
+                tv = self.gen_adapted_literal(stmt.value, declared, stmt.line)
             else:
                 tv = self.gen_expr(stmt.value)
             if stmt.type_name is not None:
@@ -5622,11 +5796,19 @@ class CodeGen:
             self.narrowed_paths.clear()
         elif isinstance(stmt, StoreIndex):
             base_t = self.lvalue_type(stmt.base)
-            if base_t is not None and is_array(base_t) and self.writes_const(stmt.base):
+            # An array or tuple element lives in the base's own storage, so a
+            # const parameter's read-only-ness extends to it; a pointer or
+            # slice element sits behind a pointer hop the const does not cover.
+            in_storage = base_t is not None and (
+                is_array(base_t) or is_tuple(strip_const(base_t))
+            )
+            if in_storage and self.writes_const(stmt.base):
                 raise LangError(
                     "cannot assign to an element of a const parameter", stmt.line
                 )
-            addr, element = self.gen_index_addr(stmt.base, stmt.index, stmt.line)
+            addr, element, align, volatile = self.gen_index_addr(
+                stmt.base, stmt.index, stmt.line, store=True
+            )
             if element.const:
                 raise LangError(
                     "cannot assign through a read-only slice<const T>", stmt.line
@@ -5645,7 +5827,7 @@ class CodeGen:
                     stmt.line,
                     "assignment to element",
                 )
-            self.gen_store(value.value, addr, volatile=element.volatile)
+            self.gen_store(value.value, addr, align=align, volatile=volatile)
             self.narrowed_paths.clear()  # an element store may alias a field
         elif isinstance(stmt, StoreMember):
             if not stmt.arrow and self.writes_const(stmt.base):
@@ -6197,19 +6379,24 @@ class CodeGen:
             return ptr.value, ptr.type.pointee, None, ptr.type.pointee.volatile
         if isinstance(target, Index):
             base_t = self.lvalue_type(target.base)
-            if base_t is not None and is_array(base_t) and self.writes_const(
-                target.base
-            ):
+            # In-storage elements (array or tuple) inherit a const
+            # parameter's read-only-ness, as in a plain element assignment.
+            in_storage = base_t is not None and (
+                is_array(base_t) or is_tuple(strip_const(base_t))
+            )
+            if in_storage and self.writes_const(target.base):
                 raise LangError(
                     "cannot assign to an element of a const parameter", line
                 )
-            addr, element = self.gen_index_addr(target.base, target.index, line)
+            addr, element, align, volatile = self.gen_index_addr(
+                target.base, target.index, line, store=True
+            )
             if element.const:
                 raise LangError(
                     "cannot assign through a read-only slice<const T>", line
                 )
             self.narrowed_paths.clear()
-            return addr, element, None, element.volatile
+            return addr, element, align, volatile
         if isinstance(target, Member):
             if not target.arrow and self.writes_const(target.base):
                 raise LangError(
@@ -7092,6 +7279,8 @@ class CodeGen:
             )
         if isinstance(expr, StructLit):
             return self.gen_struct_lit(expr)
+        if isinstance(expr, TupleLit):
+            return self.gen_tuple_lit(expr)
         if isinstance(expr, BlockExpr):
             return self.gen_block_expr(expr)
         if isinstance(expr, Var):
@@ -7162,8 +7351,10 @@ class CodeGen:
                 ir.Constant(UINT64.ir, lang_type.count), UINT64, adaptable=True
             )
         if isinstance(expr, Index):
-            addr, element = self.gen_index_addr(expr.base, expr.index, expr.line)
-            return self.value_at(addr, element, volatile=element.volatile)
+            addr, element, align, volatile = self.gen_index_addr(
+                expr.base, expr.index, expr.line
+            )
+            return self.value_at(addr, element, align=align, volatile=volatile)
         if isinstance(expr, Slice):
             return self.gen_slice(expr)
         if isinstance(expr, Member):
@@ -7285,7 +7476,9 @@ class CodeGen:
             return self.writes_const(target.base)
         if isinstance(target, Index):
             base_t = self.lvalue_type(target.base)
-            if base_t is not None and is_array(base_t):
+            if base_t is not None and (
+                is_array(base_t) or is_tuple(strip_const(base_t))
+            ):
                 return self.writes_const(target.base)
         return False
 
@@ -7310,7 +7503,9 @@ class CodeGen:
             return self.roots_in_mut(target.base)
         if isinstance(target, Index):
             base_t = self.lvalue_type(target.base)
-            if base_t is not None and is_array(base_t):
+            if base_t is not None and (
+                is_array(base_t) or is_tuple(strip_const(base_t))
+            ):
                 return self.roots_in_mut(target.base)
         return False
 
@@ -7430,10 +7625,12 @@ class CodeGen:
             )
             return
         if isinstance(expr, Index):
-            # Indexing a fixed-size array stays in the base's own storage;
-            # a pointer or slice element lives behind a pointer hop.
+            # Indexing a fixed-size array or a tuple stays in the base's own
+            # storage; a pointer or slice element lives behind a pointer hop.
             base_t = self.lvalue_type(expr.base)
-            in_storage = base_t is not None and is_array(base_t)
+            in_storage = base_t is not None and (
+                is_array(base_t) or is_tuple(strip_const(base_t))
+            )
             self.check_mut_return_formation(
                 expr.base, line, crossed=crossed or not in_storage, top=False
             )
@@ -7504,8 +7701,10 @@ class CodeGen:
         """Best-effort static type of a simple lvalue, without emitting code.
 
         Resolves ``Var``/``Member``/``Index`` chains; returns ``None`` when the
-        type cannot be determined statically. Used only to tell an in-storage
-        array index from a through-pointer one when checking const writes.
+        type cannot be determined statically. Used to tell an in-storage
+        array or tuple index from a through-pointer one when checking const
+        writes, and as the static probe that routes tuple indexing onto the
+        member machinery (see :meth:`gen_index_addr`).
 
         Args:
             expr: The lvalue expression.
@@ -7535,6 +7734,15 @@ class CodeGen:
                 return base_t.element
             if is_pointer(base_t):
                 return base_t.pointee
+            if is_tuple(strip_const(base_t)):
+                # A constant index names a positional field; a non-constant
+                # (or out-of-bounds) one types as nothing here and gets its
+                # precise error at code generation.
+                try:
+                    fname = self.tuple_element(strip_const(base_t), expr.index, 0)
+                except LangError:
+                    return None
+                return self.struct_field(strip_const(base_t), fname, 0)[1]
         return None
 
     def sizeof_operand(self, ref: TypeRef, line: int) -> LangType:
@@ -7609,8 +7817,10 @@ class CodeGen:
             self.warn_unchecked_deref(expr.operand, line)
             return tv.value, tv.type.pointee, None, tv.type.pointee.volatile
         if isinstance(expr, Index):
-            addr, element = self.gen_index_addr(expr.base, expr.index, line)
-            return addr, element, None, element.volatile
+            # store=True: an address may feed a write (assignment through a
+            # member of the element, or &), so an rvalue tuple base must
+            # reject rather than hand out a spilled temporary's address.
+            return self.gen_index_addr(expr.base, expr.index, line, store=True)
         if isinstance(expr, Member):
             return self.gen_member_addr(expr.base, expr.field, expr.arrow, line)
         if isinstance(expr, StrLit):
@@ -7638,22 +7848,36 @@ class CodeGen:
         raise LangError("expression is not addressable", line)
 
     def gen_index_addr(
-        self, base_expr, index_expr, line: int
-    ) -> tuple[ir.Value, LangType]:
+        self, base_expr, index_expr, line: int, *, store: bool = False
+    ) -> tuple[ir.Value, LangType, int | None, bool]:
         """Compute the address of ``base[index]``.
 
         Args:
-            base_expr: The indexed base expression (a pointer or array).
-            index_expr: The index expression (an integer).
+            base_expr: The indexed base expression (a pointer, array, slice,
+                or tuple).
+            index_expr: The index expression (an integer; a compile-time
+                constant for a tuple base).
             line: Source line for diagnostics.
+            store: Whether the address receives a write. An rvalue tuple base
+                (a call result) then rejects instead of spilling to a
+                temporary the store would silently vanish into.
 
         Returns:
-            A ``(pointer value, element type)`` pair.
+            A ``(pointer value, element type, guaranteed alignment,
+            volatile)`` tuple, as in :meth:`gen_addr`.
 
         Raises:
-            LangError: When the base is not indexable or the index is not an
-                integer.
+            LangError: When the base is not indexable, the index is not an
+                integer, or a tuple index is not a constant in bounds.
         """
+        base_t = self.lvalue_type(base_expr)
+        if base_t is not None and is_tuple(strip_const(base_t)):
+            # A tuple element is a struct field in disguise (positional
+            # fields "0", "1", ...): resolve the constant index and reuse the
+            # member machinery, packed alignment and @volatile propagation
+            # included.
+            fname = self.tuple_element(strip_const(base_t), index_expr, line)
+            return self.gen_member_addr(base_expr, fname, False, line)
         base = self.gen_expr(base_expr)
         if is_slice(base.type):
             # A slice indexes through its `data` field into the borrowed run.
@@ -7662,7 +7886,42 @@ class CodeGen:
             index = self.gen_expr(index_expr)
             if not is_integer(index.type):
                 raise LangError(f"index must be an integer, not {index.type}", line)
-            return self.builder.gep(ptr, [index.value]), element
+            return self.builder.gep(ptr, [index.value]), element, None, element.volatile
+        if is_tuple(strip_const(base.type)):
+            # The base types as a tuple only once evaluated (a call result or
+            # another rvalue chain the static probe above cannot follow).
+            owner = strip_const(base.type)
+            fname = self.tuple_element(owner, index_expr, line)
+            index, ftype = self.struct_field(owner, fname, line)
+            if base.lvalue is not None:
+                # A mut-returning call is an lvalue: project the element
+                # through the returned storage address (writes included), as
+                # gen_addr's Call arm does for a member projection. The
+                # callee's formation rule already rejected @packed and
+                # @volatile storage.
+                addr = self.builder.gep(
+                    base.lvalue,
+                    [I32_ZERO, ir.Constant(ir.IntType(32), index)],
+                    inbounds=True,
+                )
+                return addr, ftype, None, False
+            # A plain rvalue: a read extracts through a spilled temporary; a
+            # write has no caller-visible storage to land in, so it rejects
+            # -- matching a struct rvalue's `f().field = v` rejection.
+            if store:
+                raise LangError(
+                    f"cannot assign into a {base.type} value; bind it to a "
+                    "variable first",
+                    line,
+                )
+            slot = self.builder.alloca(owner.ir)
+            if over_aligned(owner):
+                slot.align = type_align(owner)
+            self.builder.store(base.value, slot)
+            addr = self.builder.gep(
+                slot, [I32_ZERO, ir.Constant(ir.IntType(32), index)], inbounds=True
+            )
+            return addr, ftype, 1 if owner.packed else None, owner.volatile
         if not is_pointer(base.type):
             raise LangError(f"cannot index a {base.type}", line)
         self.warn_unchecked_deref(base_expr, line)
@@ -7670,7 +7929,46 @@ class CodeGen:
         if not is_integer(index.type):
             raise LangError(f"index must be an integer, not {index.type}", line)
         addr = self.builder.gep(base.value, [index.value])
-        return addr, base.type.pointee
+        return addr, base.type.pointee, None, base.type.pointee.volatile
+
+    def tuple_element(self, tuple_type: LangType, index_expr, line: int) -> str:
+        """Resolve a tuple index to its positional field name (``"0"``, ...).
+
+        The index must fold to a compile-time integer constant -- each
+        position has its own type, so a runtime index would have no single
+        result type -- and is bounds-checked here, at compile time.
+
+        Args:
+            tuple_type: The (const-stripped) tuple type being indexed.
+            index_expr: The index expression.
+            line: Source line for diagnostics.
+
+        Returns:
+            The positional field name.
+
+        Raises:
+            LangError: On a non-constant, non-integer, or out-of-bounds index.
+        """
+        try:
+            tv = self.eval_const(index_expr, line)
+        except LangError:
+            raise LangError(
+                f"a tuple index must be a compile-time constant: each "
+                f"position of a {tuple_type} has its own type, so a runtime "
+                "index has no single result type",
+                line,
+            ) from None
+        if not is_integer(tv.type):
+            raise LangError(f"index must be an integer, not {tv.type}", line)
+        count = len(tuple_type.fields)
+        n = tv.value.constant
+        if not 0 <= n < count:
+            raise LangError(
+                f"tuple index {n} is out of bounds for {tuple_type} "
+                f"(positions 0 to {count - 1})",
+                line,
+            )
+        return str(n)
 
     def gen_slice(self, expr: Slice) -> TypedValue:
         """Evaluate a sub-slice expression: ``base[start:end]``.
@@ -8277,8 +8575,14 @@ class CodeGen:
 
         Returns:
             ``True`` if ``expr`` is a bare struct literal and ``expected`` is an
-            aggregate type.
+            aggregate type, or a tuple literal and ``expected`` is a tuple.
         """
+        if isinstance(expr, TupleLit):
+            # The tuple literal is the bare struct literal's positional twin:
+            # it routes through the same sinks, building the expected tuple
+            # with per-element coercion (see gen_tuple_lit). The check stays
+            # coarse (any tuple target) for the same precise-error reason.
+            return is_tuple(strip_const(expected))
         return (
             isinstance(expr, StructLit)
             and expr.type_ref is None
@@ -8304,6 +8608,8 @@ class CodeGen:
         """
         if not self.struct_literal_adapts(expr, expected):
             return False
+        if isinstance(expr, TupleLit):  # positions fit when the arity does
+            return len(expr.elements) == len(strip_const(expected).fields)
         known = {fname for fname, _ in strip_const(expected).fields}
         return all(fname in known for fname, _ in expr.fields)
 
@@ -8323,6 +8629,8 @@ class CodeGen:
         Returns:
             The adapted value.
         """
+        if isinstance(expr, TupleLit):
+            return self.gen_tuple_lit(expr, tuple_type=strip_const(expected))
         if self.struct_literal_adapts(expr, expected):
             return self.gen_struct_lit(expr, struct_type=strip_const(expected))
         return self.gen_borrow_slice(expr, expected, line)
@@ -8669,10 +8977,9 @@ class CodeGen:
             elif self.struct_literal_adapts(element, arr_type.element):
                 # A bare struct-literal element builds the element's aggregate
                 # type, so `let ps: point[2] = [{ x = 1, y = 2 }, { x = 3 }];`
-                # needs no per-element type name.
-                tv = self.gen_struct_lit(
-                    element, struct_type=strip_const(arr_type.element)
-                )
+                # needs no per-element type name; a tuple-literal element
+                # builds a tuple element the same way ([(1, 2), (3, 4)]).
+                tv = self.gen_adapted_literal(element, arr_type.element, line)
                 self.gen_store(tv.value, slot)
             elif self.str_literal_adapts(element, arr_type.element):
                 # A string-literal element adapts to a slice<char> element
@@ -11174,6 +11481,7 @@ class CodeGen:
                 args.append(tv.value if i in decayed else addrs[i][0])
             elif (
                 self.struct_literal_adapts(expr.args[i], p)
+                and not isinstance(expr.args[i], TupleLit)
                 or self.str_literal_adapts(expr.args[i], p)
                 or self.array_literal_adapts(expr.args[i], p)
             ):
@@ -11184,7 +11492,11 @@ class CodeGen:
                 # slice/struct parameter travels by hidden reference, so the
                 # adapted value spills to a temporary first. (The char* / NULLT
                 # placeholder the literal pre-evaluated to for inference goes
-                # unused.)
+                # unused.) A tuple literal is NOT re-adapted here: unlike a
+                # bare struct literal it anchors its own type, so it lowered
+                # eagerly for inference, and rebuilding it would run its
+                # element side effects twice -- the eager value flows to the
+                # coerce below instead.
                 tv = self.gen_adapted_literal(expr.args[i], p, expr.line)
                 if i in hidden:
                     args.append(self.spill_to_temp(tv, p, expr.line, context))

@@ -903,26 +903,30 @@ already do).
       structs; the open `equals` overload set is the extension point. Lands
       **staged** (each stage its own complete change set with its own
       CHANGELOG entry; this box ticks when the last stage lands):
-  - [ ] stage 1: the core type, paren literal, and constant indexing — a
+  - [x] stage 1: the core type, paren literal, and constant indexing — a
         new interned builtin `LangType` arm beside `slice` and `any` in the
         generator's type resolution, built on `instantiate_struct`'s layout
-        core with internal field names `"0"`, `"1"`, ... so the existing
-        GEP/member machinery works unchanged (padding and alignment are the
-        care point: the dual-site layout invariant, types.py and the LLVM
-        identified type agreeing, applies); the paren literal as a new
-        parse in the primary/paren arm with struct-literal-style context
-        coercion (adaptable literals anchor `int32` with no context);
-        constant `t[n]` as a tuple arm in the Index codegen requiring a
-        folded constant (`eval_const`), with the compile-time bounds check;
-        and the shallow arity check. `tuple<...>` in type position already
-        parses (it fails only at resolution), so no parser change is needed
-        there, and once the `LangType` exists the rest rides existing
-        machinery free: direct aggregate returns (multiple return values
-        work immediately), generic inference (`unify` recurses template and
-        arguments, variable arity included), hidden-reference `const`
-        parameters, whole-value assignment, arrays of tuples, tuples in
-        structs, `sizeof`, `.mci` round-trip, `any` boxing under the struct
-        rule (by reference into a `const any` only), and `case type`
+        core (factored as `set_struct_body`) with internal field names
+        `"0"`, `"1"`, ... so the existing GEP/member machinery works
+        unchanged (padding and alignment are the care point: the dual-site
+        layout invariant, types.py and the LLVM identified type agreeing,
+        applies); the paren literal as a new parse in the primary/paren arm
+        with struct-literal-style context coercion (adaptable literals
+        anchor `int32` with no context); constant `t[n]` routed onto the
+        member machinery, requiring a folded constant (`eval_const`), with
+        the compile-time bounds check; and the shallow arity check.
+        `tuple<...>` in type position already parsed (it failed only at
+        resolution), so no parser change was needed there, and once the
+        `LangType` existed the rest rode existing machinery free: direct
+        aggregate returns (multiple return values work immediately),
+        generic inference (`unify` recurses template and arguments,
+        variable arity included), hidden-reference `const` parameters,
+        whole-value assignment, arrays of tuples, tuples in structs,
+        `sizeof`, `.mci` round-trip, `any` boxing under the struct rule (by
+        reference into a `const any` only), `case type` — and even the
+        `@extern` crossing as the layout-equivalent C struct, since the ABI
+        classifier keys on the field list (stage 4 keeps only the `as`
+        cast); implemented, see [Tuples](docs/language.md#tuples)
   - [ ] stage 2: constant slicing — `t[n:m]` with constant bounds narrows
         to the smaller tuple of those positions, desugaring onto stage 1's
         constant-indexing arm and reusing the `[a:b]` grammar shipped with
