@@ -51,6 +51,7 @@ from mcc.nodes import (
     ExprStmt,
     FloatLit,
     For,
+    FStrLit,
     Func,
     GlobalVar,
     If,
@@ -167,6 +168,18 @@ class ExternABI:
 
     args: list
     ret: object = None
+
+
+# The f-string sink rule: an interpolated literal may stand only where an
+# @format callee's format string receives it (marshal_args and the set-path
+# winner emission substitute the desugared text and splice the holes there).
+# Every funnel a plain StrLit lowers through raises this instead, so a
+# misplaced f-string can never silently drop its holes -- an FStrLit *is* a
+# StrLit, and the isinstance predicates deliberately keep matching it.
+FSTRING_MISPLACED = (
+    "an f-string is only allowed as the format string of an @format call "
+    "like 'println' or 'format_args'"
+)
 
 
 def borrows_array_literal(expr) -> bool:
@@ -5509,6 +5522,8 @@ class CodeGen:
             # pointer alias), it keeps the old decay to a uint8* into the shared
             # constant (no copy), which the generic path below handles.
             if isinstance(stmt.value, StrLit):
+                if isinstance(stmt.value, FStrLit):
+                    raise LangError(FSTRING_MISPLACED, stmt.line)
                 if stmt.type_name is None:
                     declared = self.string_array_type(stmt.value.value)
                 else:
@@ -7326,6 +7341,8 @@ class CodeGen:
         if isinstance(expr, NullLit):
             return TypedValue(ir.Constant(RAWPTR.ir, None), NULLT, adaptable=True)
         if isinstance(expr, StrLit):
+            if isinstance(expr, FStrLit):
+                raise LangError(FSTRING_MISPLACED, expr.line)
             return self.gen_string(expr.value)
         if isinstance(expr, ArrayLit):
             raise LangError(
@@ -7897,6 +7914,8 @@ class CodeGen:
             # A string literal is a uint8[N] array (NUL included) living in a
             # constant global; addressing it (for len/sizeof, or a borrow) keeps
             # the array type, while reading it as a value decays to uint8*.
+            if isinstance(expr, FStrLit):
+                raise LangError(FSTRING_MISPLACED, expr.line)
             glob = self.string_global(expr.value)
             return glob, self.string_array_type(expr.value), None, False
         if isinstance(expr, Call):
@@ -9034,6 +9053,11 @@ class CodeGen:
         Returns:
             The adapted value.
         """
+        if isinstance(expr, FStrLit):
+            # str_literal_adapts matches it (an FStrLit is a StrLit), but the
+            # only position an f-string may adapt into is an @format string,
+            # which substitutes the plain literal before reaching here.
+            raise LangError(FSTRING_MISPLACED, expr.line)
         if isinstance(expr, TupleLit):
             return self.gen_tuple_lit(expr, tuple_type=strip_const(expected))
         if self.struct_literal_adapts(expr, expected):
@@ -9508,6 +9532,8 @@ class CodeGen:
                     for e in expr.elements
                 ],
             )
+        if isinstance(expr, FStrLit):
+            raise LangError(FSTRING_MISPLACED, expr.line)
         if isinstance(expr, StrLit) and expected in (CHARPTR, RAWPTR):
             # A char*/uint8* static initialized from a string literal: a constant
             # pointer to the shared bytes (the IR pointer is i8* either way).
@@ -9789,6 +9815,8 @@ class CodeGen:
         if isinstance(expr, NullLit):
             return TypedValue(ir.Constant(RAWPTR.ir, None), NULLT, adaptable=True)
         if isinstance(expr, StrLit):
+            if isinstance(expr, FStrLit):
+                raise LangError(FSTRING_MISPLACED, expr.line)
             return TypedValue(self.const_string(expr.value), CHARPTR)
         if isinstance(expr, SizeOf):
             size = type_size(self.lang_type(expr.type_name, line))
@@ -10696,7 +10724,10 @@ class CodeGen:
                 a string literal bound to it desugars positional ``{n}``
                 placeholders at compile time (see :meth:`scan_positional`),
                 rewriting the literal and duplicating/reordering the
-                once-evaluated extras into the collection.
+                once-evaluated extras into the collection. An f-string bound
+                to it stands in as its parse-time-desugared text, its hole
+                expressions becoming the collected extras (it admits no
+                other extras).
             extern: Whether the callee is an ``@extern`` declaration, which
                 grades a possibly-null ``@nonnull`` argument by posture instead
                 of always rejecting it (see :meth:`check_nonnull_arg`).
@@ -10728,19 +10759,30 @@ class CodeGen:
                 f"{label} expects {len(params)} argument(s), got {len(arg_exprs)}", line
             )
         slot_map = None
-        if (
-            collecting
-            and format
-            and fixed >= 1
-            and isinstance(arg_exprs[fixed - 1], StrLit)
-        ):
+        fmt = (
+            arg_exprs[fixed - 1] if collecting and format and fixed >= 1 else None
+        )
+        if isinstance(fmt, FStrLit):
+            # An f-string: parse time already desugared its text to the
+            # sequential runtime form. The plain literal stands in through a
+            # local copy (never an AST rewrite -- a call inside a template
+            # body re-marshals per instantiation) and the hole expressions
+            # splice in as the collected extras, evaluated below -- once
+            # each, in source order.
+            if len(arg_exprs) > fixed:
+                raise LangError(
+                    f"{label} takes no arguments after an f-string: the "
+                    "placeholders already supply them",
+                    line,
+                )
+            arg_exprs = arg_exprs[: fixed - 1] + [StrLit(fmt.value, fmt.line)]
+            arg_exprs += [h.expr for h in fmt.holes]
+        elif isinstance(fmt, StrLit):
             # An @format literal: desugar positional placeholders. The
-            # rewritten literal stands in through a local copy (never an AST
-            # rewrite -- a call inside a template body re-marshals per
-            # instantiation) and lowers through the ordinary string-literal
-            # adaptation below; the slot map reorders the once-evaluated
-            # extras into the collection.
-            fmt = arg_exprs[fixed - 1]
+            # rewritten literal stands in through a local copy, as above,
+            # and lowers through the ordinary string-literal adaptation
+            # below; the slot map reorders the once-evaluated extras into
+            # the collection.
             scanned = self.scan_positional(
                 fmt.value, len(arg_exprs) - fixed, fixed, label, fmt.line
             )
@@ -11880,6 +11922,14 @@ class CodeGen:
                         strip_const(t),
                     )
                 )
+            elif isinstance(arg, FStrLit):
+                # An f-string pre-evaluates for inference and ranking exactly
+                # as its desugared literal would -- a char* into the interned
+                # text -- so the winner is the one the equivalent plain-literal
+                # call would pick. The hole expressions stay unevaluated here;
+                # winner emission substitutes the plain literal and splices
+                # them in as the extras (or rejects a non-@format winner).
+                arg_tvs.append(self.gen_string(arg.value))
             elif self.defers_array_literal(arg) or self.defers_struct_literal(arg):
                 # An array or bare struct literal cannot lower without a
                 # receiving type, and the winning parameter is not yet chosen.
@@ -12137,21 +12187,33 @@ class CodeGen:
         # an AST rewrite) and lowers through the mirrored literal-adaptation
         # arm below; the slot map reorders the already-evaluated extras. (The
         # original literal's char* pre-evaluation for inference goes unused.)
-        fmt_lit = slot_map = None
+        fmt_lit = slot_map = fstr = None
         if (
             collecting
             and n_fixed >= 1
             and func.params[n_fixed - 1][0] in func.format_params
-            and isinstance(expr.args[n_fixed - 1], StrLit)
         ):
             fmt = expr.args[n_fixed - 1]
-            scanned = self.scan_positional(
-                fmt.value, len(expr.args) - n_fixed, n_fixed,
-                repr(expr.name), fmt.line,
-            )
-            if scanned is not None:
-                new_text, slot_map = scanned
-                fmt_lit = StrLit(new_text, fmt.line)
+            if isinstance(fmt, FStrLit):
+                # An f-string: the parse-time-desugared text stands in and
+                # the hole expressions become the extras (collected below,
+                # in parity with marshal_args' branch).
+                if len(expr.args) > n_fixed:
+                    raise LangError(
+                        f"{expr.name!r} takes no arguments after an "
+                        "f-string: the placeholders already supply them",
+                        expr.line,
+                    )
+                fmt_lit = StrLit(fmt.value, fmt.line)
+                fstr = fmt
+            elif isinstance(fmt, StrLit):
+                scanned = self.scan_positional(
+                    fmt.value, len(expr.args) - n_fixed, n_fixed,
+                    repr(expr.name), fmt.line,
+                )
+                if scanned is not None:
+                    new_text, slot_map = scanned
+                    fmt_lit = StrLit(new_text, fmt.line)
         for i in self.nonnull_indices(func):
             if i < len(expr.args) and i < n_fixed:
                 self.check_nonnull_arg(
@@ -12220,16 +12282,24 @@ class CodeGen:
             # array/bare-struct literal extra was never evaluated, and
             # re-generating it raises the direct path's exact
             # receiver-less-literal error.
-            extras = []
-            for j in range(n_fixed, len(arg_tvs)):
-                raw_arg = expr.args[j]
-                if self.defers_array_literal(raw_arg) or self.defers_struct_literal(
-                    raw_arg
-                ):
-                    extras.append(self.gen_expr(raw_arg))
-                else:
-                    extras.append(arg_tvs[j])
-            extra_exprs = expr.args[n_fixed:]
+            if fstr is not None:
+                # The f-string's hole expressions are the collected extras:
+                # invisible to pre-evaluation and ranking, they evaluate here
+                # -- once each, in source order (the deferred-literal
+                # precedent below).
+                extras = [self.gen_expr(h.expr) for h in fstr.holes]
+                extra_exprs = [h.expr for h in fstr.holes]
+            else:
+                extras = []
+                for j in range(n_fixed, len(arg_tvs)):
+                    raw_arg = expr.args[j]
+                    if self.defers_array_literal(
+                        raw_arg
+                    ) or self.defers_struct_literal(raw_arg):
+                        extras.append(self.gen_expr(raw_arg))
+                    else:
+                        extras.append(arg_tvs[j])
+                extra_exprs = expr.args[n_fixed:]
             if slot_map is not None:
                 # Positional desugar: map the once-evaluated extras by slot
                 # -- a duplicated slot re-boxes the same TypedValue, never

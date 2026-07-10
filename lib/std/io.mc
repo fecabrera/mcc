@@ -113,7 +113,11 @@ import "std/format";
      * The parameter is @format, so a string *literal* also takes positional
      * `{n[:modifiers]}` placeholders, desugared at compile time to the
      * sequential form above (`{:modifiers}` spells a bare all-digit
-     * modifier, e.g. the `{:2}` field width).
+     * modifier, e.g. the `{:2}` field width), and an f-string interpolates
+     * expressions directly: `print(f"x = {x}")` desugars to the same
+     * sequential form, its `{expr[:modifiers]}` holes becoming the
+     * arguments (`{expr=}` labels the value with the expression's own
+     * spelling).
      *
      * @param fmt:  format string with `{[modifiers]}` placeholders
      * @param args: values rendered in sequence, one per placeholder

@@ -6,7 +6,7 @@ import re
 from contextlib import contextmanager
 
 from mcc.errors import LangError
-from mcc.lexer import Token
+from mcc.lexer import Token, tokenize
 from mcc.nodes import (
     AlignOf,
     ArrayLit,
@@ -36,6 +36,8 @@ from mcc.nodes import (
     Import,
     FloatLit,
     For,
+    FStrHole,
+    FStrLit,
     Func,
     GlobalVar,
     If,
@@ -2110,6 +2112,176 @@ class Parser:
         self.expect(")")
         return args
 
+    def parse_fstring(self, tok: Token):
+        """Desugar an interpolated string literal ``f"..."`` at parse time.
+
+        The literal's text is unescaped once -- restoring real quotes for
+        string literals nested in holes, so hole text is valid source -- and
+        scanned: ``{{`` / ``}}`` spell literal braces, and every other ``{``
+        opens an expression hole (braces nested in the hole, including inside
+        its string and char literals, are skipped). Each hole is sub-parsed
+        by :meth:`parse_fstring_hole`, which reduces it to its runtime
+        ``{modifier}`` placeholder. The pieces concatenate into the
+        sequential runtime's format text (escapes and inspector labels kept
+        ``{{``-escaped), carried with the hole expressions as an
+        :class:`FStrLit` -- or, with no holes at all, a plain
+        :class:`StrLit` of that text.
+
+        Args:
+            tok: The FSTRING token.
+
+        Returns:
+            The ``FStrLit`` (or hole-free ``StrLit``) node.
+
+        Raises:
+            LangError: On a stray ``}``, an unclosed ``{``, or a malformed
+                hole.
+        """
+        text = _unescape(tok.text[2:-1])
+        pieces: list[str] = []
+        holes: list[FStrHole] = []
+        i = 0
+        while i < len(text):
+            c = text[i]
+            if c == "{":
+                if text.startswith("{", i + 1):
+                    pieces.append("{{")
+                    i += 2
+                    continue
+                end = self.fstring_hole_end(text, i + 1, tok.line)
+                pieces.append(
+                    self.parse_fstring_hole(text[i + 1 : end], holes, tok.line)
+                )
+                i = end + 1
+            elif c == "}":
+                if text.startswith("}", i + 1):
+                    pieces.append("}}")
+                    i += 2
+                    continue
+                raise LangError(
+                    "single '}' in f-string (write }} for a literal '}')",
+                    tok.line,
+                )
+            else:
+                pieces.append(c)
+                i += 1
+        value = "".join(pieces)
+        if not holes:
+            return StrLit(value, tok.line)
+        return FStrLit(value, tok.line, holes)
+
+    @staticmethod
+    def fstring_hole_end(text: str, start: int, line: int) -> int:
+        """Find the index of the ``}`` closing the hole opened before ``start``.
+
+        Counts brace depth so struct literals and block expressions nest, and
+        skips string and char literals (with their ``\\x`` pairs), so a brace
+        inside quotes -- ``f"{s == \\"}\\"}"`` -- never closes the hole.
+
+        Args:
+            text: The f-string's unescaped text.
+            start: The index just past the hole's opening ``{``.
+            line: Source line for diagnostics.
+
+        Returns:
+            The index of the closing ``}``.
+
+        Raises:
+            LangError: When the hole never closes.
+        """
+        depth = 1
+        i = start
+        while i < len(text):
+            c = text[i]
+            if c in ('"', "'"):
+                i += 1
+                while i < len(text) and text[i] != c:
+                    i += 2 if text[i] == "\\" else 1
+                if i >= len(text):
+                    break  # an unterminated literal: the hole never closes
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+            i += 1
+        raise LangError(
+            "unclosed '{' in f-string (write {{ for a literal '{')", line
+        )
+
+    def parse_fstring_hole(
+        self, content: str, holes: list[FStrHole], line: int
+    ) -> str:
+        """Parse one f-string hole and append its record to ``holes``.
+
+        The hole text is tokenized and sub-parsed as a single expression.
+        After it, an optional ``=`` marks the Python-style inspector -- the
+        hole's verbatim text (expression spelling, ``=``, and whitespace)
+        becomes a label printed ahead of the value -- and an optional ``:``
+        starts the runtime modifier, taken as raw text to the hole's end.
+
+        Args:
+            content: The hole's text (between the braces, already unescaped).
+            holes: The literal's hole list, appended to in place.
+            line: The literal's source line, stamped on the hole's tokens so
+                sub-parse diagnostics point at the literal.
+
+        Returns:
+            The hole's desugared piece of format text: its ``{modifier}``
+            placeholder, preceded by the ``{{``-escaped label for an
+            inspector hole.
+
+        Raises:
+            LangError: On an empty or malformed hole.
+        """
+        if "\n" in content:
+            # The literal's \n escape already unescaped to a real newline the
+            # sub-lexer cannot take; a nested literal's escape needs the
+            # backslash itself escaped so it survives into the hole text.
+            raise LangError(
+                "a \\n escape inside an f-string placeholder becomes a real "
+                "newline; write \\\\n to put the escape in a nested string "
+                "literal",
+                line,
+            )
+        try:
+            tokens = tokenize(content)
+        except LangError as err:
+            raise LangError(err.message, line) from None
+        for t in tokens:
+            t.line = line
+        if tokens[0].kind in ("EOF", "=", ":"):
+            raise LangError(
+                f"empty expression in f-string placeholder {{{content}}}", line
+            )
+        sub = Parser(tokens)
+        expr = sub.parse_expr()
+        label = None
+        if sub.cur.kind == "=":
+            # The inspector: the label is the hole's own text, verbatim --
+            # whitespace and all -- up to the modifier's colon.
+            sub.advance()
+            label = content
+        modifier = ""
+        if sub.cur.kind == ":":
+            modifier = content[sub.cur.offset + 1 :]
+            if label is not None:
+                label = content[: sub.cur.offset]
+        elif sub.cur.kind != "EOF":
+            raise LangError(
+                f"unexpected {sub.cur.text!r} in f-string placeholder "
+                f"{{{content}}}",
+                line,
+            )
+        holes.append(FStrHole(expr, label, modifier))
+        piece = "{" + modifier + "}"
+        if label is not None:
+            # The label splices into format text, so its own braces (an
+            # expression with a struct literal, say) must re-escape.
+            piece = label.replace("{", "{{").replace("}", "}}") + piece
+        return piece
+
     def parse_primary(self):
         """Parse a primary expression.
 
@@ -2138,6 +2310,8 @@ class Parser:
             return NullLit(tok.line)
         if tok.kind == "STRING":
             return StrLit(_unescape(tok.text[1:-1]), tok.line)
+        if tok.kind == "FSTRING":
+            return self.parse_fstring(tok)
         if tok.kind == "CHAR":
             inner = tok.text[1:-1]  # the single character between the quotes
             char = STRING_ESCAPES.get(inner[1], inner[1]) if inner[0] == "\\" else inner

@@ -4339,6 +4339,9 @@ fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
 ```
 
 See [examples/systems/formatting.mc](../examples/systems/formatting.mc).
+The protocol's main consumers are `print`/`println` just below — `{}`
+placeholders, positional `{n}` selection, and `f"..."` interpolation all
+render through this one set.
 
 ### Formatted print / println
 
@@ -4350,6 +4353,7 @@ import "std/io";
 
 println("{} + {} = {}", 2, 3, 2 + 3);      // 2 + 3 = 5
 println("mask {x}, ok {yes}", 255, true);  // mask ff, ok yes
+println(f"2 + 3 = {2 + 3}");               // f-string interpolation (below)
 ```
 
 The signature is `fn println(@format const fmt: slice<const char>,
@@ -4410,8 +4414,46 @@ collecting `args...`, and it travels through
 [interface stubs](#interface-files) like `@nonnull` does. The legacy
 printf-style pair is C-variadic and unmarked, so it is unaffected.
 
+**String interpolation (f-strings)** writes the expressions inline: an
+`f`-prefixed string literal holds `{expr}` holes, and the literal desugars
+at parse time into the sequential form above — `println(f"x = {x}")` is
+`println("x = {}", x)`, surface syntax only, no new runtime. The prefix is
+what keeps the two brace grammars apart: in a plain literal `{x}` is the
+runtime *modifier* (hex the next argument), in an f-string it is the
+*expression* `x` — `println("{x}", x)` and `println(f"{x}")` are both
+meaningful. A `:` after the expression carries a runtime modifier through
+(the hole is parsed first and only a *leftover* colon starts the modifier,
+so a ternary's own colon stays inside the expression), and the inspector
+form `f"{n=}"` — Python's spelling, Python's semantics — prints the
+expression's verbatim source text, whitespace and all, ahead of its value,
+with a modifier composing after the `=`:
+
+```c
+let x = 255 as int32;
+println(f"x is {x}, hex {x:08x}");  // x is 255, hex 000000ff
+println(f"{x=}");                   // x=255
+println(f"{x = }");                 // x = 255   (the spacing is yours)
+println(f"{x=:08x}");               // x=000000ff
+println(f"{x > 9 ? x : 0}");        // 255 — any expression goes
+```
+
+An f-string is its own placeholder style: every hole is an expression, so
+it never mixes with the automatic `{}` or positional `{n}` forms, and
+passing extra arguments after one is a compile error — `println(f"{x}", y)`
+has no placeholder left for `y`. `{{` and `}}` still escape literal braces
+(braces inside a hole's nested string/char literals need no escape), an
+empty hole `{}`, a bare `{:mods}`, and a stray or unclosed brace are
+compile errors, and a hole-free `f"..."` degrades to a plain string
+literal at parse time. An f-string is legal *only* as the format string of
+an `@format` call (`println(f"...")`, `format_args(str, f"...")`); every
+other sink — a `let` initializer, a plain parameter, an ordinary
+expression — is a compile error (a string-*valued* f-string would need a
+runtime rendering buffer, a possible later extension). The legacy
+`-D PRINTF_PRINTLN=1` pair is unmarked, so f-strings are rejected there
+too.
+
 See [examples/systems/formatting.mc](../examples/systems/formatting.mc) —
-the positional demos are its finale.
+the positional and f-string demos are its finale.
 
 ## Reaching libc
 

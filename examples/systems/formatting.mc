@@ -15,8 +15,10 @@ import "libc/stdio";
 // rounds and pads floats with ".2f" / "8.2f",
 // renders slices (nested too), hits the <typename> fallback, and then makes
 // its own struct printable by declaring one more overload into the set.
-// The finale moves to println's `{}` placeholders and their positional
-// `{n}` sugar (duplicate, reorder, `{0:x}`, and the `{:N}` width escape).
+// The finale moves to println's `{}` placeholders, their positional
+// `{n}` sugar (duplicate, reorder, `{0:x}`, and the `{:N}` width escape),
+// and f-string interpolation: `{expr}` holes written inline, with the
+// Python-style `{n=}` inspector.
 // Builds on io.mc (raw printf, used here to print the results),
 // functions/open_overloads.mc (how a module joins a foreign overload set),
 // types/type_groups.mc (the closed integer groups behind the set), and
@@ -168,6 +170,48 @@ fn main() -> int32 {
     //   println("{0}", 1, 2)       the 2 is never referenced
     // A format string arriving through a variable is untouched: it hits the
     // sequential runtime parser, where {2} is always the field width.
+
+    // F-strings write the expressions inline: an f-prefixed literal holds
+    // `{expr}` holes, and the whole literal desugars at parse time to the
+    // sequential form -- f"n is {n}" IS "n is {}" with n appended to the
+    // arguments. Surface syntax only; the runtime parser never sees it.
+    let n = 7 as int32;
+    println(f"fstring:  n is {n}, twice {n * 2}");
+
+    // The f prefix is what keeps the two brace grammars apart: in the plain
+    // literals above {x} was the hex *modifier*, here it is the *expression*
+    // x. A colon left over after the expression parse carries a runtime
+    // modifier through ({x:08x} renders like {08x} did) -- and only a
+    // *leftover* colon starts it, so a ternary's own colon stays inside
+    // the hole, with or without a modifier after the expression.
+    let hx = 255 as int32;
+    println(f"fmod:     {hx:08x} then {n > 5 ? hx : n} as hex {n > 5 ? hx : n:x}");
+
+    // The inspector, Python's spelling and semantics: {n=} splices the
+    // hole's verbatim source text, up to and including the =, in front of
+    // the value -- whitespace preserved, so {n = } keeps your spaces. A
+    // modifier still composes after the =. An == is consumed by the
+    // expression parse (a lone trailing = is what marks the inspector),
+    // so {n == 7} is the comparison and {n == 7=} labels it.
+    println(f"inspect:  {n=} {n = } {hx=:08x}");
+    println(f"compare:  {n == 7} vs {n == 7=}");
+
+    // {{ and }} still escape literal braces (braces inside a hole's nested
+    // string or char literals need no escape at all).
+    println(f"brace:    {{{n}}}");                       // {7}
+
+    // An f-string is its own placeholder style and its own sink. Each of
+    // these is a compile error:
+    //   println(f"{n}", 9)      no placeholder is left for the 9: the holes
+    //                           supply every argument, and {} / {n} never
+    //                           mix in
+    //   let s = f"n is {n}";    an f-string is only allowed as the format
+    //                           string of an @format call (print, println,
+    //                           format_args, or your own @format function)
+    //   println(f"{}")          a hole must hold an expression: empty {},
+    //                           bare {:x}, a stray } or an unclosed { all
+    //                           reject
+    // A hole-free f"abc" simply degrades to a plain string literal.
 
     return 0;
 }

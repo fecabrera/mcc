@@ -236,8 +236,8 @@ import under their `std/` (mcc modules) or `libc/` (C bindings) prefix. For
 everyday output, `import "std/io";` provides `print` and `println` — `{}`
 placeholders rendered type-driven through the
 [formatting protocol](docs/language.md#formatted-print--println), with
-positional `{n}` selection desugared at compile time, written
-in mcc on top of the libc bindings:
+positional `{n}` selection and `f"..."` string interpolation desugared at
+compile time, written in mcc on top of the libc bindings:
 
 ```c
 import "std/io";

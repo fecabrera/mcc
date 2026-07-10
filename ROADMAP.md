@@ -2544,20 +2544,29 @@ already do).
         parsed width and precision feed a `%*.*f`, so the rounding is the
         C library's. The last runtime modifier stage: libc's `printf`
         remains only the scientific-notation (`%g`/`%e`) tool
-- [ ] String interpolation — `println(f"x = {x}")`: an `f`-prefixed string
-      literal with `{expr}` holes desugars at compile time into the formatted
-      `println("{}", ...)` call above (`{{`/`}}` escape a literal brace), so it
-      is surface syntax only — no new runtime. The prefix is what keeps the
-      two brace grammars apart: in a plain literal `{x}` is a *modifier*
-      placeholder (hex the next argument), while in an `f`-string `{x}` is
-      the *expression* `x` — `println("{x}", x)` and `println(f"{x}")` are
-      both meaningful and unambiguous. The inspector form `{=n}` desugars to
-      the labelled `println("n = {}", n)`, printing the expression's own
-      spelling next to its value. An interpolated string is its own
+- [x] String interpolation — `println(f"x = {x}")`: an `f`-prefixed string
+      literal with `{expr}` holes desugars at parse time into the formatted
+      `println("x = {}", x)` call above (`{{`/`}}` escape a literal brace),
+      so it is surface syntax only — no new runtime. The prefix is what
+      keeps the two brace grammars apart: in a plain literal `{x}` is a
+      *modifier* placeholder (hex the next argument), while in an `f`-string
+      `{x}` is the *expression* `x` — `println("{x}", x)` and
+      `println(f"{x}")` are both meaningful and unambiguous, and
+      `f"{x:08x}"` carries a modifier through (the hole is parsed first, so
+      a ternary's own colon stays inside the expression). The inspector form
+      is Python's, spelling and semantics: `f"{n=}"` splices the hole's
+      verbatim source text as a label ahead of the value — whitespace
+      preserved (`f"{n = }"` prints `n = 7`), a modifier composing after
+      the `=` (`f"{x=:08x}"`). An interpolated string is its own
       placeholder style: it does not mix with the auto-numbered `{}` or
-      manually numbered `{n}` forms in one format string (a mixed string is
-      a compile error). Depends on formatted print (above) and the
-      [native variadics](#functions-and-methods) it builds on
+      manually numbered `{n}` forms, and extra arguments after one are a
+      compile error. Legal only as the format string of an `@format` call —
+      every other sink is a compile error, never a silently dropped hole;
+      implemented, see
+      [Formatted print/println](docs/language.md#formatted-print--println)
+  - [ ] string-valued f-strings — `let s = f"{x}"` rendering into a
+        runtime buffer (a `string`), so an f-string can go anywhere a
+        string can, not only into an `@format` argument position
 
 ### Tooling and C interop
 

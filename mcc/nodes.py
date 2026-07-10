@@ -1026,6 +1026,45 @@ class StrLit:
 
 
 @dataclass
+class FStrHole:
+    """One ``{expr}`` placeholder of an interpolated f-string literal.
+
+    Attributes:
+        expr: The hole's parsed expression.
+        label: For the inspector form ``{expr=}``, the hole's verbatim source
+            text up to the modifier (the expression's spelling, the ``=``, and
+            any whitespace around it) -- spliced into the format text ahead of
+            the placeholder; ``None`` for a plain hole.
+        modifier: The runtime modifier text after the hole's ``:``, or ``""``
+            when the hole has none.
+    """
+
+    expr: object
+    label: str | None
+    modifier: str
+
+
+@dataclass
+class FStrLit(StrLit):
+    """An interpolated string literal ``f"x = {x}"``.
+
+    Parse-time sugar over the sequential format runtime: ``value`` holds the
+    already-desugared format text (each hole reduced to its ``{modifier}``
+    placeholder, literal braces and inspector labels ``{{``/``}}``-escaped)
+    and ``holes`` the interpolated expressions, in order. Legal only as the
+    format string of an ``@format`` call, where the holes splice in as the
+    collected arguments; every other sink rejects it (the ``StrLit`` funnels
+    guard). A literal with no holes never builds this node -- it degrades to
+    a plain ``StrLit`` at parse time.
+
+    Attributes:
+        holes: The ``FStrHole`` records, one per placeholder, in source order.
+    """
+
+    holes: list
+
+
+@dataclass
 class NullLit:
     """The ``null`` pointer constant, adapting to any pointer type.
 

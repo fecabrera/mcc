@@ -25,6 +25,10 @@ TOKEN_SPEC = [
     ("ANNOT", r"@[A-Za-z_]\w*"),
     ("FLOAT", r"\d+\.\d+(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+"),
     ("INT", r"0[xX][0-9a-fA-F]+|\d+"),
+    # An interpolated string literal, f"...". Listed before IDENT so the `f`
+    # glued to a quote reads as the prefix; `f` followed by anything else
+    # (including whitespace before a string) stays an ordinary identifier.
+    ("FSTRING", r'f"(\\.|[^"\\\n])*"'),
     ("IDENT", r"[A-Za-z_]\w*"),
     ("STRING", r'"(\\.|[^"\\\n])*"'),
     ("CHAR", r"'(\\.|[^'\\\n])'"),

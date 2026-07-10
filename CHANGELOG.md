@@ -10,6 +10,30 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **String interpolation — `f"..."` literals with `{expr}` holes and the
+  Python-style `{n=}` inspector** — an `f`-prefixed string literal
+  interpolates expressions directly: `println(f"x = {x}")` desugars at
+  parse time into the sequential `println("x = {}", x)` — surface syntax
+  only, no new runtime. The prefix separates the two brace grammars (in a
+  plain literal `{x}` is the runtime *modifier*, in an f-string it is the
+  *expression* `x`), a leftover `:` after the parsed expression carries a
+  modifier through (`f"{x:08x}"`; a ternary's own colon stays inside the
+  hole), and the inspector `f"{n=}"` follows Python wholesale: the hole's
+  verbatim source text splices in as a label, whitespace preserved
+  (`f"{n = }"` prints `n = 7`), with a modifier composing after the `=`
+  (`f"{x=:08x}"`). An f-string is its own placeholder style — it never
+  mixes with automatic `{}` or positional `{n}` placeholders, and extra
+  arguments after one (`println(f"{x}", y)`) are a compile error, as are
+  an empty hole, a bare `{:mods}`, and a stray or unclosed brace. `{{`/`}}`
+  still escape literal braces, a hole-free `f"..."` degrades to a plain
+  string literal, and an f-string is legal *only* as the format string of
+  an `@format` call (`print`/`println`/`format_args`, both marshal paths)
+  — every other sink is a compile error rather than a silently dropped
+  hole (string-*valued* f-strings are a possible later extension; the
+  legacy `-D PRINTF_PRINTLN=1` pair is unmarked and rejects them). See
+  [Formatted print/println](docs/language.md#formatted-print--println)
+  and [formatting.mc](examples/systems/formatting.mc).
+
 - **Positional `{n}` format placeholders — compile-time sugar for `{}`
   print** — in a format string *literal*, `{n}` selects the n-th argument
   after the format string manually: `println("{0}, {0}", x)` desugars at
