@@ -10,6 +10,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`tuple<A, B, ...>`: constant slicing (stage 2)** — `t[n:m]` with
+  compile-time-constant bounds narrows to the smaller tuple of positions
+  `n` to `m-1`: the same half-open `[a:b]` grammar as sub-slicing, open
+  ends included (`t[1:]`, `t[:2]`, the plain copy `t[:]`), each omitted
+  bound folding against the arity. The result is a new tuple value, not a
+  view — the kept positions are copied into the narrowed interned tuple, so
+  slicing works on rvalue bases (`divmod(7, 2)[:]`), composes with indexing
+  and itself (`t[1:3][0]`, `t[0:3][1:3]`), and is never a write target.
+  Bounds share the constant-index discipline (they pick the result type)
+  and are range- and order-checked at compile time
+  (`0 <= n <= m <= arity`); a slice must keep at least 2 positions, the
+  `tuple<>`/`tuple<T>` surface check applied to the slice surface. See
+  [Tuples](docs/language.md#tuples) and
+  [examples/types/tuples.mc](examples/types/tuples.mc).
+
 - **`tuple<A, B, ...>`: the core type, paren literal, and constant indexing
   (stage 1)** — a builtin heterogeneous, fixed-arity product: each position
   keeps its own statically-known type, so

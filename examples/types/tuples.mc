@@ -4,8 +4,9 @@ import "std/io";
 // ad-hoc struct without a name, positions instead of field names, the same
 // layout the struct with those field types would have. It is built by the
 // paren literal `(a, b)` (at least one top-level comma; `(x)` stays plain
-// grouping) and read by position with a compile-time-constant index. Its
-// headline job is multiple return values.
+// grouping), read by position with a compile-time-constant index, and
+// narrowed to a smaller tuple with a constant slice `t[n:m]`. Its headline
+// job is multiple return values.
 // Prerequisites: structs.mc and struct_literals.mc (a tuple element coerces
 // exactly like a struct-literal field), arrays.mc for the index syntax.
 
@@ -70,6 +71,20 @@ fn main() -> int32 {
     let nested = ((1, 2), 3,);
     println("nested[0][1]  = {}", nested[0][1]);
 
+    // Slicing is compile-time too: q[n:m] narrows to positions n..m-1, the
+    // same half-open [a:b] grammar as sub-slicing on slices, open ends
+    // folding against the arity. Unlike a sub-slice the result is a NEW
+    // tuple, positions copied out, not a view: it works on an rvalue base
+    // and is never a write target (q[1:3] = ... is rejected). Bounds must
+    // fold to constants (they pick the result type, like indices), are
+    // checked at compile time (0 <= n <= m <= arity), and must keep at
+    // least 2 positions; a single position is read with q[n].
+    let q = (1, 'x', 2.5, 4);
+    let mid = q[1:3];                         // mid is tuple<char, float64>
+    println("mid           = ({}, {})", mid[0], mid[1]);
+    println("q[1:][2]      = {}", q[1:][2]);  // the open tail, then indexed
+    println("divmod[:][0]  = {}", divmod(9, 4)[:][0]);   // rvalue base copy
+
     // The alias in action; 5 adapts to int64 per position, as above.
     let p: polar = (5, 0.5);
     println("polar         = ({}, {})", p[0], p[1]);
@@ -94,4 +109,6 @@ fn main() -> int32 {
 // per-field adaptation rules tuple elements follow; type_aliases.mc for the
 // alias mechanism naming `polar` above; any_struct_boxing.mc for how a tuple
 // follows the struct rule under `any`, boxing by hidden reference into a
-// `const any` and recovered by a `case type` arm.
+// `const any` and recovered by a `case type` arm; memory/sub_slices.mc for
+// the same [a:b] grammar on slices, where the result is a borrowed view of
+// the same storage rather than a copied-out value.

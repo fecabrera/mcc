@@ -927,17 +927,31 @@ already do).
         `@extern` crossing as the layout-equivalent C struct, since the ABI
         classifier keys on the field list (stage 4 keeps only the `as`
         cast); implemented, see [Tuples](docs/language.md#tuples)
-  - [ ] stage 2: constant slicing — `t[n:m]` with constant bounds narrows
-        to the smaller tuple of those positions, desugaring onto stage 1's
-        constant-indexing arm and reusing the `[a:b]` grammar shipped with
-        [sub-slicing](docs/language.md#slices)
+  - [x] stage 2: constant slicing — `t[n:m]` with constant bounds narrows
+        to the smaller tuple of those positions, a tuple arm in the
+        sub-slice lowering reusing the `[a:b]` grammar shipped with
+        [sub-slicing](docs/language.md#sub-slicing), open ends folding
+        against the arity (`t[1:]`, `t[:2]`, the plain copy `t[:]`). The
+        result is a new tuple value, not a view — the kept positions are
+        copied (the narrowed type could not alias the source layout
+        anyway), so a tuple slice is never a write target. Bounds share the
+        constant-index discipline (they pick the result type, so each must
+        fold) and are range- and order-checked at compile time
+        (`0 <= n <= m <= arity`); a slice must keep at least 2 positions,
+        the `tuple<>`/`tuple<T>` shallow surface check applied to the slice
+        surface; implemented, see [Tuples](docs/language.md#tuples)
   - [ ] stage 3: destructuring and the rest binder — `let a, b = t;` (the
         `let` grammar takes a single IDENT today, so the comma slot is
         free) and the trailing-`...` rest binder, both pure sugar over
         stage 1's constant indexing and stage 2's constant slicing; the
         same rest binder over a slice right-hand side
         (`let first, rest... = s;`) lands here too, the identical desugar
-        onto shipped [sub-slicing](docs/language.md#slices)
+        onto shipped [sub-slicing](docs/language.md#slices). Note: stage 2
+        rejects a slice keeping fewer than 2 positions (the arity surface
+        discipline), so the rest binder's `t2 = t1[1:]` desugar on a
+        2-tuple — a 1-tuple tail — must either bind the final position
+        directly instead of slicing, or revisit allowing 1-tuples as slice
+        *results* while keeping the `tuple<T>` type-spelling rejection
   - [ ] stage 4: layout-equivalent struct `as` and `@extern` — the
         `(a, b, ...) as A` cast as a cast arm checking field-type-sequence
         equality against the target struct, with tuples then crossing

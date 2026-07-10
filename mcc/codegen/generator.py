@@ -7990,9 +7990,11 @@ class CodeGen:
         but never dereferenced, and it is deliberately not normalized to the
         empty literal's ``{ null, 0 }`` (no branch in the lowering).
 
-        Only slice-typed receivers slice; everything else reaches sub-slicing
-        by first becoming a slice through its existing borrow spelling (see
-        :meth:`sub_slice_error`).
+        A tuple receiver dispatches to :meth:`gen_tuple_slice` instead: the
+        same grammar with compile-time-constant bounds, narrowing to the
+        smaller tuple by value. Every other non-slice receiver reaches
+        sub-slicing by first becoming a slice through its existing borrow
+        spelling (see :meth:`sub_slice_error`).
 
         Args:
             expr: The ``Slice`` node.
@@ -8005,6 +8007,8 @@ class CodeGen:
                 not an integer.
         """
         base = self.gen_expr(expr.base)
+        if is_tuple(strip_const(base.type)):
+            return self.gen_tuple_slice(expr, base)
         if not is_slice(base.type):
             raise LangError(self.sub_slice_error(expr.base, base), expr.line)
         if expr.start is None and expr.end is None:
@@ -8050,10 +8054,117 @@ class CodeGen:
         extend = self.builder.sext if tv.type.signed else self.builder.zext
         return extend(tv.value, UINT64.ir)
 
+    def gen_tuple_slice(self, expr: Slice, base: TypedValue) -> TypedValue:
+        """Evaluate a constant tuple slice: ``t[n:m]`` narrows to the smaller
+        tuple of positions ``n`` to ``m - 1``.
+
+        The same half-open ``[a:b]`` grammar as a sub-slice, open ends
+        included (an omitted ``start`` defaults to 0 and an omitted ``end``
+        to the arity, so ``t[1:]``, ``t[:2]``, and ``t[:]`` all fold), but
+        the result is a **new tuple value, not a view**: the kept positions
+        are copied (the narrowed type could not alias the source layout
+        anyway), built over a zeroinitializer so padding bytes are
+        deterministic, as in a tuple literal. The copy semantics also mean a
+        tuple slice is never a write target -- ``Slice`` sits on no lvalue
+        surface.
+
+        Bounds must fold to compile-time constants (the bounds pick the
+        result type) and are checked here: ``0 <= n <= m <= arity``, and the
+        slice must keep at least 2 positions -- ``tuple<>`` and ``tuple<T>``
+        reject as a surface check, and a slice expression is surface (the
+        internals stay arity-agnostic for a future variadic).
+
+        Args:
+            expr: The ``Slice`` node.
+            base: The evaluated tuple receiver.
+
+        Returns:
+            The narrowed tuple as a ``TypedValue``.
+
+        Raises:
+            LangError: On a non-constant, non-integer, or out-of-bounds
+                bound, inverted bounds, or a result below 2 positions.
+        """
+        owner = strip_const(base.type)
+        count = len(owner.fields)
+        start = (
+            0 if expr.start is None
+            else self.tuple_slice_bound(owner, expr.start, expr.line)
+        )
+        end = (
+            count if expr.end is None
+            else self.tuple_slice_bound(owner, expr.end, expr.line)
+        )
+        if start > end:
+            raise LangError(
+                f"tuple slice bounds are inverted: {start} > {end}", expr.line
+            )
+        if end - start < 2:
+            raise LangError(
+                f"a tuple slice must keep at least 2 positions, but "
+                f"[{start}:{end}] of {owner} keeps {end - start}; read a "
+                "single position with [n]",
+                expr.line,
+            )
+        result_t = self.tuple_type(
+            tuple(ftype for _, ftype in owner.fields[start:end]), expr.line
+        )
+        value = ir.Constant(result_t.ir, None)
+        for pos in range(start, end):
+            element = self.builder.extract_value(
+                base.value, owner.elem_indices[pos]
+            )
+            value = self.builder.insert_value(
+                value, element, result_t.elem_indices[pos - start]
+            )
+        return TypedValue(value, result_t)
+
+    def tuple_slice_bound(self, tuple_type: LangType, bound_expr, line: int) -> int:
+        """Fold a tuple slice bound to a compile-time position.
+
+        The bound must fold via :meth:`eval_const` -- the bounds pick which
+        positions the result keeps, so a runtime bound would have no single
+        result type, the same reasoning as a tuple index -- and each bound is
+        range-checked on its own, 0 to the arity inclusive: the end bound is
+        exclusive in the slice, so it may equal the arity.
+
+        Args:
+            tuple_type: The (const-stripped) tuple type being sliced.
+            bound_expr: The bound expression.
+            line: Source line for diagnostics.
+
+        Returns:
+            The bound as a Python int.
+
+        Raises:
+            LangError: On a non-constant, non-integer, or out-of-range bound.
+        """
+        try:
+            tv = self.eval_const(bound_expr, line)
+        except LangError:
+            raise LangError(
+                f"a tuple slice bound must be a compile-time constant: the "
+                f"bounds pick which positions of a {tuple_type} the result "
+                "keeps, so a runtime bound has no single result type",
+                line,
+            ) from None
+        if not is_integer(tv.type):
+            raise LangError(f"slice bound must be an integer, not {tv.type}", line)
+        count = len(tuple_type.fields)
+        n = tv.value.constant
+        if not 0 <= n <= count:
+            raise LangError(
+                f"tuple slice bound {n} is out of bounds for {tuple_type} "
+                f"(bounds run 0 to {count})",
+                line,
+            )
+        return n
+
     def sub_slice_error(self, base_expr, base: TypedValue) -> str:
         """Word the rejection for a non-slice sub-slice receiver.
 
-        The single dispatch point for every non-slice receiver, so the
+        The single dispatch point for every non-slice, non-tuple receiver
+        (a tuple slices directly, see :meth:`gen_tuple_slice`), so the
         planned indexing/slicing protocol has one place to hook user-defined
         slicer overloads into later. Owned containers get the borrow
         spelling that works today: a fixed array's brackets keep the

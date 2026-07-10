@@ -1,9 +1,10 @@
-"""The builtin tuple<A, B, ...> product type (stage 1).
+"""The builtin tuple<A, B, ...> product type (stages 1 and 2).
 
 The core type (an interned struct with positional fields "0", "1", ...), the
-paren literal `(a, b)` with struct-literal-style context coercion, and constant
-indexing `t[n]` with compile-time bounds checks. Slicing, destructuring, and
-the `as` struct cast land in later stages.
+paren literal `(a, b)` with struct-literal-style context coercion, constant
+indexing `t[n]` with compile-time bounds checks, and constant slicing `t[n:m]`
+narrowing to the smaller tuple by value. Destructuring and the `as` struct
+cast land in later stages.
 """
 
 import pytest
@@ -295,6 +296,238 @@ def test_mut_return_projects_a_tuple_element():
     }
     """
     assert run(source) == 42
+
+
+# ------------------------------------------------- constant slicing (stage 2)
+
+def test_slice_narrows_to_the_smaller_tuple():
+    # `t[n:m]` keeps positions n to m-1 (half-open, like a sub-slice) as a
+    # new value of the interned tuple of those positions.
+    out = compile_ir(
+        "fn main() -> int32 { let t = (1, 'x', 2.5, 4); let u = t[1:3]; "
+        "return 0; }"
+    )
+    assert '%"tuple<char, float64>"' in out
+
+
+def test_slice_values_are_copied():
+    # A tuple is a value type and the narrowed layout could not alias the
+    # source anyway: the slice is a copy, not a view.
+    source = """
+    fn main() -> int32 {
+        let t = (10, 20, 30);
+        let u = t[0:2];
+        u[0] = 999;                       // a copy: t is untouched
+        return t[0] + u[1];
+    }
+    """
+    assert run(source) == 30
+
+
+def test_open_ended_bounds_fold_against_the_arity():
+    # The grammar's open ends work on tuples too: an omitted start is 0, an
+    # omitted end the arity, and `t[:]` a plain whole-value copy.
+    source = """
+    fn main() -> int32 {
+        let t = (1, 2, 3);
+        let head = t[:2];
+        let tail = t[1:];
+        let all = t[:];
+        return head[0] * 100 + tail[1] * 10 + all[2];
+    }
+    """
+    assert run(source) == 133
+
+
+def test_slice_result_feeds_typed_sinks_and_aliases():
+    # The result is an ordinary interned tuple: a typed let and a
+    # tuple-naming alias both accept it.
+    source = """
+    type duo = tuple<int32, int32>;
+    fn main() -> int32 {
+        let t = (1, 2, 3);
+        let u: tuple<int32, int32> = t[1:3];
+        let p: duo = t[0:2];
+        return u[0] + u[1] + p[0] + p[1];
+    }
+    """
+    assert run(source) == 8
+
+
+def test_slice_then_index_composes():
+    assert run(
+        "fn main() -> int32 { let t = (1, 20, 3); return t[0:2][1]; }"
+    ) == 20
+
+
+def test_slice_of_a_slice_chains():
+    source = """
+    fn main() -> int32 {
+        let t = (1, 2, 3, 4);
+        let u = t[0:3][1:3];              // positions 1 and 2
+        return u[0] * 10 + u[1];
+    }
+    """
+    assert run(source) == 23
+
+
+def test_rvalue_base_slices():
+    # A call result is a plain rvalue: the slice copies out of the returned
+    # value, no binding needed.
+    source = """
+    fn three() -> tuple<int32, int32, int32> { return (10, 20, 30); }
+    fn main() -> int32 { return three()[1:][0] + three()[0:2][1]; }
+    """
+    assert run(source) == 40
+
+
+def test_const_parameter_base_slices():
+    # A hidden-reference const tuple slices like any value; the copy sheds
+    # the const, so the result's elements are writable.
+    source = """
+    fn f(const t: tuple<int32, int32, int32>) -> int32 {
+        let u = t[1:];
+        u[0] += 1;
+        return u[0] + u[1];
+    }
+    fn main() -> int32 { return f((1, 2, 3)); }
+    """
+    assert run(source) == 6
+
+
+def test_literal_base_slices():
+    assert run(
+        "fn main() -> int32 { let u = (1, 2, 3)[1:3]; return u[0] + u[1]; }"
+    ) == 5
+
+
+def test_generic_tuple_slices():
+    # Inside a generic the bounds still fold; the narrowed tuple is built
+    # from the instantiated element types and matches the declared return.
+    source = """
+    fn tail<A, B, C>(t: tuple<A, B, C>) -> tuple<B, C> { return t[1:3]; }
+    fn main() -> int32 {
+        let u = tail((1, 'x', 3));
+        if (u[0] != 'x') { return 1; }
+        return u[1] == 3 ? 42 : 0;
+    }
+    """
+    assert run(source) == 42
+
+
+def test_named_constant_bound_folds():
+    source = """
+    const K = 1;
+    fn main() -> int32 {
+        let t = (1, 2, 3);
+        let u = t[K:3];
+        return u[0] + u[1];
+    }
+    """
+    assert run(source) == 5
+
+
+def test_slice_relayouts_the_kept_positions():
+    # The source's interior padding differs from the narrowed type's; the
+    # copy re-lays the kept positions: tuple<int32, int64, int32> is 24
+    # bytes, the sliced tuple<int32, int64> is 16.
+    source = """
+    fn main() -> int32 {
+        let t = (1, 2 as int64, 3);
+        let u = t[0:2];
+        return sizeof(u) as int32 + u[1] as int32;
+    }
+    """
+    assert run(source) == 18
+
+
+def test_runtime_slice_bound_is_rejected():
+    with pytest.raises(
+        LangError,
+        match="a tuple slice bound must be a compile-time constant: the "
+        "bounds pick which positions of a tuple<int32, int32, int32> the "
+        "result keeps, so a runtime bound has no single result type",
+    ):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2, 3); let n: int32 = 1; "
+            "let u = t[n:3]; return 0; }"
+        )
+
+
+def test_out_of_bounds_slice_bound_is_rejected():
+    # Each bound folds against the arity; the end bound is exclusive, so it
+    # may equal the arity but not exceed it.
+    with pytest.raises(
+        LangError,
+        match=r"tuple slice bound 4 is out of bounds for "
+        r"tuple<int32, int32, int32> \(bounds run 0 to 3\)",
+    ):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2, 3); let u = t[0:4]; return 0; }"
+        )
+    with pytest.raises(
+        LangError, match="tuple slice bound -1 is out of bounds"
+    ):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2, 3); let u = t[-1:2]; return 0; }"
+        )
+
+
+def test_inverted_slice_bounds_are_rejected():
+    with pytest.raises(
+        LangError, match="tuple slice bounds are inverted: 2 > 1"
+    ):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2, 3); let u = t[2:1]; return 0; }"
+        )
+
+
+def test_sub_arity_2_slice_is_rejected():
+    # `tuple<>` and `tuple<T>` reject as a shallow surface check, and a
+    # slice expression is surface: a result below 2 positions has no type
+    # spelling (the door stays open for a future variadic).
+    with pytest.raises(
+        LangError,
+        match=r"a tuple slice must keep at least 2 positions, but \[0:1\] of "
+        "tuple<int32, int32, int32> keeps 1; read a single position with",
+    ):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2, 3); let u = t[0:1]; return 0; }"
+        )
+    with pytest.raises(
+        LangError,
+        match=r"a tuple slice must keep at least 2 positions, but \[1:1\] of "
+        "tuple<int32, int32, int32> keeps 0",
+    ):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2, 3); let u = t[1:1]; return 0; }"
+        )
+
+
+def test_non_integer_slice_bound_is_rejected():
+    with pytest.raises(
+        LangError, match="slice bound must be an integer, not float64"
+    ):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2, 3); let u = t[0:2.5]; return 0; }"
+        )
+
+
+def test_tuple_slice_is_not_an_lvalue():
+    # A slice is a value copy, not a place: not an assignment target, not
+    # compound-assignable, and not addressable -- like a sub-slice view.
+    with pytest.raises(LangError, match="invalid assignment target"):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2, 3); t[0:2] = (9, 9); return 0; }"
+        )
+    with pytest.raises(LangError, match="invalid assignment target"):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2, 3); t[0:2] += (9, 9); return 0; }"
+        )
+    with pytest.raises(LangError, match="expression is not addressable"):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2, 3); let p = &t[0:2]; return 0; }"
+        )
 
 
 # ------------------------------------------------------ const/mut discipline
@@ -637,15 +870,6 @@ def test_user_struct_named_tuple_is_rejected():
     # `tuple` is a reserved type name, like `slice` and `any`.
     with pytest.raises(LangError, match="type 'tuple' already defined"):
         compile_ir("struct tuple<T> { v: T; } fn main() -> int32 { return 0; }")
-
-
-def test_sub_slicing_is_not_in_stage_1():
-    # `t[n:m]` narrowing to the smaller tuple is stage 2; today the sub-slice
-    # arm rejects a non-slice receiver with its usual message.
-    with pytest.raises(LangError, match="cannot sub-slice tuple<int32, int32, int32>"):
-        compile_ir(
-            "fn main() -> int32 { let t = (1, 2, 3); let u = t[0:2]; return 0; }"
-        )
 
 
 def test_extern_crossing_uses_the_struct_abi_classification():

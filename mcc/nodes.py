@@ -1331,12 +1331,13 @@ class Slice:
 
     Either bound may be omitted: ``start`` defaults to 0 and ``end`` to the
     receiver's length, so ``s[1:]``, ``s[:2]``, and ``s[:]`` all parse here.
-    Deliberately a separate node from :class:`Index`: a sub-slice is always an
-    rvalue view, so every lvalue surface (assignment targets, compound
-    assignment, ``&``) excludes it by not matching this node.
+    Deliberately a separate node from :class:`Index`: a slice is always an
+    rvalue (a sub-slice is a view, a tuple slice a copied value), so every
+    lvalue surface (assignment targets, compound assignment, ``&``) excludes
+    it by not matching this node.
 
     Attributes:
-        base: The sliced expression (a ``slice<T>`` value).
+        base: The sliced expression (a ``slice<T>`` or ``tuple<...>`` value).
         start: The start-bound expression, or ``None`` when omitted.
         end: The end-bound expression, or ``None`` when omitted.
         line: Source line for diagnostics.

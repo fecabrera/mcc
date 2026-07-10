@@ -3318,6 +3318,28 @@ an error, not UB. Elements are lvalues, so reads, writes, compound
 assignment, and nesting all go by position (`t[1][0]`), and `&t[0]` follows
 the same rules as a struct field's address.
 
+**Slicing is compile-time too**: `t[n:m]` narrows to the smaller tuple of
+positions `n` to `m-1` — the same half-open `[a:b]` grammar as
+[sub-slicing](#sub-slicing), open ends included (`t[1:]`, `t[:2]`, and the
+plain copy `t[:]`), each omitted bound folding against the arity. Unlike a
+sub-slice, the result is **a new tuple value, not a view**: the kept
+positions are copied (the narrowed type could not alias the source layout
+anyway), so a tuple slice is never a write target — `t[0:2] = ...` is not an
+assignment. Bounds must fold to constants for the same reason indices must
+(they pick the result type) and are checked at compile time:
+`0 <= n <= m <= arity`, and the slice must keep at least 2 positions —
+`tuple<T>` and `tuple<>` have no type spelling, so read a single position
+with `t[n]` instead of `t[n:n+1]`. Slicing composes with indexing and with
+itself:
+
+```c
+let t = (1, 'x', 2.5, 4);
+let mid  = t[1:3];          // tuple<char, float64>, values copied out
+let tail = t[1:];           // tuple<char, float64, int32>
+let c    = t[1:3][0];       // 'x': slice, then index the result
+let u    = divmod(7, 2)[:]; // an rvalue base slices too
+```
+
 Everything else rides the struct machinery: whole-value assignment copies,
 tuples pass and return by value, a `const tuple<...>` parameter travels by
 hidden reference (elements then read-only), `mut` parameters lend the
@@ -3337,11 +3359,11 @@ struct to name the shape), and naming a tuple is the
 works anywhere the written type does. `==` stays rejected as on structs.
 `tuple<>` and `tuple<T>` are rejected as a shallow surface check, keeping the
 door open to a statically-typed variadic later. The rest of the
-[roadmap item](../ROADMAP.md) lands in stages: constant slicing (`t[n:m]`
-narrowing to the smaller tuple), destructuring with the rest binder
-(`let a, b = t;`), and the layout-equivalent struct cast (`(a, b) as A`) are
-not in this stage — though a tuple in an [`@extern`](#extern-declarations)
-signature already crosses as the layout-equivalent C struct via the existing
+[roadmap item](../ROADMAP.md) lands in stages: destructuring with the rest
+binder (`let a, b = t;`) and the layout-equivalent struct cast
+(`(a, b) as A`) are not in this stage — though a tuple in an
+[`@extern`](#extern-declarations) signature already crosses as the
+layout-equivalent C struct via the existing
 [struct ABI classification](#passing-structs-by-value-across-the-c-boundary).
 See [examples/types/tuples.mc](../examples/types/tuples.mc).
 

@@ -6,7 +6,9 @@ import "std/io";
 //
 // Prerequisites: the slice<T> view itself (memory/slices.mc) and array
 // literals borrowing into slices (memory/slice_literals.mc).
-// See also: memory/slices.mc, memory/slice_literals.mc.
+// See also: memory/slices.mc, memory/slice_literals.mc; types/tuples.mc for
+// the same [a:b] grammar on tuples, where slicing copies out a new smaller
+// tuple value instead of borrowing a view.
 
 // The usual read-only consumer. A sub-slice is a plain slice value, so it
 // passes here like any other. The result type is the receiver's verbatim:
