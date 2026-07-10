@@ -54,7 +54,8 @@ class TypeRef:
             text = "fn(" + ", ".join(parts) + ") -> " + str(self.ret)
         else:
             text = self.name
-            if self.args:
+            if self.args or self.name == "tuple":
+                # The empty tuple renders its canonical `tuple<>` spelling.
                 text += "<" + ", ".join(str(a) for a in self.args) + ">"
         dims = "".join(f"[{render_dim(d)}]" for d in self.dims)
         return ("const " if self.const else "") + text + "*" * self.stars + dims

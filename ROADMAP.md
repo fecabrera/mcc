@@ -895,11 +895,14 @@ already do).
       grouping without a one-off struct. Distinct from `slice<any>`: a
       tuple keeps each element's static type and a compile-time arity,
       where erasing every slot to `any` would collapse into a fixed-length
-      `slice<any>`. Also the door to a statically-typed variadic later (no
-      erasure), if wanted; to keep that door open, `tuple<>` and `tuple<T>`
-      reject as a shallow surface check only, and the interning, layout,
-      and unification internals never assume an arity of two or more (a
-      future `T...` may produce 0- and 1-tuples). `==` stays rejected as on
+      `slice<any>`. Arity is fully open, surface included: `tuple<T>` and
+      the trailing-comma literal `(x,)` spell the 1-tuple, `tuple<>` and
+      `()` the empty tuple — a zero-sized unit on the empty-struct
+      precedent — and the interning, layout, and unification internals
+      never assumed two or more, so the door to a statically-typed
+      variadic later (no erasure) is open with no carve-out at all: a
+      `T...` may produce 0- and 1-tuples and every surface already takes
+      them. `==` stays rejected as on
       structs; the open `equals` overload set is the extension point. Lands
       **staged** (each stage its own complete change set with its own
       CHANGELOG entry; this box ticks when the last stage lands):
@@ -914,7 +917,9 @@ already do).
         with struct-literal-style context coercion (adaptable literals
         anchor `int32` with no context); constant `t[n]` routed onto the
         member machinery, requiring a folded constant (`eval_const`), with
-        the compile-time bounds check; and the shallow arity check.
+        the compile-time bounds check (the arity floor stage 1 shipped
+        with was later lifted — see the parent prose: 0- and 1-tuples are
+        legal, `()`/`(x,)` construct them, `tuple<>`/`tuple<T>` spell them).
         `tuple<...>` in type position already parsed (it failed only at
         resolution), so no parser change was needed there, and once the
         `LangType` existed the rest rode existing machinery free: direct
@@ -937,21 +942,19 @@ already do).
         anyway), so a tuple slice is never a write target. Bounds share the
         constant-index discipline (they pick the result type, so each must
         fold) and are range- and order-checked at compile time
-        (`0 <= n <= m <= arity`); a slice must keep at least 2 positions,
-        the `tuple<>`/`tuple<T>` shallow surface check applied to the slice
-        surface; implemented, see [Tuples](docs/language.md#tuples)
+        (`0 <= n <= m <= arity`); any result arity is legal, `t[1:]` on a
+        pair keeping the 1-tuple tail and `t[n:n]` the empty tuple;
+        implemented, see [Tuples](docs/language.md#tuples)
   - [ ] stage 3: destructuring and the rest binder — `let a, b = t;` (the
         `let` grammar takes a single IDENT today, so the comma slot is
         free) and the trailing-`...` rest binder, both pure sugar over
         stage 1's constant indexing and stage 2's constant slicing; the
         same rest binder over a slice right-hand side
         (`let first, rest... = s;`) lands here too, the identical desugar
-        onto shipped [sub-slicing](docs/language.md#slices). Note: stage 2
-        rejects a slice keeping fewer than 2 positions (the arity surface
-        discipline), so the rest binder's `t2 = t1[1:]` desugar on a
-        2-tuple — a 1-tuple tail — must either bind the final position
-        directly instead of slicing, or revisit allowing 1-tuples as slice
-        *results* while keeping the `tuple<T>` type-spelling rejection
+        onto shipped [sub-slicing](docs/language.md#slices). The rest
+        binder's tail is uniform all the way down: `let a, t2... = t1;` on
+        a 2-tuple yields the 1-tuple tail and on a 1-tuple yields
+        `tuple<>`, arities the surface now takes everywhere
   - [ ] stage 4: layout-equivalent struct `as` and `@extern` — the
         `(a, b, ...) as A` cast as a cast arm checking field-type-sequence
         equality against the target struct, with tuples then crossing

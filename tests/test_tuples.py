@@ -1,10 +1,12 @@
-"""The builtin tuple<A, B, ...> product type (stages 1 and 2).
+"""The builtin tuple<A, B, ...> product type (stages 1 and 2, any arity).
 
 The core type (an interned struct with positional fields "0", "1", ...), the
 paren literal `(a, b)` with struct-literal-style context coercion, constant
 indexing `t[n]` with compile-time bounds checks, and constant slicing `t[n:m]`
-narrowing to the smaller tuple by value. Destructuring and the `as` struct
-cast land in later stages.
+narrowing to the smaller tuple by value. Arity is fully open: `(x,)` and
+`tuple<T>` spell the 1-tuple, `()` and `tuple<>` the zero-sized empty tuple
+(the empty struct's twin). Destructuring and the `as` struct cast land in
+later stages.
 """
 
 import pytest
@@ -165,27 +167,200 @@ def test_return_position_coerces_elements():
     assert run(source) == 42
 
 
-# ------------------------------------------------- the shallow arity checks
+# ------------------------------------------------ small arities: 1-tuples
 
-def test_one_element_type_is_rejected():
+def test_one_tuple_spells_with_a_trailing_comma():
+    # `(x)` stays plain grouping; the trailing comma makes the 1-tuple.
+    (func,) = parse("fn f() { let t = (1,); }").functions
+    (stmt,) = func.body
+    assert isinstance(stmt.value, TupleLit)
+    assert len(stmt.value.elements) == 1
+
+
+def test_one_tuple_type_parses():
+    (func,) = parse("fn f(t: tuple<int32>) {}").functions
+    t = func.params[0][1]
+    assert isinstance(t, TypeRef) and t.args == [TypeRef("int32")]
+    assert str(t) == "tuple<int32>"
+
+
+def test_one_tuple_constructs_and_indexes():
+    source = """
+    fn main() -> int32 {
+        let t: tuple<int64> = (40,);
+        let u = (2,);
+        return (t[0] + u[0]) as int32;
+    }
+    """
+    assert run(source) == 42
+
+
+def test_one_tuple_literal_indexes_directly():
+    assert run("fn main() -> int32 { return (42,)[0]; }") == 42
+
+
+def test_one_tuple_index_stays_bounds_checked():
     with pytest.raises(
-        LangError, match=r"type 'tuple' takes at least 2 type arguments, got 1"
+        LangError,
+        match=r"tuple index 1 is out of bounds for tuple<int32> "
+        r"\(positions 0 to 0\)",
     ):
-        compile_ir("fn main() -> int32 { let t: tuple<int32>; return 0; }")
+        compile_ir("fn main() -> int32 { let t = (1,); return t[1]; }")
 
 
-def test_one_element_literal_is_rejected():
-    with pytest.raises(
-        LangError, match=r"a tuple literal takes at least 2 elements, got 1"
-    ):
-        compile_ir("fn main() -> int32 { let t = (1,); return 0; }")
+def test_one_tuple_binds_a_generic_element():
+    source = """
+    fn first<T>(t: tuple<T>) -> T { return t[0]; }
+    fn main() -> int32 { return first((42,)); }
+    """
+    assert run(source) == 42
 
 
-def test_empty_type_args_are_a_parse_error():
-    # `tuple<>` never reaches type resolution: like any generic, the argument
-    # list requires at least one type between the angles.
+# --------------------------------- small arities: the empty tuple (the unit)
+
+def test_empty_parens_spell_the_empty_tuple_literal():
+    (func,) = parse("fn f() { let u = (); }").functions
+    (stmt,) = func.body
+    assert isinstance(stmt.value, TupleLit)
+    assert stmt.value.elements == []
+
+
+def test_empty_tuple_type_parses():
+    (func,) = parse("fn f(u: tuple<>) {}").functions
+    t = func.params[0][1]
+    assert isinstance(t, TypeRef) and t.name == "tuple" and t.args == []
+    assert str(t) == "tuple<>"  # the canonical interning spelling
+
+
+def test_empty_tuple_type_splits_a_nested_double_close():
+    # The empty argument list sees through a `>>` nested close.
+    (func,) = parse("fn f(t: tuple<int32, tuple<>>) {}").functions
+    assert str(func.params[0][1]) == "tuple<int32, tuple<>>"
+
+
+def test_empty_type_args_stay_rejected_elsewhere():
+    # The empty argument list is tuple's alone: every other generic still
+    # requires at least one type between the angles.
     with pytest.raises(LangError, match="expected 'IDENT'"):
-        compile_ir("fn main() -> int32 { let t: tuple<>; return 0; }")
+        compile_ir("fn main() -> int32 { let s: slice<>; return 0; }")
+
+
+def test_unit_declares_assigns_passes_and_returns():
+    # The empty tuple mirrors the empty struct: an ordinary zero-sized value.
+    source = """
+    fn bounce(u: tuple<>) -> tuple<> { return u; }
+    fn main() -> int32 {
+        let u: tuple<>;
+        u = ();
+        let v = bounce(u);
+        v = ();
+        return sizeof(tuple<>) as int32;
+    }
+    """
+    assert run(source) == 0
+
+
+def test_unit_arrays_and_fields_follow_the_empty_struct():
+    # `struct e {}` allows arrays and zero-sized fields; the unit matches.
+    source = """
+    struct holder { u: tuple<>; n: int32; }
+    fn main() -> int32 {
+        let a: tuple<>[4];
+        a[0] = ();
+        let h = holder{ u = (), n = 38 };
+        return h.n + (sizeof(a) + sizeof(holder)) as int32;
+    }
+    """
+    assert run(source) == 42
+
+
+def test_unit_as_a_generic_argument():
+    source = """
+    struct box<T> { v: T; }
+    fn main() -> int32 {
+        let b = box<tuple<>>{ v = () };
+        b.v = ();
+        return sizeof(b) as int32;
+    }
+    """
+    assert run(source) == 0
+
+
+def test_unit_binds_a_generic_type_parameter():
+    source = """
+    fn bounce<T>(v: T) -> T { return v; }
+    fn main() -> int32 { let u = bounce(()); u = (); return 0; }
+    """
+    assert run(source) == 0
+
+
+def test_nested_unit_makes_a_one_tuple_of_unit():
+    source = """
+    fn main() -> int32 {
+        let n = ((),);
+        let inner: tuple<> = n[0];
+        return (sizeof(n) + sizeof(inner)) as int32;
+    }
+    """
+    assert run(source) == 0
+
+
+def test_unit_boxes_and_case_type_recovers(capfd):
+    # The struct rule: by hidden reference into a const any; the println
+    # fallback renders the canonical spelling.
+    source = """
+    import "std/io";
+    fn probe(v: const any) -> int32 {
+        case type (v) {
+            when tuple<> u: { return 42; }
+            else: { return -1; }
+        }
+        return -2;
+    }
+    fn main() -> int32 {
+        let u = ();
+        println("{}", u);
+        return probe(u) - 42;
+    }
+    """
+    assert run(source) == 0
+    assert capfd.readouterr().out == "<tuple<>>\n"
+
+
+def test_unit_index_is_out_of_bounds():
+    match = (
+        r"tuple index 0 is out of bounds for tuple<> \(it has no positions\)"
+    )
+    with pytest.raises(LangError, match=match):
+        compile_ir("fn main() -> int32 { let u = (); let x = u[0]; return 0; }")
+    with pytest.raises(LangError, match=match):
+        compile_ir("fn main() -> int32 { let u = (); u[0] = 1; return 0; }")
+
+
+def test_literal_arity_must_match_an_empty_receiver():
+    with pytest.raises(
+        LangError, match="tuple literal has 1 elements, but tuple<> has 0"
+    ):
+        compile_ir("fn main() -> int32 { let u: tuple<> = (1,); return 0; }")
+
+
+def test_small_arity_mci_round_trip(tmp_path):
+    lib = tmp_path / "unit.mc"
+    lib.write_text(
+        "@inline fn unit() -> tuple<> { return (); }\n"
+        "@inline fn one() -> tuple<int32> { return (42,); }\n"
+    )
+    out = tmp_path / "unit.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    text = out.read_text()
+    assert "tuple<>" in text and "tuple<int32>" in text
+    lib.unlink()  # force the import to resolve through the stub
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "unit";\n'
+        "fn main() -> int32 { let u = unit(); u = (); return one()[0]; }\n"
+    )
+    assert run_path(main) == 42
 
 
 def test_void_element_is_rejected():
@@ -482,26 +657,32 @@ def test_inverted_slice_bounds_are_rejected():
         )
 
 
-def test_sub_arity_2_slice_is_rejected():
-    # `tuple<>` and `tuple<T>` reject as a shallow surface check, and a
-    # slice expression is surface: a result below 2 positions has no type
-    # spelling (the door stays open for a future variadic).
-    with pytest.raises(
-        LangError,
-        match=r"a tuple slice must keep at least 2 positions, but \[0:1\] of "
-        "tuple<int32, int32, int32> keeps 1; read a single position with",
-    ):
-        compile_ir(
-            "fn main() -> int32 { let t = (1, 2, 3); let u = t[0:1]; return 0; }"
-        )
-    with pytest.raises(
-        LangError,
-        match=r"a tuple slice must keep at least 2 positions, but \[1:1\] of "
-        "tuple<int32, int32, int32> keeps 0",
-    ):
-        compile_ir(
-            "fn main() -> int32 { let t = (1, 2, 3); let u = t[1:1]; return 0; }"
-        )
+def test_slice_narrows_to_any_arity():
+    # A slice may keep 1 or 0 positions: `t[1:]` on a pair is the 1-tuple
+    # tail (the rest binder's desugar) and `t[n:n]` the empty tuple.
+    source = """
+    fn main() -> int32 {
+        let t = (40, 2);
+        let tail: tuple<int32> = t[1:];
+        let head = t[:1];
+        let none: tuple<> = t[1:1];
+        return head[0] + tail[0] + sizeof(none) as int32;
+    }
+    """
+    assert run(source) == 42
+
+
+def test_one_tuple_base_slices_to_both_arities():
+    source = """
+    fn main() -> int32 {
+        let t = (42,);
+        let whole = t[:];
+        let same = t[0:1];
+        let empty: tuple<> = t[1:];
+        return whole[0] + same[0] - t[0] + sizeof(empty) as int32;
+    }
+    """
+    assert run(source) == 42
 
 
 def test_non_integer_slice_bound_is_rejected():

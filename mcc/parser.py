@@ -722,9 +722,13 @@ class Parser:
         name = self.expect("IDENT").text
         args = []
         if self.accept("<"):
-            args.append(self.parse_type_ref())
-            while self.accept(","):
+            # `tuple<>` spells the empty tuple -- the one empty argument
+            # list, so `int32<>` and an all-defaulted `pair<>` stay rejected
+            # (a `>>` here is a nested close, e.g. `list<tuple<>>`).
+            if not (name == "tuple" and self.cur.kind in (">", ">>")):
                 args.append(self.parse_type_ref())
+                while self.accept(","):
+                    args.append(self.parse_type_ref())
             self.expect_close_angle()
         return TypeRef(
             name, args, self.parse_stars(greedy_stars), dims=self.parse_dims()
@@ -2094,12 +2098,18 @@ class Parser:
                 )
             return CharLit(ord(char), tok.line)
         if tok.kind == "(":
+            if self.cur.kind == ")":
+                # `()` is the empty tuple literal; there is no expression it
+                # could be grouping.
+                self.advance()
+                return TupleLit([], tok.line)
             with self._struct_literals(True):
                 expr = self.parse_expr()
                 if self.cur.kind == ",":
                     # A top-level comma makes the parenthesized expression a
-                    # tuple literal; `(x)` stays plain grouping. A trailing
-                    # comma is allowed, as in array and struct literals.
+                    # tuple literal; `(x)` stays plain grouping (a 1-tuple
+                    # needs the trailing comma: `(x,)`). A trailing comma is
+                    # allowed, as in array and struct literals.
                     elements = [expr]
                     while self.accept(","):
                         if self.cur.kind == ")":

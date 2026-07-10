@@ -2710,16 +2710,9 @@ class CodeGen:
                 )
             base = self.slice_type(self.lang_type(ref.args[0], line), line)
         elif ref.name == "tuple":
-            # The arity floor is deliberately this shallow surface check
-            # alone: the interning, layout, and unification internals never
-            # assume two or more elements, keeping the door open to a future
-            # variadic's 0- and 1-tuples.
-            if len(ref.args) < 2:
-                raise LangError(
-                    f"type 'tuple' takes at least 2 type arguments, "
-                    f"got {len(ref.args)}",
-                    line,
-                )
+            # Any arity: `tuple<>` is the zero-sized unit (the empty struct's
+            # twin) and `tuple<T>` the 1-tuple, so a future variadic's `T...`
+            # expansions need no carve-out.
             base = self.tuple_type(
                 tuple(self.lang_type(a, line) for a in ref.args), line
             )
@@ -3059,10 +3052,9 @@ class CodeGen:
 
         Elements are arbitrary types (padding, over-aligned structs), so the
         body goes through :meth:`set_struct_body` -- never a direct
-        ``set_body`` like the fixed-shape slice. Nothing here assumes an
-        arity of two or more; the surface check in :meth:`lang_type` is
-        deliberately the only gate (a future variadic may produce 0- and
-        1-tuples).
+        ``set_body`` like the fixed-shape slice. Any arity works, 0 and 1
+        included: ``tuple<>`` is a zero-sized unit on the empty-struct
+        precedent, and a future variadic's ``T...`` may produce either.
 
         Args:
             elements: The element types, in position order.
@@ -4865,16 +4857,9 @@ class CodeGen:
             The constructed tuple as a ``TypedValue``.
 
         Raises:
-            LangError: On fewer than 2 elements (the literal's half of the
-                shallow arity surface check), an arity mismatch against the
-                receiving type, or an element that cannot fix a type.
+            LangError: On an arity mismatch against the receiving type, or an
+                element that cannot fix a type.
         """
-        if len(expr.elements) < 2:
-            raise LangError(
-                f"a tuple literal takes at least 2 elements, "
-                f"got {len(expr.elements)}",
-                expr.line,
-            )
         cached: list | None = None
         if tuple_type is not None:
             if len(expr.elements) != len(tuple_type.fields):
@@ -7963,9 +7948,13 @@ class CodeGen:
         count = len(tuple_type.fields)
         n = tv.value.constant
         if not 0 <= n < count:
+            positions = (
+                "it has no positions" if count == 0
+                else f"positions 0 to {count - 1}"
+            )
             raise LangError(
                 f"tuple index {n} is out of bounds for {tuple_type} "
-                f"(positions 0 to {count - 1})",
+                f"({positions})",
                 line,
             )
         return str(n)
@@ -8069,10 +8058,9 @@ class CodeGen:
         surface.
 
         Bounds must fold to compile-time constants (the bounds pick the
-        result type) and are checked here: ``0 <= n <= m <= arity``, and the
-        slice must keep at least 2 positions -- ``tuple<>`` and ``tuple<T>``
-        reject as a surface check, and a slice expression is surface (the
-        internals stay arity-agnostic for a future variadic).
+        result type) and are checked here: ``0 <= n <= m <= arity``. Any
+        result arity is legal -- ``t[1:]`` on a 2-tuple keeps the 1-tuple
+        tail, and ``t[n:n]`` is the empty ``tuple<>``.
 
         Args:
             expr: The ``Slice`` node.
@@ -8083,7 +8071,7 @@ class CodeGen:
 
         Raises:
             LangError: On a non-constant, non-integer, or out-of-bounds
-                bound, inverted bounds, or a result below 2 positions.
+                bound, or inverted bounds.
         """
         owner = strip_const(base.type)
         count = len(owner.fields)
@@ -8098,13 +8086,6 @@ class CodeGen:
         if start > end:
             raise LangError(
                 f"tuple slice bounds are inverted: {start} > {end}", expr.line
-            )
-        if end - start < 2:
-            raise LangError(
-                f"a tuple slice must keep at least 2 positions, but "
-                f"[{start}:{end}] of {owner} keeps {end - start}; read a "
-                "single position with [n]",
-                expr.line,
             )
         result_t = self.tuple_type(
             tuple(ftype for _, ftype in owner.fields[start:end]), expr.line

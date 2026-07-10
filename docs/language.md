@@ -3294,8 +3294,9 @@ fn main() -> int32 {
 ```
 
 A tuple is **constructed by the paren literal** — a parenthesized expression
-with at least one top-level comma; `(x)` stays plain grouping. A trailing
-comma is allowed, as in array and struct literals. In a tuple-typed position
+with a top-level comma; `(x)` stays plain grouping, so the 1-tuple spells
+with a trailing comma, `(x,)`, and `()` is the empty tuple. A trailing comma
+is allowed, as in array and struct literals. In a tuple-typed position
 (a typed `let`, assignment, `return`, argument, element, or field) each
 element lowers against its position's type exactly like a
 [struct-literal](#structs) field: untyped constants adapt, and a string or
@@ -3327,10 +3328,9 @@ positions are copied (the narrowed type could not alias the source layout
 anyway), so a tuple slice is never a write target — `t[0:2] = ...` is not an
 assignment. Bounds must fold to constants for the same reason indices must
 (they pick the result type) and are checked at compile time:
-`0 <= n <= m <= arity`, and the slice must keep at least 2 positions —
-`tuple<T>` and `tuple<>` have no type spelling, so read a single position
-with `t[n]` instead of `t[n:n+1]`. Slicing composes with indexing and with
-itself:
+`0 <= n <= m <= arity`. The result may keep any number of positions —
+`t[1:]` on a pair is the 1-tuple tail, and `t[n:n]` the empty tuple. Slicing
+composes with indexing and with itself:
 
 ```c
 let t = (1, 'x', 2.5, 4);
@@ -3353,12 +3353,21 @@ tuple follows the struct rule: it boxes by reference into a `const any` (so
 `println("{}", t)` compiles, rendering the `<tuple<int32, int32>>` fallback),
 recovers in a `case type` arm, and an owning `any` of it stays rejected.
 
+**Arity runs all the way down to zero.** `tuple<T>` spells the 1-tuple
+(`(x,)` constructs it, `t[0]` reads it), and `tuple<>` the empty tuple: a
+zero-sized unit value on the empty-struct precedent — `sizeof` 0, constructed
+by `()`, declared, assigned, passed, returned, held in arrays, fields, and
+generic arguments, boxed by reference into a `const any`, and matched by a
+`case type` arm like any other tuple. Indexing an empty tuple is out of
+bounds (it has no positions). The unit is what generic code returning `T`
+needs when `T` carries nothing, and it means a future statically-typed
+variadic's `T...` expansions need no arity carve-out at all.
+
 Tuples are **not named types**: `extends tuple<...>` is rejected (declare a
 struct to name the shape), and naming a tuple is the
 [type alias](#type-aliases)'s job — `type polar = tuple<int64, float64>;`
 works anywhere the written type does. `==` stays rejected as on structs.
-`tuple<>` and `tuple<T>` are rejected as a shallow surface check, keeping the
-door open to a statically-typed variadic later. The rest of the
+The rest of the
 [roadmap item](../ROADMAP.md) lands in stages: destructuring with the rest
 binder (`let a, b = t;`) and the layout-equivalent struct cast
 (`(a, b) as A`) are not in this stage — though a tuple in an

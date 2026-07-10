@@ -3,10 +3,10 @@ import "std/io";
 // `tuple<A, B, ...>` is the builtin heterogeneous fixed-arity product: an
 // ad-hoc struct without a name, positions instead of field names, the same
 // layout the struct with those field types would have. It is built by the
-// paren literal `(a, b)` (at least one top-level comma; `(x)` stays plain
-// grouping), read by position with a compile-time-constant index, and
-// narrowed to a smaller tuple with a constant slice `t[n:m]`. Its headline
-// job is multiple return values.
+// paren literal `(a, b)` (a top-level comma; `(x)` stays plain grouping, so
+// the 1-tuple is `(x,)` and the empty tuple `()`), read by position with a
+// compile-time-constant index, and narrowed to a smaller tuple with a
+// constant slice `t[n:m]`. Its headline job is multiple return values.
 // Prerequisites: structs.mc and struct_literals.mc (a tuple element coerces
 // exactly like a struct-literal field), arrays.mc for the index syntax.
 
@@ -76,14 +76,22 @@ fn main() -> int32 {
     // folding against the arity. Unlike a sub-slice the result is a NEW
     // tuple, positions copied out, not a view: it works on an rvalue base
     // and is never a write target (q[1:3] = ... is rejected). Bounds must
-    // fold to constants (they pick the result type, like indices), are
-    // checked at compile time (0 <= n <= m <= arity), and must keep at
-    // least 2 positions; a single position is read with q[n].
+    // fold to constants (they pick the result type, like indices) and are
+    // checked at compile time (0 <= n <= m <= arity).
     let q = (1, 'x', 2.5, 4);
     let mid = q[1:3];                         // mid is tuple<char, float64>
     println("mid           = ({}, {})", mid[0], mid[1]);
     println("q[1:][2]      = {}", q[1:][2]);  // the open tail, then indexed
     println("divmod[:][0]  = {}", divmod(9, 4)[:][0]);   // rvalue base copy
+
+    // Arity runs all the way down: a slice keeping one position is the
+    // 1-tuple (tuple<float64> here), and `()` is the empty tuple `tuple<>`
+    // -- a zero-sized unit value like an empty struct, useful when generic
+    // code needs a T that carries nothing.
+    let single = q[2:3];
+    let unit: tuple<> = ();
+    println("single[0]     = {}", single[0]);
+    println("sizeof(unit)  = {}", sizeof(unit) as int32);
 
     // The alias in action; 5 adapts to int64 per position, as above.
     let p: polar = (5, 0.5);

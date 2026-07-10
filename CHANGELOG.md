@@ -10,6 +10,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Tuples of arity 0 and 1** — the tuple surface is now fully
+  arity-agnostic, like the internals always were. `tuple<T>` spells the
+  1-tuple and the trailing comma constructs it (`(x,)`; `(x)` stays plain
+  grouping); `tuple<>` spells the empty tuple and `()` constructs it — a
+  zero-sized unit value on the empty-struct precedent (`sizeof` 0), which
+  declares, assigns, passes, returns, nests in arrays/fields/generic
+  arguments, boxes by reference into a `const any`, and matches a `case
+  type` arm like any other tuple. A slice may now keep any number of
+  positions (`t[1:]` on a pair is the 1-tuple tail, `t[n:n]` the empty
+  tuple), dissolving stage 3's rest-binder carve-out — `let a, t2... = t1;`
+  will narrow uniformly all the way down — and a future statically-typed
+  variadic's `T...` expansions need no arity carve-out either. Indexing an
+  empty tuple is out of bounds (it has no positions), and `<>` stays
+  tuple's alone: every other generic still takes at least one argument.
+  Amends the stage 1 and 2 entries below. See
+  [Tuples](docs/language.md#tuples) and
+  [examples/types/tuples.mc](examples/types/tuples.mc).
+
 - **`tuple<A, B, ...>`: constant slicing (stage 2)** — `t[n:m]` with
   compile-time-constant bounds narrows to the smaller tuple of positions
   `n` to `m-1`: the same half-open `[a:b]` grammar as sub-slicing, open
@@ -20,8 +38,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and itself (`t[1:3][0]`, `t[0:3][1:3]`), and is never a write target.
   Bounds share the constant-index discipline (they pick the result type)
   and are range- and order-checked at compile time
-  (`0 <= n <= m <= arity`); a slice must keep at least 2 positions, the
-  `tuple<>`/`tuple<T>` surface check applied to the slice surface. See
+  (`0 <= n <= m <= arity`). See
   [Tuples](docs/language.md#tuples) and
   [examples/types/tuples.mc](examples/types/tuples.mc).
 
@@ -40,8 +57,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   padding, arrays/struct fields of tuples, generic inference through the
   shape, `.mci` stubs, and the by-reference `const any` box (with `case
   type` recovery) all ride the struct machinery; two same-shape tuples are
-  one type across modules. `extends tuple<...>`, `==`, owning `any` boxes,
-  and arity below 2 are rejected; `type polar = tuple<int64, float64>;`
+  one type across modules. `extends tuple<...>`, `==`, and owning `any`
+  boxes are rejected; `type polar = tuple<int64, float64>;`
   names a tuple via the transparent alias. Slicing, destructuring, and the
   layout-equivalent struct cast land in later stages. See
   [Tuples](docs/language.md#tuples) and
