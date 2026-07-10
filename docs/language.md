@@ -4274,7 +4274,10 @@ The baseline members cover the built-in types:
   under `"08p"` is `-0x0000002a`. A negative value renders
   sign-and-magnitude — the base applies to `|value|`, so `-4` with `"x"`
   is `-4` (render a two's-complement bit pattern by casting the bits
-  unsigned first), and `int64`'s minimum renders exactly.
+  unsigned first), and `int64`'s minimum renders exactly. In a
+  `print`/`println` *literal* a bare all-digit width is spelled `{:6}` —
+  a bare `{6}` selects an argument (see
+  [positional placeholders](#formatted-print--println)).
 - **`float64`**: fixed-point (`3.5` renders `3.500000`). The modifier
   grammar is `[[N].M]f`: `.M` rounds to M decimals (`".2f"` gives `3.50`,
   `".0f"` drops the point entirely), and an optional leading width N
@@ -4288,7 +4291,8 @@ The baseline members cover the built-in types:
   literal decays to `char*` and lands on that member, and a null `char*`
   renders `(null)`. The string members take a field-width modifier,
   grammar `[N][s][N]`: digits before the `s` right-align the text in an
-  N-wide field (`"20s"`, or a bare `"20"`), digits after it left-align
+  N-wide field (`"20s"`, or a bare `"20"` — spelled `{:20}` in a
+  `print`/`println` literal), digits after it left-align
   (`"s20"`); text at or past the width appends unpadded. A single `char`
   ignores the modifier.
 - **`slice<char*>`**: a quoted, bracketed list of the C strings,
@@ -4348,7 +4352,8 @@ println("{} + {} = {}", 2, 3, 2 + 3);      // 2 + 3 = 5
 println("mask {x}, ok {yes}", 255, true);  // mask ff, ok yes
 ```
 
-The signature is `fn println(const fmt: slice<const char>, args...)`: a
+The signature is `fn println(@format const fmt: slice<const char>,
+args...)`: a
 string literal adapts to `fmt` at the call site, and the
 [native variadic](#native-variadics) collects the arguments into a
 `slice<const any>`. Each `{[modifiers]}` placeholder renders the next
@@ -4365,12 +4370,48 @@ Integer placeholders already carry width and zero-padding —
 string placeholders carry field widths — `println("{s20}", name)` — via
 `[N][s][N]`, and float placeholders carry width and precision —
 `println("{.2f}", f)`, `println("{8.2f}", f)` — via `[[N].M]f` (all
-above). Manual field selection is planned as compile-time sugar — a
-positional `println("{0}, {0}", x)` desugaring to the sequential
-`println("{}, {}", x, x)`, no runtime machinery. libc's `printf` remains
-the tool only for what the modifiers do not carry: scientific notation
-(`printf("%g\n", f)` / `%e`). The legacy printf-style `print`/`println`
-pair is kept behind `-D PRINTF_PRINTLN=1` for programs mid-migration.
+above). libc's `printf` remains the tool only for what the modifiers do
+not carry: scientific notation (`printf("%g\n", f)` / `%e`). The legacy
+printf-style `print`/`println` pair is kept behind `-D PRINTF_PRINTLN=1`
+for programs mid-migration.
+
+**Positional placeholders** select an argument manually: in a format
+string *literal*, `{n}` renders the n-th argument after the format string
+(0-based), and a `:` separates the index from the modifiers. This is pure
+compile-time sugar — the call desugars to the sequential form by
+duplicating or reordering the arguments (each argument still evaluates
+exactly once, in source order), so the runtime parser stays
+sequential-only:
+
+```c
+println("{0}, {0}!", "again");        // println("{}, {}!", "again", "again")
+println("{1} then {0}", 'b', 'a');    // a then b
+println("{0} is {0:x} in hex", 255);  // {0:x} desugars to {x}
+```
+
+One string commits to one placeholder style: mixing automatic `{}` and
+positional `{n}` placeholders is a compile error, and in the positional
+style an out-of-range index and an argument no placeholder references are
+compile errors too. Because an all-digit bracket now selects an argument,
+a *bare* field width in a literal is spelled with the index-less escape
+`{:N}` — `println("{:2}", n)` desugars to the runtime `{2}` width — while
+digit-leading modifiers with a base letter (`{06x}`) stay plain modifiers
+and `{{`/`}}` still escape literal braces. Only a literal desugars: a
+format string arriving through a variable is parsed by the runtime
+machinery above, where bracket content is always modifier text (so a
+runtime `{2}` is still the field width).
+
+The hook is the **`@format` parameter attribute**: `std/io` declares
+`fn println(@format const fmt: slice<const char>, args...)` (ditto
+`print` and the `format_args` worker), and any collecting function may
+opt its own format string into the desugar the same way. `@format` is
+valid only on the `slice<const char>` parameter just before the
+collecting `args...`, and it travels through
+[interface stubs](#interface-files) like `@nonnull` does. The legacy
+printf-style pair is C-variadic and unmarked, so it is unaffected.
+
+See [examples/systems/formatting.mc](../examples/systems/formatting.mc) —
+the positional demos are its finale.
 
 ## Reaching libc
 

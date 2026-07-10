@@ -10,6 +10,29 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Positional `{n}` format placeholders — compile-time sugar for `{}`
+  print** — in a format string *literal*, `{n}` selects the n-th argument
+  after the format string manually: `println("{0}, {0}", x)` desugars at
+  compile time to the sequential `println("{}, {}", x, x)`, duplicating or
+  reordering the arguments at the call site (each still evaluates exactly
+  once, in source order), so the runtime parser stays sequential-only. In
+  the positional form a `:` separates the index from the modifiers —
+  `println("{0} {0:x}", n)` desugars to `println("{} {x}", n, n)` — and
+  one string commits to one placeholder style: mixing automatic `{}` and
+  positional `{n}`, an out-of-range index, and an argument no placeholder
+  references are compile errors. Because an all-digit bracket now selects
+  an argument, a bare field width in a literal is spelled with the
+  index-less escape `{:N}` (`{:2}` desugars to the runtime `{2}` width;
+  digit-leading modifiers with a base letter like `{06x}` are untouched,
+  as is a *variable* format string — runtime brackets stay modifiers).
+  The hook is the new `@format` parameter attribute: `std/io` marks
+  `print`/`println`/`format_args`, and any collecting function may opt
+  its own format string in by marking the `slice<const char>` parameter
+  just before its `args...` — validated at declaration, desugared on both
+  the direct and the overload/generic call paths, and carried through
+  `.mci` interface stubs like `@nonnull`. See
+  [Formatted print/println](docs/language.md#formatted-print--println).
+
 - **Float format modifiers — precision and field width for `{}` print** —
   the `format` set's `float64` member now parses the `[[N].M]f` modifier
   grammar: `{.2f}` rounds to two decimals, `{.0f}` drops the point
@@ -223,8 +246,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   reference, no copy). The legacy printf-style pair is kept behind
   `-D PRINTF_PRINTLN=1` for programs mid-migration, and with the `{...}`
   modifier stages landed (the entries above) libc's `printf` remains only
-  the scientific-notation (`%g`/`%e`) tool (positional `{n}` is planned
-  as compile-time sugar desugaring to the sequential form). The example
+  the scientific-notation (`%g`/`%e`) tool (positional `{n}` landed as
+  exactly the planned compile-time sugar — the entry above). The example
   suite, the docs, and the smoke tests all
   speak `{}` now; the only visible renderings that changed are deliberate
   (`true`/`false` for bools instead of printf's `1`/`0`). See

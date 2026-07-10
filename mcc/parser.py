@@ -1232,6 +1232,7 @@ class Parser:
         mut_params: set[str] = set()
         noalias_params: set[str] = set()
         nonnull_params: set[str] = set()
+        format_params: set[str] = set()
         variadic = False
         while self.cur.kind != ")":
             if params:
@@ -1249,15 +1250,19 @@ class Parser:
                 break
             is_noalias = False
             is_nonnull = False
+            is_format = False
             # Per-parameter annotations come before const/mut, in any order.
             while self.cur.kind == "ANNOT" and self.cur.text in (
                 "@noalias",
                 "@nonnull",
+                "@format",
             ):
                 if self.cur.text == "@noalias":
                     is_noalias = True
-                else:
+                elif self.cur.text == "@nonnull":
                     is_nonnull = True
+                else:
+                    is_format = True
                 self.advance()
             is_const = bool(self.accept("const"))
             is_mut = bool(self.accept("mut"))
@@ -1277,16 +1282,23 @@ class Parser:
                     "(a mut parameter is passed by reference and is never null)",
                     self.cur.line,
                 )
+            if is_format and is_mut:
+                raise LangError(
+                    "a parameter cannot be both @format and mut "
+                    "(a format string is read, never written)",
+                    self.cur.line,
+                )
             pname = self.expect("IDENT").text
             if self.cur.kind == "...":
                 # `args...` -- native variadic sugar: a const parameter of type
                 # slice<const any>, the trailing type that marks a collecting
                 # function (the call site boxes its extra arguments into it).
                 ellipsis = self.advance()
-                if is_const or is_mut or is_noalias or is_nonnull:
+                if is_const or is_mut or is_noalias or is_nonnull or is_format:
                     raise LangError(
-                        f"'{pname}...' cannot take const, mut, @noalias, or "
-                        "@nonnull (it is already a const slice<const any>)",
+                        f"'{pname}...' cannot take const, mut, @noalias, "
+                        "@nonnull, or @format (it is already a const "
+                        "slice<const any>)",
                         ellipsis.line,
                     )
                 if self.cur.kind != ")":
@@ -1306,6 +1318,8 @@ class Parser:
                 noalias_params.add(pname)
             if is_nonnull:
                 nonnull_params.add(pname)
+            if is_format:
+                format_params.add(pname)
             self.expect(":")
             params.append((pname, self.parse_type_ref()))
         self.expect(")")
@@ -1353,6 +1367,8 @@ class Parser:
                 # Both attribute-only: no ABI change, so allowed on @extern.
                 noalias_params=noalias_params,
                 nonnull_params=nonnull_params,
+                # Threaded so codegen rejects it (an @extern never collects).
+                format_params=format_params,
                 noreturn=noreturn,
                 deprecated_msg=deprecated,
                 removed_msg=removed,
@@ -1393,6 +1409,10 @@ class Parser:
             if nonnull_params:
                 raise LangError(
                     "@nonnull parameters are not allowed on @asm functions", line
+                )
+            if format_params:
+                raise LangError(
+                    "@format parameters are not allowed on @asm functions", line
                 )
             template = self.parse_asm_body(line)
             inputs = [Var(pname, line) for pname, _ in params]
@@ -1460,6 +1480,7 @@ class Parser:
                 mut_params=mut_params,
                 noalias_params=noalias_params,
                 nonnull_params=nonnull_params,
+                format_params=format_params,
                 noreturn=noreturn,
                 mut_return=mut_return,
                 deprecated_msg=deprecated,
@@ -1483,6 +1504,7 @@ class Parser:
             mut_params=mut_params,
             noalias_params=noalias_params,
             nonnull_params=nonnull_params,
+            format_params=format_params,
             noreturn=noreturn,
             mut_return=mut_return,
             deprecated_msg=deprecated,

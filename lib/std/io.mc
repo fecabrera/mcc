@@ -47,7 +47,7 @@ import "std/format";
      * @param args: values rendered in sequence, one per placeholder
      */
     @private
-    fn format_args(mut str: string, const fmt: slice<const char>, args...) {
+    fn format_args(mut str: string, @format const fmt: slice<const char>, args...) {
         let i: uint64 = 0;
         let bracket_open = false;
         let bracket_closed = false;
@@ -110,10 +110,15 @@ import "std/format";
      * `{{`/`}}` print literal braces. Making your own type printable is one
      * `format` overload in your module (the set is open).
      *
+     * The parameter is @format, so a string *literal* also takes positional
+     * `{n[:modifiers]}` placeholders, desugared at compile time to the
+     * sequential form above (`{:modifiers}` spells a bare all-digit
+     * modifier, e.g. the `{:2}` field width).
+     *
      * @param fmt:  format string with `{[modifiers]}` placeholders
      * @param args: values rendered in sequence, one per placeholder
      */
-    fn print(const fmt: slice<const char>, args...) {
+    fn print(@format const fmt: slice<const char>, args...) {
         let str: string;
         string_init(str);
         defer string_destroy(str);
@@ -127,7 +132,7 @@ import "std/format";
      * @param fmt:  format string with `{[modifiers]}` placeholders
      * @param args: values rendered in sequence, one per placeholder
      */
-    fn println(const fmt: slice<const char>, args...) {
+    fn println(@format const fmt: slice<const char>, args...) {
         let str: string;
         string_init(str);
         defer string_destroy(str);

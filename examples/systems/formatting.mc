@@ -15,6 +15,8 @@ import "libc/stdio";
 // rounds and pads floats with ".2f" / "8.2f",
 // renders slices (nested too), hits the <typename> fallback, and then makes
 // its own struct printable by declaring one more overload into the set.
+// The finale moves to println's `{}` placeholders and their positional
+// `{n}` sugar (duplicate, reorder, `{0:x}`, and the `{:N}` width escape).
 // Builds on io.mc (raw printf, used here to print the results),
 // functions/open_overloads.mc (how a module joins a foreign overload set),
 // types/type_groups.mc (the closed integer groups behind the set), and
@@ -134,6 +136,38 @@ fn main() -> int32 {
     // included. The point* overload above answers the last placeholder.
     println("println:  {} {x} {.2f} {yes} {s6}| {x}",
             -4, 255 as uint8, 3.5, true, "mc", &p);
+
+    // Positional placeholders: when the format string is a *literal*, `{n}`
+    // selects the n-th argument after it (0-based) instead of taking the
+    // next one. This is compile-time sugar: the call desugars to the
+    // sequential form by duplicating or reordering the arguments (each
+    // argument still evaluates once, in source order), so the runtime
+    // parser above never sees an index.
+    println("repeat:   {0} and {0} and {0}", 42);        // one arg, three renderings
+    println("reorder:  {1} before {0}", "second", "first");
+
+    // A colon separates the index from the modifiers, and the modifier text
+    // is the same grammar as ever: {0:x} desugars to {x} on a duplicated
+    // argument.
+    println("hex:      {0} is {0:x}, padded {0:06x}", 255);
+
+    // The digits claimed by argument selection cost one spelling: a *bare*
+    // field width in a literal is now the index-less escape {:N}, which
+    // desugars to the runtime {2} width (control-flow/while.mc's table uses
+    // it in the wild). Digit-leading modifiers with a base letter ({06x})
+    // stay plain modifiers.
+    println("width:    [{:2}] [{:2}]", 3, 9);            // [ 3] [ 9]
+    println("width:    [{1:2}] [{0:2}]", 3, 9);          // [ 9] [ 3]
+
+    // One literal commits to one style, and the positional style must be
+    // total. Each of these is a compile error:
+    //   println("{} {0}", 1)       mixes automatic {} with positional {0}
+    //                              ({:N} counts as automatic, so the two
+    //                              width lines above cannot merge into one)
+    //   println("{2}", 1, 2)       index out of range: arguments are 0 and 1
+    //   println("{0}", 1, 2)       the 2 is never referenced
+    // A format string arriving through a variable is untouched: it hits the
+    // sequential runtime parser, where {2} is always the field width.
 
     return 0;
 }

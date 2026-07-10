@@ -513,6 +513,12 @@ class CodeGen:
         # must prove the argument non-null (a checked refinement, unlike the
         # unchecked @noalias promise).
         self.nonnull_ref: dict[str, frozenset[int]] = {}
+        # Symbols whose last fixed parameter is @format: a string literal
+        # bound to it is scanned at the call site, desugaring positional
+        # `{n}` placeholders into the sequential runtime form (see
+        # :meth:`scan_positional`). Direct-call registrations only; the
+        # overload/generic path reads the winner's ``format_params`` itself.
+        self.format_syms: set[str] = set()
         # Symbols declared `-> mut T`: the LLVM return type is a pointer to
         # the returned storage, and a call to one is an lvalue expression
         # (assignable, projectable, re-lendable as a mut argument). Fed by
@@ -1075,6 +1081,13 @@ class CodeGen:
         """Indices of ``func``'s ``@noalias`` parameters."""
         return frozenset(
             i for i, (name, _) in enumerate(func.params) if name in func.noalias_params
+        )
+
+    @staticmethod
+    def format_indices(func: Func) -> frozenset[int]:
+        """Indices of ``func``'s ``@format`` parameters."""
+        return frozenset(
+            i for i, (name, _) in enumerate(func.params) if name in func.format_params
         )
 
     def shared_linkage(self, source: str | None) -> str:
@@ -2241,7 +2254,8 @@ class CodeGen:
         construction; the rest must match exactly: same return type (which
         preserves the return-type-only drift error -- overloads may not
         differ solely in return type) *and* the same derived conventions --
-        hidden-reference, ``mut``, ``@nonnull``, and ``@noalias`` positions
+        hidden-reference, ``mut``, ``@nonnull``, ``@noalias``, and
+        ``@format`` positions
         -- plus the same ``@private``, ``@inline``, and ``@noreturn`` flags
         (a prototype is never ``@inline``, so an ``@inline`` definition
         cannot pair with one; a ``@noreturn`` mismatch would let a stub and
@@ -2282,6 +2296,9 @@ class CodeGen:
             or self.mut_ref[symbol] != self.mut_indices(func)
             or self.nonnull_ref[symbol] != self.nonnull_indices(func)
             or self.noalias_indices(prior) != self.noalias_indices(func)
+            # An @format mismatch would let a stub and its definition
+            # disagree on the call-site positional desugar.
+            or self.format_indices(prior) != self.format_indices(func)
             or prior.private != func.private
             or prior.inline != func.inline
             or prior.noreturn != func.noreturn
@@ -2482,6 +2499,70 @@ class CodeGen:
             raise LangError(
                 "a collecting function cannot also take C varargs; drop the '...'",
                 func.line,
+            )
+
+    def check_format_decl(self, func: Func, params: list):
+        """Validate an ``@format`` declaration once its parameters resolve.
+
+        ``@format`` marks a collecting function's format string, so the
+        call-site desugar (see :meth:`scan_positional`) knows which literal
+        to scan and which arguments its positional placeholders select. That
+        pins the shape: the marked parameter must be the ``slice<const char>``
+        just before the collecting ``args...``. Checked here rather than at
+        parse time so an alias spelling of the type still qualifies; a
+        generic template is checked per instantiation (its parameter types
+        may name type parameters).
+
+        Args:
+            func: The declared function.
+            params: Its resolved parameter ``LangType``\\ s.
+
+        Raises:
+            LangError: When ``@format`` marks a parameter of a non-collecting
+                function, a parameter other than the last fixed one, or a
+                parameter that is not a ``slice<const char>``.
+        """
+        if not func.format_params:
+            return
+        # Mirror the call path's collection decision: a template is judged
+        # by the syntactic marker (an alias spelling stays explicit-slice,
+        # see collecting_candidate), a concrete function by its resolved
+        # signature.
+        if func.type_params:
+            collects = (
+                bool(func.params)
+                and func.params[-1][0] not in func.mut_params
+                and self.collecting_ref(func.params[-1][1])
+            )
+        else:
+            collects = self.is_collecting_func(func, params)
+        if not collects:
+            raise LangError(
+                "@format only applies to a collecting function's format "
+                "string (declare a trailing 'args...')",
+                func.line,
+                source=func.source,
+            )
+        if (
+            len(func.params) < 2
+            or len(func.format_params) > 1
+            or func.params[-2][0] not in func.format_params
+        ):
+            raise LangError(
+                "@format only applies to the parameter just before the "
+                "collecting 'args...'",
+                func.line,
+                source=func.source,
+            )
+        fmt = strip_const(params[-2])
+        if not (
+            is_slice(fmt) and fmt.args[0].const and strip_const(fmt.args[0]) == CHAR
+        ):
+            raise LangError(
+                f"an @format parameter must be a slice<const char>, not "
+                f"{params[-2]}",
+                func.line,
+                source=func.source,
             )
 
     def lookup_enum(self, name: str) -> "EnumType | None":
@@ -3857,6 +3938,9 @@ class CodeGen:
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
                 self.check_collecting_decl(func, params)
+                # Always fails for an @extern (it never collects); run for
+                # the diagnostic.
+                self.check_format_decl(func, params)
                 self.check_noreturn_decl(func, ret)
                 if func.name in self.extern_decls:
                     if self.signatures[func.name] != (
@@ -3976,6 +4060,7 @@ class CodeGen:
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
                 self.check_collecting_decl(func, params)
+                self.check_format_decl(func, params)
                 self.check_noreturn_decl(func, ret)
                 self.check_mut_return_decl(func, ret)
                 hidden = self.hidden_ref_indices(func, params)
@@ -3997,6 +4082,8 @@ class CodeGen:
                 self.hidden_ref[symbol] = hidden
                 self.mut_ref[symbol] = self.mut_indices(func)
                 self.nonnull_ref[symbol] = self.nonnull_indices(func)
+                if func.format_params:
+                    self.format_syms.add(symbol)
                 if func.mut_return:
                     self.mut_ret.add(symbol)
                 self.static_funcs[key] = symbol
@@ -4100,6 +4187,7 @@ class CodeGen:
                         func.line,
                     )
                 ret = self.lang_type(func.ret_type, func.line)
+                self.check_format_decl(func, params)
                 self.check_noreturn_decl(func, ret)
                 self.check_mut_return_decl(func, ret)
                 salt = (
@@ -4308,6 +4396,7 @@ class CodeGen:
                     )
                     raise err
             self.check_collecting_decl(func, params)
+            self.check_format_decl(func, params)
             self.concrete_decls.setdefault(func.name, {})[params_key] = func
             self.func_privacy[func.name] = (func.private, func.source)
             self.used_symbols.add(func.name)
@@ -4341,6 +4430,8 @@ class CodeGen:
             self.hidden_ref[func.name] = hidden
             self.mut_ref[func.name] = self.mut_indices(func)
             self.nonnull_ref[func.name] = self.nonnull_indices(func)
+            if func.format_params:
+                self.format_syms.add(func.name)
             if func.mut_return:
                 self.mut_ret.add(func.name)
             if func.deprecated_msg is not None:
@@ -10354,6 +10445,9 @@ class CodeGen:
             # parameter never does.
             collecting=self.collecting_params(params)
             and len(params) - 1 not in mut,
+            # The last fixed parameter is @format: a literal argument
+            # desugars its positional placeholders at compile time.
+            format=symbol in self.format_syms,
             # An @extern @nonnull slot grades a possibly-null argument by
             # posture; a native one always rejects it.
             extern=symbol in self.extern_decls,
@@ -10420,6 +10514,145 @@ class CodeGen:
         args = self.marshal_args(arg_exprs, params, variadic, label, line)
         return TypedValue(self.emit_call(callee.value, args), ret)
 
+    @staticmethod
+    def scan_positional(
+        text: str, n_extras: int, fixed: int, label: str, line: int
+    ) -> tuple[str, list[int] | None] | None:
+        """Desugar positional ``{n}`` placeholders in an ``@format`` literal.
+
+        Purely compile-time sugar over the sequential runtime form: each
+        ``{n}`` selects the n-th collected argument (0-based), so
+        ``println("{0}, {0}", x)`` desugars to ``println("{}, {}", x, x)``
+        and the runtime parser stays sequential-only. In the positional form
+        a ``:`` separates the index from the modifiers -- ``{0:x}`` desugars
+        to ``{x}`` -- and the index-less ``{:mods}`` escape spells a bare
+        runtime modifier that the new grammar would otherwise claim
+        (``{:2}`` desugars to the ``{2}`` field width). One string commits
+        to one style: manual ``{n}`` and automatic ``{}`` placeholders
+        (``{:mods}`` counts as automatic) cannot mix.
+
+        The walk replicates ``format_args``'s state machine exactly --
+        ``{{``/``}}`` escape literal braces (so ``{{0}}`` renders literally),
+        and its unspecified edges (an unclosed ``{``, a stray ``}``) pass
+        through verbatim, never classified. Only a well-formed placeholder
+        whose content is all digits, or digits before a ``:``, is positional;
+        a digit-leading runtime modifier like ``{06x}`` passes through
+        untouched.
+
+        Args:
+            text: The format string literal's decoded contents.
+            n_extras: How many source arguments follow the format string (an
+                explicit pass-through slice counts as one).
+            fixed: The callee's fixed-parameter count, for numbering the
+                unused-argument diagnostic.
+            label: A description of the callee, for error messages.
+            line: Source line of the literal, for diagnostics.
+
+        Returns:
+            ``None`` when the string needs no rewriting (automatic style,
+            no escapes); otherwise ``(new_text, slot_map)`` where
+            ``slot_map`` lists the selected argument index per placeholder
+            in render order for the positional style, or is ``None`` for an
+            automatic-style string that only had ``{:mods}`` escapes
+            rewritten.
+
+        Raises:
+            LangError: On a mixed-style string, an out-of-range index, a
+                collected argument no placeholder references, or a ``:``
+                with no argument index before it (the colon is reserved in
+                ``@format`` literals).
+        """
+        bracket_open = False
+        bracket_closed = False
+        span: list[str] = []
+        span_start = -1
+        # (start, end, replacement) rewrites over `text`, in order.
+        rewrites: list[tuple[int, int, str]] = []
+        slots: list[int] = []
+        auto_text: str | None = None
+        pos_text: str | None = None
+        for i, c in enumerate(text):
+            if c == "{":
+                if bracket_open:  # `{{` (or an aborted span): a literal `{`
+                    bracket_open = False
+                    continue
+                bracket_open = True
+                span = []
+                span_start = i
+            elif c == "}":
+                if bracket_closed:  # `}}`: a literal `}`
+                    bracket_closed = False
+                    continue
+                if not bracket_open:
+                    bracket_closed = True
+                    continue
+                bracket_open = False
+                content = "".join(span)
+                if text[span_start : i + 1] != "{" + content + "}":
+                    # The span interleaved with a `}}` escape -- one of the
+                    # runtime parser's unspecified edges. Pass it through
+                    # verbatim, unclassified.
+                    continue
+                head, colon, mods = content.partition(":")
+                if colon and head and not head.isdigit():
+                    raise LangError(
+                        "expected an argument index before ':' in format "
+                        f"placeholder {{{content}}}",
+                        line,
+                    )
+                if colon and not head:
+                    # The `{:mods}` escape: a bare runtime modifier, spelled
+                    # around the positional grammar. Automatic style.
+                    auto_text = auto_text or "{" + content + "}"
+                    rewrites.append((span_start, i + 1, "{" + mods + "}"))
+                elif content and content.isdigit() or colon:
+                    # `{n}` or `{n:mods}`: a positional placeholder.
+                    pos_text = pos_text or "{" + content + "}"
+                    index = int(head)
+                    if index >= n_extras:
+                        hint = (
+                            ""
+                            if colon
+                            else f" (for a field width, write {{:{content}}})"
+                        )
+                        raise LangError(
+                            f"positional placeholder {{{head}}} is out of "
+                            f"range: {label} has {n_extras} argument(s) "
+                            f"after the format string{hint}",
+                            line,
+                        )
+                    slots.append(index)
+                    rewrites.append((span_start, i + 1, "{" + mods + "}"))
+                else:
+                    # `{}` or a runtime modifier: automatic style, verbatim.
+                    auto_text = auto_text or "{" + content + "}"
+            elif bracket_open:
+                span.append(c)
+        if pos_text is not None and auto_text is not None:
+            raise LangError(
+                f"format string mixes automatic '{auto_text}' and "
+                f"positional '{pos_text}' placeholders",
+                line,
+            )
+        if pos_text is None and not rewrites:
+            return None
+        if pos_text is not None:
+            used = set(slots)
+            for j in range(n_extras):
+                if j not in used:
+                    raise LangError(
+                        f"argument {fixed + j + 1} of {label} is never "
+                        "referenced by the format string",
+                        line,
+                    )
+        pieces, copied = [], 0
+        for start, end, replacement in rewrites:
+            pieces.append(text[copied:start])
+            pieces.append(replacement)
+            copied = end
+        pieces.append(text[copied:])
+        return "".join(pieces), slots if pos_text is not None else None
+
     def marshal_args(
         self,
         arg_exprs: list,
@@ -10431,6 +10664,7 @@ class CodeGen:
         mut: frozenset[int] = frozenset(),
         nonnull: frozenset[int] = frozenset(),
         collecting: bool = False,
+        format: bool = False,
         extern: bool = False,
         abi: "ExternABI | None" = None,
         sret_slot=None,
@@ -10458,6 +10692,11 @@ class CodeGen:
                 provably non-null (see :meth:`check_nonnull_arg`).
             collecting: Whether the callee's trailing ``slice<const any>``
                 parameter collects the extra arguments (native variadics).
+            format: Whether the callee's last fixed parameter is ``@format``:
+                a string literal bound to it desugars positional ``{n}``
+                placeholders at compile time (see :meth:`scan_positional`),
+                rewriting the literal and duplicating/reordering the
+                once-evaluated extras into the collection.
             extern: Whether the callee is an ``@extern`` declaration, which
                 grades a possibly-null ``@nonnull`` argument by posture instead
                 of always rejecting it (see :meth:`check_nonnull_arg`).
@@ -10488,6 +10727,27 @@ class CodeGen:
             raise LangError(
                 f"{label} expects {len(params)} argument(s), got {len(arg_exprs)}", line
             )
+        slot_map = None
+        if (
+            collecting
+            and format
+            and fixed >= 1
+            and isinstance(arg_exprs[fixed - 1], StrLit)
+        ):
+            # An @format literal: desugar positional placeholders. The
+            # rewritten literal stands in through a local copy (never an AST
+            # rewrite -- a call inside a template body re-marshals per
+            # instantiation) and lowers through the ordinary string-literal
+            # adaptation below; the slot map reorders the once-evaluated
+            # extras into the collection.
+            fmt = arg_exprs[fixed - 1]
+            scanned = self.scan_positional(
+                fmt.value, len(arg_exprs) - fixed, fixed, label, fmt.line
+            )
+            if scanned is not None:
+                new_text, slot_map = scanned
+                arg_exprs = list(arg_exprs)
+                arg_exprs[fixed - 1] = StrLit(new_text, fmt.line)
         args = []
         if sret_slot is not None:
             # The struct return's hidden pointer leads the argument list.
@@ -10554,11 +10814,29 @@ class CodeGen:
                 value = tv.value
             args.append(value)
         if collecting:
-            args.append(
-                self.collect_variadic_args(
-                    arg_exprs[fixed:], params[-1], fixed in hidden, label, line
+            extras = arg_exprs[fixed:]
+            if slot_map is not None:
+                # Positional desugar: evaluate each extra once, in source
+                # order, then map values and expressions by slot -- a
+                # duplicated slot re-boxes the same TypedValue, never
+                # re-evaluates its expression.
+                tvs = [self.gen_expr(e) for e in extras]
+                args.append(
+                    self.collect_from_values(
+                        [tvs[s] for s in slot_map],
+                        [extras[s] for s in slot_map],
+                        params[-1],
+                        fixed in hidden,
+                        label,
+                        line,
+                    )
                 )
-            )
+            else:
+                args.append(
+                    self.collect_variadic_args(
+                        extras, params[-1], fixed in hidden, label, line
+                    )
+                )
         return args
 
     def lower_abi_arg(self, arg_expr, ptype: LangType, cls, line: int, context: str):
@@ -11854,6 +12132,26 @@ class CodeGen:
         # slice after it -- in parity with marshal_args' head/tail split.
         collecting = self.collecting_candidate(func)
         n_fixed = len(params) - 1 if collecting else len(params)
+        # An @format literal desugars its positional placeholders, in parity
+        # with marshal_args: the rewritten literal stands in locally (never
+        # an AST rewrite) and lowers through the mirrored literal-adaptation
+        # arm below; the slot map reorders the already-evaluated extras. (The
+        # original literal's char* pre-evaluation for inference goes unused.)
+        fmt_lit = slot_map = None
+        if (
+            collecting
+            and n_fixed >= 1
+            and func.params[n_fixed - 1][0] in func.format_params
+            and isinstance(expr.args[n_fixed - 1], StrLit)
+        ):
+            fmt = expr.args[n_fixed - 1]
+            scanned = self.scan_positional(
+                fmt.value, len(expr.args) - n_fixed, n_fixed,
+                repr(expr.name), fmt.line,
+            )
+            if scanned is not None:
+                new_text, slot_map = scanned
+                fmt_lit = StrLit(new_text, fmt.line)
         for i in self.nonnull_indices(func):
             if i < len(expr.args) and i < n_fixed:
                 self.check_nonnull_arg(
@@ -11864,16 +12162,23 @@ class CodeGen:
         args = []
         for i, (tv, p) in enumerate(zip(arg_tvs[:n_fixed], params)):
             context = f"argument {i + 1} of {expr.name!r}"
+            # The desugared @format literal stands in for the original at
+            # its position; every other argument is its own AST node.
+            arg_node = (
+                fmt_lit
+                if fmt_lit is not None and i == n_fixed - 1
+                else expr.args[i]
+            )
             if i in mut_positions:
                 # A decayed pointer is forwarded by value (it was already
                 # loaded, once, when the argument was evaluated); a direct
                 # lend passes the caller's storage address.
                 args.append(tv.value if i in decayed else addrs[i][0])
             elif (
-                self.struct_literal_adapts(expr.args[i], p)
-                and not isinstance(expr.args[i], TupleLit)
-                or self.str_literal_adapts(expr.args[i], p)
-                or self.array_literal_adapts(expr.args[i], p)
+                self.struct_literal_adapts(arg_node, p)
+                and not isinstance(arg_node, TupleLit)
+                or self.str_literal_adapts(arg_node, p)
+                or self.array_literal_adapts(arg_node, p)
             ):
                 # Literal adaptation, in parity with marshal_args: a string
                 # literal borrows to the parameter's char slice view, an array
@@ -11887,7 +12192,7 @@ class CodeGen:
                 # eagerly for inference, and rebuilding it would run its
                 # element side effects twice -- the eager value flows to the
                 # coerce below instead.
-                tv = self.gen_adapted_literal(expr.args[i], p, expr.line)
+                tv = self.gen_adapted_literal(arg_node, p, expr.line)
                 if i in hidden:
                     args.append(self.spill_to_temp(tv, p, expr.line, context))
                 else:
@@ -11901,7 +12206,7 @@ class CodeGen:
                 # optimization on the generic path).
                 if self.decays_to(tv.type, p, mut=False):
                     self.check_decay_arg(
-                        expr.args[i], strip_const(tv.type), "const", p,
+                        arg_node, strip_const(tv.type), "const", p,
                         context, expr.line, proven=proofs[i],
                     )
                     args.append(tv.value)
@@ -11924,10 +12229,17 @@ class CodeGen:
                     extras.append(self.gen_expr(raw_arg))
                 else:
                     extras.append(arg_tvs[j])
+            extra_exprs = expr.args[n_fixed:]
+            if slot_map is not None:
+                # Positional desugar: map the once-evaluated extras by slot
+                # -- a duplicated slot re-boxes the same TypedValue, never
+                # re-evaluates its expression (in parity with marshal_args).
+                extras = [extras[s] for s in slot_map]
+                extra_exprs = [extra_exprs[s] for s in slot_map]
             args.append(
                 self.collect_from_values(
                     extras,
-                    expr.args[n_fixed:],
+                    extra_exprs,
                     params[-1],
                     n_fixed in hidden,
                     repr(expr.name),
@@ -12568,6 +12880,9 @@ class CodeGen:
             self.check_noreturn_decl(func, ret)
             self.check_mut_return_decl(func, ret)
             params = [self.lang_type(t, func.line) for _, t in func.params]
+            # A generic @format is validated per instance: the marked
+            # parameter's type may only now have resolved.
+            self.check_format_decl(func, params)
             hidden = self.hidden_ref_indices(func, params)
             fnty = ir.FunctionType(
                 self.ret_ir(func, ret), self.param_irs(params, hidden)

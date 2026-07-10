@@ -366,6 +366,14 @@ class Func:
             prove the argument non-null, and the callee may pass the
             parameter onward as proof. Lowered to LLVM's ``nonnull`` (plus
             ``dereferenceable``) argument attributes.
+        format_params: Names of parameters declared ``@format`` -- the format
+            string of a collecting function (``print``/``println``-style).
+            Purely compile-time: a string *literal* bound to the parameter is
+            scanned at the call site, desugaring positional ``{n}``
+            placeholders into the sequential runtime form by duplicating or
+            reordering the collected arguments. Valid only on the
+            ``slice<const char>`` parameter just before the collecting
+            ``args...`` (checked once the signature resolves).
         noreturn: ``@noreturn`` -- the function never returns to its caller
             (it exits, aborts, or loops forever). Void-only. A call site's
             block is terminated right after the call (so no dummy return is
@@ -428,6 +436,7 @@ class Func:
     mut_params: set[str] = field(default_factory=set)
     noalias_params: set[str] = field(default_factory=set)
     nonnull_params: set[str] = field(default_factory=set)
+    format_params: set[str] = field(default_factory=set)
     noreturn: bool = False
     mut_return: bool = False
     deprecated_msg: str | None = None

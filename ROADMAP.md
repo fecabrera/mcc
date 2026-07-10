@@ -2493,21 +2493,33 @@ already do).
           diagnostics (the compile-time format checking the positional
           and interpolation items reference is the natural vehicle for
           the diagnostic option)
-  - [ ] positional placeholders — `{n}` selecting an argument manually, as
+  - [x] positional placeholders — `{n}` selecting an argument manually, as
         compile-time sugar over the sequential form:
         `println("{0}, {0}", x)` desugars to `println("{}, {}", x, x)`
-        (duplicating/reordering the arguments at the call site), so the
-        runtime parser stays sequential-only. In the positional form a `:`
-        separates the index from the modifiers — `println("{0} {0:x}", n)`
-        desugars to `println("{} {x}", n, n)`, the colon dropping with the
-        index. One format string commits to one placeholder style: manual
-        numbering (`{n}`), auto numbering (`{}`), and interpolation
-        (`{expr}`, below) cannot mix — a mixed string is a compile error,
-        not a guess at the intent. Pairs with the compile-time format
-        checking that string interpolation (below) also builds on
+        (duplicating/reordering the once-evaluated arguments at the call
+        site), so the runtime parser stays sequential-only. In the
+        positional form a `:` separates the index from the modifiers —
+        `println("{0} {0:x}", n)` desugars to `println("{} {x}", n, n)`,
+        the colon dropping with the index. One format string commits to
+        one placeholder style: manual numbering (`{n}`), auto numbering
+        (`{}`), and interpolation (`{expr}`, below) cannot mix — a mixed
+        string is a compile error, not a guess at the intent, as are an
+        out-of-range index and an argument no placeholder references.
+        Shipped with the `@format` parameter attribute as the hook
+        (`std/io` marks `print`/`println`/`format_args`; valid on the
+        `slice<const char>` just before a collecting `args...`, carried
+        through `.mci` stubs like `@nonnull`) and the index-less `{:N}`
+        escape spelling the bare all-digit field width the positional
+        grammar now claims (`{:2}` desugars to the runtime `{2}` width;
+        a *variable* format string keeps today's runtime reading). Pairs
+        with the compile-time format checking that string interpolation
+        (below) also builds on; implemented, see
+        [Formatted print/println](docs/language.md#formatted-print--println)
   - [x] integer format modifiers — width and zero-padded width over every
         base, the `[0][width][x|X|b|p]` grammar (`{8x}`, `{08x}`, `{08p}`,
-        a bare `{6}` decimal), hand-rolled in the integer digit worker (no
+        a bare `{6}` decimal — spelled `{:6}` in a literal since the
+        positional item above claimed the all-digit bracket), hand-rolled
+        in the integer digit worker (no
         snprintf round-trip): a space width counts the whole field, a zero
         width the digits alone (the sign and `0x` sit outside the zeros,
         so `-42` under `{08p}` is `-0x0000002a`), negatives render
@@ -2515,7 +2527,8 @@ already do).
         minimum renders exactly (its magnitude is taken by
         two's-complement negation in uint64 space)
   - [x] string format modifiers — field widths over the string members,
-        the `[N][s][N]` grammar: `{20s}` (or a bare `{20}`) right-aligns
+        the `[N][s][N]` grammar: `{20s}` (or a bare `{20}` — `{:20}` in a
+        literal since the positional item above) right-aligns
         the text in an N-wide field, `{s20}` left-aligns, text at or past
         the width appends unpadded. `char*` gains them by wrapping in a
         strlen-measured slice and delegating to the `slice<const char>`

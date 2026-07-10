@@ -17,7 +17,9 @@ fn main() -> int32 {
     while (row <= 3) {
         let col: int32 = 1;
         while (col <= 3) {
-            print("{2} ", row * col); // {2}: space-padded to a 2-wide field
+            print("{:2} ", row * col); // {:2}: space-padded to a 2-wide field
+                                       // (bare {2} would pick argument 2;
+                                       // see systems/formatting.mc)
             col += 1;
         }
         println("");                   // newline after each row

@@ -310,12 +310,14 @@ class InterfaceWriter:
                 source=func.source,
             )
         # Every parameter marker rides along: @noalias/@nonnull carry the
-        # overlap and non-null contracts, const/mut carry the read-only and
+        # overlap and non-null contracts, @format carries the call-site
+        # positional-placeholder desugar, const/mut carry the read-only and
         # by-reference conventions -- the prototype must match the definition's
         # signature exactly for the call to be compiled correctly.
         params = [
             f"{'@noalias ' if pname in func.noalias_params else ''}"
             f"{'@nonnull ' if pname in func.nonnull_params else ''}"
+            f"{'@format ' if pname in func.format_params else ''}"
             f"{'const ' if pname in func.const_params else ''}"
             f"{'mut ' if pname in func.mut_params else ''}"
             f"{pname}: {ptype}"
