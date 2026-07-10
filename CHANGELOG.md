@@ -10,6 +10,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **String format modifiers: field widths, and a null-safe `char*`** — the
+  `format` set's string members (`char*` and `slice<const char>`) take the
+  `[N][s][N]` field-width grammar: digits before the `s` right-align the
+  text in an N-wide field (`{20s}`, or a bare `{20}`), digits after it
+  left-align (`{s20}`); text at or past the width appends unpadded.
+  `char*` wraps itself in a strlen-measured slice and delegates to the
+  slice member, so both speak the same grammar — and a null `char*` now
+  renders `(null)` instead of being undefined behavior. String field
+  widths leave the libc-`printf` escape hatch; float precision (`.Nf`) is
+  the one formatting job left with it.
+
 - **Integer format modifiers: base, width, and zero-padding** — the
   `format` set's integer members now speak the `[0][width][x|X|b|p]`
   modifier grammar, hand-rolled in one digit worker with no snprintf

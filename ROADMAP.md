@@ -2358,11 +2358,17 @@ already do).
         sign-and-magnitude (the base applies to `|value|`), and int64's
         minimum renders exactly (its magnitude is taken by
         two's-complement negation in uint64 space)
-  - [ ] float and string format modifiers — precision (`.Nf`, e.g.
-        `{.8f}`) and string field widths (`Ns` and `sN`, e.g. `{20s}`,
-        `{s20}`); the per-type channel they travel through (the `format`
-        set's `modifier` parameter, already routing the integer grammar
-        and `y`/`yes` per type) shipped with the baseline module above
+  - [x] string format modifiers — field widths over the string members,
+        the `[N][s][N]` grammar: `{20s}` (or a bare `{20}`) right-aligns
+        the text in an N-wide field, `{s20}` left-aligns, text at or past
+        the width appends unpadded. `char*` gains them by wrapping in a
+        strlen-measured slice and delegating to the `slice<const char>`
+        member — and a null `char*` now renders `(null)` instead of being
+        undefined
+  - [ ] float format modifiers — precision (`.Nf`, e.g. `{.8f}`); the
+        per-type channel it travels through (the `format` set's `modifier`
+        parameter, already routing the integer and string grammars per
+        type) shipped with the baseline module above
 - [ ] String interpolation — `println(f"x = {x}")`: an `f`-prefixed string
       literal with `{expr}` holes desugars at compile time into the formatted
       `println("{}", ...)` call above (`{{`/`}}` escape a literal brace), so it

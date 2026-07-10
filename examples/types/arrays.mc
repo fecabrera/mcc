@@ -1,5 +1,4 @@
 import "std/io";
-import "libc/stdio";   // printf: `{...}` has no width options yet
 
 // An array dimension can be any constant integer expression -- a `const`,
 // `sizeof`, arithmetic over them -- not just a literal. `counts` is sized for
@@ -61,7 +60,7 @@ fn main() -> int32 {
     // adaptable constant, so it compares against this int32 counter directly.
     i = 0;
     while (i < len(cmds)) {
-        printf("  %-6s %s\n", cmds[i][0], cmds[i][1]);
+        println("  {s6} {}", cmds[i][0], cmds[i][1]);  // {s6}: left-aligned, 6 wide
         i += 1;
     }
 

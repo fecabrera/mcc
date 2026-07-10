@@ -6,7 +6,7 @@ import "std/format";
 // type-driven -- no `%`-letters. The legacy printf-style pair below is kept
 // behind -D PRINTF_PRINTLN=1 for programs mid-migration; libc's printf
 // remains the tool for the formatting the `{...}` modifiers do not carry
-// yet (float precision, string field widths).
+// yet (float precision).
 @if (PRINTF_PRINTLN) {
     /**
      * Formats according to format and writes the result to standard output

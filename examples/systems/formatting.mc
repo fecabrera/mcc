@@ -115,8 +115,9 @@ fn main() -> int32 {
 
     // println is this same set behind `{}` placeholders: each `{[modifiers]}`
     // renders the next argument, the bracket content arriving verbatim as the
-    // modifier. The point* overload above answers the last placeholder.
-    println("println:  {} {x} {yes} {x}", -4, 255 as uint8, true, &p);
+    // modifier -- the string width `{s6}` included. The point* overload above
+    // answers the last placeholder.
+    println("println:  {} {x} {yes} {s6}| {x}", -4, 255 as uint8, true, "mc", &p);
 
     return 0;
 }

@@ -31,6 +31,13 @@ enum int_fmt_state {
     FORMAT = 2,
 }
 
+@private
+enum str_fmt_state {
+    LPADDING = 0,
+    FORMAT = 1,
+    RPADDING = 2,
+}
+
 /**
  * Fallback for types with no formatter: appends the type's name in angle
  * brackets (e.g. `<uint8*>`) instead of a value.
@@ -293,15 +300,88 @@ fn format<T>(mut str: string, const value: slice<T>, const modifier: slice<char>
 }
 
 /**
- * Appends a string slice's bytes to str.
+ * Appends a string slice's bytes to str, space-padded to a field width.
+ *
+ * The modifier grammar is `[N][s][N]`, parsed by the str_fmt_state
+ * machine: digits before the `s` right-align the text in an N-wide field
+ * (`"20s"`, or a bare `"20"`), digits after it left-align (`"s20"`).
+ * Text already at or past the width appends unpadded; an empty modifier
+ * appends the bytes verbatim.
  *
  * @param str:      destination string
  * @param value:    slice to append (its `length` bytes, no NUL needed)
- * @param modifier: ignored
+ * @param modifier: `[N][s][N]`, as above; `""` appends unpadded
  */
 @inline
 fn format(mut str: string, const value: slice<const char>, const modifier: slice<char>) {
+    let state = str_fmt_state::LPADDING;
+    let l_pad: uint64 = 0;
+    let r_pad: uint64 = 0;
+    
+    let i: uint64 = 0;
+    while (i < modifier.length) {
+        let c = modifier[i];
+        case (state) {
+        when str_fmt_state::LPADDING:
+            if (c >= '0' and c <= '9') {
+                l_pad *= 10;
+                l_pad += (c - '0') as uint64;
+            } else {
+                state = str_fmt_state::FORMAT;
+                continue;
+            }
+        when str_fmt_state::FORMAT:
+            state = str_fmt_state::RPADDING;
+            if (l_pad) break;
+        when str_fmt_state::RPADDING:
+            if (c >= '0' and c <= '9') {
+                r_pad *= 10;
+                r_pad += (c - '0') as uint64;
+            } else {
+                break;
+            }
+        }
+        i += 1;
+    }
+
+    if(l_pad > value.length) {
+        for i in range(l_pad - value.length) {
+            string_push(str, ' ');
+        }
+    }
+
     string_append(str, value);
+
+    if(r_pad > value.length) {
+        for i in range(r_pad - value.length) {
+            string_push(str, ' ');
+        }
+    }
+}
+
+/**
+ * Appends a C string's bytes to str, space-padded to a field width.
+ *
+ * A null pointer renders `(null)` (no longer undefined); anything else
+ * wraps in a strlen-measured slice and delegates to the string-slice
+ * member above, so the same `[N][s][N]` width grammar applies.
+ *
+ * @param str:      destination string
+ * @param value:    NUL-terminated string, or null for `(null)`
+ * @param modifier: `[N][s][N]` (see the string-slice member above)
+ */
+@inline
+fn format(mut str: string, value: char*, const modifier: slice<char>) {
+    if (value == null) {
+        string_append(str, "(null)");
+        return;
+    }
+
+    let s = slice<char> {
+        data = value,
+        length = strlen(value),
+    };
+    format(str, s as slice<const char>, modifier);
 }
 
 /**
@@ -324,19 +404,6 @@ fn format(mut str: string, const value: slice<char*>, const modifier: slice<char
         string_push(str, '"');
     }
     string_push(str, ']');
-}
-
-/**
- * Appends a C string's bytes to str.
- *
- * @param str:      destination string
- * @param value:    NUL-terminated string; must not be null (asserted with
- *                  the `!` hatch, undefined if it is)
- * @param modifier: ignored
- */
-@inline
-fn format(mut str: string, value: char*, const modifier: slice<char>) {
-    string_append(str, value!);
 }
 
 /**

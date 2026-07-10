@@ -4054,9 +4054,13 @@ The baseline members cover the built-in types:
 - **`float64`**: fixed-point (`3.5` renders `3.500000`).
 - **`bool`**: `true`/`false`; `"y"` renders `y`/`n`, and `"yes"` renders
   `yes`/`no`.
-- **`char`**, **`char*`**, **`slice<char>`**: appended as text (the
-  modifier is ignored). A string literal decays to `char*` and lands on
-  that member.
+- **`char`**, **`char*`**, **`slice<char>`**: appended as text. A string
+  literal decays to `char*` and lands on that member, and a null `char*`
+  renders `(null)`. The string members take a field-width modifier,
+  grammar `[N][s][N]`: digits before the `s` right-align the text in an
+  N-wide field (`"20s"`, or a bare `"20"`), digits after it left-align
+  (`"s20"`); text at or past the width appends unpadded. A single `char`
+  ignores the modifier.
 - **`slice<char*>`**: a quoted, bracketed list of the C strings,
   `["ls", "cat"]` (the modifier is ignored; elements must not be null).
   Being concrete, this member beats the generic `slice<T>` one below, so a
@@ -4127,12 +4131,13 @@ type printable straight through `println("{}", value)` — boxed
 [by reference](#the-any-type) with no copy.
 
 Integer placeholders already carry width and zero-padding —
-`println("{08x}", n)` — via the `[0][width][x|X|b|p]` modifier grammar
-(above). Manual field selection is planned as compile-time sugar — a
-positional `println("{0}, {0}", x)` desugaring to the sequential
-`println("{}, {}", x, x)`, no runtime machinery — and float precision and
-string field widths as further `{...}` modifiers; until then, libc's
-`printf` remains the tool for those (`printf("%.1f\n", f)`). The legacy
+`println("{08x}", n)` — via the `[0][width][x|X|b|p]` modifier grammar,
+and string placeholders carry field widths — `println("{s20}", name)` —
+via `[N][s][N]` (both above). Manual field selection is planned as
+compile-time sugar — a positional `println("{0}, {0}", x)` desugaring to
+the sequential `println("{}, {}", x, x)`, no runtime machinery — and
+float precision as a further `{...}` modifier; until then, libc's
+`printf` remains the tool for that (`printf("%.1f\n", f)`). The legacy
 printf-style `print`/`println` pair is kept behind `-D PRINTF_PRINTLN=1`
 for programs mid-migration.
 

@@ -124,6 +124,32 @@ def test_integer_width_and_zero_padding(capfd):
     assert capfd.readouterr().out == f"|{expected}|\n"
 
 
+def test_string_field_widths_and_null(capfd):
+    # The [N][s][N] string grammar: digits before the s right-align the
+    # text in an N-wide field (a bare N works too), digits after it
+    # left-align; text at or past the width appends unpadded. char*
+    # delegates through a strlen-measured slice -- both string members
+    # share the grammar -- and a null char* renders (null), not UB.
+    run(
+        PRELUDE
+        + """
+        fn main() -> int32 {
+            let s: struct string;
+            string_init(s);
+            format(s, "hi", "6s");         string_push(s, '/');
+            format(s, "hi", "s6");         string_push(s, '/');
+            format(s, "hi", "6");          string_push(s, '/');
+            format(s, "hi", "1s");         string_push(s, '/');
+            format(s, null as char*, "");
+            show(s);
+            string_destroy(s);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "|    hi/hi    /    hi/hi/(null)|\n"
+
+
 def test_modifier_from_a_string_borrows_in(capfd):
     # A modifier built at runtime is a `string`; it borrows into the
     # slice<char> parameter explicitly, `m as slice<char>`.
