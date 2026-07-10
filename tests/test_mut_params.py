@@ -475,13 +475,15 @@ def test_address_of_mut_param_field_rejected():
         )
 
 
-def test_mut_function_is_not_a_function_value():
-    message = "cannot take a function value of 'f'"
-    with pytest.raises(LangError, match=message):
-        compile_ir(
-            "fn f(mut n: int32) {}\n"
-            "fn main() -> int32 { let g = f; return 0; }"
-        )
+def test_mut_function_is_a_function_value():
+    # A mut function is a legal function value: the inferred type spells the
+    # hidden-reference convention (`fn(mut int32)`), so the LLVM slot holds a
+    # `void (i32*)*` and calls through it pass the argument's address.
+    out = compile_ir(
+        "fn f(mut n: int32) {}\n"
+        "fn main() -> int32 { let g = f; let x: int32 = 1; g(x); return 0; }"
+    )
+    assert "void (i32*)*" in out
 
 
 def test_mut_argument_rejects_volatile_storage():

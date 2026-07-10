@@ -20,7 +20,8 @@ fn make_pair(v: int32) -> pair<char*, int32> {
 
 // A generic alias also names a *shape*: `cmp<T>` is the comparator type over any
 // element `T`. Spelling it once beats writing the function-pointer type at each
-// use site.
+// use site. (Spelled `fn(const T, const T) -> bool` the same alias also fits
+// struct elements, passed by hidden reference: see functions/mut_callbacks.mc.)
 type cmp<T> = fn(T, T) -> bool;
 
 fn less(a: int32, b: int32) -> bool { return a < b; }

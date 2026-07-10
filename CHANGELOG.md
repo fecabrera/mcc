@@ -10,6 +10,40 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`mut`/`const`-carrying function types — `fn(mut char)`,
+  `fn(const struct big) -> int64`** — a function type now spells the
+  per-parameter hidden-reference calling conventions, lifting the last
+  parameter-side function-value ban: a function with `mut` or
+  hidden-reference `const` (aggregate) parameters is a legal function
+  value, `let f = my_func;` infers the carrying type (the old "cannot
+  take a function value ... passed by hidden reference" rejection is
+  gone), and a call through the value passes the same by-reference
+  arguments and enforces the **same call-site rules as a direct call** —
+  writable-lvalue-of-exact-type for `mut`, the
+  `const`-parameter/`@volatile`/`@packed` rejections, and proven-non-null
+  pointer decay included. Unlike the `@nonnull` contract there is **no
+  variance and no hatch**: `fn(mut char)` and `fn(char)` receive their
+  argument differently at the machine level, so the types are not
+  convertible in either direction, and an `as` directly between two
+  function types of differing `mut`/`const` shape is rejected with an
+  error that explains why no cast is offered (same-shape reinterprets,
+  including the `@nonnull`-stripping hatch, still work; laundering
+  through `uint8*` remains UB like any forged address). `const` carries
+  only where it changes the convention: on a by-value scalar it erases at
+  type formation — `fn(const int32)` *is* `fn(int32)` — so a generic
+  alias like `type cmp<T> = fn(const T, const T) -> bool` is inhabitable
+  transparently at scalar and struct `T` alike, each binding classified
+  per use. The convention is part of the type's identity: `.mci`
+  interface stubs spell it, templates instantiate the carrying and plain
+  forms distinctly, and prototypes must spell it exactly. Collecting
+  functions ride along: `fn total(args...)` is a legal value of type
+  `fn(const slice<const any>) -> ...`, whose calls take the trailing
+  slice explicitly — collection and the compile-time `@format` desugars
+  stay direct-call affordances. A `-> mut T` return remains inexpressible
+  in a function type (its own roadmap follow-up). See
+  [mut/const-carrying function types](docs/language.md#mutconst-carrying-function-types)
+  and [mut_callbacks.mc](examples/functions/mut_callbacks.mc).
+
 - **`@nonnull`-carrying function types — `fn(@nonnull char*) -> int32`** —
   a function type now spells the per-parameter `@nonnull` contract,
   lifting the parent feature's remaining soundness ban: a function with

@@ -149,13 +149,17 @@ def test_const_param_rejected_on_extern():
         parse("@extern fn c(const s: struct big);")
 
 
-def test_function_value_of_const_struct_fn_is_rejected():
+def test_function_value_of_const_struct_fn():
+    # A const-struct function is a legal function value: the inferred type
+    # spells the hidden-reference convention (`fn(const struct big)`), so the
+    # slot holds a pointer-taking function and calls through it pass the
+    # argument's address.
     src = (
         BIG
         + """
     fn sum(const s: struct big) -> int64 { return s.a; }
-    fn main() -> int32 { let f = sum; return 0; }
+    fn main() -> int32 { let f = sum; let v: struct big; return f(v) as int32; }
     """
     )
-    with pytest.raises(LangError, match="cannot take a function value of 'sum'"):
-        compile_ir(src)
+    out = compile_ir(src)
+    assert 'i64 (%"big"*)*' in out

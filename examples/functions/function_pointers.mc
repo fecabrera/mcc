@@ -15,11 +15,12 @@ fn apply(op: fn(int32, int32) -> int32, x: int32, y: int32) -> int32 {
 // A variadic function-pointer type, `fn(A, ...) -> R` (a trailing `...` after
 // at least one fixed parameter), types a pointer to a C-variadic function --
 // so a printf-style function can be passed and called through with varargs.
-// (mcc's own `println` is not a function value: its format parameter is a
-// const slice passed by hidden reference, a contract no `fn(...)` type
-// expresses yet. `@nonnull` is the exception: a function type can spell that
-// contract per parameter, so a @nonnull function IS a legal value -- see
-// nonnull_callbacks.mc.)
+// (A function type can also spell the per-parameter `@nonnull` contract, so
+// a @nonnull function is a legal value too -- see nonnull_callbacks.mc --
+// and the `mut`/`const` hidden-reference conventions, so even mcc's own
+// `println`, whose format parameter is a const slice, is one -- see
+// mut_callbacks.mc. Only the compile-time @format desugars and `args...`
+// collection stay direct-call affordances.)
 fn log_with(printer: fn(char*, ...) -> int32, label: char*) {
     printer("logging from %s\n", label);
 }

@@ -80,13 +80,11 @@ points at — `const p: struct node*` means `p = ...` is rejected but `p->next =
 On a scalar it simply makes the parameter read-only.
 
 `const` is not allowed on `@extern` parameters (the hidden-reference ABI would
-not match the C function). A function with a `const` struct parameter also
-cannot be used as a function value (`let f = trace;`), because a plain
-`fn(struct matrix) -> ...` pointer type cannot express the hidden-reference
-calling convention. This is a limitation of the bare `fn(...)` type, not of the
-ABI — the two conventions are distinct at the machine level; a future
-`fn(const T)` function-pointer type could carry the convention and lift the
-restriction.
+not match the C function). A function with a `const` struct parameter is a
+legal function value (`let f = trace;`): its type spells the convention —
+`fn(const struct matrix) -> float64` — and is distinct from, and not
+convertible with, the by-value `fn(struct matrix) -> float64` (see
+[mut/const-carrying function types](#mutconst-carrying-function-types)).
 
 ### mut parameters
 
@@ -161,10 +159,11 @@ non-`mut` one does. The writability rules above are judged against the
 overload wins, and remains an error when a `mut` one does.
 
 Like `const`, `mut` is not allowed on `@extern` parameters (the
-hidden-reference ABI would not match the C function), and a function with a
-`mut` parameter cannot be used as a function value or exported to an
-[interface file](#interface-files) — the bare `fn(...)` type cannot express
-the convention (the same liftable limitation as `const`, see above).
+hidden-reference ABI would not match the C function). A function with a `mut`
+parameter is a legal function value: its type spells the convention —
+`fn(mut int32) -> bool` — and calls through the value enforce the same
+writable-lvalue rules as a direct call (see
+[mut/const-carrying function types](#mutconst-carrying-function-types)).
 
 See [examples/functions/mut_params.mc](../examples/functions/mut_params.mc)
 and, for overloads mixing `mut`,
@@ -2582,9 +2581,10 @@ initialized with one at compile time.
 A `const` (or `@static let`) may also name a single function, giving a
 compile-time **alias** you then call by its new name. The type is inferred from
 the function, so nothing needs spelling out — even a C variadic like `printf`
-aliases cleanly. (`println` itself is not a function value: its format
-parameter is a `const` slice passed by hidden reference, a calling
-convention no `fn(...)` type can express.)
+aliases cleanly. (`println` is a function value too, but a call through the
+value performs no [collection](#native-variadic-arguments): it takes the trailing
+`slice<const any>` explicitly — see
+[mut/const-carrying function types](#mutconst-carrying-function-types).)
 
 ```c
 const log = printf;           // an alias; the type is inferred
@@ -2603,7 +2603,9 @@ as `@static let ops: binop[] = [add, sub];` above.)
 A function value is a pointer underneath, so it casts like one: `add as
 uint64` is the function's address as an integer, `addr as fn(...) -> R`
 turns an address back into a callable pointer, and it bitcasts to/from a
-data pointer such as `uint8*`.
+data pointer such as `uint8*`. (One exception: an `as` directly between two
+function types whose `mut`/`const` parameter conventions differ is rejected —
+see [mut/const-carrying function types](#mutconst-carrying-function-types).)
 
 Only a single, non-generic function has an address; a generic name like
 `id` cannot be used as a value (there is no one instance to point at).
@@ -2665,15 +2667,96 @@ apply.
 `@nonnull` in a function type applies only to pointer parameters, checked
 where the type is used, so a generic alias like
 `type cb<T> = fn(@nonnull T) -> int32` is validated per binding
-(`cb<int32*>` is fine, `cb<int32>` is rejected). Only `@nonnull` may
-appear in this position: `@noalias` is an unchecked hint that drops
-silently from a function value, and `mut`/`const`-struct/`@format`
-parameters are hidden-reference conventions no `fn(...)` type expresses
-yet (their annotated-fn-type lift is a separate
-[roadmap](../ROADMAP.md) item that reuses this grammar slot).
+(`cb<int32*>` is fine, `cb<int32>` is rejected). It is the only
+**annotation** that may appear in this position — `@noalias` is an
+unchecked hint that drops silently from a function value, and `@format` is
+compile-time sugar keyed to a declaration, never part of a value's type.
+The `mut` and `const` keywords take the same slot and spell the
+hidden-reference calling conventions, described next.
 
 See
 [examples/functions/nonnull_callbacks.mc](../examples/functions/nonnull_callbacks.mc).
+
+### mut/const-carrying function types
+
+A function type may also spell the [`mut`](#mut-parameters) and
+[`const`](#const-parameters) parameter conventions: `fn(mut char) -> void`
+is the type of a function whose parameter is passed as a pointer to the
+caller's own storage, and `fn(const struct big) -> int64` one whose struct
+parameter travels by read-only hidden reference. The bare name of such a
+function infers the carrying type, and a call through the value passes the
+same by-reference arguments — and enforces the **same call-site rules** —
+as a direct call: the argument of a `mut` parameter must be the caller's
+own writable lvalue of exactly the parameter's type (or a provably non-null
+pointer to it, which decays), and the `const`/`@volatile`/`@packed`
+rejections all apply.
+
+```c
+fn bump(mut a: char) { a = a + 1; }
+
+fn main() -> int32 {
+    let f = bump;       // inferred: fn(mut char) -> void
+    let c: char = 'A';
+    f(c);               // passes &c underneath; c is now 'B'
+    return 0;           // f('x') is the same "not assignable" error
+}                       // a direct bump('x') gives
+```
+
+Unlike the `@nonnull` contract, the convention is **not convertible** — in
+either direction, with no `as` hatch. `fn(mut char)` and `fn(char)` receive
+their argument differently at the machine level (a pointer to storage
+versus the value itself), so no call sequence through the wrong type could
+be correct; the mismatch is rejected wherever the two meet, and the error
+says why no cast is offered:
+
+```
+error: line 3: let g: expected fn(char) -> void, got fn(mut char) -> void
+(a mut parameter is passed by hidden reference, a different calling
+convention; the types are not convertible)
+```
+
+An `as` between two function types is allowed only when their `mut`/`const`
+shape matches — a same-shape signature reinterpret, including stripping a
+`@nonnull` contract, still works. (Laundering through a data pointer,
+`f as uint8* as fn(char)`, remains possible and is undefined behavior,
+exactly like forging an address with `as fn(...)`.)
+
+`const` carries into the type only where it changes the convention — on an
+aggregate (a struct, union, slice, or tuple). On a by-value scalar it is
+not part of the convention and simply drops: `fn(const int32)` **is**
+`fn(int32)`, one type with one spelling. This is what makes a comparator
+alias transparent across kinds of `T`:
+
+```c
+type cmp<T> = fn(const T, const T) -> bool;
+
+fn less(a: int32, b: int32) -> bool { return a < b; }          // scalar T:
+let ci: cmp<int32> = less;                                     // const drops
+
+fn big_less(const a: struct big, const b: struct big) -> bool  // struct T:
+    { return a.a < b.a; }                                      // hidden ref
+let cb: cmp<struct big> = big_less;
+```
+
+Like the `@nonnull` contract, the convention is part of the type's
+identity: it is spelled in `.mci` [interface files](#interface-files),
+instantiates templates distinctly, and a prototype must spell it exactly as
+its definition does. A [`-> mut T` return](#mut-returns) is the one
+remaining convention a function type cannot express, so a `mut`-returning
+function still cannot become a function value.
+
+A [collecting](#native-variadic-arguments) function is a function value
+too — its trailing `args...` parameter is sugar for `const args:
+slice<const any>`, an aggregate `const`, so the value's type spells it
+(`fn(const slice<const any>) -> int32`). Collection is a **direct-call**
+affordance, though: a call through the value takes the trailing slice
+explicitly (forwarding an existing `args` is the common shape), and the
+compile-time `@format` desugars — positional `{n}` placeholders,
+f-strings — do not apply through a value either (the runtime sequential
+form still works, since the callee parses its format string at runtime).
+
+See
+[examples/functions/mut_callbacks.mc](../examples/functions/mut_callbacks.mc).
 
 ## Arrays
 

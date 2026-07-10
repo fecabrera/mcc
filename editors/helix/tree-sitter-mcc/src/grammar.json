@@ -1618,6 +1618,18 @@
                             }
                           },
                           {
+                            "type": "CHOICE",
+                            "members": [
+                              {
+                                "type": "STRING",
+                                "value": "mut"
+                              },
+                              {
+                                "type": "BLANK"
+                              }
+                            ]
+                          },
+                          {
                             "type": "SYMBOL",
                             "name": "_type"
                           }
@@ -1650,6 +1662,18 @@
                                     "type": "SYMBOL",
                                     "name": "annotation"
                                   }
+                                },
+                                {
+                                  "type": "CHOICE",
+                                  "members": [
+                                    {
+                                      "type": "STRING",
+                                      "value": "mut"
+                                    },
+                                    {
+                                      "type": "BLANK"
+                                    }
+                                  ]
                                 },
                                 {
                                   "type": "SYMBOL",

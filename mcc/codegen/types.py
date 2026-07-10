@@ -57,6 +57,16 @@ class LangType:
             interned ``name`` (so two function types differing only in the
             contract are distinct), and excluded from equality/hash like the
             other derived attributes -- the name is the identity.
+        mutref: Indices of the ``mut`` parameters of a function-pointer type --
+            passed as a pointer to the caller's storage, so a call through the
+            value enforces the same writable-lvalue rules as a direct call.
+            Spelled into the ``name`` (identity) and reflected in the LLVM
+            parameter type (a pointer); excluded from equality/hash like
+            ``nonnull``.
+        constref: Indices of the ``const``-aggregate parameters of a
+            function-pointer type -- passed by hidden reference like ``mut``,
+            but read-only. Spelled into the ``name`` and reflected in the LLVM
+            parameter type; excluded from equality/hash like ``nonnull``.
         element: Element type of a fixed-size array, else ``None``.
         count: Length of a fixed-size array, else ``None``.
         const: ``True`` for a read-only ``const T`` view -- IR-identical to
@@ -87,6 +97,8 @@ class LangType:
     elem_indices: tuple | None = field(default=None, compare=False)
     signature: tuple | None = None
     nonnull: frozenset = field(default=frozenset(), compare=False)
+    mutref: frozenset = field(default=frozenset(), compare=False)
+    constref: frozenset = field(default=frozenset(), compare=False)
     element: "LangType | None" = None
     count: int | None = None
     const: bool = False
@@ -254,11 +266,22 @@ def function_type(
     params: tuple,
     variadic: bool = False,
     nonnull: frozenset = frozenset(),
+    mutref: frozenset = frozenset(),
+    constref: frozenset = frozenset(),
 ) -> LangType:
     """Build a function-pointer type, e.g. ``fn(int32, int32) -> int32``.
 
     Its LLVM type is a pointer to the LLVM function type, so a value of it is
     callable directly.
+
+    The one canonicalization point for the parameter qualifiers: a ``const``
+    qualifier on a parameter type is stripped here -- on an aggregate it
+    records the hidden-reference index (the calling convention it implies),
+    on a scalar it simply drops (``fn(const int32)`` *is* ``fn(int32)``: a
+    by-value copy is read-only to the caller either way). Both producers --
+    a spelled ``fn(...)`` type resolving possibly-``const`` parameter types,
+    and a function value deriving the sets from a declaration's registries --
+    funnel through here, so the two spellings build one identical type.
 
     Args:
         ret: The return type.
@@ -268,13 +291,37 @@ def function_type(
             the type carries, spelled into its name (so
             ``fn(@nonnull char*) -> void`` is distinct from its plain form)
             and checked at calls through a value of the type.
+        mutref: Indices of ``mut`` parameters -- passed as a pointer to the
+            caller's own storage, spelled into the name and the LLVM type.
+        constref: Indices of ``const`` aggregate parameters -- passed by
+            hidden (read-only) reference; unioned with the indices derived
+            from ``const``-qualified aggregate types in ``params``.
 
     Returns:
         A ``LangType`` for the function-pointer type.
     """
-    fnty = ir.FunctionType(ret.ir, [p.ir for p in params], var_arg=variadic)
+    stripped = []
+    derived = set(constref)
+    for i, p in enumerate(params):
+        if p.const:
+            p = strip_const(p)
+            if is_aggregate(p):
+                derived.add(i)  # a scalar's const drops instead (see above)
+        stripped.append(p)
+    params = tuple(stripped)
+    constref = frozenset(derived)
+    hidden = mutref | constref
+    fnty = ir.FunctionType(
+        ret.ir,
+        [p.ir.as_pointer() if i in hidden else p.ir for i, p in enumerate(params)],
+        var_arg=variadic,
+    )
     parts = [
-        ("@nonnull " if i in nonnull else "") + p.name for i, p in enumerate(params)
+        ("@nonnull " if i in nonnull else "")
+        + ("mut " if i in mutref else "")
+        + ("const " if i in constref else "")
+        + p.name
+        for i, p in enumerate(params)
     ]
     if variadic:
         parts.append("...")
@@ -283,8 +330,10 @@ def function_type(
         name,
         fnty.as_pointer(),
         signed=False,
-        signature=(ret, tuple(params), variadic),
+        signature=(ret, params, variadic),
         nonnull=nonnull,
+        mutref=mutref,
+        constref=constref,
     )
 
 

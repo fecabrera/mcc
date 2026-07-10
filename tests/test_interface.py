@@ -773,16 +773,15 @@ def test_proto_plus_definition_pairs_as_a_forward_declaration():
     assert 'define i32 @"f"' in out
 
 
-def test_function_value_of_mut_proto_is_rejected():
-    # The hidden-reference registration comes from the signature alone, so the
-    # function-value gate applies to a proto exactly as to a local definition.
-    with pytest.raises(
-        LangError, match="cannot take a function value of 'set'"
-    ):
-        compile_ir(
-            "fn set(mut out: int32);\n"
-            "fn main() -> int32 { let p = set; return 0; }"
-        )
+def test_function_value_of_mut_proto():
+    # The hidden-reference registration comes from the signature alone, so a
+    # proto's function value spells the mut convention exactly as a local
+    # definition's does.
+    out = compile_ir(
+        "fn set(mut out: int32);\n"
+        "fn main() -> int32 { let p = set; return 0; }"
+    )
+    assert "void (i32*)*" in out
 
 
 # -------------------------------------------------------------- @deprecated

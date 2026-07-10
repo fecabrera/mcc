@@ -816,8 +816,24 @@ class Parser:
                     )
                 is_nonnull = True
                 self.advance()
+            # `mut` before the type, as in a declaration (`const` rides in
+            # through parse_type_ref); the declaration-side compose bans
+            # apply verbatim.
+            mut_tok = self.cur if self.cur.kind == "mut" else None
+            is_mut = bool(self.accept("mut"))
+            if is_nonnull and is_mut:
+                raise LangError(
+                    "a parameter cannot be both @nonnull and mut "
+                    "(a mut parameter is passed by reference and is never null)",
+                    mut_tok.line,
+                )
             ref = self.parse_type_ref()
+            if is_mut and ref.const:
+                raise LangError(
+                    "a parameter cannot be both const and mut", mut_tok.line
+                )
             ref.nonnull = is_nonnull
+            ref.mut = is_mut
             params.append(ref)
         self.expect(")")
         ret = self.parse_type_ref() if self.accept("->") else TypeRef("void")

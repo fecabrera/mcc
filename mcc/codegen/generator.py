@@ -2774,6 +2774,7 @@ class CodeGen:
             ret = self.lang_type(ref.ret, line)
             params = tuple(self.lang_type(p, line) for p in ref.params)
             nonnull = frozenset(i for i, p in enumerate(ref.params) if p.nonnull)
+            mutref = frozenset(i for i, p in enumerate(ref.params) if p.mut)
             # Checked per use, so a generic alias like `type cb<T> =
             # fn(@nonnull T*)` is validated against each binding (mirrors
             # mark_nonnull's declaration-site rule).
@@ -2782,7 +2783,11 @@ class CodeGen:
                     raise LangError(
                         "@nonnull only applies to pointer parameters", line
                     )
-            base = function_type(ret, params, ref.variadic, nonnull)
+            # A `const` qualifier canonicalizes inside function_type: on an
+            # aggregate it records the hidden-reference index, on a scalar it
+            # drops -- per use, so `type cmp<T> = fn(const T, const T)` gets
+            # the right convention at each binding.
+            base = function_type(ret, params, ref.variadic, nonnull, mutref)
             for _ in range(ref.stars):
                 base = pointer_to(base)
             return self.apply_dims(base, ref.dims, line)
@@ -5283,12 +5288,18 @@ class CodeGen:
         # call-site proof obligation the plain function tolerates), never the
         # reverse -- a call through the plain type would skip the proof. The
         # contract lives outside the LLVM type, so the value passes through
-        # retyped. Flat variance: fn values only, no deep variance through
-        # slices, nested fn types, or any.
+        # retyped. The mut/const hidden-reference shape must match exactly:
+        # it is a calling convention, not a contract (signatures store the
+        # plain parameter types, so this gate is what keeps fn(mut char)
+        # from silently retyping to fn(char) across the ABI). Flat variance:
+        # fn values only, no deep variance through slices, nested fn types,
+        # or any.
         if (
             is_function(expected)
             and is_function(tv.type)
             and tv.type.signature == expected.signature
+            and tv.type.mutref == expected.mutref
+            and tv.type.constref == expected.constref
             and tv.type.nonnull <= expected.nonnull
         ):
             return TypedValue(tv.value, expected)
@@ -5324,13 +5335,17 @@ class CodeGen:
     def reject_nonnull_drop(
         self, src: LangType, expected: LangType, line: int, context: str
     ):
-        """Report a function-type mismatch that only drops a ``@nonnull``.
+        """Report a function-type mismatch between two same-signature types.
 
         The hinted variant of the coercion failure, shared by :meth:`coerce`
-        and :meth:`const_coerce`: when two function-pointer types share one
-        underlying signature and differ only in the ``@nonnull`` contract,
-        the mismatch is the dropping direction of the contravariant rule, and
-        the error says why it is banned and names the explicit hatch.
+        and :meth:`const_coerce`, for two function-pointer types sharing one
+        underlying signature. A differing ``mut``/``const`` hidden-reference
+        shape is a calling-convention mismatch: the two types are simply not
+        convertible, and the error says so with **no** hatch (an ``as`` here
+        would be a miscompile recipe -- the callee reads a pointer where the
+        caller passed a value, or vice versa). Otherwise the mismatch is the
+        dropping direction of the ``@nonnull`` contravariant rule, and the
+        error says why it is banned and names the explicit ``as`` hatch.
 
         Args:
             src: The value's function-pointer type.
@@ -5339,13 +5354,22 @@ class CodeGen:
             context: A label describing the site, for the error message.
 
         Raises:
-            LangError: When the mismatch is exactly a dropped ``@nonnull``.
+            LangError: When the mismatch is a hidden-reference shape change or
+                exactly a dropped ``@nonnull``.
         """
         if (
             is_function(expected)
             and is_function(src)
             and src.signature == expected.signature
         ):
+            if src.mutref != expected.mutref or src.constref != expected.constref:
+                kind = "mut" if src.mutref != expected.mutref else "const"
+                raise LangError(
+                    f"{context}: expected {expected}, got {src} (a {kind} "
+                    "parameter is passed by hidden reference, a different "
+                    "calling convention; the types are not convertible)",
+                    line,
+                )
             raise LangError(
                 f"{context}: expected {expected}, got {src} (a @nonnull "
                 "contract cannot be dropped: a call through the plain type "
@@ -8762,6 +8786,23 @@ class CodeGen:
         # A function value is a pointer underneath (LLVM `ret (args)*`), so it
         # casts like one: between pointer kinds, and to/from a 64-bit integer
         # address -- exactly as a function name converts to an address in C.
+        # One carve-out: between two function types, the mut/const
+        # hidden-reference shape must match. Same-shape reinterpretation
+        # (including stripping a @nonnull contract) stays open, but a shape
+        # change is a calling-convention change -- there is no call sequence
+        # an `as` could make correct, so it is not offered.
+        if (
+            is_function(src)
+            and is_function(target)
+            and (src.mutref != target.mutref or src.constref != target.constref)
+        ):
+            kind = "mut" if src.mutref != target.mutref else "const"
+            raise LangError(
+                f"cannot cast {src} to {target}: a {kind} parameter is "
+                "passed by hidden reference, a different calling "
+                "convention; the types are not convertible",
+                expr.line,
+            )
         src_addr = is_pointer(src) or is_function(src)
         target_addr = is_pointer(target) or is_function(target)
         if src_addr and target_addr:
@@ -9981,10 +10022,14 @@ class CodeGen:
         # The @nonnull contravariant rule, mirroring coerce: a plain function
         # constant initializes an annotated slot (so a @static table of
         # fn(@nonnull ...) values accepts plain members), never the reverse.
+        # The mut/const hidden-reference shape must match exactly -- it is a
+        # calling convention, not a contract (see coerce).
         if (
             is_function(expected)
             and is_function(tv.type)
             and tv.type.signature == expected.signature
+            and tv.type.mutref == expected.mutref
+            and tv.type.constref == expected.constref
             and tv.type.nonnull <= expected.nonnull
         ):
             return TypedValue(tv.value, expected)
@@ -10414,15 +10459,6 @@ class CodeGen:
             symbol = name
         if symbol is None:
             return None
-        if self.hidden_ref.get(symbol):
-            # The function takes a const struct or mut parameter by hidden
-            # pointer, an ABI a plain fn(...) -> R pointer type cannot express.
-            kind = "mut" if self.mut_ref.get(symbol) else "const struct"
-            raise LangError(
-                f"cannot take a function value of {name!r}: it has {kind} "
-                "parameters (passed by hidden reference)",
-                line,
-            )
         if symbol in self.mut_ret:
             # The pointer-typed return (and the lvalue-ness of a call) is
             # invisible to a plain fn(...) -> T type; a call through the
@@ -10436,9 +10472,12 @@ class CodeGen:
         # through the pointer are indirect and can no longer be attributed.
         self.warn_deprecated(name, self.deprecated_syms.get(symbol), line)
         ret, params, variadic = self.signatures[symbol]
-        # The value's type spells the function's @nonnull contract, so a call
-        # through it runs the same call-site null proof as a direct call --
-        # this is what lets a @nonnull function be a function value at all.
+        # The value's type spells the function's whole call contract --
+        # @nonnull, mut, and const-aggregate hidden references -- so a call
+        # through it runs the same call-site checks and passes the same
+        # by-reference arguments as a direct call. This is what lets an
+        # annotated or hidden-reference function be a function value at all.
+        mutref = self.mut_ref.get(symbol, frozenset())
         return TypedValue(
             self.funcs[symbol],
             function_type(
@@ -10446,6 +10485,8 @@ class CodeGen:
                 tuple(params),
                 variadic,
                 self.nonnull_ref.get(symbol, frozenset()),
+                mutref,
+                self.hidden_ref.get(symbol, frozenset()) - mutref,
             ),
         )
 
@@ -10609,13 +10650,22 @@ class CodeGen:
         if not is_function(callee.type):
             raise LangError(f"cannot call a value of type {callee.type}", line)
         ret, params, variadic = callee.type.signature
-        # The type's @nonnull contract runs the same call-site proof as a
-        # direct call (flow-narrowing and the postfix `!` hatch included).
-        # Always strict: even a value of an @extern function checks
-        # unconditionally -- the indirect call can no longer be attributed,
-        # so the graded extern posture does not apply.
+        # The type's contract runs the same call-site rules as a direct call:
+        # the @nonnull proof (flow-narrowing and the postfix `!` hatch
+        # included), the writable-lvalue rules for mut, and the by-reference
+        # handover for mut and const-aggregate parameters. Always strict:
+        # even a value of an @extern function checks unconditionally -- the
+        # indirect call can no longer be attributed, so the graded extern
+        # posture does not apply.
         args = self.marshal_args(
-            arg_exprs, params, variadic, label, line, nonnull=callee.type.nonnull
+            arg_exprs,
+            params,
+            variadic,
+            label,
+            line,
+            hidden=callee.type.mutref | callee.type.constref,
+            mut=callee.type.mutref,
+            nonnull=callee.type.nonnull,
         )
         return TypedValue(self.emit_call(callee.value, args), ret)
 
@@ -11755,9 +11805,10 @@ class CodeGen:
         # path facts anyway today -- but the lend itself is the mut hand-off,
         # and the point invalidation must not depend on the blanket kill
         # staying blanket. The point invalidation is sound because & of a mut
-        # parameter is banned and a function with mut parameters cannot
-        # become a function value, so the callee cannot leak the address past
-        # the call.
+        # parameter is banned, so the callee cannot leak the address past the
+        # call (re-lending it as a further mut argument is bounded by the
+        # call the same way; a function value captures a function's address,
+        # never a lent argument's).
         if isinstance(arg_expr, Var):
             self.narrowed_nonnull.discard(arg_expr.name)
             self.kill_paths_rooted(arg_expr.name)

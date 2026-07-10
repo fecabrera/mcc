@@ -221,14 +221,14 @@ already do).
     counting the alias's own parameters as external references, mirroring
     structs; import merging keeps rejecting duplicates by name. Parameter
     defaults (the item below) and bounds extend naturally to alias
-    parameters when they land. One deliberate exclusion: a
+    parameters when they land. The one deliberate exclusion — a
     convention-carrying comparator type (`fn(const T, const T) -> bool`)
-    is not this item's job. Today a const-scalar function's value type
-    erases the `const` and a const-struct function cannot be a function
-    value at all, so `const` in a written `fn(...)` type has nothing to
-    match; carrying `const`/`mut` in the function-pointer type is the
-    [`mut` item](#functions-and-methods)'s planned lift, which `cmp`
-    then picks up transparently
+    — has since been filled: the [`mut` item](#functions-and-methods)'s
+    convention-carrying function types carry `const`/`mut` in the
+    function-pointer type (a const-scalar spelling erases, a
+    const-aggregate one records the hidden reference, classified per
+    binding), so `cmp<T>` picked it up transparently at scalar and
+    struct `T` alike, exactly as planned
   - [x] [defaults](docs/language.md#type-parameter-defaults) — a declared
         fallback type parameter, on functions
         (`fn myfunc<T = uint8*>(x: T) { ... }`) and structs
@@ -1025,13 +1025,12 @@ already do).
       counterpart to handing out a raw `T*`. In an rvalue position a `mut T`
       auto-derefs to `T` (copy on read, compare); in an lvalue position it
       writes through. Inherits `const`'s restrictions: not allowed on `@extern`
-      parameters (ABI mismatch) and a function using it cannot **initially** be
-      taken as a plain `fn(...)` value — the hidden-reference convention isn't
-      carried by the bare `fn(...)` type. That is a source-level type-system
-      simplification, not an ABI limit (LLVM already types the two conventions
-      distinctly), and can later be lifted by making `mut`/`const` part of the
-      function-pointer type — a distinct, non-coercible `fn(mut T)` — which is
-      also what makes the view-table reconciliation below rigorous. Note
+      parameters (ABI mismatch). A function using it initially could not be
+      taken as a plain `fn(...)` value — the hidden-reference convention wasn't
+      carried by the bare `fn(...)` type, a source-level type-system
+      simplification, not an ABI limit — a restriction since lifted by the
+      convention-carrying function types nested below, which are also what
+      makes the view-table reconciliation below rigorous. Note
       that, unlike `const`, `mut` on a **scalar**
       changes the calling convention (always by hidden reference) — that is the
       only way a write reaches the caller:
@@ -1043,6 +1042,29 @@ already do).
         storage of exactly the parameter's type; generics are supported
         (`swap<T>(mut a: T, mut b: T)`); implemented, see
         [mut parameters](docs/language.md#mut-parameters)
+  - [x] convention-carrying function types — `mut`/`const` became part of the
+        function-pointer type: `fn(mut char)` / `fn(const struct big)` is a
+        **distinct, non-coercible** type — in either direction, with no `as`
+        hatch, since the hidden-reference convention is a calling-convention
+        fact no cast could bridge (the error says so instead of offering one).
+        The bare name of a `mut`/`const`-taking function infers the carrying
+        type, and calls through the value pass the same by-reference arguments
+        and run the same lvalue/storage checks (and proven pointer decay) as a
+        direct call. `const` carries only where it changes the convention —
+        on an aggregate; on a by-value scalar it erases at type formation, so
+        `fn(const int32)` *is* `fn(int32)` (no spelled-but-uninhabitable
+        types), and the generic-aliases item's deferred comparator
+        (`type cmp<T> = fn(const T, const T) -> bool`) became inhabitable
+        transparently at scalar and struct `T` alike. Collecting functions
+        ride along (`args...` is sugar for a `const` slice parameter): legal
+        values whose calls take the trailing slice explicitly — collection
+        and the `@format` desugars stay direct-call affordances; implemented,
+        see [mut/const-carrying function
+        types](docs/language.md#mutconst-carrying-function-types):
+    - [ ] `-> mut T` in function types — the one remaining convention a
+          `fn(...)` type cannot express: a `mut`-returning function still
+          cannot become a function value, since the returned lvalue-ness
+          would be invisible to the plain `-> T` spelling
   - [x] generic overloads mixing `mut` — overloads of one generic name may
         disagree on which positions are `mut`: at a position any candidate
         marks `mut`, an lvalue argument's address is formed up front and the
@@ -2062,13 +2084,13 @@ already do).
         hatch, a free bitcast whose calls skip the proof (UB if the
         argument is actually null, mirroring `p!`). Variance is flat:
         fn values only, no deep variance through slices or nested fn
-        types. Scope is `@nonnull` alone: `@noalias` stays an unchecked
-        hint that drops silently from a fn value, and `mut`/`const` in
-        fn types remain the [`mut` item](#functions-and-methods)'s
-        separate, non-coercible lift, which reuses the annotated-fn-type
-        grammar slot this item built (the two sibling bans at the same
-        rejection site, hidden-reference `const`-struct/`mut` parameters
-        and `mut` returns, are ABI-level and stay). One accepted
+        types. Scope was `@nonnull` alone: `@noalias` stays an unchecked
+        hint that drops silently from a fn value, while `mut`/`const` in
+        fn types — the [`mut` item](#functions-and-methods)'s separate,
+        non-coercible lift — have since shipped reusing the
+        annotated-fn-type grammar slot this item built (of the two
+        sibling bans at the old rejection site only the `mut`-return ban
+        remains, as that convention is still inexpressible). One accepted
         asymmetry, documented with the feature: a fn value of a
         `@nonnull` `@extern` (`let f = strlen;`) carries the contract,
         so calls through the pointer check strictly, while direct

@@ -33,6 +33,9 @@ class TypeRef:
             parameter position of a ``fn(...)`` type, where it spells the
             per-parameter non-null contract the function value carries, as in
             ``fn(@nonnull char*) -> void``.
+        mut: A leading ``mut`` keyword -- meaningful only in the parameter
+            position of a ``fn(...)`` type, where it spells a by-reference
+            writable parameter, as in ``fn(mut char) -> void``.
     """
 
     name: str
@@ -44,6 +47,7 @@ class TypeRef:
     const: bool = False  # a leading `const` read-only qualifier
     variadic: bool = False  # a trailing `...` in a fn(...) type's parameters
     nonnull: bool = False  # a leading `@nonnull` (fn-type parameter position)
+    mut: bool = False  # a leading `mut` (fn-type parameter position)
 
     def __str__(self) -> str:
         """Render the type back to its source spelling.
@@ -65,6 +69,7 @@ class TypeRef:
         dims = "".join(f"[{render_dim(d)}]" for d in self.dims)
         return (
             ("@nonnull " if self.nonnull else "")
+            + ("mut " if self.mut else "")
             + ("const " if self.const else "")
             + text
             + "*" * self.stars

@@ -330,9 +330,14 @@ module.exports = grammar({
           'fn',
           '(',
           // A parameter type takes the per-parameter annotation slot
-          // (`fn(@nonnull char*) -> int32` carries the @nonnull contract).
+          // (`fn(@nonnull char*) -> int32` carries the @nonnull contract)
+          // and a `mut` marker (`fn(mut char)` spells the by-reference
+          // convention); `const` rides in through const_type.
           commaSep(
-            choice(seq(repeat($.annotation), $._type), $.variadic_parameter),
+            choice(
+              seq(repeat($.annotation), optional('mut'), $._type),
+              $.variadic_parameter,
+            ),
           ),
           ')',
           optional(seq('->', $._type)),

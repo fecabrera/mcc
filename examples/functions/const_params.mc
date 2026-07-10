@@ -52,5 +52,7 @@ fn main() -> int32 {
 }
 
 // See also: mut_params.mc (write-through, the dual of const), the pointer
-// promises in noalias.mc (@noalias) and nonnull.mc (@nonnull), and
-// pointer_decay.mc for a proven-non-null T* decaying into a const-struct slot.
+// promises in noalias.mc (@noalias) and nonnull.mc (@nonnull),
+// pointer_decay.mc for a proven-non-null T* decaying into a const-struct
+// slot, and mut_callbacks.mc for `fn(const struct ...)` function types
+// carrying this hidden-reference convention into callbacks.

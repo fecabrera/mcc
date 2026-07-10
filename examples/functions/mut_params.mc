@@ -79,4 +79,5 @@ fn main() -> int32 {
 // for the return-side counterpart, `-> mut T` functions returning lvalues;
 // mut_overloads.mc for overloads of one generic name mixing mut and
 // non-mut positions; pointer_decay.mc for a proven-non-null T* decaying
-// into a mut slot.
+// into a mut slot; mut_callbacks.mc for `fn(mut T)` function types, which
+// make a mut-taking function a legal callback and dispatch-table entry.
