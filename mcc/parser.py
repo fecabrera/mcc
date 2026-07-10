@@ -801,7 +801,24 @@ class Parser:
                     raise LangError("'...' must be the last parameter", ellipsis.line)
                 variadic = True
                 break
-            params.append(self.parse_type_ref())
+            # The per-parameter annotation slot, mirroring a declaration's
+            # parameter list. Only @nonnull is part of the call contract a
+            # function value carries; the other parameter annotations are
+            # rejected with a pointer to why.
+            is_nonnull = False
+            while self.cur.kind == "ANNOT":
+                if self.cur.text != "@nonnull":
+                    raise LangError(
+                        f"{self.cur.text} does not apply in a function type; "
+                        "only @nonnull is part of a function value's call "
+                        "contract",
+                        self.cur.line,
+                    )
+                is_nonnull = True
+                self.advance()
+            ref = self.parse_type_ref()
+            ref.nonnull = is_nonnull
+            params.append(ref)
         self.expect(")")
         ret = self.parse_type_ref() if self.accept("->") else TypeRef("void")
         return TypeRef(

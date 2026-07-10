@@ -329,7 +329,11 @@ module.exports = grammar({
         seq(
           'fn',
           '(',
-          commaSep(choice($._type, $.variadic_parameter)),
+          // A parameter type takes the per-parameter annotation slot
+          // (`fn(@nonnull char*) -> int32` carries the @nonnull contract).
+          commaSep(
+            choice(seq(repeat($.annotation), $._type), $.variadic_parameter),
+          ),
           ')',
           optional(seq('->', $._type)),
         ),

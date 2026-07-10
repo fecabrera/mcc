@@ -3631,6 +3631,10 @@
       "required": false,
       "types": [
         {
+          "type": "annotation",
+          "named": true
+        },
+        {
           "type": "array_type",
           "named": true
         },

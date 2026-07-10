@@ -56,6 +56,27 @@ def test_native_build_links_template_pattern_symbols(tmp_path):
     assert out.returncode == 0
 
 
+def test_native_build_links_nonnull_fn_type_instance_symbols(tmp_path):
+    # A template instantiated with a @nonnull-carrying function type mangles
+    # the annotation into the instance symbol (`pick<fn(@nonnull char*) ->
+    # int32>`): the `@` must survive `cc` on the host object format, like the
+    # `$`/parens/spaces of the pattern symbols above.
+    src = tmp_path / "nonnull_fn.mc"
+    src.write_text(
+        "fn first(@nonnull p: char*) -> int32 { return 7; }\n"
+        "fn pick<T>(f: T) -> T { return f; }\n"
+        "fn main() -> int32 {\n"
+        "    let f = pick<fn(@nonnull char*) -> int32>(first);\n"
+        '    return f("x") - 7;\n'
+        "}\n"
+    )
+    exe = tmp_path / "nonnull_fn"
+    result = mcc(src, "-o", exe)
+    assert result.returncode == 0, result.stderr
+    out = subprocess.run([exe], capture_output=True, text=True)
+    assert out.returncode == 0
+
+
 def test_native_build_links_libm(tmp_path):
     # math.h functions require libm; the driver links -lm.
     src = tmp_path / "trig.mc"

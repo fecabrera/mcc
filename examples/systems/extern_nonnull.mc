@@ -107,6 +107,9 @@ fn main() -> int32 {
 
 // See also: functions/nonnull.mc for @nonnull itself and the always-non-null
 // proof sources, functions/nonnull_narrowing.mc for the null-check guards used
-// above; systems/extern.mc for the `@extern` boundary and variadics;
+// above; functions/nonnull_callbacks.mc for the asymmetry's other half: a
+// function *value* of a @nonnull extern (`let f = strlen;`) carries the
+// contract and checks strictly, with no posture to grade the indirect call;
+// systems/extern.mc for the `@extern` boundary and variadics;
 // types/unchecked_dereference.mc and control-flow/dead_code.mc for the two
 // other opt-in warning classes riding the same -W<name> / -Werror framework.

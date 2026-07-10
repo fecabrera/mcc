@@ -601,9 +601,11 @@ reassigned, cannot have its address taken (a `T**` could store null through
 it), cannot be passed as a `mut` argument (the callee writes through a
 hidden reference and could store null into the parameter's storage), and a
 shadowing `let` of the same name is a fresh, unproven binding. A
-function with `@nonnull` parameters cannot be used as a function value — the
-plain `fn(...)` type cannot carry the contract, and a call through the
-pointer would skip the proof check.
+function with `@nonnull` parameters is a legal function value: the function
+type spells the contract (`fn(@nonnull int32*) -> int32`), `let f = first;`
+infers it, and a call through the value runs the same call-site proof as a
+direct call — see
+[@nonnull-carrying function types](#nonnull-carrying-function-types).
 
 Like `@noalias`, the annotation precedes any `const` (`@nonnull const p: T*`
 composes; the two annotations combine in either order), changes **no ABI**,
@@ -2581,9 +2583,8 @@ A `const` (or `@static let`) may also name a single function, giving a
 compile-time **alias** you then call by its new name. The type is inferred from
 the function, so nothing needs spelling out — even a C variadic like `printf`
 aliases cleanly. (`println` itself is not a function value: its format
-parameter is a `const` slice passed by hidden reference, a contract the plain
-`fn(...)` type cannot carry — the same rule that excludes `@nonnull`
-functions.)
+parameter is a `const` slice passed by hidden reference, a calling
+convention no `fn(...)` type can express.)
 
 ```c
 const log = printf;           // an alias; the type is inferred
@@ -2606,6 +2607,73 @@ data pointer such as `uint8*`.
 
 Only a single, non-generic function has an address; a generic name like
 `id` cannot be used as a value (there is no one instance to point at).
+
+### @nonnull-carrying function types
+
+A function type may spell a [`@nonnull`](#nonnull-parameters) contract per
+parameter: `fn(@nonnull char*, @nonnull char*) -> int32` is the type of a
+function whose arguments must be provably non-null. The bare name of a
+`@nonnull` function infers the annotated type, and a call through the value
+runs the **same call-site proof as a direct call** — flow narrowing and the
+postfix `!` hatch included:
+
+```c
+fn first(@nonnull p: int32*) -> int32 { return *p; }
+
+fn main() -> int32 {
+    let f = first;      // inferred: fn(@nonnull int32*) -> int32
+    let x: int32 = 5;
+    return f(&x);       // &x is a proof, exactly as in first(&x)
+                        // f(q) with an unproven q is the same compile
+                        // error a direct call gives; f(q!) asserts
+}
+```
+
+Assignability along the contract axis is **contravariant**. A plain function
+value flows into an annotated slot — the annotation only adds a call-site
+obligation, which a function that tolerates null meets trivially. The
+reverse is rejected: binding an annotated value to a plain fn type would
+let calls skip the proof, so the error explains the drop and names the
+hatch. The explicit hatch is `as`: casting to the plain type strips the
+contract as a free bitcast, and calls through the result skip the proof —
+undefined behavior if an argument is actually null, exactly like `p!`.
+
+```c
+fn plain(p: int32*) -> int32 { return p == null ? -1 : *p; }
+
+let g: fn(@nonnull int32*) -> int32 = plain;    // ok: adds the obligation
+let h: fn(int32*) -> int32 = first;             // error: drops the contract
+let k = first as fn(int32*) -> int32;           // the hatch: UB if null
+```
+
+Variance is flat: the rule applies to function values themselves, never
+deeply through slices, arrays of function types, nested fn types, or `any`.
+The contract is part of the type's identity — a `@static` dispatch table
+typed `(fn(@nonnull int32*) -> int32)[]` accepts plain members, `.mci`
+[interface files](#interface-files) spell the annotation in prototypes, a
+template instantiated with `fn(@nonnull char*) -> int32` is a distinct
+instance from the plain form, and a prototype must spell the contract
+exactly as its definition does.
+
+One accepted asymmetry: a function value of a `@nonnull` `@extern`
+(`let f = strlen;`) carries the contract, and calls through the value check
+**strictly**, while direct extern calls keep grading by the
+[-Wextern-nonnull](#-wextern-nonnull) posture — an indirect call can no
+longer be attributed to an extern declaration, so the graded posture cannot
+apply.
+
+`@nonnull` in a function type applies only to pointer parameters, checked
+where the type is used, so a generic alias like
+`type cb<T> = fn(@nonnull T) -> int32` is validated per binding
+(`cb<int32*>` is fine, `cb<int32>` is rejected). Only `@nonnull` may
+appear in this position: `@noalias` is an unchecked hint that drops
+silently from a function value, and `mut`/`const`-struct/`@format`
+parameters are hidden-reference conventions no `fn(...)` type expresses
+yet (their annotated-fn-type lift is a separate
+[roadmap](../ROADMAP.md) item that reuses this grammar slot).
+
+See
+[examples/functions/nonnull_callbacks.mc](../examples/functions/nonnull_callbacks.mc).
 
 ## Arrays
 

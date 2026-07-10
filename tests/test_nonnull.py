@@ -1,5 +1,7 @@
 """``@nonnull`` parameters: a checked non-null refinement over ``T*``."""
 
+import re
+
 import pytest
 
 from mcc.codegen import CodeGen
@@ -475,9 +477,19 @@ def test_shadowing_let_drops_the_fact():
         )
 
 
-def test_function_value_of_nonnull_function_rejected():
+def test_function_value_of_nonnull_function_keeps_the_contract():
+    # A @nonnull function is a legal function value, but its contract rides
+    # along in the type: binding it to a plain fn type would let calls skip
+    # the null proof, so the dropping direction is rejected with the hint.
     with pytest.raises(
-        LangError, match="cannot take a function value of 'first'"
+        LangError,
+        match=re.escape(
+            "let f: expected fn(int32*) -> int32, got "
+            "fn(@nonnull int32*) -> int32 (a @nonnull contract cannot be "
+            "dropped: a call through the plain type would skip the "
+            "call-site null proof; cast with 'as fn(int32*) -> int32' to "
+            "strip it explicitly, making a null argument undefined behavior)"
+        ),
     ):
         compile_ir(
             FIRST + "fn main() -> int32 {\n"
@@ -2433,3 +2445,487 @@ def test_stdlib_accepts_guarded_heap_pointer():
         }
         """
     ) == 42
+
+
+# ----------------------------------------- @nonnull-carrying function types
+
+# The function type spells the per-parameter contract (`fn(@nonnull int32*)`),
+# so a @nonnull function is a legal function value and calls through the value
+# run the same call-site null proof as direct calls. Assignability is
+# contravariant: plain lifts into annotated, annotated never drops to plain.
+
+SECOND = "fn second(p: int32*) -> int32 { return -1; }\n"
+
+DROP_HINT = (
+    "expected fn(int32*) -> int32, got fn(@nonnull int32*) -> int32 "
+    "(a @nonnull contract cannot be dropped: a call through the plain type "
+    "would skip the call-site null proof; cast with 'as fn(int32*) -> int32' "
+    "to strip it explicitly, making a null argument undefined behavior)"
+)
+
+
+def test_fn_value_of_nonnull_function_infers_annotated_type():
+    # The motivating case: the old rejection site is now the inference site.
+    assert run(
+        FIRST + "fn main() -> int32 {\n"
+        "    let f = first;\n"
+        "    let x: int32 = 5;\n"
+        "    return f(&x);\n"
+        "}"
+    ) == 5
+
+
+def test_fn_value_call_rejects_null_literal():
+    with pytest.raises(
+        LangError,
+        match="cannot pass null as argument 1 of 'f': the parameter is @nonnull",
+    ):
+        compile_ir(
+            FIRST + "fn main() -> int32 {\n"
+            "    let f = first;\n"
+            "    return f(null);\n"
+            "}"
+        )
+
+
+def test_fn_value_call_rejects_unproven_pointer():
+    with pytest.raises(
+        LangError, match="cannot pass a possibly-null pointer as argument 1 of 'f'"
+    ):
+        compile_ir(
+            FIRST + "fn make() -> int32* { return null; }\n"
+            "fn main() -> int32 {\n"
+            "    let f = first;\n"
+            "    let p: int32* = make();\n"
+            "    return f(p);\n"
+            "}"
+        )
+
+
+def test_fn_value_call_accepts_narrowed_pointer():
+    # Flow-narrowing applies identically through the value.
+    assert run(
+        FIRST + "fn make(a: int32*) -> int32* { return a; }\n"
+        "fn main() -> int32 {\n"
+        "    let f = first;\n"
+        "    let x: int32 = 7;\n"
+        "    let p: int32* = make(&x);\n"
+        "    if (p != null) { return f(p); }\n"
+        "    return 0;\n"
+        "}"
+    ) == 7
+
+
+def test_fn_value_call_accepts_hatch():
+    # The postfix `!` assertion applies identically through the value.
+    assert run(
+        FIRST + "fn make(a: int32*) -> int32* { return a; }\n"
+        "fn main() -> int32 {\n"
+        "    let f = first;\n"
+        "    let x: int32 = 9;\n"
+        "    let p: int32* = make(&x);\n"
+        "    return f(p!);\n"
+        "}"
+    ) == 9
+
+
+def test_explicit_annotated_type_checks_calls():
+    with pytest.raises(LangError, match="cannot pass null as argument 1 of 'f'"):
+        compile_ir(
+            FIRST + "fn main() -> int32 {\n"
+            "    let f: fn(@nonnull int32*) -> int32 = first;\n"
+            "    return f(null);\n"
+            "}"
+        )
+
+
+def test_plain_function_lifts_into_annotated_slot():
+    # Contravariance, the legal direction: a plain function tolerates more,
+    # so it may flow into an annotated slot.
+    assert run(
+        SECOND + "fn main() -> int32 {\n"
+        "    let f: fn(@nonnull int32*) -> int32 = second;\n"
+        "    let x: int32 = 1;\n"
+        "    return f(&x) + 2;\n"
+        "}"
+    ) == 1
+
+
+def test_annotated_slot_checks_calls_even_for_a_plain_callee():
+    # The *type* governs the proof, not the callee behind the value.
+    with pytest.raises(
+        LangError, match="cannot pass a possibly-null pointer as argument 1 of 'f'"
+    ):
+        compile_ir(
+            SECOND + "fn make() -> int32* { return null; }\n"
+            "fn main() -> int32 {\n"
+            "    let f: fn(@nonnull int32*) -> int32 = second;\n"
+            "    return f(make());\n"
+            "}"
+        )
+
+
+def test_annotated_argument_into_plain_parameter_rejected():
+    with pytest.raises(
+        LangError, match=re.escape("argument 1 of 'call_it': " + DROP_HINT)
+    ):
+        compile_ir(
+            FIRST + "fn call_it(g: fn(int32*) -> int32) -> int32 { return 0; }\n"
+            "fn main() -> int32 { return call_it(first); }"
+        )
+
+
+def test_annotated_return_into_plain_return_type_rejected():
+    with pytest.raises(LangError, match=re.escape("return value: " + DROP_HINT)):
+        compile_ir(
+            FIRST + "fn get() -> fn(int32*) -> int32 { return first; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_struct_field_carries_contract():
+    assert run(
+        FIRST + "struct holder { cb: fn(@nonnull int32*) -> int32; }\n"
+        "fn main() -> int32 {\n"
+        "    let h: holder = holder{cb = first};\n"
+        "    let x: int32 = 4;\n"
+        "    return h.cb(&x);\n"
+        "}"
+    ) == 4
+
+
+def test_struct_field_call_rejects_null():
+    with pytest.raises(LangError, match="cannot pass null as argument 1"):
+        compile_ir(
+            FIRST + "struct holder { cb: fn(@nonnull int32*) -> int32; }\n"
+            "fn main() -> int32 {\n"
+            "    let h: holder = holder{cb = first};\n"
+            "    return h.cb(null);\n"
+            "}"
+        )
+
+
+def test_fn_pointer_array_carries_contract():
+    # Element stores lift a plain member; calls through an element check.
+    assert run(
+        FIRST + SECOND + "fn main() -> int32 {\n"
+        "    let ops: (fn(@nonnull int32*) -> int32)[2] = [first, second];\n"
+        "    let x: int32 = 3;\n"
+        "    return ops[0](&x) - ops[1](&x);\n"
+        "}"
+    ) == 4
+
+
+def test_fn_pointer_array_element_call_rejects_null():
+    with pytest.raises(LangError, match="cannot pass null as argument 1"):
+        compile_ir(
+            FIRST + "fn main() -> int32 {\n"
+            "    let ops: (fn(@nonnull int32*) -> int32)[1] = [first];\n"
+            "    return ops[0](null);\n"
+            "}"
+        )
+
+
+def test_static_table_lifts_plain_members():
+    # The constant-initializer path (const_coerce) applies the same
+    # contravariant rule, so a @static table of annotated values accepts
+    # plain members.
+    assert run(
+        FIRST + SECOND
+        + "@static let ops: (fn(@nonnull int32*) -> int32)[] = [first, second];\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 8;\n"
+        "    return ops[0](&x) + ops[1](&x);\n"
+        "}"
+    ) == 7
+
+
+def test_static_table_rejects_contract_drop():
+    with pytest.raises(
+        LangError, match=re.escape("@static initializer: " + DROP_HINT)
+    ):
+        compile_ir(
+            FIRST + "@static let ops: (fn(int32*) -> int32)[] = [first];\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_module_const_fn_value_carries_contract():
+    program = (
+        FIRST + "const F: fn(@nonnull int32*) -> int32 = first;\n"
+        "fn main() -> int32 { return F(null); }"
+    )
+    with pytest.raises(LangError, match="cannot pass null as argument 1 of 'F'"):
+        compile_ir(program)
+
+
+def test_module_const_rejects_contract_drop():
+    with pytest.raises(LangError, match=re.escape("const F: " + DROP_HINT)):
+        compile_ir(
+            FIRST + "const F: fn(int32*) -> int32 = first;\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_extern_value_carries_contract_strictly():
+    # The accepted asymmetry: a direct extern call grades by the
+    # extern-nonnull posture (relaxed by default), while a call through the
+    # value checks strictly -- the indirect call can no longer be attributed.
+    direct = EXTERN_NN + (
+        "fn make() -> int32* { return null; }\n"
+        "fn main() -> int32 { return ext(make()); }"
+    )
+    compile_ir(direct)  # relaxed posture: accepted
+    with pytest.raises(
+        LangError, match="cannot pass a possibly-null pointer as argument 1 of 'f'"
+    ):
+        compile_ir(
+            EXTERN_NN + "fn make() -> int32* { return null; }\n"
+            "fn main() -> int32 {\n"
+            "    let f = ext;\n"
+            "    return f(make());\n"
+            "}"
+        )
+
+
+def test_static_function_value_carries_contract():
+    with pytest.raises(LangError, match="cannot pass null as argument 1 of 'f'"):
+        compile_ir(
+            "@static fn sfirst(@nonnull p: int32*) -> int32 { return *p; }\n"
+            "fn main() -> int32 {\n"
+            "    let f = sfirst;\n"
+            "    return f(null);\n"
+            "}"
+        )
+
+
+def test_as_cast_strips_contract():
+    # The explicit hatch: a free bitcast to the plain type; calls through the
+    # result skip the proof (UB if the argument is actually null, like `p!`).
+    assert run(
+        FIRST + "fn make(a: int32*) -> int32* { return a; }\n"
+        "fn main() -> int32 {\n"
+        "    let f = first;\n"
+        "    let g = f as fn(int32*) -> int32;\n"
+        "    let x: int32 = 5;\n"
+        "    let p: int32* = make(&x);\n"
+        "    return g(p);\n"
+        "}"
+    ) == 5
+
+
+def test_ternary_lifts_toward_annotated_first_arm():
+    # unify_branches targets the first arm's type, so a plain second arm
+    # lifts into an annotated first arm...
+    assert run(
+        FIRST + SECOND + "fn main() -> int32 {\n"
+        "    let flag: bool = false;\n"
+        "    let h = flag ? first : second;\n"
+        "    let x: int32 = 2;\n"
+        "    return h(&x);\n"
+        "}"
+    ) == -1  # flag is false, so h is second
+
+
+def test_ternary_plain_first_arm_rejects_annotated_second():
+    # ...while the mirrored operand order is the dropping direction. Pinned
+    # asymmetry: first-arm-wins is unify_branches' pre-existing rule.
+    with pytest.raises(
+        LangError, match=re.escape("ternary branch: " + DROP_HINT)
+    ):
+        compile_ir(
+            FIRST + SECOND + "fn main() -> int32 {\n"
+            "    let flag: bool = true;\n"
+            "    let h = flag ? second : first;\n"
+            "    return 0;\n"
+            "}"
+        )
+
+
+def test_equality_lifts_toward_annotated_second_operand():
+    # Function-pointer `==` coerces toward one side, so a plain/annotated mix
+    # compares in one operand order only (pinned asymmetry, like the ternary).
+    assert run(
+        FIRST + SECOND + "fn main() -> int32 {\n"
+        "    let a = first;\n"
+        "    let b = second;\n"
+        "    return (b == a) ? 1 : 0;\n"
+        "}"
+    ) == 0
+
+
+def test_equality_annotated_first_operand_rejected():
+    with pytest.raises(
+        LangError, match=re.escape("operand of '==': " + DROP_HINT)
+    ):
+        compile_ir(
+            FIRST + SECOND + "fn main() -> int32 {\n"
+            "    let a = first;\n"
+            "    let b = second;\n"
+            "    return (a == b) ? 1 : 0;\n"
+            "}"
+        )
+
+
+def test_prototype_pairs_with_matching_fn_type_spelling():
+    # A prototype and its definition must spell the fn-type contract
+    # identically -- the pairing key is the parameter type's name. (A
+    # differing spelling is a distinct signature, not a pairing mismatch.)
+    assert run(
+        "fn apply(cb: fn(@nonnull int32*) -> int32, @nonnull p: int32*) -> int32;\n"
+        "fn apply(cb: fn(@nonnull int32*) -> int32, @nonnull p: int32*) -> int32 "
+        "{ return cb(p); }\n"
+        + FIRST
+        + "fn main() -> int32 { let x: int32 = 3; return apply(first, &x); }"
+    ) == 3
+
+
+def test_fn_type_contract_round_trips_through_interface():
+    # The stub renders the fn-type parameter through TypeRef.__str__, so the
+    # contract ships in the .mci and is enforced on re-import.
+    src = (
+        "fn apply(cb: fn(@nonnull int32*) -> int32, @nonnull p: int32*) -> int32 "
+        "{ return cb(p); }\n"
+    )
+    out = _iface(src)
+    assert (
+        "fn apply(cb: fn(@nonnull int32*) -> int32, @nonnull p: int32*) -> int32;"
+        in out
+    )
+    caller = out + (
+        "fn main() -> int32 {\n"
+        "    let f: fn(@nonnull int32*) -> int32;\n"
+        "    return apply(f, null);\n"
+        "}\n"
+    )
+    with pytest.raises(LangError, match="cannot pass null as argument 2 of 'apply'"):
+        CodeGen(Parser(tokenize(caller)).parse_program(), "test").generate()
+
+
+def test_fn_type_nonnull_on_non_pointer_rejected():
+    # `fn(@nonnull int32)` parses but nothing could inhabit it; reject the
+    # type itself, at its use site.
+    with pytest.raises(LangError, match="@nonnull only applies to pointer parameters"):
+        compile_ir(
+            "fn main() -> int32 {\n"
+            "    let f: fn(@nonnull int32) -> int32;\n"
+            "    return 0;\n"
+            "}"
+        )
+
+
+def test_type_alias_of_annotated_fn_type():
+    with pytest.raises(LangError, match="cannot pass null as argument 1 of 'f'"):
+        compile_ir(
+            "type cb = fn(@nonnull int32*) -> int32;\n"
+            + FIRST
+            + "fn main() -> int32 {\n"
+            "    let f: cb = first;\n"
+            "    return f(null);\n"
+            "}"
+        )
+
+
+def test_generic_alias_checks_contract_per_binding():
+    # The pointer-shape check runs per use, so a generic alias validates
+    # against each binding: T = int32* is fine, T = int32 is rejected.
+    assert run(
+        "type gcb<T> = fn(@nonnull T) -> int32;\n"
+        + FIRST
+        + "fn main() -> int32 {\n"
+        "    let g: gcb<int32*> = first;\n"
+        "    let x: int32 = 6;\n"
+        "    return g(&x);\n"
+        "}"
+    ) == 6
+    with pytest.raises(LangError, match="@nonnull only applies to pointer parameters"):
+        compile_ir(
+            "type gcb<T> = fn(@nonnull T) -> int32;\n"
+            "fn main() -> int32 {\n"
+            "    let g: gcb<int32>;\n"
+            "    return 0;\n"
+            "}"
+        )
+
+
+def test_fn_type_rejects_other_param_annotations():
+    # Only @nonnull is part of the call contract a function value carries;
+    # the other parameter annotations are rejected with a pointer to why.
+    for annot in ("@noalias", "@format"):
+        with pytest.raises(
+            LangError,
+            match=f"{annot} does not apply in a function type; only @nonnull "
+            "is part of a function value's call contract",
+        ):
+            compile_ir(
+                "fn main() -> int32 {\n"
+                f"    let f: fn({annot} char*) -> int32;\n"
+                "    return 0;\n"
+                "}"
+            )
+
+
+def test_libc_comparator_rejects_annotated_function():
+    # libc's qsort comparator is a plain fn type on purpose: qsort may pass
+    # any element addresses, so an @nonnull comparator's contract cannot be
+    # honored and the dropping direction rejects it.
+    program = merge_imports(
+        parse(
+            'import "libc/stdlib";\n'
+            "fn cmp(@nonnull a: byte*, @nonnull b: byte*) -> int32 { return 0; }\n"
+            "fn main() -> int32 {\n"
+            "    let vals: int32[2];\n"
+            "    qsort(&vals[0] as byte*, 2, 4, cmp);\n"
+            "    return 0;\n"
+            "}\n"
+        ),
+        STDLIB_DIR,
+        (STDLIB_DIR,),
+    )
+    with pytest.raises(
+        LangError, match=re.escape("argument 4 of 'qsort': expected "
+        "fn(uint8*, uint8*) -> int32, got "
+        "fn(@nonnull uint8*, @nonnull uint8*) -> int32")
+    ):
+        CodeGen(program, "test").generate()
+
+
+def test_annotated_fn_type_monomorphizes_separately():
+    # The contract is spelled into the type's name, so an annotated and a
+    # plain fn type instantiate a template separately.
+    ir_text = compile_ir(
+        "fn id<T>(f: T) -> T { return f; }\n"
+        "fn first(@nonnull p: char*) -> int32 { return 1; }\n"
+        "fn second(p: char*) -> int32 { return 2; }\n"
+        "fn main() -> int32 {\n"
+        "    let a = id(first);\n"
+        "    let b = id(second);\n"
+        '    return a("x") + b(null);\n'
+        "}"
+    )
+    assert 'id<$0>($0)<fn(@nonnull char*) -> int32>' in ir_text
+    assert 'id<$0>($0)<fn(char*) -> int32>' in ir_text
+
+
+def test_multi_param_contract_checks_only_marked_index():
+    # The proof is per marked index: the plain first parameter takes an
+    # unproven pointer while the annotated second one is checked.
+    assert run(
+        "fn pick(a: int32*, @nonnull b: int32*) -> int32 { return *b; }\n"
+        "fn make() -> int32* { return null; }\n"
+        "fn main() -> int32 {\n"
+        "    let f = pick;\n"
+        "    let x: int32 = 4;\n"
+        "    return f(make(), &x);\n"
+        "}"
+    ) == 4
+
+
+def test_nonnull_param_forwards_through_fn_value():
+    # Transitivity: an enclosing @nonnull parameter is a standing proof for
+    # a call through a value, exactly as for a direct call.
+    assert run(
+        FIRST + "fn outer(@nonnull p: int32*, f: fn(@nonnull int32*) -> int32) "
+        "-> int32 { return f(p); }\n"
+        "fn main() -> int32 { let x: int32 = 6; return outer(&x, first); }"
+    ) == 6

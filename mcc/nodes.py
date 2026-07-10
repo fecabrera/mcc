@@ -29,6 +29,10 @@ class TypeRef:
             code generation.
         const: A leading ``const`` qualifier -- a read-only type, as in the
             element of a ``slice<const T>``.
+        nonnull: A leading ``@nonnull`` annotation -- meaningful only in the
+            parameter position of a ``fn(...)`` type, where it spells the
+            per-parameter non-null contract the function value carries, as in
+            ``fn(@nonnull char*) -> void``.
     """
 
     name: str
@@ -39,6 +43,7 @@ class TypeRef:
     dims: list = field(default_factory=list)  # array sizes, outermost first
     const: bool = False  # a leading `const` read-only qualifier
     variadic: bool = False  # a trailing `...` in a fn(...) type's parameters
+    nonnull: bool = False  # a leading `@nonnull` (fn-type parameter position)
 
     def __str__(self) -> str:
         """Render the type back to its source spelling.
@@ -58,7 +63,13 @@ class TypeRef:
                 # The empty tuple renders its canonical `tuple<>` spelling.
                 text += "<" + ", ".join(str(a) for a in self.args) + ">"
         dims = "".join(f"[{render_dim(d)}]" for d in self.dims)
-        return ("const " if self.const else "") + text + "*" * self.stars + dims
+        return (
+            ("@nonnull " if self.nonnull else "")
+            + ("const " if self.const else "")
+            + text
+            + "*" * self.stars
+            + dims
+        )
 
 
 def render_dim(d) -> str:

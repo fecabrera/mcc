@@ -54,7 +54,8 @@ parameter modifiers (`const`, `mut`, `@noalias`, `@nonnull`), `mut` returns
 (functions returning lvalues), overload sets
 (concrete, generic, mixed, and open across modules), never-returning
 functions (`@noreturn`),
-variadics (C `...` and native collecting), and function pointers.
+variadics (C `...` and native collecting), and function pointers, including
+the function types that carry a `@nonnull` contract.
 
 | Example | Shows |
 |---------|-------|
@@ -78,6 +79,7 @@ variadics (C `...` and native collecting), and function pointers.
 | [variadic.mc](functions/variadic.mc) | variadic `...` definitions, `va_list`, `va_start`/`va_end`, forwarding to `vsnprintf` |
 | [native_variadics.mc](functions/native_variadics.mc) | native variadic collection: `args...` as sugar for a trailing `const args: slice<const any>`, extras boxed caller-side into a read-only slice walked with `for` + `case type`, zero extras giving an empty slice, the explicit spelling collecting the same, collectors in overload sets (exact arity beats collecting, more fixed parameters wins) and a generic collector binding `T` from the fixed arguments only |
 | [function_pointers.mc](functions/function_pointers.mc) | `fn(...) -> R` types (incl. variadic `fn(A, ...)`), callbacks in structs, dispatch tables, `const`/`@static` function aliases, `null` callbacks |
+| [nonnull_callbacks.mc](functions/nonnull_callbacks.mc) | `fn(@nonnull T*) -> R` function types carrying the @nonnull contract: a @nonnull function as a legal value (`let f = first;` infers the annotated type), calls through the value running the same call-site null proof as a direct call, the contravariant lift (a plain function into an annotated let / argument / @static dispatch table; the dropping direction a compile error), the contract-stripping `as` hatch (UB if actually null), and the extern asymmetry (`let n = strlen;` checks strictly where direct extern calls stay graded) |
 
 ## types/
 

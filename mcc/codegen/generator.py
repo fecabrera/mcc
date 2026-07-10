@@ -2773,7 +2773,16 @@ class CodeGen:
         if ref.params is not None:  # a fn(...) -> ret function-pointer type
             ret = self.lang_type(ref.ret, line)
             params = tuple(self.lang_type(p, line) for p in ref.params)
-            base = function_type(ret, params, ref.variadic)
+            nonnull = frozenset(i for i, p in enumerate(ref.params) if p.nonnull)
+            # Checked per use, so a generic alias like `type cb<T> =
+            # fn(@nonnull T*)` is validated against each binding (mirrors
+            # mark_nonnull's declaration-site rule).
+            for i in sorted(nonnull):
+                if not is_pointer(params[i]):
+                    raise LangError(
+                        "@nonnull only applies to pointer parameters", line
+                    )
+            base = function_type(ret, params, ref.variadic, nonnull)
             for _ in range(ref.stars):
                 base = pointer_to(base)
             return self.apply_dims(base, ref.dims, line)
@@ -5269,6 +5278,20 @@ class CodeGen:
             return TypedValue(ir.Constant(expected.ir, None), expected)
         if expected == RAWPTR and is_pointer(tv.type):
             return TypedValue(self.builder.bitcast(tv.value, RAWPTR.ir), RAWPTR)
+        # A function value flows contravariantly along the @nonnull axis: a
+        # plain value may enter an annotated slot (the contract only adds a
+        # call-site proof obligation the plain function tolerates), never the
+        # reverse -- a call through the plain type would skip the proof. The
+        # contract lives outside the LLVM type, so the value passes through
+        # retyped. Flat variance: fn values only, no deep variance through
+        # slices, nested fn types, or any.
+        if (
+            is_function(expected)
+            and is_function(tv.type)
+            and tv.type.signature == expected.signature
+            and tv.type.nonnull <= expected.nonnull
+        ):
+            return TypedValue(tv.value, expected)
         # A value initializes a read-only `const T` target by adding const; the
         # representation is unchanged, so the value passes through retyped.
         if expected.const and strip_const(expected) == tv.type:
@@ -5295,7 +5318,42 @@ class CodeGen:
             if expected is ANY:
                 return boxed
             return TypedValue(boxed.value, expected)  # the const any form
+        self.reject_nonnull_drop(tv.type, expected, line, context)
         raise LangError(f"{context}: expected {expected}, got {tv.type}", line)
+
+    def reject_nonnull_drop(
+        self, src: LangType, expected: LangType, line: int, context: str
+    ):
+        """Report a function-type mismatch that only drops a ``@nonnull``.
+
+        The hinted variant of the coercion failure, shared by :meth:`coerce`
+        and :meth:`const_coerce`: when two function-pointer types share one
+        underlying signature and differ only in the ``@nonnull`` contract,
+        the mismatch is the dropping direction of the contravariant rule, and
+        the error says why it is banned and names the explicit hatch.
+
+        Args:
+            src: The value's function-pointer type.
+            expected: The target function-pointer type it may not become.
+            line: Source line for diagnostics.
+            context: A label describing the site, for the error message.
+
+        Raises:
+            LangError: When the mismatch is exactly a dropped ``@nonnull``.
+        """
+        if (
+            is_function(expected)
+            and is_function(src)
+            and src.signature == expected.signature
+        ):
+            raise LangError(
+                f"{context}: expected {expected}, got {src} (a @nonnull "
+                "contract cannot be dropped: a call through the plain type "
+                "would skip the call-site null proof; cast with "
+                f"'as {expected}' to strip it explicitly, making a null "
+                "argument undefined behavior)",
+                line,
+            )
 
     def widen_operand(
         self, tv: TypedValue, target: LangType, line: int, context: str
@@ -9920,6 +9978,16 @@ class CodeGen:
         # string literal still initializes a uint8* const.
         if expected == RAWPTR and is_pointer(tv.type):
             return TypedValue(tv.value.bitcast(RAWPTR.ir), RAWPTR)
+        # The @nonnull contravariant rule, mirroring coerce: a plain function
+        # constant initializes an annotated slot (so a @static table of
+        # fn(@nonnull ...) values accepts plain members), never the reverse.
+        if (
+            is_function(expected)
+            and is_function(tv.type)
+            and tv.type.signature == expected.signature
+            and tv.type.nonnull <= expected.nonnull
+        ):
+            return TypedValue(tv.value, expected)
         if (
             (tv.adaptable or tv.type == CHAR)
             and is_integer(tv.type)
@@ -9937,6 +10005,7 @@ class CodeGen:
             raise LangError(
                 f"constant {tv.value.constant} is out of range for {expected}", line
             )
+        self.reject_nonnull_drop(tv.type, expected, line, context)
         raise LangError(f"{context}: expected {expected}, got {tv.type}", line)
 
     def eval_const_unary(self, expr: Unary) -> TypedValue:
@@ -10354,14 +10423,6 @@ class CodeGen:
                 "parameters (passed by hidden reference)",
                 line,
             )
-        if self.nonnull_ref.get(symbol):
-            # A plain fn(...) type cannot carry the @nonnull contract, and a
-            # call through the pointer would skip the call-site proof check.
-            raise LangError(
-                f"cannot take a function value of {name!r}: it has @nonnull "
-                "parameters, which a plain function type cannot express",
-                line,
-            )
         if symbol in self.mut_ret:
             # The pointer-typed return (and the lvalue-ness of a call) is
             # invisible to a plain fn(...) -> T type; a call through the
@@ -10375,8 +10436,17 @@ class CodeGen:
         # through the pointer are indirect and can no longer be attributed.
         self.warn_deprecated(name, self.deprecated_syms.get(symbol), line)
         ret, params, variadic = self.signatures[symbol]
+        # The value's type spells the function's @nonnull contract, so a call
+        # through it runs the same call-site null proof as a direct call --
+        # this is what lets a @nonnull function be a function value at all.
         return TypedValue(
-            self.funcs[symbol], function_type(ret, tuple(params), variadic)
+            self.funcs[symbol],
+            function_type(
+                ret,
+                tuple(params),
+                variadic,
+                self.nonnull_ref.get(symbol, frozenset()),
+            ),
         )
 
     def emit_call(
@@ -10539,7 +10609,14 @@ class CodeGen:
         if not is_function(callee.type):
             raise LangError(f"cannot call a value of type {callee.type}", line)
         ret, params, variadic = callee.type.signature
-        args = self.marshal_args(arg_exprs, params, variadic, label, line)
+        # The type's @nonnull contract runs the same call-site proof as a
+        # direct call (flow-narrowing and the postfix `!` hatch included).
+        # Always strict: even a value of an @extern function checks
+        # unconditionally -- the indirect call can no longer be attributed,
+        # so the graded extern posture does not apply.
+        args = self.marshal_args(
+            arg_exprs, params, variadic, label, line, nonnull=callee.type.nonnull
+        )
         return TypedValue(self.emit_call(callee.value, args), ret)
 
     @staticmethod

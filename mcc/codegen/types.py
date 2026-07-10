@@ -51,6 +51,12 @@ class LangType:
         signature: ``(return type, param types, variadic)`` for a
             function-pointer type; part of equality, so structurally equal
             function types match.
+        nonnull: Indices of the ``@nonnull`` parameters of a function-pointer
+            type -- the per-parameter non-null contract a function value
+            carries, checked at calls through the value. Spelled into the
+            interned ``name`` (so two function types differing only in the
+            contract are distinct), and excluded from equality/hash like the
+            other derived attributes -- the name is the identity.
         element: Element type of a fixed-size array, else ``None``.
         count: Length of a fixed-size array, else ``None``.
         const: ``True`` for a read-only ``const T`` view -- IR-identical to
@@ -80,6 +86,7 @@ class LangType:
     union: bool = field(default=False, compare=False)
     elem_indices: tuple | None = field(default=None, compare=False)
     signature: tuple | None = None
+    nonnull: frozenset = field(default=frozenset(), compare=False)
     element: "LangType | None" = None
     count: int | None = None
     const: bool = False
@@ -242,7 +249,12 @@ def strip_const(lang_type: LangType) -> LangType:
     return lang_type.mutable if lang_type.const else lang_type
 
 
-def function_type(ret: LangType, params: tuple, variadic: bool = False) -> LangType:
+def function_type(
+    ret: LangType,
+    params: tuple,
+    variadic: bool = False,
+    nonnull: frozenset = frozenset(),
+) -> LangType:
     """Build a function-pointer type, e.g. ``fn(int32, int32) -> int32``.
 
     Its LLVM type is a pointer to the LLVM function type, so a value of it is
@@ -252,17 +264,27 @@ def function_type(ret: LangType, params: tuple, variadic: bool = False) -> LangT
         ret: The return type.
         params: The parameter types, in order.
         variadic: Whether the function takes C-style varargs.
+        nonnull: Indices of ``@nonnull`` parameters -- the non-null contract
+            the type carries, spelled into its name (so
+            ``fn(@nonnull char*) -> void`` is distinct from its plain form)
+            and checked at calls through a value of the type.
 
     Returns:
         A ``LangType`` for the function-pointer type.
     """
     fnty = ir.FunctionType(ret.ir, [p.ir for p in params], var_arg=variadic)
-    parts = [p.name for p in params]
+    parts = [
+        ("@nonnull " if i in nonnull else "") + p.name for i, p in enumerate(params)
+    ]
     if variadic:
         parts.append("...")
     name = "fn(" + ", ".join(parts) + ") -> " + ret.name
     return LangType(
-        name, fnty.as_pointer(), signed=False, signature=(ret, tuple(params), variadic)
+        name,
+        fnty.as_pointer(),
+        signed=False,
+        signature=(ret, tuple(params), variadic),
+        nonnull=nonnull,
     )
 
 

@@ -52,4 +52,6 @@ fn main() -> int32 {
 // for the postfix `p!` assertion that lets unproven pointers cross;
 // systems/extern_nonnull.mc for @nonnull on an @extern declaration, where the
 // flat hard error here becomes a graded posture over the `-Wextern-nonnull`
-// class; noalias.mc; memory/pointers.mc for the pointer basics.
+// class; nonnull_callbacks.mc for the contract riding in a function *type*
+// (`fn(@nonnull int32*) -> int32`), proved at calls through the value too;
+// noalias.mc; memory/pointers.mc for the pointer basics.

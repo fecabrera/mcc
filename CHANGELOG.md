@@ -8,6 +8,37 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **`@nonnull`-carrying function types — `fn(@nonnull char*) -> int32`** —
+  a function type now spells the per-parameter `@nonnull` contract,
+  lifting the parent feature's remaining soundness ban: a function with
+  `@nonnull` parameters is a legal function value, `let f = my_func;`
+  infers the annotated type (the old "cannot take a function value"
+  rejection is gone), and a call through the value runs the **same
+  call-site null proof as a direct call** — literal null and unproven
+  pointers are compile errors, while flow narrowing and the postfix `!`
+  hatch apply identically. Assignability along the contract axis is
+  contravariant: a plain function value flows into an annotated slot
+  (`let`/assignment, struct fields, array elements, `@static` dispatch
+  tables, arguments, returns), while dropping the contract is a compile
+  error whose hint names the escape hatch — `f as fn(char*) -> int32`
+  strips it explicitly as a free bitcast whose calls skip the proof (UB
+  if an argument is actually null, mirroring `p!`). The contract is part
+  of the type's identity: `.mci` interface prototypes spell it, a
+  template instantiated with the annotated type is a distinct instance
+  from the plain form, and a prototype must spell it exactly as its
+  definition. One accepted asymmetry, by design: a value of a `@nonnull`
+  `@extern` (`let f = strlen;`) checks strictly through the pointer,
+  while direct extern calls keep grading by the `-Wextern-nonnull`
+  posture (an indirect call can no longer be attributed). `@nonnull` in a
+  function type applies to pointer parameters only, validated where the
+  type is used, so a generic alias like `type cb<T> = fn(@nonnull T)`
+  checks per binding; `@noalias` stays an unchecked hint that drops
+  silently from a function value. See
+  [@nonnull-carrying function types](docs/language.md#nonnull-carrying-function-types)
+  and [nonnull_callbacks.mc](examples/functions/nonnull_callbacks.mc).
+
 ## [0.7.0] - 2026-07-10
 
 ### Added
