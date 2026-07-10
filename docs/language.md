@@ -2619,7 +2619,9 @@ arithmetic — so a lookup table lives in read-only data:
 `len(arr)` is the element count — a compile-time constant, handy as a loop
 bound and the way to read a size you let `[]` infer. It adapts to its
 context like a literal, so it compares against any integer counter (`int32`
-or `uint64`) without a cast. For a multi-dimensional array, `len(grid)` is
+or `uint64`) without a cast, and it folds in constant expressions, so it can
+size another array (`let ys: int32[len(xs)];`). The same builtin reports a
+[tuple](#tuples)'s arity. For a multi-dimensional array, `len(grid)` is
 the outer length and `len(grid[0])` the inner one:
 
 ```c
@@ -3339,6 +3341,14 @@ let tail = t[1:];           // tuple<char, float64, int32>
 let c    = t[1:3][0];       // 'x': slice, then index the result
 let u    = divmod(7, 2)[:]; // an rvalue base slices too
 ```
+
+**`len(t)` is the arity** — the same builtin that counts an
+[array](#arrays)'s elements, and the same kind of compile-time,
+context-adapting constant: `len(())` is `0`, `len((x,))` is `1`. Arity is
+purely a property of the type, so an rvalue operand needs no address —
+`len(divmod(7, 2))` is `2` (the call still runs for its effects) — and
+`len` folds in constant expressions, composing with the constant bounds
+above: `t[len(t) - 1]` is the last position, `t[1:len(t)]` the tail.
 
 Everything else rides the struct machinery: whole-value assignment copies,
 tuples pass and return by value, a `const tuple<...>` parameter travels by

@@ -371,7 +371,20 @@ def test_len_is_a_compile_time_constant():
 
 
 def test_len_requires_an_array():
-    with pytest.raises(LangError, match=r"len\(\) requires an array, got int32\*"):
+    with pytest.raises(LangError, match=r"len\(\) requires an array or tuple, got int32\*"):
         compile_ir(
             "fn main() -> int32 { let p: int32* = null; return len(p) as int32; }"
         )
+
+
+def test_len_folds_in_a_constant_expression():
+    # len() is a pure type property, so it folds through eval_const: it can
+    # size another array.
+    source = """
+    fn main() -> int32 {
+        let xs: int32[3];
+        let ys: int32[len(xs) + 1];
+        return len(ys) as int32;
+    }
+    """
+    assert run(source) == 4

@@ -876,7 +876,11 @@ already do).
       compile-time constant (each position has its own type, so a runtime
       index has no single result type) and bounds are checked at compile
       time too; slicing with constant bounds narrows the type, `t[n:m]`
-      being the smaller tuple of those positions. Constructed by the paren
+      being the smaller tuple of those positions; and `len(t)` recovers the
+      arity — the same builtin, and the same adaptable compile-time
+      constant, as an array's `len`, folding in constant expressions so it
+      composes with the constant bounds (`t[len(t) - 1]`, `t[1:len(t)]`;
+      implemented, see [Tuples](docs/language.md#tuples)). Constructed by the paren
       literal (a parenthesized expression with a top-level comma; `(x)`
       stays grouping): `let t: tuple<A, B> = (a, b);`, inferred
       `let t = (a, b);`, and the uninitialized `let t: tuple<A, B>;` all

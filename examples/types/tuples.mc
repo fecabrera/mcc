@@ -84,14 +84,24 @@ fn main() -> int32 {
     println("q[1:][2]      = {}", q[1:][2]);  // the open tail, then indexed
     println("divmod[:][0]  = {}", divmod(9, 4)[:][0]);   // rvalue base copy
 
+    // len(t) is the arity -- the same builtin, and the same compile-time,
+    // context-adapting constant, as an array's len. It folds in constant
+    // expressions, so it composes with the constant bounds above:
+    // q[len(q) - 1] is the last position. Arity is a property of the type
+    // alone, so an rvalue operand (a call result, a slice) works too.
+    println("len(q)        = {}", len(q) as int32);
+    println("q[len(q)-1]   = {}", q[len(q) - 1]);
+    println("len(divmod)   = {}", len(divmod(9, 4)) as int32);
+
     // Arity runs all the way down: a slice keeping one position is the
     // 1-tuple (tuple<float64> here), and `()` is the empty tuple `tuple<>`
     // -- a zero-sized unit value like an empty struct, useful when generic
-    // code needs a T that carries nothing.
+    // code needs a T that carries nothing (len(unit) is 0).
     let single = q[2:3];
     let unit: tuple<> = ();
     println("single[0]     = {}", single[0]);
     println("sizeof(unit)  = {}", sizeof(unit) as int32);
+    println("len(unit)     = {}", len(unit) as int32);
 
     // The alias in action; 5 adapts to int64 per position, as above.
     let p: polar = (5, 0.5);

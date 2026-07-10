@@ -7325,16 +7325,28 @@ class CodeGen:
             named = strip_const(self.sizeof_operand(expr.type_name, expr.line))
             return self.gen_string(str(named))
         if isinstance(expr, Len):
-            # The element count is a compile-time property of the array's type;
-            # read it through the address so the array does not decay first. It
-            # is an adaptable constant -- like writing the literal count -- so it
-            # compares against an int32 counter as readily as a uint64 one.
-            _, lang_type, _, _ = self.gen_addr(expr.operand, expr.line)
-            if not is_array(lang_type):
-                raise LangError(f"len() requires an array, got {lang_type}", expr.line)
-            return TypedValue(
-                ir.Constant(UINT64.ir, lang_type.count), UINT64, adaptable=True
-            )
+            # The count is a compile-time property of the operand's type: an
+            # array's element count or a tuple's arity. An addressable operand
+            # is typed through its address so an array does not decay first; a
+            # tuple's arity needs no address at all, so an rvalue tuple (a
+            # call result, a tuple slice, a literal) is evaluated instead --
+            # its side effects still run. Either way the count is an adaptable
+            # constant -- like writing it as a literal -- so it compares
+            # against an int32 counter as readily as a uint64 one.
+            if isinstance(expr.operand, (Var, Unary, Index, Member, StrLit)):
+                _, lang_type, _, _ = self.gen_addr(expr.operand, expr.line)
+            else:
+                lang_type = self.gen_expr(expr.operand).type
+            stripped = strip_const(lang_type)
+            if is_tuple(stripped):
+                count = len(stripped.fields)
+            elif is_array(lang_type):
+                count = lang_type.count
+            else:
+                raise LangError(
+                    f"len() requires an array or tuple, got {lang_type}", expr.line
+                )
+            return TypedValue(ir.Constant(UINT64.ir, count), UINT64, adaptable=True)
         if isinstance(expr, Index):
             addr, element, align, volatile = self.gen_index_addr(
                 expr.base, expr.index, expr.line
@@ -9490,6 +9502,28 @@ class CodeGen:
         if isinstance(expr, TypeName):
             named = strip_const(self.lang_type(expr.type_name, line))
             return TypedValue(self.const_string(str(named)), CHARPTR)
+        if isinstance(expr, Len):
+            # len() is a pure property of the operand's type, so it folds
+            # wherever constants go -- const initializers, tuple index and
+            # slice bounds -- as long as the operand is a simple lvalue the
+            # static probe can type without emitting code.
+            operand_t = self.lvalue_type(expr.operand)
+            if operand_t is not None:
+                stripped = strip_const(operand_t)
+                if is_tuple(stripped):
+                    count = len(stripped.fields)
+                elif is_array(operand_t):
+                    count = operand_t.count
+                else:
+                    raise LangError(
+                        f"len() requires an array or tuple, got {operand_t}", line
+                    )
+                return TypedValue(
+                    ir.Constant(UINT64.ir, count), UINT64, adaptable=True
+                )
+            raise LangError(
+                "a const initializer must be a compile-time constant", line
+            )
         if isinstance(expr, Var):
             const = self.consts.get(expr.name)
             if const is not None:

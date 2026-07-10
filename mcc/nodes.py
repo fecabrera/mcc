@@ -1300,10 +1300,10 @@ class TypeName:
 
 @dataclass
 class Len:
-    """A ``len(array expression)`` yielding the element count.
+    """A ``len(expression)`` yielding an array's element count or a tuple's arity.
 
     Attributes:
-        operand: The array expression whose length is taken.
+        operand: The array or tuple expression whose length is taken.
         line: Source line for diagnostics.
     """
 

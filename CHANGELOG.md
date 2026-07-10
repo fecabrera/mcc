@@ -10,6 +10,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`len()` on tuples** — a tuple's arity is recovered with the existing
+  `len()` builtin, the same spelling arrays use: `len(())` is `0`,
+  `len((x,))` is `1`, and the count is the same adaptable compile-time
+  constant an array's `len` yields, comparing against an `int32` counter
+  without a cast. Arity is purely a property of the type, so an rvalue
+  operand needs no address — `len(divmod(7, 2))` works, the call still
+  running for its effects. `len` also folds in constant expressions now,
+  arrays included (`let ys: int32[len(xs)];` sizes an array), so it
+  composes with tuples' constant index and slice bounds: `t[len(t) - 1]`
+  is the last position and `t[1:len(t)]` the tail, both still checked at
+  compile time. See [Tuples](docs/language.md#tuples) and
+  [examples/types/tuples.mc](examples/types/tuples.mc).
+
 - **Tuples of arity 0 and 1** — the tuple surface is now fully
   arity-agnostic, like the internals always were. `tuple<T>` spells the
   1-tuple and the trailing comma constructs it (`(x,)`; `(x)` stays plain

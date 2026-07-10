@@ -711,6 +711,132 @@ def test_tuple_slice_is_not_an_lvalue():
         )
 
 
+# ------------------------------------------------------------------- len()
+
+def test_len_reports_the_arity():
+    source = """
+    fn main() -> int32 {
+        let e: tuple<>;
+        let s = (7,);
+        let t = (1, 'x', 2.5);
+        return (len(e) * 100 + len(s) * 10 + len(t)) as int32;   // 13
+    }
+    """
+    assert run(source) == 13
+
+
+def test_len_of_a_tuple_literal():
+    source = """
+    fn main() -> int32 {
+        return (len(()) * 10 + len((1, 2))) as int32;   // 2
+    }
+    """
+    assert run(source) == 2
+
+
+def test_len_is_a_compile_time_constant():
+    ir_text = compile_ir(
+        "fn main() -> int32 { let t = (1, 2, 3); return len(t) as int32; }"
+    )
+    assert "i64 3" in ir_text  # the arity is a constant, not a runtime computation
+
+
+def test_len_adapts_to_an_int32_counter():
+    # len is an adaptable constant, so it compares against int32 without a cast.
+    source = """
+    fn main() -> int32 {
+        let t = (4, 8, 15, 16);
+        let i: int32 = 0;
+        while (i < len(t)) { i = i + 1; }
+        return i;
+    }
+    """
+    assert run(source) == 4
+
+
+def test_len_folds_as_an_index_bound():
+    # len() folds through eval_const, so it composes with the constant-index
+    # requirement of tuple positions.
+    source = """
+    fn main() -> int32 {
+        let t = (10, 20, 30);
+        return t[len(t) - 1];
+    }
+    """
+    assert run(source) == 30
+
+
+def test_len_folds_as_a_slice_bound():
+    source = """
+    fn main() -> int32 {
+        let t = (1, 20, 22);
+        let rest = t[1:len(t)];
+        return rest[0] + rest[1];   // 42
+    }
+    """
+    assert run(source) == 42
+
+
+def test_len_as_an_index_is_bounds_checked():
+    with pytest.raises(
+        LangError,
+        match=r"tuple index 2 is out of bounds for tuple<int32, int32> "
+        r"\(positions 0 to 1\)",
+    ):
+        compile_ir("fn main() -> int32 { let t = (1, 2); return t[len(t)]; }")
+
+
+def test_len_of_a_call_result():
+    # Arity is purely a type property, so an rvalue operand needs no address.
+    source = """
+    fn divmod(a: int32, b: int32) -> tuple<int32, int32> {
+        return (a / b, a % b);
+    }
+    fn main() -> int32 { return len(divmod(7, 2)) as int32; }
+    """
+    assert run(source) == 2
+
+
+def test_len_evaluates_a_call_operand_once():
+    source = """
+    @static let calls: int32 = 0;
+    fn make() -> tuple<int32, int32> { calls = calls + 1; return (1, 2); }
+    fn main() -> int32 {
+        let n: int32 = len(make());
+        return n * 10 + calls;   // 21
+    }
+    """
+    assert run(source) == 21
+
+
+def test_len_composes_with_slicing():
+    source = """
+    fn main() -> int32 {
+        let t = (1, 2, 3, 4);
+        return len(t[1:3]) as int32;
+    }
+    """
+    assert run(source) == 2
+
+
+def test_len_of_a_const_tuple_parameter():
+    source = """
+    fn arity(const t: tuple<int32, char>) -> int32 { return len(t) as int32; }
+    fn main() -> int32 { let t = (1, 'x'); return arity(t); }
+    """
+    assert run(source) == 2
+
+
+def test_len_requires_an_array_or_tuple():
+    with pytest.raises(
+        LangError, match=r"len\(\) requires an array or tuple, got slice<int32>"
+    ):
+        compile_ir(
+            "fn f(s: slice<int32>) -> int32 { return len(s) as int32; }\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
 # ------------------------------------------------------ const/mut discipline
 
 def test_const_parameter_element_write_is_rejected():
