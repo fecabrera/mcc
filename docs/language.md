@@ -2376,9 +2376,12 @@ let n = p as uint64;       // pointer <-> integer
 `as` binds tighter than binary operators: `a + b as int64` is
 `a + (b as int64)`.
 
-Casts between structs are rejected, with two exceptions: an
-[`extends`](#structs) value-upcast to a base struct, and a **borrow** to a
-[`slice<T>`](#slices) view (`xs as slice<T>` from an owned `list<T>` or `T[N]`).
+Casts between structs are rejected, with three exceptions: an
+[`extends`](#structs) value-upcast to a base struct, a **borrow** to a
+[`slice<T>`](#slices) view (`xs as slice<T>` from an owned `list<T>` or `T[N]`),
+and the layout-equivalent [tuple](#tuples) cast — `(a, b) as A` converts a
+tuple to any struct with the same field types in the same order, and a struct
+back to its positional form.
 
 ## Pointers
 
@@ -3423,16 +3426,45 @@ bounds (it has no positions). The unit is what generic code returning `T`
 needs when `T` carries nothing, and it means a future statically-typed
 variadic's `T...` expansions need no arity carve-out at all.
 
+**A tuple casts to the layout-equivalent struct, and a struct back to its
+tuple.** A tuple has exactly the layout of the struct with its element types
+as fields, so the explicit [`as` cast](#casts) converts between the two:
+`(a, b) as A` builds an `A` from a tuple — the literal form lowers its
+elements against `A`'s field types exactly like a typed `let`, so untyped
+constants adapt — and `p as tuple<...>` turns a struct value into its
+positional form, which composes with destructuring to consume an existing
+struct by position:
+
+```c
+struct point { x: int32; y: int32; }
+
+let p = (3, 4) as point;                // the literal adapts to the fields
+let d = divmod(7, 2) as point;          // any tuple value converts
+let x, y = p as tuple<int32, int32>;    // and back: positional consumption
+```
+
+Equivalence is **exact and one level deep**: the same field types in the same
+order (field names never matter), compared exactly — a field that is itself a
+struct requires the *same* struct type in that position, never a recursively
+equivalent tuple — and a `@packed` or `@align(N)` struct is never equivalent,
+since its offsets or size diverge from the tuple's. The check runs against
+the exact target type only, so two distinct structs still never cast into
+each other (the nominal [`extends`](#structs) rule keeps its monopoly on
+struct-to-struct casts), and a tuple never converts to another tuple type —
+only the literal form adapts. A rejected cast names the first divergence
+(position, field, or attribute). The result is a fresh value copy either way,
+so casting a `const` source yields an ordinary mutable value, and the cast
+chains: `(1, 2) as point as tuple<int32, int32>` round-trips. The empty
+tuple and an empty struct convert on the same rule. A tuple in an
+[`@extern`](#extern-declarations) signature needs no cast at all — it already
+crosses as the layout-equivalent C struct via the existing
+[struct ABI classification](#passing-structs-by-value-across-the-c-boundary).
+
 Tuples are **not named types**: `extends tuple<...>` is rejected (declare a
 struct to name the shape), and naming a tuple is the
 [type alias](#type-aliases)'s job — `type polar = tuple<int64, float64>;`
-works anywhere the written type does. `==` stays rejected as on structs.
-The rest of the
-[roadmap item](../ROADMAP.md) lands in stages: the layout-equivalent struct
-cast (`(a, b) as A`) is not in this stage — though a tuple in an
-[`@extern`](#extern-declarations) signature already crosses as the
-layout-equivalent C struct via the existing
-[struct ABI classification](#passing-structs-by-value-across-the-c-boundary).
+works anywhere the written type does, the cast target included. `==` stays
+rejected as on structs.
 See [examples/types/tuples.mc](../examples/types/tuples.mc).
 
 ## The any type

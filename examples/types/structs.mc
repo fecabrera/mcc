@@ -73,4 +73,5 @@ fn main() -> int32 {
 // twist on this list, where the payload is embedded as the entry's layout
 // prefix with `extends T` instead of sitting behind a `value` field; and
 // tuples.mc for `tuple<A, B, ...>`, the ad-hoc unnamed counterpart with
-// positions instead of field names.
+// positions instead of field names, and the `as` cast converting a value
+// between a struct and its layout-equivalent tuple.

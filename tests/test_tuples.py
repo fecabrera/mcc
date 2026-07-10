@@ -1,13 +1,14 @@
-"""The builtin tuple<A, B, ...> product type (stages 1-3, any arity).
+"""The builtin tuple<A, B, ...> product type (stages 1-4, any arity).
 
 The core type (an interned struct with positional fields "0", "1", ...), the
 paren literal `(a, b)` with struct-literal-style context coercion, constant
 indexing `t[n]` with compile-time bounds checks, constant slicing `t[n:m]`
-narrowing to the smaller tuple by value, and destructuring `let a, b = t;`
-with the trailing-`...` rest binder -- pure sugar over the indexing and
-slicing. Arity is fully open: `(x,)` and `tuple<T>` spell the 1-tuple, `()`
-and `tuple<>` the zero-sized empty tuple (the empty struct's twin). The `as`
-struct cast lands in stage 4.
+narrowing to the smaller tuple by value, destructuring `let a, b = t;` with
+the trailing-`...` rest binder -- pure sugar over the indexing and slicing --
+and the stage-4 layout-equivalent struct cast, `(a, b) as A` and back, exact
+field-type-sequence equality with no `@packed`/`@align` on the struct. Arity
+is fully open: `(x,)` and `tuple<T>` spell the 1-tuple, `()` and `tuple<>`
+the zero-sized empty tuple (the empty struct's twin).
 """
 
 import pytest
@@ -1353,7 +1354,348 @@ def test_destructure_a_scalar_rejected():
         )
 
 
-# --------------------------------------------------- rejected in this stage
+# ------------------------------ layout-equivalent struct casts (stage 4)
+
+def test_tuple_casts_to_a_layout_equivalent_struct():
+    source = """
+    struct point { x: int32; y: int32; }
+    fn main() -> int32 {
+        let t = (3, 4);
+        let p = t as point;
+        return p.x * 10 + p.y;   // 34
+    }
+    """
+    assert run(source) == 34
+
+
+def test_struct_casts_to_the_layout_equivalent_tuple():
+    source = """
+    struct point { x: int32; y: int32; }
+    fn main() -> int32 {
+        let p = point { x = 3, y = 4 };
+        let t = p as tuple<int32, int32>;
+        return t[0] * 10 + t[1];   // 34
+    }
+    """
+    assert run(source) == 34
+
+
+def test_cast_round_trips_through_both_directions():
+    source = """
+    struct point { x: int32; y: int32; }
+    fn main() -> int32 {
+        let t = (1, 2) as point as tuple<int32, int32>;
+        return t[0] * 10 + t[1];   // 12
+    }
+    """
+    assert run(source) == 12
+
+
+def test_literal_operand_adapts_against_the_target_fields():
+    # `(a, b) as A` lowers the literal against the target's field types, as
+    # against a typed let: the untyped constants take int64 here.
+    source = """
+    struct pair64 { a: int64; b: int64; }
+    fn main() -> int32 {
+        let p = (1, 2) as pair64;
+        return (p.a * 10 + p.b) as int32;   // 12
+    }
+    """
+    assert run(source) == 12
+
+
+def test_literal_operand_adapts_against_a_tuple_target():
+    source = """
+    fn main() -> int32 {
+        let t = (1, 2) as tuple<int64, int64>;
+        return (t[0] * 10 + t[1]) as int32;   // 12
+    }
+    """
+    assert run(source) == 12
+
+
+def test_rvalue_source_evaluates_once():
+    source = """
+    @static let calls: int32 = 0;
+    struct point { x: int32; y: int32; }
+    fn make() -> tuple<int32, int32> { calls = calls + 1; return (1, 2); }
+    fn main() -> int32 {
+        let p = make() as point;
+        return p.y * 10 + calls;   // 21
+    }
+    """
+    assert run(source) == 21
+
+
+def test_empty_tuple_and_empty_struct_convert_both_ways():
+    # Both are zero-sized units with an empty field sequence, so the rule
+    # accepts them like any other equivalent pair.
+    source = """
+    struct unit {}
+    fn main() -> int32 {
+        let u = () as unit;
+        let t = u as tuple<>;
+        return len(t) as int32;   // 0
+    }
+    """
+    assert run(source) == 0
+
+
+def test_alias_names_the_tuple_side():
+    source = """
+    type polar = tuple<int64, float64>;
+    struct pf { r: int64; theta: float64; }
+    fn main() -> int32 {
+        let s = pf { r = 4, theta = 0.5 };
+        let p = s as polar;
+        return p[0] as int32;   // 4
+    }
+    """
+    assert run(source) == 4
+
+
+def test_generic_struct_instantiation_as_the_target():
+    source = """
+    struct pair<T> { a: T; b: T; }
+    fn main() -> int32 {
+        let p = (3, 4) as pair<int32>;
+        return p.a * 10 + p.b;   // 34
+    }
+    """
+    assert run(source) == 34
+
+
+def test_nested_struct_position_takes_the_same_struct_type():
+    source = """
+    struct inner { v: int32; }
+    struct wrap { p: inner; }
+    fn main() -> int32 {
+        let i = inner { v = 7 };
+        let w = (i,) as wrap;
+        return w.p.v;   // 7
+    }
+    """
+    assert run(source) == 7
+
+
+def test_struct_with_a_tuple_field_matches_the_nested_tuple():
+    source = """
+    struct holder { t: tuple<int32, int32>; }
+    fn main() -> int32 {
+        let h = ((1, 2),) as holder;
+        return h.t[0] * 10 + h.t[1];   // 12
+    }
+    """
+    assert run(source) == 12
+
+
+def test_derived_struct_matches_by_its_full_flattened_fields():
+    # `extends` flattens the base's fields into the front of the derived
+    # struct, so a tuple of the FULL sequence is genuinely layout-equivalent;
+    # no subtype relation participates (the pair below pins the reject).
+    source = """
+    struct point { x: int32; y: int32; }
+    struct point3 extends point { z: int32; }
+    fn main() -> int32 {
+        let p = (1, 2, 3) as point3;
+        return p.x + p.y + p.z;   // 6
+    }
+    """
+    assert run(source) == 6
+
+
+def test_base_layout_does_not_match_a_derived_struct():
+    with pytest.raises(
+        LangError,
+        match=r"cannot cast tuple<int32, int32> to point3: point3 has 3 "
+        r"fields, but the tuple has 2 positions",
+    ):
+        compile_ir(
+            "struct point { x: int32; y: int32; }\n"
+            "struct point3 extends point { z: int32; }\n"
+            "fn main() -> int32 { let t = (1, 2); let p = t as point3; "
+            "return 0; }"
+        )
+
+
+def test_const_source_yields_a_fresh_mutable_copy():
+    source = """
+    struct pair { a: int32; b: int32; }
+    fn reshape(const t: tuple<int32, int32>) -> int32 {
+        let p = t as pair;   // a value copy: const does not stick
+        p.a = 9;
+        return p.a + p.b;
+    }
+    fn main() -> int32 { return reshape((1, 2)); }   // 11
+    """
+    assert run(source) == 11
+
+
+def test_volatile_struct_is_layout_neutral():
+    # @volatile changes access semantics, not layout, so the cast stands; the
+    # result is an ordinary SSA value copy.
+    source = """
+    @volatile struct reg { a: int32; b: int32; }
+    fn main() -> int32 {
+        let r = (1, 2) as reg;
+        return r.b;   // 2
+    }
+    """
+    assert run(source) == 2
+
+
+def test_wrong_field_type_names_the_first_divergence():
+    with pytest.raises(
+        LangError,
+        match=r"cannot cast tuple<int32, char> to point: position 1 is "
+        r"char, but field 'y' is int32",
+    ):
+        compile_ir(
+            "struct point { x: int32; y: int32; }\n"
+            "fn main() -> int32 { let t = (1, 'c'); let p = t as point; "
+            "return 0; }"
+        )
+
+
+def test_wrong_field_order_rejected():
+    with pytest.raises(
+        LangError,
+        match=r"cannot cast tuple<char, int32> to point: position 0 is "
+        r"char, but field 'x' is int32",
+    ):
+        compile_ir(
+            "struct point { x: int32; y: char; }\n"
+            "fn main() -> int32 { let t = ('c', 1); let p = t as point; "
+            "return 0; }"
+        )
+
+
+def test_literal_element_mismatch_uses_the_element_message():
+    # The literal form lowers per element (the typed-let rule), so a
+    # non-adapting element reports as an element, not a position.
+    with pytest.raises(
+        LangError, match=r"tuple element '1': expected int32, got char\*"
+    ):
+        compile_ir(
+            "struct point { x: int32; y: int32; }\n"
+            'fn main() -> int32 { let p = (1, "hi") as point; return 0; }'
+        )
+
+
+def test_packed_struct_is_not_layout_equivalent():
+    with pytest.raises(
+        LangError,
+        match=r"cannot cast tuple<int32, int8> to pp: pp is @packed, so its "
+        r"layout is not the tuple's",
+    ):
+        compile_ir(
+            "@packed struct pp { a: int32; b: int8; }\n"
+            "fn main() -> int32 { let p = (1, 2 as int8) as pp; return 0; }"
+        )
+
+
+def test_over_aligned_struct_is_not_layout_equivalent():
+    with pytest.raises(
+        LangError,
+        match=r"cannot cast tuple<int32, int32> to ap: ap is @align\(16\), "
+        r"so its layout is not the tuple's",
+    ):
+        compile_ir(
+            "@align(16) struct ap { a: int32; b: int32; }\n"
+            "fn main() -> int32 { let p = (1, 2) as ap; return 0; }"
+        )
+
+
+def test_struct_to_struct_stays_nominal_only():
+    # Two structs with identical layouts still do not cast into each other:
+    # the tuple arm requires a tuple on exactly one side, so the structural
+    # check opens no back door around the nominal `extends` rule.
+    with pytest.raises(LangError, match=r"cannot cast point to vec2"):
+        compile_ir(
+            "struct point { x: int32; y: int32; }\n"
+            "struct vec2 { x: int32; y: int32; }\n"
+            "fn main() -> int32 { let p: point; let v = p as vec2; "
+            "return 0; }"
+        )
+
+
+def test_tuple_to_tuple_conversion_stays_rejected():
+    # A cast never converts positions element by element; only the literal
+    # form adapts (against the target, above).
+    with pytest.raises(
+        LangError,
+        match=r"cannot cast tuple<int32, int32> to tuple<int64, int64>",
+    ):
+        compile_ir(
+            "fn main() -> int32 { let t = (1, 2); "
+            "let u = t as tuple<int64, int64>; return 0; }"
+        )
+
+
+def test_nested_tuple_does_not_match_a_nested_struct():
+    # Equivalence is one level deep: a struct field that is itself a struct
+    # needs the SAME struct type in that position, never a recursively
+    # equivalent tuple.
+    with pytest.raises(
+        LangError,
+        match=r"cannot cast tuple<tuple<int32>> to wrap: position 0 is "
+        r"tuple<int32>, but field 'p' is inner",
+    ):
+        compile_ir(
+            "struct inner { v: int32; }\n"
+            "struct wrap { p: inner; }\n"
+            "fn main() -> int32 { let t = ((1,),); let w = t as wrap; "
+            "return 0; }"
+        )
+
+
+def test_same_layout_with_a_nested_difference_rejected():
+    # Byte-identical layouts are not enough: field types compare exactly, so
+    # two distinct single-int32 structs do not substitute for each other.
+    with pytest.raises(
+        LangError,
+        match=r"cannot cast tuple<other> to wrap: position 0 is other, but "
+        r"field 'p' is inner",
+    ):
+        compile_ir(
+            "struct inner { v: int32; }\n"
+            "struct other { v: int32; }\n"
+            "struct wrap { p: inner; }\n"
+            "fn main() -> int32 { let o = other { v = 1 }; let t = (o,); "
+            "let w = t as wrap; return 0; }"
+        )
+
+
+def test_union_target_stays_rejected():
+    with pytest.raises(LangError, match=r"cannot cast tuple<int32> to u"):
+        compile_ir(
+            "union u { a: int32; b: float64; }\n"
+            "fn main() -> int32 { let t = (1,); let x = t as u; return 0; }"
+        )
+
+
+def test_slice_source_stays_rejected():
+    # Punning a slice's internals out is not a tuple cast.
+    with pytest.raises(
+        LangError, match=r"cannot cast slice<int32> to tuple<int32\*, int64>"
+    ):
+        compile_ir(
+            "fn main() -> int32 { let s: slice<int32>; "
+            "let t = s as tuple<int32*, int64>; return 0; }"
+        )
+
+
+def test_tuple_literal_to_any_still_rejects_as_implicit_boxing():
+    # A non-struct target gives the literal no shape; the ordinary any
+    # reject applies.
+    with pytest.raises(
+        LangError,
+        match=r"cannot cast tuple<int32, int32> to any; boxing is implicit",
+    ):
+        compile_ir("fn main() -> int32 { let a = (1, 2) as any; return 0; }")
+
+
+# ------------------------------------------------------------------ rejected
 
 def test_equality_operator_is_rejected_as_on_structs():
     with pytest.raises(
@@ -1384,10 +1726,10 @@ def test_user_struct_named_tuple_is_rejected():
 
 
 def test_extern_crossing_uses_the_struct_abi_classification():
-    # Pinned behavior ahead of stage 4: a tuple in an @extern signature
-    # already classifies as the layout-equivalent C struct (here one
-    # SysV/AAPCS64 eightbyte -> i64), because the ABI classifier keys on the
-    # field list a tuple shares with structs.
+    # Pinned with stage 1 (stage 4 then added only the `as` cast): a tuple
+    # in an @extern signature classifies as the layout-equivalent C struct
+    # (here one SysV/AAPCS64 eightbyte -> i64), because the ABI classifier
+    # keys on the field list a tuple shares with structs.
     out = compile_ir(
         "@extern fn f(t: tuple<int32, int32>);\n"
         "fn main() -> int32 { f((1, 2)); return 0; }"

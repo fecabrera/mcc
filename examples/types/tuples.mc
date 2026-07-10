@@ -6,7 +6,8 @@ import "std/io";
 // paren literal `(a, b)` (a top-level comma; `(x)` stays plain grouping, so
 // the 1-tuple is `(x,)` and the empty tuple `()`), read by position with a
 // compile-time-constant index, narrowed to a smaller tuple with a constant
-// slice `t[n:m]`, and destructured into named locals with `let a, b = t;`.
+// slice `t[n:m]`, destructured into named locals with `let a, b = t;`, and
+// converted with `as` to and from the struct sharing its exact layout.
 // Its headline job is multiple return values.
 // Prerequisites: structs.mc and struct_literals.mc (a tuple element coerces
 // exactly like a struct-literal field), arrays.mc for the index syntax.
@@ -32,6 +33,12 @@ fn fst<A, B>(t: tuple<A, B>) -> A {
 // Tuples are not named types (`extends tuple<...>` is rejected); naming one
 // is the type alias's job, and the alias works anywhere the written type does.
 type polar = tuple<int64, float64>;
+
+// A named struct with a pair's exact shape: the cast target below.
+struct point {
+    x: int32;
+    y: int32;
+}
 
 fn main() -> int32 {
     // Multiple return values, unpacked by position. The index must fold to a
@@ -124,6 +131,22 @@ fn main() -> int32 {
     println("first         = {}", first);
     println("rest[0]       = {}", rest[0]);
 
+    // `as` converts a tuple to any struct with the same field types in the
+    // same order (a fresh value copy, not a view). Field names never matter;
+    // the match is exact and one level deep, and a @packed or @align struct
+    // never qualifies. The literal form lowers its elements against the
+    // fields like a typed let, so 3 and 4 adapt here.
+    let pt = (3, 4) as point;
+    println("pt            = ({}, {})", pt.x, pt.y);
+
+    // And back: `as tuple<...>` turns a struct into its positional form,
+    // composing with destructuring to consume an existing struct by
+    // position. The casts chain (round-trip), but only this pairing
+    // converts: struct-to-struct stays nominal, `extends` only (see
+    // extends.mc), and tuple-to-tuple stays rejected.
+    let x, y = pt as tuple<int32, int32>;
+    println("x, y          = {}, {}", x, y);
+
     // The alias in action; 5 adapts to int64 per position, as above.
     let p: polar = (5, 0.5);
     println("polar         = ({}, {})", p[0], p[1]);
@@ -144,7 +167,8 @@ fn main() -> int32 {
 }
 
 // See also: structs.mc for the named counterpart these ride on (declare a
-// struct when the positions deserve field names); struct_literals.mc for the
+// struct when the positions deserve field names, and cast when a value needs
+// to cross between the two forms, as above); struct_literals.mc for the
 // per-field adaptation rules tuple elements follow; type_aliases.mc for the
 // alias mechanism naming `polar` above; any_struct_boxing.mc for how a tuple
 // follows the struct rule under `any`, boxing by hidden reference into a

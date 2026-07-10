@@ -10,6 +10,28 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Layout-equivalent struct casts (tuples stage 4, the final stage)** —
+  a tuple casts to any struct with the same field types in the same
+  order, and a struct back to its positional form: `(3, 4) as point`
+  builds the struct (the literal's elements lower against the target's
+  field types, like a typed `let`, so untyped constants adapt), and
+  `p as tuple<int32, int32>` converts the other way, composing with
+  destructuring to consume an existing struct by position
+  (`let x, y = p as tuple<int32, int32>;`). Equivalence is exact and one
+  level deep — field names never matter, a struct-typed field takes only
+  the same struct type (never a recursively-equivalent tuple), and a
+  `@packed`/`@align(N)` struct is never equivalent, its offsets or size
+  diverging from the tuple's. Struct-to-struct casts stay nominal-only
+  (`extends` upcasts), tuple-to-tuple conversion stays rejected, the
+  result is a fresh value copy either way, the cast chains
+  (`(1, 2) as point as tuple<int32, int32>` round-trips), and a rejected
+  cast names the first divergence. The empty tuple and an empty struct
+  convert on the same rule. This closes the `tuple<A, B, ...>` roadmap
+  item: the `@extern` half of stage 4 had already shipped with stage 1,
+  tuples crossing C boundaries as the layout-equivalent struct. See
+  [Tuples](docs/language.md#tuples), [Casts](docs/language.md#casts),
+  and [examples/types/tuples.mc](examples/types/tuples.mc).
+
 - **Destructuring with the rest binder (tuples stage 3, slices too)** —
   `let a, b = t;` binds a tuple's positions to names, no parens, one
   ordinary local per position (`let q, r = divmod(9, 4);` — multiple

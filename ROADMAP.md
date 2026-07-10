@@ -870,7 +870,7 @@ already do).
       accepted shape, and the commuted `n + p` is rejected, unlike C
       (the pointer is the base operand being advanced, and `n - p` has
       no meaning anyway, so addition matches subtraction's shape)
-- [ ] `tuple<A, B, ...>` — a builtin heterogeneous, fixed-arity product: each
+- [x] `tuple<A, B, ...>` — a builtin heterogeneous, fixed-arity product: each
       position keeps its own statically-known type, accessed by position
       with the existing index syntax (`t[0]`, `t[1]`). The index must be a
       compile-time constant (each position has its own type, so a runtime
@@ -895,7 +895,9 @@ already do).
       layout-equivalent to the struct with the same field types in the same
       order, so `(a, b, ...) as A` converts to any layout-equivalent struct
       `A` and tuples cross `@extern` boundaries as the layout-equivalent C
-      struct. For multiple return values
+      struct (both implemented — the cast in stage 4 below, the crossing
+      with stage 1 — see [Tuples](docs/language.md#tuples)). For multiple
+      return values
       (`fn divmod(a: int32, b: int32) -> tuple<int32, int32>`) and ad-hoc
       grouping without a one-off struct. Distinct from `slice<any>`: a
       tuple keeps each element's static type and a compile-time arity,
@@ -908,9 +910,9 @@ already do).
       variadic later (no erasure) is open with no carve-out at all: a
       `T...` may produce 0- and 1-tuples and every surface already takes
       them. `==` stays rejected as on
-      structs; the open `equals` overload set is the extension point. Lands
+      structs; the open `equals` overload set is the extension point. Landed
       **staged** (each stage its own complete change set with its own
-      CHANGELOG entry; this box ticks when the last stage lands):
+      CHANGELOG entry; the box ticked when the last stage landed):
   - [x] stage 1: the core type, paren literal, and constant indexing — a
         new interned builtin `LangType` arm beside `slice` and `any` in the
         generator's type resolution, built on `instantiate_struct`'s layout
@@ -968,11 +970,24 @@ already do).
         1-tuple tail and on a 1-tuple yields `tuple<>`, arities the
         surface takes everywhere; implemented, see
         [Tuples](docs/language.md#tuples)
-  - [ ] stage 4: layout-equivalent struct `as` and `@extern` — the
-        `(a, b, ...) as A` cast as a cast arm checking field-type-sequence
-        equality against the target struct, with tuples then crossing
-        `@extern` boundaries as the layout-equivalent C struct via the
-        existing struct-ABI classification (`classify_aggregate`)
+  - [x] stage 4: the layout-equivalent struct `as` — the `(a, b, ...) as A`
+        cast, and its reverse `p as tuple<...>` (layout equivalence is
+        symmetric; the reverse composes with destructuring to consume an
+        existing struct by position), as a cast arm checking
+        field-type-sequence equality against the exact target struct:
+        per-position type equality one level deep (a struct-typed field
+        takes only the same struct type, never a recursively-equivalent
+        tuple), `@packed`/`@align` structs never equivalent (their offsets
+        or size diverge; without those attributes both sides run the
+        identical sequential layout, so equal field sequences mean equal
+        layouts), struct-to-struct staying nominal-only. The literal form
+        lowers its elements against the target's field types like a typed
+        `let`, the value rebuilds position by position (the tuple-slice
+        shape, no memory round-trip), and rejections name the first
+        divergence. The `@extern` half needed nothing here — tuples had
+        crossed as the layout-equivalent C struct since stage 1, the
+        struct-ABI classification keying on the field list; implemented,
+        see [Tuples](docs/language.md#tuples)
 - [ ] `new T { ... }` sugar — desugars to a block that calls a user-defined
       `fn new<T>() -> T*`, writes a [struct literal](docs/language.md#structs)
       through the result, and emits the pointer:

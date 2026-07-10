@@ -8566,7 +8566,8 @@ class CodeGen:
         integer truncation/extension (by signedness), integer-to-bool, and the
         ``float64`` conversions. A cast to ``slice<T>`` is a borrow (see
         :meth:`gen_borrow_slice`); other struct casts are rejected, except the
-        ``extends`` value-upcast.
+        ``extends`` value-upcast and the tuple-to-struct (and back)
+        layout-equivalent reinterpret (see :meth:`gen_tuple_struct_cast`).
 
         Args:
             expr: The ``Cast`` node.
@@ -8583,7 +8584,18 @@ class CodeGen:
             # T[N]. Resolved before the operand is read, so an array keeps its
             # static length instead of decaying to a bare pointer.
             return self.gen_borrow_slice(expr.value, target, expr.line)
-        tv = self.gen_expr(expr.value)
+        shape = (
+            self.tuple_cast_shape(target, expr.line)
+            if isinstance(expr.value, TupleLit)
+            else None
+        )
+        if shape is not None:
+            # The headline `(a, b) as A` form: the literal lowers against the
+            # target's shape as against a typed `let`, so an untyped constant
+            # adapts to its position's type (`(1, 2) as pair64`).
+            tv = self.gen_tuple_lit(expr.value, tuple_type=shape)
+        else:
+            tv = self.gen_expr(expr.value)
         src = tv.type
         if src == target:
             return TypedValue(tv.value, target)
@@ -8623,6 +8635,18 @@ class CodeGen:
             self.builder.store(tv.value, slot)
             base_ptr = self.builder.bitcast(slot, target.ir.as_pointer())
             return TypedValue(self.builder.load(base_ptr), target)
+        src_t, target_t = strip_const(src), strip_const(target)
+        if (
+            is_tuple(src_t) != is_tuple(target_t)
+            and is_struct(src_t)
+            and not is_slice(src_t)
+            and is_struct(target_t)
+        ):
+            # Layout-equivalent reinterpret (tuples stage 4): exactly one side
+            # is a tuple, the other a record struct. Struct-to-struct stays
+            # nominal-only (the `extends` upcast above) and tuple-to-tuple is
+            # never a pun, so this structural check opens no back door.
+            return self.gen_tuple_struct_cast(tv, target_t, expr.line)
         if is_aggregate(src) or is_aggregate(target):
             raise LangError(f"cannot cast {src} to {target}", expr.line)
         if isinstance(src.ir, ir.IntType) and target is BOOL:
@@ -8646,6 +8670,111 @@ class CodeGen:
             convert = self.builder.fptosi if target.signed else self.builder.fptoui
             return TypedValue(convert(tv.value, target.ir), target)
         raise LangError(f"cannot cast {src} to {target}", expr.line)
+
+    def tuple_cast_shape(self, target: LangType, line: int) -> LangType | None:
+        """The tuple type a tuple-literal cast operand lowers against.
+
+        The headline layout-equivalent cast form is the literal one,
+        ``(a, b) as A``, so a ``TupleLit`` operand of a cast lowers against
+        the target's shape the way it would against a typed ``let``: a tuple
+        target is its own shape, a record-struct target contributes its field
+        types in order. Any other target gets ``None`` -- the literal then
+        anchors its own type and the ordinary cast arms (or rejects) apply,
+        e.g. ``(1, 2) as any`` still hits the boxing-is-implicit reject.
+
+        Args:
+            target: The resolved cast target type.
+            line: Source line for diagnostics.
+
+        Returns:
+            The tuple type to lower the literal against, or ``None``.
+        """
+        target = strip_const(target)
+        if is_tuple(target):
+            return target
+        if is_struct(target) and not is_slice(target) and not is_any(target):
+            return self.tuple_type(
+                tuple(strip_const(ftype) for _, ftype in target.fields), line
+            )
+        return None
+
+    def gen_tuple_struct_cast(
+        self, tv: TypedValue, target: LangType, line: int
+    ) -> TypedValue:
+        """Reinterpret a tuple as a layout-equivalent struct, or back.
+
+        Exactly one of operand and target is a tuple, the other a record
+        struct (the caller gates). The cast is legal when the struct is
+        layout-equivalent to the tuple: the same field types in the same
+        order, compared exactly -- a nested struct field needs the *same*
+        struct type in that position, never a recursively-equivalent tuple --
+        and no layout-changing attribute on the struct. Without ``@packed``
+        or ``@align`` both sides run the identical sequential layout
+        (:meth:`set_struct_body`), so an equal field sequence means equal
+        size, alignment, and offsets; with either attribute the offsets or
+        size diverge from the tuple's, so those structs never match. Field
+        names never matter, and the ``extends`` lineage never participates:
+        a derived struct matches only when its full flattened field sequence
+        does.
+
+        The value is rebuilt position by position -- extract/insert through
+        both sides' ``elem_indices`` over a zero-initialized aggregate, the
+        shape of a tuple slice -- so padding stays deterministic, no memory
+        round-trip is needed, and any padding-element index divergence
+        between the two identified types is harmless. The result is a fresh
+        value copy, never ``const``.
+
+        Args:
+            tv: The evaluated operand (tuple or struct value).
+            target: The resolved cast target (struct or tuple), const-stripped.
+            line: Source line for diagnostics.
+
+        Returns:
+            The reinterpreted value as a ``TypedValue`` of ``target``.
+
+        Raises:
+            LangError: When the sides are not layout-equivalent, naming the
+                first divergence.
+        """
+        src = strip_const(tv.type)
+        tup, struct = (src, target) if is_tuple(src) else (target, src)
+        head = f"cannot cast {src} to {target}"
+        if struct.packed:
+            raise LangError(
+                f"{head}: {struct} is @packed, so its layout is not the "
+                "tuple's",
+                line,
+            )
+        if struct.align is not None:
+            raise LangError(
+                f"{head}: {struct} is @align({struct.align}), so its layout "
+                "is not the tuple's",
+                line,
+            )
+        if len(struct.fields) != len(tup.fields):
+            raise LangError(
+                f"{head}: {struct} has {len(struct.fields)} fields, but the "
+                f"tuple has {len(tup.fields)} positions",
+                line,
+            )
+        for pos, ((fname, ftype), (_, ptype)) in enumerate(
+            zip(struct.fields, tup.fields)
+        ):
+            if strip_const(ftype) != strip_const(ptype):
+                raise LangError(
+                    f"{head}: position {pos} is {strip_const(ptype)}, but "
+                    f"field {fname!r} is {strip_const(ftype)}",
+                    line,
+                )
+        value = ir.Constant(target.ir, None)
+        for pos in range(len(src.fields)):
+            element = self.builder.extract_value(
+                tv.value, src.elem_indices[pos]
+            )
+            value = self.builder.insert_value(
+                value, element, target.elem_indices[pos]
+            )
+        return TypedValue(value, target)
 
     def make_slice(self, target: LangType, ptr, length) -> TypedValue:
         """Assemble a ``slice<T>`` value from a pointer and a length.
