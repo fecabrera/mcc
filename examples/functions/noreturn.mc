@@ -9,7 +9,8 @@ import "std/io";
 // `exit`, `abort`, and `_Exit` (import "std/io" or "libc/stdlib") ship
 // annotated. Prerequisites: functions.mc, nonnull.mc, nonnull_narrowing.mc.
 
-// A panic-style helper: report and exit. `@noreturn` must be void (a call
+// A panic-style helper: report and exit. std/io now ships the real thing
+// (see panic_assert.mc). `@noreturn` must be void (a call
 // can then never sit in expression position), and a `return` inside the
 // body is the compile error "cannot return from @noreturn function 'fail'
 // (it promises never to return)".

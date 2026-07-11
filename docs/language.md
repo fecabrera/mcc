@@ -860,7 +860,9 @@ The rules:
   divergence convenience, never a soundness hole).
 
 The fact is handed to LLVM as the `noreturn` function attribute, so the
-optimizer drops the dead continuation paths.
+optimizer drops the dead continuation paths. The stdlib packages the
+report-and-abort guard as [`panic`/`assert`](#panic-and-assert), so most
+programs never write their own `@noreturn` helper.
 
 See [examples/functions/noreturn.mc](../examples/functions/noreturn.mc).
 
@@ -4568,9 +4570,7 @@ string placeholders carry field widths — `println("{s20}", name)` — via
 `[N][s][N]`, and float placeholders carry width and precision —
 `println("{.2f}", f)`, `println("{8.2f}", f)` — via `[[N].M]f` (all
 above). libc's `printf` remains the tool only for what the modifiers do
-not carry: scientific notation (`printf("%g\n", f)` / `%e`). The legacy
-printf-style `print`/`println` pair is kept behind `-D PRINTF_PRINTLN=1`
-for programs mid-migration.
+not carry: scientific notation (`printf("%g\n", f)` / `%e`).
 
 **Positional placeholders** select an argument manually: in a format
 string *literal*, `{n}` renders the n-th argument after the format string
@@ -4604,8 +4604,7 @@ The hook is the **`@format` parameter attribute**: `std/io` declares
 opt its own format string into the desugar the same way. `@format` is
 valid only on the `slice<const char>` parameter just before the
 collecting `args...`, and it travels through
-[interface stubs](#interface-files) like `@nonnull` does. The legacy
-printf-style pair is C-variadic and unmarked, so it is unaffected.
+[interface stubs](#interface-files) like `@nonnull` does.
 
 **String interpolation (f-strings)** writes the expressions inline: an
 `f`-prefixed string literal holds `{expr}` holes, and the literal desugars
@@ -4641,12 +4640,72 @@ literal at parse time. An f-string is legal *only* as the format string of
 an `@format` call (`println(f"...")`, `format_args(str, f"...")`); every
 other sink — a `let` initializer, a plain parameter, an ordinary
 expression — is a compile error (a string-*valued* f-string would need a
-runtime rendering buffer, a possible later extension). The legacy
-`-D PRINTF_PRINTLN=1` pair is unmarked, so f-strings are rejected there
-too.
+runtime rendering buffer, a possible later extension). In an
+[overload set](#function-overloading) the sink rule filters **before**
+ranking: a candidate that would receive the f-string anywhere but its
+`@format` format-string slot is non-viable, and the usual plain-literal
+rank runs among the survivors — so `panic(f"x = {x}")` resolves to the
+formatting collector even though the equivalent plain literal would pick
+the verbatim `panic(msg)` member (below).
 
 See [examples/systems/formatting.mc](../examples/systems/formatting.mc) —
 the positional and f-string demos are its finale.
+
+### Panic and assert
+
+`std/io` packages the [`@noreturn`](#noreturn-functions) guard pattern:
+`panic` writes `panic: <message>` to standard error and aborts the process
+(`abort()`, so SIGABRT — exit status 134 under a shell), and
+`assert(cond, ...)` panics with `assertion failed: <message>` when its
+condition is false, doing nothing otherwise:
+
+```c
+import "std/io";
+
+fn first(p: int32*) -> int32 {
+    if (p == null) {
+        panic("first(): null input");   // diverges: narrows p below
+    }
+    return *p;                          // proven non-null here
+}
+
+fn main() -> int32 {
+    let x = 41 as int32;
+    assert(x > 0, "x must be positive, got {}", x);
+    println("first(&x) = {}", first(&x));
+    panic(f"x = {x}, giving up");       // f-strings interpolate as usual
+}
+```
+
+Each family is two overloads. `panic(msg)` and `assert(cond, msg)` take one
+`slice<const char>` and write it **verbatim** — braces are not placeholders
+in the message arm, so runtime text always passes through safely.
+`panic(fmt, args...)` and `assert(cond, fmt, args...)` are `@format`
+collectors rendering through the same machinery as
+[`print`/`println`](#formatted-print--println): `{}` placeholders,
+modifiers, positional `{n}` sugar, and f-strings all apply. A string
+*literal* adapts to the message arm directly; an owned `string` borrows in
+with `panic(str as slice<char>)`.
+
+The details:
+
+- **`panic` is `@noreturn`**, so a call diverges like a `return`: it
+  satisfies missing-return analysis as a block's final statement, and the
+  `if (p == null) { panic("..."); }` guard body narrows `p` for the rest
+  of the scope, like any diverging guard.
+- **`assert` does not narrow.** `assert(p != null, "...")` compiles, but
+  facts do not flow through a call, so `p` stays unproven after it — the
+  narrowing idiom remains the `panic` guard above.
+- **Termination is `abort()`**, never `exit`: SIGABRT traps in a debugger
+  and can leave a core dump, and no atexit handlers run mid-panic.
+  [Defers](#defer) do not run on the panic path (a `@noreturn` call is not
+  a block exit), but pending standard *output* is flushed first, so
+  interleaved program output survives the abort.
+- **`assert` is always enabled** — its arguments evaluate whether or not
+  the condition holds, and there is no release-stripping mode yet (a
+  `-D`-gated variant is a roadmap follow-up).
+
+See [examples/functions/panic_assert.mc](../examples/functions/panic_assert.mc).
 
 ## Reaching libc
 

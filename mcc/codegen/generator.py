@@ -12100,6 +12100,30 @@ class CodeGen:
             LangError: When no overload matches, the choice is ambiguous, a type
                 parameter binds to ``void``, or access is denied.
         """
+        # An f-string can only ever bind an @format format-string slot, so a
+        # candidate that would receive one anywhere else is non-viable before
+        # ranking -- panic(f"x = {x}") must resolve to the @format collector
+        # even though the msg-only member would win the plain-literal rank.
+        # An f-string among a viable candidate's *extras* is left alone here:
+        # the winner's takes-no-arguments-after-an-f-string rejection (or the
+        # collected-extra funnel) reports it against the resolved callee.
+        if any(isinstance(arg, FStrLit) for arg in expr.args):
+
+            def receives_fstrings(f: Func) -> bool:
+                if not self.collecting_candidate(f):
+                    return False
+                fixed = len(f.params) - 1
+                if f.params[fixed - 1][0] not in f.format_params:
+                    return False
+                return all(
+                    i == fixed - 1
+                    for i, arg in enumerate(expr.args[:fixed])
+                    if isinstance(arg, FStrLit)
+                )
+
+            candidates = [f for f in candidates if receives_fstrings(f)]
+            if not candidates:
+                raise LangError(FSTRING_MISPLACED, expr.line)
         # A mut argument lends the caller's storage, so its address must be
         # formed before the args are lowered to values for inference -- but
         # which overload wins (and with it which positions are mut) is not
@@ -12148,10 +12172,11 @@ class CodeGen:
             elif isinstance(arg, FStrLit):
                 # An f-string pre-evaluates for inference and ranking exactly
                 # as its desugared literal would -- a char* into the interned
-                # text -- so the winner is the one the equivalent plain-literal
-                # call would pick. The hole expressions stay unevaluated here;
-                # winner emission substitutes the plain literal and splices
-                # them in as the extras (or rejects a non-@format winner).
+                # text -- so among the @format collectors the viability filter
+                # above kept, the winner is the one the equivalent
+                # plain-literal call would pick. The hole expressions stay
+                # unevaluated here; winner emission substitutes the plain
+                # literal and splices them in as the extras.
                 arg_tvs.append(self.gen_string(arg.value))
             elif self.defers_array_literal(arg) or self.defers_struct_literal(arg):
                 # An array or bare struct literal cannot lower without a

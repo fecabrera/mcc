@@ -16,10 +16,8 @@ hole-free f-string degrades to a plain string literal at parse time.
 
 import pytest
 
-from mcc.codegen import CodeGen
-from mcc.driver import STDLIB_DIR, merge_imports
 from mcc.errors import LangError
-from helpers import compile_ir, parse, run
+from helpers import compile_ir, run
 
 IO = 'import "std/io";\n'
 
@@ -452,15 +450,3 @@ def test_an_fstring_is_not_an_ordinary_expression():
             + "fn main() -> int32 { "
             'return len(f"{1 as int32}") as int32; }'
         )
-
-
-def test_the_legacy_printf_println_rejects_fstrings():
-    # Under -D PRINTF_PRINTLN=1 println is C-variadic with a char* format
-    # -- not @format -- so an f-string has no legal position there.
-    program = merge_imports(
-        parse(IO + 'fn main() -> int32 { println(f"{1 as int32}"); return 0; }'),
-        STDLIB_DIR,
-        (STDLIB_DIR,),
-    )
-    with pytest.raises(LangError, match=MISPLACED):
-        CodeGen(program, "test", defines={"PRINTF_PRINTLN": 1}).generate()

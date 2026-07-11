@@ -8,6 +8,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Removed
+
+- **The `PRINTF_PRINTLN` toggle and the legacy printf-style
+  `print`/`println`** — the `-D PRINTF_PRINTLN=1` escape hatch is retired:
+  `std/io`'s `@if`/`@else` branches are deleted and the slice-typed `{}`
+  pair is unconditional, so the docs carry one format grammar. Programs
+  still on the C-variadic pair migrate to `{}` placeholders (or call
+  libc's `printf` directly — still the scientific-notation tool). The
+  `-D` define mechanism itself is unchanged.
+
 ### Changed
 
 - **`swap` and `replace` moved to `std/utils`** — the generic in-place
@@ -17,6 +27,28 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and writing families only.
 
 ### Added
+
+- **stdlib `panic` and `assert`** — `std/io` grows the report-and-abort
+  guards: `panic(msg)` writes `panic: <msg>` verbatim to standard error
+  (braces stay literal, so runtime text is always safe), and
+  `panic(fmt, args...)` renders `{}` placeholders through the `std/format`
+  set first — f-strings included, `panic(f"x = {x}")` being the idiomatic
+  spelling. `assert(cond, msg)` / `assert(cond, fmt, args...)` panic with
+  `assertion failed: <msg>` when the condition is false and do nothing
+  otherwise (always enabled; a `-D`-gated release-stripping variant is a
+  recorded follow-up). Termination is `abort()` — SIGABRT, exit status 134
+  under a shell, no defers, no atexit handlers — with pending stdout
+  flushed first so interleaved output survives. `panic` is
+  [`@noreturn`](docs/language.md#noreturn-functions), so a trailing call
+  satisfies missing-return and the `if (p == null) { panic("..."); }`
+  guard narrows `p` (`assert(p != null, ...)` does not — facts stop at the
+  call). En route, the f-string sink rule became a pre-ranking viability
+  filter in overload sets: an f-string argument rules out every candidate
+  that would not receive it at an `@format` format-string slot, so
+  `panic(f"...")` resolves to the collector instead of erroring against
+  the rank-winning verbatim member. See
+  [Panic and assert](docs/language.md#panic-and-assert) and
+  [panic_assert.mc](examples/functions/panic_assert.mc).
 
 - **Editors: f-string interpolation highlighting** — the tree-sitter
   grammar (Helix, and Neovim through the shared parser) now parses the

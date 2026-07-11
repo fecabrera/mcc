@@ -53,7 +53,7 @@ Defining and calling functions: void/recursion, forward declarations, the
 parameter modifiers (`const`, `mut`, `@noalias`, `@nonnull`), `mut` returns
 (functions returning lvalues), overload sets
 (concrete, generic, mixed, and open across modules), never-returning
-functions (`@noreturn`),
+functions (`@noreturn`) and the stdlib `panic`/`assert` pair built on them,
 variadics (C `...` and native collecting), and function pointers, including
 the function types that carry a `@nonnull` contract or spell the `mut`/`const`
 hidden-reference conventions and the `-> mut` return convention.
@@ -77,6 +77,7 @@ hidden-reference conventions and the `-> mut` return convention.
 | [nonnull_projections.mc](functions/nonnull_projections.mc) | flow-narrowing for field projections: the same guards prove a pointer-typed struct field (`b->data`, keyed by access path at any depth) into @nonnull slots, the call write-effect refinement (a call kills the fact unless the callee is proven transitively write-free; stores and loop entry always kill), and `let q = b->data;` binding a checked field to a name fact that survives writing calls and loops |
 | [nonnull_assert.mc](functions/nonnull_assert.mc) | the postfix `p!` non-null assertion, @nonnull's escape hatch where narrowing cannot see the invariant: a zero-cost static proof for heap/returned pointers (null is then UB), one hatch at a `let` seeding all later uses, and the `!=` lexing gotcha |
 | [noreturn.mc](functions/noreturn.mc) | `@noreturn` void functions that never return: a panic-style exit helper, calls diverging like a `return` (no dummy return after), the C-idiomatic `if (p == null) abort();` guard narrowing into @nonnull, the legal `while (true)` spin body, defers skipped at the call |
+| [panic_assert.mc](functions/panic_assert.mc) | the stdlib `panic`/`assert` pair from std/io: `panic(msg)` writing `panic: <msg>` verbatim to stderr then aborting (SIGABRT, exit 134, defers skipped, stdout flushed), the `panic(fmt, args...)` format collector with f-strings, both `assert` arms passing silently, the panic guard narrowing a null check where `assert(p != null, ...)` does not, and a deliberately-aborting finale (safe: CI compiles examples, never runs them) |
 | [variadic.mc](functions/variadic.mc) | variadic `...` definitions, `va_list`, `va_start`/`va_end`, forwarding to `vsnprintf` |
 | [native_variadics.mc](functions/native_variadics.mc) | native variadic collection: `args...` as sugar for a trailing `const args: slice<const any>`, extras boxed caller-side into a read-only slice walked with `for` + `case type`, zero extras giving an empty slice, the explicit spelling collecting the same, collectors in overload sets (exact arity beats collecting, more fixed parameters wins) and a generic collector binding `T` from the fixed arguments only |
 | [function_pointers.mc](functions/function_pointers.mc) | `fn(...) -> R` types (incl. variadic `fn(A, ...)`), callbacks in structs, dispatch tables, `const`/`@static` function aliases, `null` callbacks |

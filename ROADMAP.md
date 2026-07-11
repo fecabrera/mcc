@@ -1997,9 +1997,27 @@ already do).
       an impossible branch; implemented, see
       [@noreturn functions](docs/language.md#noreturn-functions) and
       [The unreachable statement](docs/language.md#the-unreachable-statement):
-  - [ ] stdlib `panic(msg)` — a `@noreturn` "print to stderr and abort"
-        entry point in `std`, the idiomatic guard body once formatted
-        printing settles
+  - [x] stdlib `panic`/`assert` — the `@noreturn` "print to stderr and
+        abort" guards in `std/io`, a verbatim-message and an
+        `@format`-collecting overload of each (`panic(msg)`,
+        `panic(fmt, args...)`, `assert(cond, msg)`,
+        `assert(cond, fmt, args...)`): `panic: ...` / `assertion failed:
+        ...` on stderr, then `abort()` with stdout flushed first (no
+        defers, no atexit handlers), the idiomatic guard body
+        (`if (p == null) { panic("..."); }` narrows; `assert` itself does
+        not — facts stop at the call). An f-string resolves to the
+        collector because the sink rule filters overload candidates
+        before ranking (a non-`@format` slot can never receive one);
+        implemented, see
+        [Panic and assert](docs/language.md#panic-and-assert):
+    - [ ] release-stripping asserts — a `-D MC_NDEBUG=1`-style `@if` gate
+          inside the assert bodies compiling the check away (undefined
+          `-D` names read as 0, so opting in later is drop-in)
+    - [ ] caller location — panics carry no file/line today; the hook is
+          a compiler-filled caller-location parameter attribute
+          (call-site compile-time rewriting, which the `@format`
+          positional desugar already proves out), its own item when it
+          comes
   - [x] `-Wdead-code` — an opt-in class (via the shipped warning registry)
         reporting statements silently dropped after a `return`, a
         `@noreturn` call, or an `unreachable` (also `break`/`continue`/
@@ -2288,19 +2306,21 @@ already do).
       works directly), and an owned `struct string` borrows in with
       `str as slice<char>` — both via the
       [`slice<T>`](docs/language.md#slices) borrowing rules. **This is now
-      the default `print`/`println`**, every stage nested below shipped;
-      the open sub-items are the remaining scraps, the legacy toggle's
-      deletion decision and the silent-edge spec:
+      the only `print`/`println`**, every stage nested below shipped and
+      the legacy toggle retired; the open sub-items are the remaining
+      scraps and the silent-edge spec:
   - [x] printf-style `%` formatting — the previous `print`/`println` in the
         [standard library](README.md#standard-library), superseded by the
         `{}` model and kept behind `-D PRINTF_PRINTLN=1` for programs
-        mid-migration; with the modifier stages below all landed, libc's
-        `printf` stays only the scientific-notation (`%g`/`%e`) tool
-    - [ ] retire the `PRINTF_PRINTLN` toggle — the legacy pair and its
-          `@if`/`@else` branches in `std/io` need a recorded deletion
-          decision (which release removes them); the flip audit's lean
-          still applies: a long half-flipped ecosystem means two format
-          grammars in every doc
+        mid-migration until the toggle's retirement below; with the
+        modifier stages all landed, libc's `printf` stays only the
+        scientific-notation (`%g`/`%e`) tool
+    - [x] retire the `PRINTF_PRINTLN` toggle — the recorded decision:
+          deleted rather than extended when `panic`/`assert` joined
+          `std/io`. The legacy pair and its `@if`/`@else` branches are
+          gone, the slice-typed `{}` pair is unconditional, and the docs
+          carry one format grammar (the flip audit's lean); the `-D`
+          mechanism itself is untouched
   - [x] the stdlib `format` overload-set module — `lib/std/format.mc`, the
         type-driven per-type rendering layer the placeholder stages below
         dispatch into: a
