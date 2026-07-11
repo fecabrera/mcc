@@ -158,6 +158,11 @@
           "comment": "`type` is contextual: only a keyword as `type <name> = …`.",
           "name": "storage.type.mcc",
           "match": "\\btype\\b(?=\\s+[A-Za-z_]\\w*\\s*=)"
+        },
+        {
+          "comment": "`error` is contextual too: only a keyword as the declaration head `error <name> {`; `error(` stays the result constructor (an ordinary call).",
+          "name": "storage.type.mcc",
+          "match": "\\berror\\b(?=\\s+[A-Za-z_]\\w*\\s*\\{)"
         }
       ]
     },

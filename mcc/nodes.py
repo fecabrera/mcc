@@ -284,15 +284,26 @@ class EnumDecl:
     type for each member. The underlying type may be any type; a member's value
     is any expression that folds to a constant of it.
 
+    An ``error`` declaration (``error my_error { NOT_FOUND, ... }``) rides the
+    same chassis with ``is_error`` set: the members become the variants of a
+    nominal, ``int32``-backed error type (auto-numbered from 1; a member's
+    value expression may be ``None``), and a variant may carry a display
+    string in ``displays`` instead of a value.
+
     Attributes:
         name: The enum's name, usable both as a type and as the ``::`` scope.
         underlying: The underlying ``TypeRef``, or ``None`` to default to
-            ``int32``.
-        members: ``(name, value expression)`` pairs in declaration order.
+            ``int32``. Always ``None`` for an error declaration.
+        members: ``(name, value expression)`` pairs in declaration order. For
+            an error declaration the expression is ``None`` when the variant
+            auto-numbers.
         line: Source line for diagnostics.
         private: ``@private`` -- usable only within its source file.
         static: ``@static`` -- file-scoped name other files may reuse.
         source: Defining file, stamped by the driver.
+        is_error: ``True`` for an ``error`` declaration.
+        displays: ``{variant name: display string}`` for error variants
+            declared ``NAME = "display"``. Empty for plain enums.
     """
 
     name: str
@@ -303,6 +314,8 @@ class EnumDecl:
     static: bool = False
     source: str | None = None
     span: tuple[int, int] | None = field(default=None, compare=False)
+    is_error: bool = False
+    displays: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -1147,6 +1160,30 @@ class StructLit:
 
     type_ref: "TypeRef | None"
     fields: list
+    line: int
+
+
+@dataclass
+class ResultLit:
+    """A ``result`` constructor: ``ok(v)``, ``ok()``, or ``error(e)``.
+
+    The only ways to build a ``result`` value. Context-typed like a bare
+    ``StructLit``: the position must fix a ``result<T, E>`` / ``result<E>``
+    type (a typed ``let``/assignment/return/argument/field); with no such
+    context the constructor is an error. ``ok()`` with no value is legal only
+    for the error-only ``result<E>``; ``error(e)`` always takes the error
+    value. ``ok`` and ``error`` are not keywords -- the parser claims them
+    only when directly followed by ``(``, so both stay ordinary identifiers
+    elsewhere.
+
+    Attributes:
+        kind: ``"ok"`` or ``"error"``.
+        value: The wrapped value expression, or ``None`` for ``ok()``.
+        line: Source line for diagnostics.
+    """
+
+    kind: str
+    value: object | None
     line: int
 
 

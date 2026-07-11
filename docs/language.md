@@ -4016,6 +4016,136 @@ The directional base/derived checking this shape suggests is the separate
 nominal-enums item on the [roadmap](../ROADMAP.md#planned). See
 [examples/types/derived_enums.mc](../examples/types/derived_enums.mc).
 
+## Error handling
+
+Recoverable errors are values: a dedicated `error` declaration names the
+failure causes, and a function that can fail returns a `result` carrying
+either its ok value or the error — no exceptions, no unwinding, no hidden
+control flow. This is the recoverable complement of the unrecoverable
+[`panic`/`assert`](#panic-and-assert) lane.
+
+```c
+error my_error {
+    NOT_FOUND = "Not Found",
+    IO_ERROR  = "I/O Error",
+    EXHAUSTED,
+}
+
+fn find(key: int32) -> result<int64, my_error> {
+    if (key == 0) { return error(my_error::NOT_FOUND); }
+    return ok(compute(key));
+}
+```
+
+### Error declarations
+
+An `error` declaration is enum-like but differs from an [`enum`](#enums) on
+every axis that matters for errors:
+
+- **Nominal.** `my_error` is a distinct `int32`-backed type, not a
+  transparent integer: no arithmetic, no ordering, and no implicit
+  conversion to or from integers — `error(5)` and `return 1;` into a
+  `my_error` both reject. Two same-shaped declarations do not mix.
+- **Auto-numbered from 1.** Variants take 1, 2, 3, … in declaration order.
+  An explicit `= n` is allowed and numbering continues from `n + 1` (the C
+  convention); `= 0` and duplicate values are compile errors, so **every
+  variant is non-zero by construction**.
+- **Zero is the reserved, unnameable no-error state.** It cannot be
+  declared, constructed, or named — a function that has no error to report
+  returns `ok(...)`. Its only purpose is to make `if (err)` a total check
+  once the binding forms land.
+- **A variant may carry a display string** — `NOT_FOUND = "Not Found"` —
+  data for the planned rendering stage (`error_name(err)` and `{}`
+  formatting), stored in the declaration and carried through `.mci` stubs.
+  A variant takes a value *or* a display string, not both; a display string
+  does not affect the numbering.
+
+An error value supports exactly the operations a failure cause needs:
+truthiness (`if (err)` tests against the zero state), `==`/`!=` against
+values of the same declaration, and `case`:
+
+```c
+fn describe(e: my_error) -> int32 {
+    if (e) { /* e is some cause, not the zero state */ }
+    if (e == my_error::NOT_FOUND) { /* ... */ }
+    case (e) {
+        when my_error::NOT_FOUND: return 1;
+        when my_error::IO_ERROR:  return 2;
+        else:                     return 3;
+    }
+}
+```
+
+Reading the numeric value *out* stays an explicit escape — `err as int32`
+(or `as bool` for the zero test) — like any other explicit narrowing; no
+cast mints an error *from* an integer, which would name a value no variant
+declares. Error values are ordinary data otherwise: they pass, return, and
+sit in struct fields and arrays. An `error` declaration may be `@private`
+or `@static`, like an enum, and travels verbatim through
+[interface stubs](#interface-files).
+
+Three spellings share the word and never collide: `error name { ... }` is
+the declaration (a contextual introducer, like `type`), `error(e)` the
+constructor below, and [`@error(msg)`](#error-directives) the compile-time
+directive.
+
+### The result type
+
+`result<T, E>` is a builtin template type (like [`slice`](#slices) and
+[`tuple`](#tuples)) carrying **either** the ok value **or** the error —
+never both, never neither. `E` must be a declared `error` type; primitives,
+structs, and plain enums reject at instantiation. A function that can only
+fail returns the one-argument `result<E>` — the language has no `void`
+type argument, here or anywhere.
+
+```c
+fn read_all(path: char*) -> result<slice<char>, my_error>;
+fn flush() -> result<my_error>;
+```
+
+The layout is a one-byte tag plus the payload — a union of the two arms
+for `result<T, E>` (the size of the larger, at its alignment), `E` directly
+for `result<E>` — but the fields are internal: a result exposes **no**
+members, no `offsetof`, and no struct-literal construction. It is an
+ordinary value in every other way — returned and passed by value, stored,
+copied, a struct field, a generic argument (`result<T, E>` participates in
+[type-parameter inference](#generics)) — and spells itself
+`result<int64, my_error>` in diagnostics and `.mci` stubs. A `const` or
+`@static` global cannot hold one (a result is built at runtime).
+
+### Construction: ok() and error()
+
+`ok(v)`, `ok()` (for `result<E>` only), and `error(e)` are the **only**
+constructors — there is no implicit coercion between `T`/`E` and
+`result<...>` in either direction, so the error path is always visible at
+the return site:
+
+```c
+fn find(key: int32) -> result<int64, my_error> {
+    if (key == 0) { return error(my_error::NOT_FOUND); }
+    return ok(compute(key));       // return compute(key); would be an error
+}
+```
+
+Like a [bare struct literal](#structs), a constructor is **context-typed**:
+it is legal where the position fixes a result type — a `return`, a typed
+`let`, an assignment, a function argument, a struct field — and errors
+elsewhere (`let r = ok(5);` needs an annotation). The ok value lowers
+against `T` exactly like a typed position: untyped constants adapt, a bare
+struct literal builds a struct `T`, a string literal borrows into a
+`slice<char>` `T`. `error(e)` takes any expression of the declared error
+type — a member, a parameter, a stored value — and nothing else. `ok` and
+`error` are not keywords: only the call shape `ok(` / `error(` is claimed,
+so both names remain ordinary identifiers.
+
+Stage 1 ships the declarations, the type, and the constructors; the
+consumption forms — the destructure `let ret, err = f();`, the
+`except`/`else` handler form, and `try` — are the next stages of the
+[roadmap epic](../ROADMAP.md#planned). Until they land, a result can be
+constructed, returned, passed, and stored, and an error value tested
+directly; see
+[examples/types/error_handling.mc](../examples/types/error_handling.mc).
+
 ## Type aliases
 
 `type <name> = <type>;` introduces a name for an existing type, usable anywhere

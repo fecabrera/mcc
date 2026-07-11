@@ -424,9 +424,9 @@ already do).
   allowed; `= 0` and duplicate values reject), so every variant is non-zero
   by construction and zero is the reserved, **unnameable** no-error state
   that makes `if (err)` a total check. A variant may carry an optional
-  display string, as above (how a display string and an explicit integer
-  value combine on one variant is a sub-detail settled with the
-  implementation). Deliberately nominal from birth, front-running the
+  display string, as above (a variant takes a value *or* a display string,
+  not both; a display string does not affect the numbering). Deliberately
+  nominal from birth, front-running the
   [nominal enums](#types-and-generics) migration above inside a new
   declaration kind where no existing code can break; an `error` declaration
   is the **only** admissible `E` (primitives, structs, and plain enums
@@ -438,13 +438,14 @@ already do).
   with no implicit value-to-result coercion in either direction (and
   `error(` the builtin, `error name {` the declaration, and the
   `@error(msg)` directive are three spellings that never collide). Staged:
-  - [ ] stage 1: `error` declarations, the `result` type, and the
+  - [x] stage 1: `error` declarations, the `result` type, and the
         constructors — the declaration kind (nominal registration,
         auto-numbering, display strings, `==`/`!=` against its own
         members, truthiness, `case`, `.mci` round-trip), the
         `result<T, E>` / `result<E>` builtin (arity 1 or 2; `E` must be an
         `error` declaration), and the `ok()`/`error()` builtins with their
-        context-required and wrong-arity diagnostics:
+        context-required and wrong-arity diagnostics — implemented, see
+        [Error handling](docs/language.md#error-handling). Follow-ups:
     - [ ] variant payloads — `SHORT_READ(uint64)`, a variant carrying
           data: rides the same tag-plus-union machinery `result`
           introduces, and the declaration head is chosen so payload parens

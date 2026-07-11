@@ -1,0 +1,92 @@
+================================================================================
+error declaration with auto, explicit, and display-string variants
+================================================================================
+
+error my_error {
+    NOT_FOUND = "Not Found",
+    PERMISSION = 5,
+    EXHAUSTED,
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (error_declaration
+    name: (type_identifier)
+    (error_body
+      (error_member
+        name: (identifier)
+        value: (string))
+      (error_member
+        name: (identifier)
+        value: (number))
+      (error_member
+        name: (identifier)))))
+
+================================================================================
+annotated error declaration
+================================================================================
+
+@private error hidden { A, B }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (error_declaration
+    (annotation
+      name: (annotation_name))
+    name: (type_identifier)
+    (error_body
+      (error_member
+        name: (identifier))
+      (error_member
+        name: (identifier)))))
+
+================================================================================
+error( stays an ordinary call and error stays an ordinary identifier
+================================================================================
+
+fn f(e: my_error) -> result<int32, my_error> {
+    let error: int32 = 2;
+    if (error == 2) { return error(e); }
+    return ok(error);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list
+      (parameter
+        name: (identifier)
+        name: (type_identifier)))
+    name: (type_identifier)
+    return_type: (type_arguments
+      name: (type_identifier)
+      name: (type_identifier))
+    body: (block
+      (let_statement
+        name: (identifier)
+        name: (type_identifier)
+        value: (number))
+      (if_statement
+        condition: (binary_expression
+          (identifier_expression
+            (identifier))
+          (number))
+        consequence: (block
+          (return_statement
+            (call_expression
+              function: (identifier_expression
+                (identifier))
+              arguments: (argument_list
+                (identifier_expression
+                  (identifier)))))))
+      (return_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (identifier_expression
+              (identifier))))))))

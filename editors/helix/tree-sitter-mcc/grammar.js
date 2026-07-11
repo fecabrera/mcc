@@ -98,6 +98,7 @@ module.exports = grammar({
       choice(
         $.struct_declaration,
         $.enum_declaration,
+        $.error_declaration,
         $.type_alias,
         $.function_definition,
         $.function_prototype,
@@ -166,6 +167,27 @@ module.exports = grammar({
 
     enum_member: ($) =>
       seq(field('name', $.identifier), '=', field('value', $._expression)),
+
+    // `error` is a contextual keyword too (an identifier elsewhere -- and
+    // `error(...)` in expression position is the result constructor, an
+    // ordinary call to this grammar): `error <name> { ... }` declares a
+    // nominal error type. A variant auto-numbers, takes an explicit value,
+    // or carries a display string -- all `= expression` to the grammar.
+    error_declaration: ($) =>
+      seq(
+        repeat($.annotation),
+        'error',
+        field('name', alias($.identifier, $.type_identifier)),
+        $.error_body,
+      ),
+
+    error_body: ($) => seq('{', commaSep($.error_member), optional(','), '}'),
+
+    error_member: ($) =>
+      seq(
+        field('name', $.identifier),
+        optional(seq('=', field('value', $._expression))),
+      ),
 
     // `type` is a contextual keyword (an identifier elsewhere); tree-sitter's
     // keyword extraction via `word` keeps it usable as a plain identifier.

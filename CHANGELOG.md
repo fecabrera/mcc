@@ -28,6 +28,35 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Error handling stage 1: `error` declarations, `result<T, E>`, and the
+  `ok()`/`error()` constructors** — recoverable errors as values, the
+  recoverable complement of `panic`/`assert`. An `error` declaration
+  (`error my_error { NOT_FOUND = "Not Found", IO_ERROR }`) names the
+  failure causes as a **nominal**, `int32`-backed type: variants
+  auto-number from 1 in declaration order (an explicit `= n` continues
+  from `n + 1`; `= 0` and duplicate values reject), so every variant is
+  non-zero by construction and zero stays the reserved, unnameable
+  no-error state. An error value supports truthiness (`if (err)`),
+  `==`/`!=` against its own declaration, and `case` — but no arithmetic,
+  no ordering, and no implicit integer conversion (`err as int32` reads
+  the value out explicitly; nothing casts *into* an error type). A
+  variant may carry a display string instead of a value, stored for the
+  planned rendering stage. `result<T, E>` / the error-only `result<E>`
+  (no `void` type arguments, ever) is a builtin template on the
+  `slice`/`tuple` pattern — a one-byte tag plus a union of the arms —
+  whose `E` must be an `error` declaration; it returns, passes, stores,
+  and infers through generics like any value, but exposes no fields.
+  `ok(v)` / `ok()` / `error(e)` are the **only** constructors,
+  context-typed like a bare struct literal (a `return`, typed `let`,
+  assignment, argument, or field), with no implicit value↔result
+  coercion in either direction. Declarations and result signatures
+  round-trip through `.mci` stubs. The binding forms (`let ret, err =`,
+  `except`, `try`) are the epic's next stages. All three editor grammars
+  learn the `error name { ... }` declaration head (variants highlight as
+  constants; `error(` stays an ordinary call). See
+  [Error handling](docs/language.md#error-handling) and
+  [examples/types/error_handling.mc](examples/types/error_handling.mc).
+
 - **Constant-condition loop folding** — a loop whose condition folds to
   always-run at compile time (`while (true)`, `while (1)`, the dual
   `until (false)`, `const` references, constant arithmetic) no longer
@@ -183,6 +212,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and [nonnull_callbacks.mc](examples/functions/nonnull_callbacks.mc).
 
 ### Fixed
+
+- **`void` as a generic type argument crashed the compiler** —
+  `box<void>` (any generic struct instantiated with `void`) surfaced as
+  a raw LLVM verifier error instead of a compile error. It is now
+  rejected up front: `struct 'box' cannot take void as a type argument`
+  (and the same guard is what keeps `void` out of `result<...>` through
+  a generic).
 
 - **Control flow escaping a `defer` body crashed the compiler** — `defer
   break;` (and `continue`/`return`/`emit` jumping out of a defer body)

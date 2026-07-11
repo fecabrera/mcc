@@ -40,9 +40,10 @@
 (field_list name: (identifier) @variable.member)
 (member_expression field: (identifier) @variable.member)
 
-; Enum members are named compile-time constants.
+; Enum members are named compile-time constants; error variants likewise.
 (enum_member name: (identifier) @constant)
 (enum_access member: (identifier) @constant)
+(error_member name: (identifier) @constant)
 
 ; ----------------------------------------------------------------- keywords
 "fn" @keyword.function
@@ -63,6 +64,7 @@
   "struct"
   "union"
   "enum"
+  "error"
   "type"
   "extends"
 ] @keyword.type

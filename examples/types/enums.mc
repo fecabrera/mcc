@@ -86,4 +86,6 @@ fn main() -> int32 {
 }
 
 // See also: derived_enums.mc for reusing one enum's members in another
-// (`enum b: a` copies a's members and adopts its underlying type).
+// (`enum b: a` copies a's members and adopts its underlying type), and
+// error_handling.mc for the `error` declaration, the enum's nominal sibling
+// for failure causes (auto-numbered, no arithmetic, no implicit integers).

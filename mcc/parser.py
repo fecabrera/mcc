@@ -51,6 +51,7 @@ from mcc.nodes import (
     NullLit,
     OffsetOf,
     Program,
+    ResultLit,
     Return,
     SizeOf,
     Slice,
@@ -579,6 +580,28 @@ class Parser:
                     self.cur.line,
                 )
             return self.parse_type_alias(private, static)
+        # `error` is a contextual keyword too: `error <name> { ... }` at top
+        # level declares an error type. Elsewhere `error` stays an identifier,
+        # and `error(` in expression position is the result constructor.
+        if (
+            self.cur.kind == "IDENT"
+            and self.cur.text == "error"
+            and self.tokens[self.pos + 1].kind == "IDENT"
+        ):
+            if extern:
+                raise LangError(
+                    "@extern does not apply to error declarations", self.cur.line
+                )
+            if inline:
+                raise LangError(
+                    "@inline only applies to functions with a body", self.cur.line
+                )
+            if volatile:
+                raise LangError(
+                    "@volatile only applies to structs and extern variables",
+                    self.cur.line,
+                )
+            return self.parse_error_decl(private, static)
         if self.cur.kind == "enum":
             if extern:
                 raise LangError("@extern does not apply to enums", self.cur.line)
@@ -1189,6 +1212,55 @@ class Parser:
         if not members:
             raise LangError(f"enum {name!r} has no members", line)
         return EnumDecl(name, underlying, members, line, private=private, static=static)
+
+    def parse_error_decl(
+        self, private: bool = False, static: bool = False
+    ) -> EnumDecl:
+        """Parse an ``error`` declaration.
+
+        ``error name { VARIANT, VARIANT = value, VARIANT = "display", ... }`` --
+        the leading ``error`` is a contextual keyword (an identifier elsewhere),
+        already confirmed by the caller. Variants auto-number from 1 in
+        declaration order; an explicit integer value continues the numbering
+        from it. A variant may instead carry a display string (stored, not a
+        value -- the variant still auto-numbers); it takes one or the other,
+        not both. The type is always ``int32``-backed, so there is no ``:``
+        underlying slot. A trailing comma is allowed, as in an ``enum``.
+
+        Args:
+            private: Whether ``@private`` was applied.
+            static: Whether ``@static`` was applied.
+
+        Returns:
+            The parsed ``EnumDecl`` with ``is_error`` set.
+
+        Raises:
+            LangError: When the declaration has no variants.
+        """
+        line = self.advance().line  # the 'error' identifier
+        name = self.expect("IDENT").text
+        self.expect("{")
+        members = []
+        displays: dict[str, str] = {}
+        while self.cur.kind != "}":
+            mname = self.expect("IDENT").text
+            value = None
+            if self.accept("="):
+                if self.cur.kind == "STRING":
+                    tok = self.advance()
+                    displays[mname] = _unescape(tok.text[1:-1])
+                else:
+                    value = self.parse_expr()
+            members.append((mname, value))
+            if not self.accept(","):  # a trailing comma is allowed
+                break
+        self.expect("}")
+        if not members:
+            raise LangError(f"error {name!r} has no members", line)
+        return EnumDecl(
+            name, None, members, line,
+            private=private, static=static, is_error=True, displays=displays,
+        )
 
     def parse_type_alias(
         self, private: bool = False, static: bool = False
@@ -2455,6 +2527,22 @@ class Parser:
             self.expect(")")
             return Len(operand, tok.line)
         if tok.kind == "IDENT":
+            # `ok(` and `error(` are the builtin result constructors -- claimed
+            # by shape (the name directly followed by `(`), like the
+            # sizeof-family builtins, so bare `ok`/`error` stay ordinary
+            # identifiers everywhere else and no keyword is reserved.
+            if tok.text in ("ok", "error") and self.cur.kind == "(":
+                self.advance()
+                value = None
+                if self.cur.kind != ")":
+                    with self._struct_literals(True):
+                        value = self.parse_expr()
+                    if self.cur.kind == ",":
+                        raise LangError(
+                            f"{tok.text}() takes a single value", tok.line
+                        )
+                self.expect(")")
+                return ResultLit(tok.text, value, tok.line)
             if self.cur.kind == "::":
                 self.advance()
                 member = self.expect("IDENT").text

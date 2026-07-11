@@ -66,6 +66,7 @@ from mcc.nodes import (
     NullLit,
     OffsetOf,
     Program,
+    ResultLit,
     Return,
     SizeOf,
     Slice,
@@ -129,10 +130,12 @@ from mcc.codegen.types import (
     is_any,
     is_aggregate,
     is_array,
+    is_error_decl,
     is_flexible_array,
     is_function,
     is_integer,
     is_pointer,
+    is_result,
     is_slice,
     is_struct,
     is_tuple,
@@ -2681,6 +2684,9 @@ class CodeGen:
                 redefines an inherited one, or a member value that is not a
                 constant of the underlying type.
         """
+        if decl.is_error:
+            self.register_error(decl)
+            return
         self.current_source = decl.source
         underlying = (
             self.lang_type(decl.underlying, decl.line)
@@ -2743,6 +2749,93 @@ class CodeGen:
             )
             enum.members[mname] = TypedValue(value.value, underlying)
 
+    def register_error(self, decl: EnumDecl):
+        """Register an ``error`` declaration as a nominal error type.
+
+        Unlike an ``enum`` -- transparent, explicit-valued, duplicates legal --
+        an error type is nominal (its ``int32``-backed ``LangType`` is a
+        distinct type: no arithmetic, no implicit integer conversion) and its
+        variants auto-number from 1 in declaration order. An explicit ``= n``
+        continues the numbering from ``n + 1`` (the C convention); ``= 0`` and
+        duplicate values reject, so every variant is non-zero by construction
+        and zero stays the reserved, unnameable no-error state that makes
+        ``if (err)`` a total check. The record rides the enum registries, so
+        name clashes, ``Enum::Member`` access, ``@private``, and ``@static``
+        shadowing all behave as for an enum; a ``@static`` error's type takes
+        its salted file-scoped name, like a ``@static`` struct.
+
+        Args:
+            decl: The error declaration to register (``is_error`` set).
+
+        Raises:
+            LangError: On a name clash, a duplicate member name, a member
+                value that is 0, is not a constant integer, or collides with
+                another member's value.
+        """
+        self.current_source = decl.source
+        name = (
+            self.static_base(decl.name, decl.source) if decl.static else decl.name
+        )
+        err_type = LangType(name, ir.IntType(32), signed=True, template="error")
+        enum = EnumType(
+            err_type, {}, decl.private, decl.source, displays=dict(decl.displays)
+        )
+        if decl.static:
+            key = (decl.source, decl.name)
+            if key in self.static_enums or key in self.static_structs:
+                raise LangError(f"type {decl.name!r} already defined", decl.line)
+            self.static_enums[key] = enum
+        else:
+            if (
+                decl.name in TYPES
+                or decl.name in self.enums
+                or decl.name in self.struct_templates
+            ):
+                raise LangError(f"type {decl.name!r} already defined", decl.line)
+            self.enums[decl.name] = enum
+        taken: dict[int, str] = {}
+        next_value = 1
+        for mname, vexpr in decl.members:
+            if mname in enum.members:
+                raise LangError(
+                    f"error {decl.name!r} has a duplicate member {mname!r}",
+                    decl.line,
+                )
+            if vexpr is None:
+                value = next_value
+                if value >= 1 << 31:
+                    raise LangError(
+                        f"error {decl.name!r} member {mname!r} auto-numbers "
+                        f"past int32 ({value}); give it an explicit value",
+                        decl.line,
+                    )
+            else:
+                folded = self.const_coerce(
+                    self.eval_const(vexpr, decl.line),
+                    INT32,
+                    decl.line,
+                    f"error member {decl.name}::{mname}",
+                )
+                value = folded.value.constant
+            if value == 0:
+                raise LangError(
+                    f"error {decl.name!r} member {mname!r} cannot be 0; "
+                    "zero is the reserved no-error state (values start at 1)",
+                    decl.line,
+                )
+            if value in taken:
+                raise LangError(
+                    f"error {decl.name!r} members {taken[value]!r} and "
+                    f"{mname!r} share the value {value}; each variant is a "
+                    "distinct cause",
+                    decl.line,
+                )
+            taken[value] = mname
+            next_value = value + 1
+            enum.members[mname] = TypedValue(
+                ir.Constant(err_type.ir, value), err_type
+            )
+
     def resolve_enum_access(self, expr: EnumAccess) -> TypedValue:
         """Resolve an ``Enum::Member`` to its folded constant value.
 
@@ -2759,11 +2852,14 @@ class CodeGen:
         enum = self.lookup_enum(expr.enum)
         if enum is None:
             raise LangError(f"unknown enum {expr.enum!r}", expr.line)
-        self.check_access(enum.private, enum.source, f"enum {expr.enum!r}", expr.line)
+        label = "error" if is_error_decl(enum.underlying) else "enum"
+        self.check_access(
+            enum.private, enum.source, f"{label} {expr.enum!r}", expr.line
+        )
         member = enum.members.get(expr.member)
         if member is None:
             raise LangError(
-                f"enum {expr.enum!r} has no member {expr.member!r}", expr.line
+                f"{label} {expr.enum!r} has no member {expr.member!r}", expr.line
             )
         return member
 
@@ -2855,6 +2951,16 @@ class CodeGen:
             base = self.tuple_type(
                 tuple(self.lang_type(a, line) for a in ref.args), line
             )
+        elif ref.name == "result":
+            if len(ref.args) not in (1, 2):
+                raise LangError(
+                    f"type 'result' takes 1 or 2 type arguments, "
+                    f"got {len(ref.args)}",
+                    line,
+                )
+            base = self.result_type(
+                tuple(self.lang_type(a, line) for a in ref.args), line
+            )
         elif (
             self.current_source,
             ref.name,
@@ -2882,15 +2988,25 @@ class CodeGen:
                     line,
                 )
             args = tuple(self.lang_type(a, line) for a in ref.args)
+            if any(strip_const(a) is VOID for a in args):
+                # Rejected up front: a void field would otherwise surface as
+                # a raw LLVM verifier error instead of a compile error.
+                raise LangError(
+                    f"struct {ref.name!r} cannot take void as a type argument",
+                    line,
+                )
             if len(args) < total:
                 bindings = dict(zip(decl.type_params, args))
                 self.fill_default_bindings(decl, bindings, line)
                 args = tuple(bindings[t] for t in decl.type_params)
             base = self.instantiate_struct(decl, args, line)
         elif (enum := self.lookup_enum(ref.name)) is not None:
+            label = "error" if is_error_decl(enum.underlying) else "enum"
             if ref.args:
-                raise LangError(f"enum {ref.name!r} is not generic", line)
-            self.check_access(enum.private, enum.source, f"enum {ref.name!r}", line)
+                raise LangError(f"{label} {ref.name!r} is not generic", line)
+            self.check_access(
+                enum.private, enum.source, f"{label} {ref.name!r}", line
+            )
             base = enum.underlying
         elif (alias := self.lookup_alias(ref.name)) is not None:
             self.check_access(
@@ -3222,6 +3338,95 @@ class CodeGen:
         self.set_struct_body(tuple_t, identified)
         self.struct_types[mangled] = tuple_t
         return tuple_t
+
+    def result_type(self, args: tuple, line: int) -> LangType:
+        """Build (and intern) the builtin ``result<T, E>`` / ``result<E>`` type.
+
+        A result carries either the ok value or the error -- never both, never
+        neither. It is realized as a struct ``{ tag: uint8, payload }`` (so
+        ``sizeof``, by-value passing and returning, and ``const``-parameter
+        hidden references reuse the struct machinery), tagged with the
+        reserved template name ``"result"`` (see :func:`is_result`); tag 0 is
+        the ok arm, 1 the error arm. The two-argument form's payload is an
+        internal union of ``T`` and ``E`` (clang-style storage: the
+        widest-aligned arm plus pad, exactly as a user ``union`` lays out);
+        the error-only ``result<E>`` -- the language has no ``void`` type
+        argument -- stores ``E`` directly. Unlike a slice or tuple the fields
+        are not a surface: member access rejects (:meth:`struct_field`), so
+        ``ok(...)``/``error(...)`` construction is the only producer.
+
+        ``E`` must be a declared ``error`` type, and both arguments
+        canonicalize through :func:`strip_const` (a result hands out copies,
+        so a ``const`` axis would distinguish nothing). Instances are interned
+        per argument list alongside the user structs in ``struct_types``.
+
+        Args:
+            args: One or two type arguments -- ``(T, E)`` or ``(E,)``.
+            line: Source line for diagnostics.
+
+        Returns:
+            The cached or newly built ``result<...>`` ``LangType``.
+
+        Raises:
+            LangError: When ``E`` is not an error declaration, or ``T`` is
+                ``void``.
+        """
+        args = tuple(strip_const(a) for a in args)
+        err = args[-1]
+        if not is_error_decl(err):
+            raise LangError(
+                f"result's error type must be an error declaration, got {err}",
+                line,
+            )
+        if len(args) == 2 and args[0] is VOID:
+            raise LangError(
+                "result has no void arm; a function that can only fail "
+                f"returns result<{err}>",
+                line,
+            )
+        mangled = "result<" + ", ".join(str(a) for a in args) + ">"
+        cached = self.struct_types.get(mangled)
+        if cached is not None:
+            return cached
+        if len(args) == 2:
+            # The payload union: the ok and error arms share one storage at
+            # offset 0. Its LangType is a real union (types.py's union sizing
+            # arms apply), bodied clang-style as the widest-aligned arm plus
+            # pad -- the dual-site layout invariant's IR half, mirroring
+            # instantiate_struct's union arm.
+            u_fields = (("ok", args[0]), ("error", err))
+            u_ident = self.module.context.get_identified_type(
+                f"{mangled}.payload"
+            )
+            payload = LangType(
+                f"{mangled}.payload", u_ident, signed=False, union=True
+            )
+            object.__setattr__(payload, "fields", u_fields)
+            rep = max(
+                (ftype for _, ftype in u_fields),
+                key=lambda t: (type_align(t), type_size(t)),
+            )
+            elements = [rep.ir]
+            pad = type_size(payload) - type_size(rep)
+            if pad:
+                elements.append(ir.ArrayType(ir.IntType(8), pad))
+            if over_aligned(payload):
+                u_ident.packed = True
+            u_ident.set_body(*elements)
+            object.__setattr__(payload, "elem_indices", (0, 0))
+            fields = (("tag", UINT8), ("payload", payload))
+        else:
+            # Error-only: the payload is E itself (a later layout optimization
+            # may fold the tag into E's reserved zero state; not yet).
+            fields = (("tag", UINT8), ("error", err))
+        identified = self.module.context.get_identified_type(mangled)
+        result_t = LangType(
+            mangled, identified, signed=False, template="result", args=args
+        )
+        object.__setattr__(result_t, "fields", fields)  # frozen; excluded from eq
+        self.set_struct_body(result_t, identified)
+        self.struct_types[mangled] = result_t
+        return result_t
 
     def any_tag(self, lang_type: LangType, line: int) -> int:
         """Compute a boxable type's ``any`` tag, checking for hash collisions.
@@ -3720,6 +3925,10 @@ class CodeGen:
         """
         if not is_aggregate(owner):
             raise LangError(f"{owner} is not a struct", line)
+        if is_result(owner):
+            # The tag/payload layout is internal: a result is built by
+            # ok(...)/error(...) only, never read a field at a time.
+            raise LangError(f"a {owner} has no fields", line)
         for index, (name, ftype) in enumerate(owner.fields):
             if name == fname:
                 return owner.elem_indices[index], ftype
@@ -4953,6 +5162,14 @@ class CodeGen:
             raise LangError(
                 f"a struct literal needs a struct type, not {struct_type}", expr.line
             )
+        if is_result(struct_type):
+            # A result is struct-realized but its fields are internal; the
+            # constructors are the only producers.
+            raise LangError(
+                f"a {struct_type} is not built from a struct literal; "
+                "construct it with ok(...) or error(...)",
+                expr.line,
+            )
         if is_union(struct_type) and len(raw_items) > 1:
             # The members share one storage, so writing two would just
             # overwrite; the literal names the (at most one) live member.
@@ -5054,6 +5271,113 @@ class CodeGen:
             )
         return TypedValue(self.builder.load(slot), tuple_type)
 
+    def gen_result_lit(self, expr: ResultLit, result_t: LangType) -> TypedValue:
+        """Lower a result constructor ``ok(v)`` / ``ok()`` / ``error(e)``.
+
+        The only producers of a ``result`` value, context-typed like a bare
+        struct literal: the caller passes the ``result<T, E>`` /
+        ``result<E>`` the position fixes (:meth:`result_literal_adapts` gates
+        the routing; :meth:`gen_expr` rejects a constructor with no such
+        context). The ok value coerces to ``T`` -- literal adaptation
+        included, so ``ok({ x = 1 })`` builds a struct ``T`` and ``ok("hi")``
+        borrows into a ``slice<char>`` ``T``. The error value coerces to
+        ``E``, so any expression of the declared error type works and a raw
+        integer rejects.
+
+        Lowering: a zeroed temporary (unused payload bytes stay
+        deterministic), the tag byte (0 ok, 1 error), and the value stored
+        into its union arm through a cast of the payload's address -- exactly
+        a union member store, never a GEP into the other arm.
+
+        Args:
+            expr: The ``ResultLit`` node.
+            result_t: The resolved (const-stripped) result type the position
+                fixes.
+
+        Returns:
+            The constructed result as a ``TypedValue``.
+
+        Raises:
+            LangError: On ``ok()`` where the result has an ok arm, ``ok(v)``
+                where it has none, ``error()`` with no value, or a value that
+                does not coerce to its arm.
+        """
+        two_arms = len(result_t.args) == 2
+        tv = None
+        if expr.kind == "ok":
+            if two_arms and expr.value is None:
+                raise LangError(
+                    f"ok() takes the ok value here: a {result_t} carries one "
+                    "(ok() with no value is for the error-only result<E>)",
+                    expr.line,
+                )
+            if not two_arms and expr.value is not None:
+                raise LangError(
+                    f"a {result_t} has no ok value; write ok()", expr.line
+                )
+            arm = result_t.args[0] if two_arms else None
+        else:
+            if expr.value is None:
+                raise LangError(
+                    "error() takes the error value, "
+                    "e.g. error(my_error::NOT_FOUND)",
+                    expr.line,
+                )
+            arm = result_t.args[-1]
+        if expr.value is not None:
+            label = f"{expr.kind} value"
+            if (
+                self.result_literal_adapts(expr.value, arm)
+                or self.struct_literal_adapts(expr.value, arm)
+                or self.str_literal_adapts(expr.value, arm)
+                or self.array_literal_adapts(expr.value, arm)
+            ):
+                tv = self.gen_adapted_literal(expr.value, arm, expr.line)
+            else:
+                tv = self.gen_expr(expr.value)
+            tv = self.coerce(tv, arm, expr.line, label)
+        slot = self.builder.alloca(result_t.ir)
+        if over_aligned(result_t):
+            slot.align = type_align(result_t)
+        self.builder.store(ir.Constant(result_t.ir, None), slot)
+        indices = result_t.elem_indices
+        if expr.kind == "error":
+            tag_addr = self.builder.gep(
+                slot, [I32_ZERO, ir.Constant(ir.IntType(32), indices[0])],
+                inbounds=True,
+            )
+            self.builder.store(ir.Constant(UINT8.ir, 1), tag_addr)
+        if tv is not None:
+            payload_addr = self.builder.gep(
+                slot, [I32_ZERO, ir.Constant(ir.IntType(32), indices[1])],
+                inbounds=True,
+            )
+            arm_addr = self.builder.bitcast(
+                payload_addr, tv.type.ir.as_pointer()
+            )
+            self.builder.store(tv.value, arm_addr)
+        return TypedValue(self.builder.load(slot), result_t)
+
+    def result_literal_adapts(self, expr, expected: LangType) -> bool:
+        """Whether a result constructor ``ok(...)``/``error(...)`` adapts here.
+
+        The result sibling of :meth:`struct_literal_adapts`: a constructor
+        takes the ``result<...>`` type the position fixes -- a typed ``let``,
+        an assignment, a ``return``, a function argument, or a struct field --
+        and builds it (see :meth:`gen_result_lit`). The check stays coarse
+        (any result target), so a wrong arity or a value of the wrong type
+        reaches :meth:`gen_result_lit` and gets a precise error.
+
+        Args:
+            expr: The initializer/argument/field expression.
+            expected: The type the context expects.
+
+        Returns:
+            ``True`` if ``expr`` is a ``ResultLit`` and ``expected`` is a
+            ``result<...>`` type.
+        """
+        return isinstance(expr, ResultLit) and is_result(strip_const(expected))
+
     def eval_struct_field(self, struct_type, fname, value_expr, line):
         """Lower a struct-literal field value against its declared field type.
 
@@ -5078,6 +5402,7 @@ class CodeGen:
             self.struct_literal_adapts(value_expr, ftype)
             or self.str_literal_adapts(value_expr, ftype)
             or self.array_literal_adapts(value_expr, ftype)
+            or self.result_literal_adapts(value_expr, ftype)
         ):
             return self.gen_adapted_literal(value_expr, ftype, line)
         return self.gen_expr(value_expr)
@@ -5574,9 +5899,11 @@ class CodeGen:
                     )
                 # Evaluate the result before the defers run, so a defer that
                 # frees a buffer cannot clobber what is being returned.
-                if self.struct_literal_adapts(
-                    stmt.value, self.ret_type
-                ) or self.str_literal_adapts(stmt.value, self.ret_type):
+                if (
+                    self.struct_literal_adapts(stmt.value, self.ret_type)
+                    or self.str_literal_adapts(stmt.value, self.ret_type)
+                    or self.result_literal_adapts(stmt.value, self.ret_type)
+                ):
                     tv = self.gen_adapted_literal(stmt.value, self.ret_type, stmt.line)
                 else:
                     tv = self.gen_expr(stmt.value)
@@ -5725,13 +6052,19 @@ class CodeGen:
                     self.builder.store(tv.value, slot)
                     self.bind_local(stmt.name, slot, declared)
                     return
-            if stmt.type_name is not None and self.struct_literal_adapts(
-                stmt.value, self.lang_type(stmt.type_name, stmt.line)
+            if stmt.type_name is not None and (
+                self.struct_literal_adapts(
+                    stmt.value, self.lang_type(stmt.type_name, stmt.line)
+                )
+                or self.result_literal_adapts(
+                    stmt.value, self.lang_type(stmt.type_name, stmt.line)
+                )
             ):
                 # `let p: point = { x = 1, y = 2 };`: the bare literal builds the
                 # annotated struct (the coerce below re-adds any `const`), the
                 # aggregate sibling of the slice adaptations above; likewise
-                # `let t: tuple<int64, char> = (1, 'x');` builds the tuple.
+                # `let t: tuple<int64, char> = (1, 'x');` builds the tuple, and
+                # `let r: result<int32, my_error> = ok(1);` the result.
                 declared = self.lang_type(stmt.type_name, stmt.line)
                 tv = self.gen_adapted_literal(stmt.value, declared, stmt.line)
             else:
@@ -5811,9 +6144,11 @@ class CodeGen:
                 ):
                     self.narrowed_paths.clear()
 
-            if self.struct_literal_adapts(
-                stmt.value, var_type
-            ) or self.str_literal_adapts(stmt.value, var_type):
+            if (
+                self.struct_literal_adapts(stmt.value, var_type)
+                or self.str_literal_adapts(stmt.value, var_type)
+                or self.result_literal_adapts(stmt.value, var_type)
+            ):
                 # `s = "hi";`: the literal repoints s at its global string
                 # constant (static lifetime), the same borrow a `let`/argument
                 # already does -- safe even when the target outlives the frame.
@@ -6054,9 +6389,11 @@ class CodeGen:
                     f"{ptr.type.pointee}",
                     stmt.line,
                 )
-            if self.struct_literal_adapts(
-                stmt.value, ptr.type.pointee
-            ) or self.str_literal_adapts(stmt.value, ptr.type.pointee):
+            if (
+                self.struct_literal_adapts(stmt.value, ptr.type.pointee)
+                or self.str_literal_adapts(stmt.value, ptr.type.pointee)
+                or self.result_literal_adapts(stmt.value, ptr.type.pointee)
+            ):
                 # `*out = "hi";`: repoint the slice behind the pointer at the
                 # literal's global constant -- static lifetime, so safe even
                 # when the pointee outlives this frame. `*out = { ... };` writes
@@ -6094,9 +6431,11 @@ class CodeGen:
                 raise LangError(
                     "cannot assign through a read-only slice<const T>", stmt.line
                 )
-            if self.struct_literal_adapts(
-                stmt.value, element
-            ) or self.str_literal_adapts(stmt.value, element):
+            if (
+                self.struct_literal_adapts(stmt.value, element)
+                or self.str_literal_adapts(stmt.value, element)
+                or self.result_literal_adapts(stmt.value, element)
+            ):
                 # `a[i] = "hi";`: the element is a char slice repointed at the
                 # literal's global constant (static lifetime). `a[i] = { ... };`
                 # stores the built struct into the element.
@@ -6118,9 +6457,11 @@ class CodeGen:
             addr, ftype, align, volatile = self.gen_member_addr(
                 stmt.base, stmt.field, stmt.arrow, stmt.line
             )
-            if self.struct_literal_adapts(
-                stmt.value, ftype
-            ) or self.str_literal_adapts(stmt.value, ftype):
+            if (
+                self.struct_literal_adapts(stmt.value, ftype)
+                or self.str_literal_adapts(stmt.value, ftype)
+                or self.result_literal_adapts(stmt.value, ftype)
+            ):
                 # `c.name = "hi";`: repoint the char-slice field at the
                 # literal's global constant, the same borrow the struct-literal
                 # field (`cmd { name = "hi" }`) already does. `s.origin = { ... }`
@@ -6142,8 +6483,10 @@ class CodeGen:
             # it once (gen_addr's Call arm checks the resolved callee
             # actually returns mut), coerce, store through it.
             addr, t, _, _ = self.gen_addr(stmt.call, stmt.line)
-            if self.struct_literal_adapts(stmt.value, t) or self.str_literal_adapts(
-                stmt.value, t
+            if (
+                self.struct_literal_adapts(stmt.value, t)
+                or self.str_literal_adapts(stmt.value, t)
+                or self.result_literal_adapts(stmt.value, t)
             ):
                 # `f(...) = "hi";`: repoint the char slice behind the mut
                 # return at the literal's global constant (static lifetime).
@@ -7403,6 +7746,11 @@ class CodeGen:
             return tv.value
         if is_integer(tv.type):
             return self.builder.icmp_signed("!=", tv.value, ir.Constant(tv.type.ir, 0))
+        if is_error_decl(strip_const(tv.type)):
+            # A declared error is truthy against its reserved zero no-error
+            # state: every variant is non-zero by construction, so `if (err)`
+            # is a total check.
+            return self.builder.icmp_signed("!=", tv.value, ir.Constant(tv.type.ir, 0))
         raise LangError("condition must be a bool or integer", expr.line)
 
     def gen_logical(self, expr: Logical) -> TypedValue:
@@ -7589,6 +7937,15 @@ class CodeGen:
             )
         if isinstance(expr, StructLit):
             return self.gen_struct_lit(expr)
+        if isinstance(expr, ResultLit):
+            # The constructors are context-typed like a bare struct literal:
+            # with no expected result type there is nothing to build.
+            raise LangError(
+                f"{expr.kind}(...) has no result type here; use it where one "
+                "is expected -- a typed let, assignment, return, argument, "
+                "or field",
+                expr.line,
+            )
         if isinstance(expr, TupleLit):
             return self.gen_tuple_lit(expr)
         if isinstance(expr, BlockExpr):
@@ -8653,6 +9010,13 @@ class CodeGen:
                 "cannot destructure a string literal; borrow it first: "
                 'let a, b = "..." as slice<char>;'
             )
+        if is_result(base.type):
+            # No misleading borrow hint: a result has no element view. (Its
+            # binding forms are a planned, separate stage.)
+            return (
+                f"cannot destructure {base.type}; "
+                "only a tuple or slice can be destructured"
+            )
         if is_aggregate(base.type):
             return (
                 f"cannot destructure {base.type}; borrow it first: "
@@ -9034,6 +9398,19 @@ class CodeGen:
             base_ptr = self.builder.bitcast(slot, target.ir.as_pointer())
             return TypedValue(self.builder.load(base_ptr), target)
         src_t, target_t = strip_const(src), strip_const(target)
+        # A declared error is nominal with a reserved zero state: nothing casts
+        # *into* it (that would mint a value no member names, 0 included) --
+        # error(member) is the only producer. Reading the numeric value *out*
+        # stays an explicit escape (`err as int32`, or `as bool` for the
+        # zero test), like any other explicit narrowing.
+        if is_error_decl(target_t):
+            raise LangError(
+                f"cannot cast {src} to {target}; an error value is one of "
+                f"{target}'s declared members",
+                expr.line,
+            )
+        if is_error_decl(src_t) and not is_integer(target_t) and target_t is not BOOL:
+            raise LangError(f"cannot cast {src} to {target}", expr.line)
         if (
             is_tuple(src_t) != is_tuple(target_t)
             and is_struct(src_t)
@@ -9369,6 +9746,8 @@ class CodeGen:
             # only position an f-string may adapt into is an @format string,
             # which substitutes the plain literal before reaching here.
             raise LangError(FSTRING_MISPLACED, expr.line)
+        if isinstance(expr, ResultLit):
+            return self.gen_result_lit(expr, strip_const(expected))
         if isinstance(expr, TupleLit):
             return self.gen_tuple_lit(expr, tuple_type=strip_const(expected))
         if self.struct_literal_adapts(expr, expected):
@@ -10200,6 +10579,15 @@ class CodeGen:
                 )
             chosen = expr.then if cond.value.constant else expr.otherwise
             return self.eval_const(chosen, line)
+        if isinstance(expr, ResultLit):
+            # Mirrors the runtime-only aggregates a global cannot hold: a
+            # result is built at runtime, so const and @static initializers
+            # reject it up front.
+            raise LangError(
+                f"a result is a runtime value; {expr.kind}(...) cannot "
+                "initialize a const or @static global",
+                expr.line,
+            )
         raise LangError("a const initializer must be a compile-time constant", line)
 
     def const_coerce(
@@ -10324,6 +10712,16 @@ class CodeGen:
                 ir.Constant(target.ir, wrap_int(tv.value.constant, target)), target
             )
         if is_integer(src) and target is BOOL:
+            return TypedValue(ir.Constant(BOOL.ir, int(tv.value.constant != 0)), BOOL)
+        # An error member's numeric value reads out explicitly, as at runtime
+        # (`my_error::A as int32`); the reverse -- minting an error from an
+        # integer -- stays rejected by the fall-through (is_integer excludes
+        # a declared error type on either side).
+        if is_error_decl(src) and is_integer(target):
+            return TypedValue(
+                ir.Constant(target.ir, wrap_int(tv.value.constant, target)), target
+            )
+        if is_error_decl(src) and target is BOOL:
             return TypedValue(ir.Constant(BOOL.ir, int(tv.value.constant != 0)), BOOL)
         if is_integer(src) and target is FLOAT64:
             return TypedValue(
@@ -11159,6 +11557,7 @@ class CodeGen:
                 self.struct_literal_adapts(arg_expr, params[i])
                 or self.str_literal_adapts(arg_expr, params[i])
                 or self.array_literal_adapts(arg_expr, params[i])
+                or self.result_literal_adapts(arg_expr, params[i])
             ):
                 # A string literal adapts to a char slice, an array literal to a
                 # slice<T>, or a bare struct literal to the parameter's struct
@@ -12298,9 +12697,14 @@ class CodeGen:
                 # unevaluated here; winner emission substitutes the plain
                 # literal and splices them in as the extras.
                 arg_tvs.append(self.gen_string(arg.value))
-            elif self.defers_array_literal(arg) or self.defers_struct_literal(arg):
-                # An array or bare struct literal cannot lower without a
-                # receiving type, and the winning parameter is not yet chosen.
+            elif (
+                self.defers_array_literal(arg)
+                or self.defers_struct_literal(arg)
+                or isinstance(arg, ResultLit)
+            ):
+                # An array or bare struct literal (or an ok()/error()
+                # constructor) cannot lower without a receiving type, and the
+                # winning parameter is not yet chosen.
                 # Stand it in as a NULLT placeholder: the inference loop skips
                 # NULLT (so a literal contributes nothing to generic inference --
                 # a bare struct literal can never itself bind a type parameter),
@@ -12609,6 +13013,7 @@ class CodeGen:
                 and not isinstance(arg_node, TupleLit)
                 or self.str_literal_adapts(arg_node, p)
                 or self.array_literal_adapts(arg_node, p)
+                or self.result_literal_adapts(arg_node, p)
             ):
                 # Literal adaptation, in parity with marshal_args: a string
                 # literal borrows to the parameter's char slice view, an array
@@ -13081,7 +13486,7 @@ class CodeGen:
         Returns:
             ``True`` when the argument adapts to the resolved parameter.
         """
-        if not isinstance(arg, (StrLit, ArrayLit, StructLit, Ternary)):
+        if not isinstance(arg, (StrLit, ArrayLit, StructLit, Ternary, ResultLit)):
             return False
         outer_bindings = self.type_bindings
         outer_source = self.current_source
@@ -13098,6 +13503,7 @@ class CodeGen:
             self.str_literal_adapts(arg, resolved)
             or self.array_literal_adapts(arg, resolved)
             or self.struct_literal_fits(arg, resolved)
+            or self.result_literal_adapts(arg, resolved)
         )
 
     def shape_matches(
@@ -13528,6 +13934,11 @@ class CodeGen:
                 lhs = self.coerce(lhs, rhs.type, line, ctx)
         op_type = lhs.type
         if op in COMPARISON_OPS:
+            # A declared error compares for identity only: the variants are
+            # named causes with no meaningful order (the values are an
+            # implementation detail of the numbering).
+            if is_error_decl(op_type) and op not in ("==", "!="):
+                raise LangError(f"operator {op!r} not supported for {op_type}", line)
             if is_pointer(op_type) or is_function(op_type):
                 if op not in ("==", "!="):
                     raise LangError(

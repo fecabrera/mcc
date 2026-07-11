@@ -174,19 +174,28 @@ class BlockExprCtx:
 
 @dataclass
 class EnumType:
-    """A resolved ``enum``: its underlying type and folded members.
+    """A resolved ``enum`` (or ``error``): its underlying type and folded members.
+
+    A declared ``error`` type rides the same record: ``underlying`` is then the
+    error's own nominal ``LangType`` (see :func:`is_error_decl`) rather than a
+    plain integer type, so the name resolves to the nominal type and each
+    member carries it.
 
     Attributes:
         underlying: The ``LangType`` the enum aliases and its members carry.
         members: Member name -> its folded constant ``TypedValue``.
         private: ``@private`` -- usable only within ``source``.
         source: The file the enum was declared in.
+        displays: ``{variant name: display string}`` for an error declaration's
+            ``NAME = "display"`` variants (stored for the planned rendering
+            stage); empty otherwise.
     """
 
     underlying: LangType
     members: dict
     private: bool
     source: "str | None"
+    displays: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -432,7 +441,7 @@ object.__setattr__(ANY, "elem_indices", (0, 1))
 
 # Builtin type names that are not in TYPES (they are generic or platform-
 # resolved) but are still reserved, so a user struct cannot shadow them.
-RESERVED_TYPE_NAMES = frozenset({"slice", "va_list", "any", "tuple"})
+RESERVED_TYPE_NAMES = frozenset({"slice", "va_list", "any", "tuple", "result"})
 
 POINTER_SIZE = 8  # bytes; native codegen targets 64-bit platforms
 
@@ -451,12 +460,14 @@ def is_integer(lang_type: LangType) -> bool:
 
     Returns:
         ``True`` for the sized integer types, but not ``bool`` (an ``i1``
-        underneath) or pointers.
+        underneath), pointers, or a declared ``error`` type (``int32``-backed
+        but nominal: arithmetic and implicit integer conversion must reject).
     """
     return (
         isinstance(lang_type.ir, ir.IntType)
         and lang_type is not BOOL
         and lang_type.pointee is None
+        and lang_type.template is None
     )
 
 
@@ -598,6 +609,44 @@ def is_tuple(lang_type: LangType) -> bool:
         ``True`` if the type is a ``tuple<A, B, ...>``.
     """
     return is_struct(lang_type) and lang_type.template == "tuple"
+
+
+def is_result(lang_type: LangType) -> bool:
+    """Report whether a type is a builtin ``result<T, E>`` / ``result<E>``.
+
+    A result is realized as a struct (a tag plus its payload) so ``sizeof``,
+    by-value passing, and ``const``-parameter hidden references reuse the
+    struct machinery, tagged with the reserved template name ``"result"``
+    that only :meth:`CodeGen.result_type` produces. Unlike a slice or tuple
+    its fields are an internal layout, not a surface: member access rejects
+    (see :meth:`CodeGen.struct_field`), keeping ``ok(...)``/``error(...)``
+    the only producers.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type is a ``result<...>``.
+    """
+    return is_struct(lang_type) and lang_type.template == "result"
+
+
+def is_error_decl(lang_type: LangType) -> bool:
+    """Report whether a type is a declared ``error`` type.
+
+    An error type is nominal and ``int32``-backed: its IR is an ``i32`` but it
+    is deliberately not an :func:`is_integer` (no arithmetic, no implicit
+    conversion). Only :meth:`CodeGen.register_error` builds one, tagging it
+    with the reserved template name ``"error"``; the missing field list tells
+    it apart from a user struct that happens to be named ``error``.
+
+    Args:
+        lang_type: The type to test.
+
+    Returns:
+        ``True`` if the type is a declared error type.
+    """
+    return lang_type.template == "error" and lang_type.fields is None
 
 
 def is_any(lang_type: LangType) -> bool:
@@ -772,6 +821,9 @@ def field_offset(struct_type: LangType, fname: str, line: int) -> int:
     """
     if not is_aggregate(struct_type):
         raise LangError(f"offsetof needs a struct, not {struct_type}", line)
+    if is_result(struct_type):
+        # A result's tag/payload layout is internal, not a surface.
+        raise LangError(f"a {struct_type} has no fields", line)
     if is_union(struct_type):
         # Every member sits at offset 0; only validate that the field exists.
         if any(name == fname for name, _ in struct_type.fields):
