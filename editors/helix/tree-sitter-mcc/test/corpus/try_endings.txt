@@ -1,0 +1,218 @@
+================================================================================
+bare try propagation
+================================================================================
+
+fn wrap(key: int32) -> result<int64, my_error> {
+    let v = try find(key);
+    return ok(v + 1);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (type_identifier)
+    (type_arguments
+      (type_identifier)
+      (type_identifier))
+    (block
+      (let_statement
+        (identifier)
+        (try_expression
+          (call_expression
+            (identifier_expression
+              (identifier))
+            (argument_list
+              (identifier_expression
+                (identifier))))))
+      (return_statement
+        (call_expression
+          (identifier_expression
+            (identifier))
+          (argument_list
+            (binary_expression
+              (identifier_expression
+                (identifier))
+              (number))))))))
+
+================================================================================
+try with a ?? scalar fallback
+================================================================================
+
+fn main() -> int32 {
+    let v = try find(0) ?? 0;
+    return v;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list)
+    (type_identifier)
+    (block
+      (let_statement
+        (identifier)
+        (coalesce_expression
+          (try_expression
+            (call_expression
+              (identifier_expression
+                (identifier))
+              (argument_list
+                (number))))
+          (number)))
+      (return_statement
+        (identifier_expression
+          (identifier))))))
+
+================================================================================
+try with a ?? emit-block fallback
+================================================================================
+
+fn main() -> int32 {
+    let v = try find(0) ?? { warn(); emit 0; };
+    return v;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list)
+    (type_identifier)
+    (block
+      (let_statement
+        (identifier)
+        (coalesce_expression
+          (try_expression
+            (call_expression
+              (identifier_expression
+                (identifier))
+              (argument_list
+                (number))))
+          (block_expression
+            (expression_statement
+              (call_expression
+                (identifier_expression
+                  (identifier))
+                (argument_list)))
+            (emit_statement
+              (number)))))
+      (return_statement
+        (identifier_expression
+          (identifier))))))
+
+================================================================================
+?? binds tighter than comparison and chains left
+================================================================================
+
+fn f() {
+    let x = try g() ?? v > p ?? q;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        (identifier)
+        (binary_expression
+          (coalesce_expression
+            (try_expression
+              (call_expression
+                (identifier_expression
+                  (identifier))
+                (argument_list)))
+            (identifier_expression
+              (identifier)))
+          (coalesce_expression
+            (identifier_expression
+              (identifier))
+            (identifier_expression
+              (identifier))))))))
+
+================================================================================
+try statement with block-scoped binding
+================================================================================
+
+fn main() -> int32 {
+    try (v = find(0)) { use(v); } except (err) { log(err); }
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list)
+    (type_identifier)
+    (block
+      (try_statement
+        (identifier)
+        (call_expression
+          (identifier_expression
+            (identifier))
+          (argument_list
+            (number)))
+        (block
+          (expression_statement
+            (call_expression
+              (identifier_expression
+                (identifier))
+              (argument_list
+                (identifier_expression
+                  (identifier))))))
+        (identifier)
+        (block
+          (expression_statement
+            (call_expression
+              (identifier_expression
+                (identifier))
+              (argument_list
+                (identifier_expression
+                  (identifier)))))))
+      (return_statement
+        (number)))))
+
+================================================================================
+statement-position bare try
+================================================================================
+
+fn run() -> result<my_error> {
+    try flush(0);
+    return ok();
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list)
+    (type_identifier)
+    (type_arguments
+      (type_identifier))
+    (block
+      (expression_statement
+        (try_expression
+          (call_expression
+            (identifier_expression
+              (identifier))
+            (argument_list
+              (number)))))
+      (return_statement
+        (call_expression
+          (identifier_expression
+            (identifier))
+          (argument_list))))))

@@ -20,9 +20,10 @@ const PREC = {
   add: 9,
   mul: 10,
   as: 11,
-  unary: 12,
-  postfix: 13,
-  call: 14,
+  coalesce: 12,
+  unary: 13,
+  postfix: 14,
+  call: 15,
 };
 
 const commaSep = (rule) => optional(commaSep1(rule));
@@ -41,6 +42,13 @@ module.exports = grammar({
     [$.identifier_expression, $._type_name],
     [$.binary_expression, $.call_expression],
     [$.binary_expression, $.unary_expression, $.call_expression],
+    // A bare `try f` followed by `<` is the same comparison-or-generic-call
+    // fork with the try's operand extent at stake; let GLR explore both.
+    // The `??` right-hand side hits the identical fork (its RHS is atomic
+    // in the compiler, so `<` after it is a comparison unless a generic
+    // call proves otherwise).
+    [$.try_expression, $.binary_expression, $.call_expression],
+    [$.coalesce_expression, $.binary_expression, $.call_expression],
     // `{ ... }` opening a statement is a block, not a block-expression used as
     // an expression statement; the dynamic precedence below settles it.
     [$.block, $.block_expression],
@@ -382,6 +390,7 @@ module.exports = grammar({
         $.if_statement,
         $.case_statement,
         $.with_statement,
+        $.try_statement,
         $.while_statement,
         $.break_statement,
         $.continue_statement,
@@ -396,10 +405,16 @@ module.exports = grammar({
     return_statement: ($) => seq('return', optional($._expression), ';'),
     emit_statement: ($) => seq('emit', $._expression, ';'),
 
+    // Destructuring binders (`let a, b = t;`, optional trailing-`...` rest
+    // binder `let a, rest... = t;`) share the statement; the compiler
+    // rejects an annotation on the destructuring form, but a highlighting
+    // grammar need not.
     let_statement: ($) =>
       seq(
         'let',
         field('name', $.identifier),
+        optional('...'),
+        repeat(seq(',', field('name', $.identifier), optional('...'))),
         optional(seq(':', $._type)),
         optional(seq('=', field('value', $._expression))),
         ';',
@@ -474,21 +489,29 @@ module.exports = grammar({
         $.logical_expression,
         $.binary_expression,
         $.cast_expression,
+        $.coalesce_expression,
         $.unary_expression,
         $.try_expression,
         $._postfix_expression,
       ),
 
-    // `try f() except (err) { H } [else { S }]` -- the result handler form.
-    // `try` binds the call chain that follows (a unary-level prefix, so the
-    // whole form composes as an operand) and carries its except clause; the
-    // bare propagation form and the `??` fallback are later stages. The
-    // binder is parenthesized, both bodies are braced blocks, and the
-    // optional `else` is the ok-arm block.
+    // `try f() [except (err) { H } [else { S }]]` -- the try expression:
+    // bare (propagate the error up) or with its except handler (the binder
+    // is parenthesized, both bodies are braced blocks, and the optional
+    // `else` is the ok-arm block). `try` binds the call chain that follows
+    // (a unary-level prefix, so the whole form composes as an operand).
+    // The `??` fallback ending renders through coalesce_expression below:
+    // in the compiler it is the try's own clause (structural, by
+    // production), but the resulting extents and groupings are identical,
+    // so the highlighting grammar keeps one `??` rule.
     try_expression: ($) =>
       prec.right(
         PREC.unary,
-        seq('try', field('operand', $._expression), $.except_clause),
+        seq(
+          'try',
+          field('operand', $._expression),
+          optional($.except_clause),
+        ),
       ),
 
     except_clause: ($) =>
@@ -501,6 +524,37 @@ module.exports = grammar({
           field('handler', $.block),
           optional(seq('else', field('alternative', $.block))),
         ),
+      ),
+
+    // `try (ret = f()) { B } except (err) { H }` -- the try statement:
+    // a fresh `ret` scoped to `B`, an obligation-free handler, no else arm.
+    // `try ( IDENT =` opens the statement (assignment is not an
+    // expression); anything else is an expression statement.
+    try_statement: ($) =>
+      seq(
+        'try',
+        '(',
+        field('name', $.identifier),
+        '=',
+        field('value', $._expression),
+        ')',
+        field('body', $.block),
+        'except',
+        '(',
+        field('binder', $.identifier),
+        ')',
+        field('handler', $.block),
+      ),
+
+    // The `??` coalesce: left-associative, tighter than the ternary and
+    // every binary operator (each chain reduces to one operand first).
+    // Covers both the try fallback (`try g() ?? v` -- the whole try is the
+    // left operand, matching the compiler's grouping) and the reserved
+    // general coalesce.
+    coalesce_expression: ($) =>
+      prec.left(
+        PREC.coalesce,
+        seq($._expression, '??', field('fallback', $._expression)),
       ),
 
     // `cond ? a : b`, the loosest operator and right-associative, so

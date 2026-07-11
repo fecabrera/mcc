@@ -1192,9 +1192,10 @@ class Except:
     """A ``try`` expression: ``try expr except (err) { H } [else { S }]``.
 
     ``try`` binds the call chain that follows (a unary-level prefix, so the
-    whole form composes as an operand) and in this stage always carries its
-    ``except`` clause -- the bare propagation form and the ``??`` fallback
-    are later stages. Branches on the result's tag: on error the handler
+    whole form composes as an operand); the ``except`` handler is one of its
+    three endings (see :class:`Try` for bare propagation and
+    :class:`TryFallback` for the ``??`` default -- a try takes exactly one
+    clause). Branches on the result's tag: on error the handler
     ``H`` runs with ``binder`` bound to the error value (a plain copy,
     scoped to ``H``); on ok the optional ``else`` block ``S`` runs. Where a
     value escapes, ``H`` must diverge or ``emit`` a fallback for it; as a
@@ -1216,6 +1217,106 @@ class Except:
     binder: str
     handler: list
     otherwise: list | None
+    line: int
+
+
+@dataclass
+class Try:
+    """A bare ``try expr``: propagate the error up the call stack.
+
+    On error, the enclosing function returns ``error(err)`` -- so its return
+    type must be a ``result`` carrying the **same** declared error type
+    (``result<T2, E>`` or ``result<E>``); anything else is a compile error at
+    the try site naming both types. On ok the expression yields the payload
+    ``T`` (arity 2); an error-only ``result<E>`` yields no value, so the bare
+    form over one is legal only as a whole expression statement
+    (``try f();``, the propagate-or-continue consumer).
+
+    Attributes:
+        value: The tested operand (must evaluate to a ``result``).
+        line: Source line for diagnostics.
+    """
+
+    value: object
+    line: int
+
+
+@dataclass
+class TryFallback:
+    """A ``try expr ?? fallback``: discard the error, supply a default.
+
+    On error the error value is discarded and the fallback is evaluated --
+    lazily, only on that path -- and coerced to ``T``; on ok the fallback
+    never runs. Nothing escapes the expression, so the enclosing return type
+    is never consulted (legal in ``main``). The fallback is the try's own
+    clause, consumed by the try production itself -- it binds tighter than
+    the general :class:`Coalesce` operator -- and is restricted to an atomic
+    right-hand side: a unary expression, a parenthesized ``(expr)``, or an
+    emit-block ``{ ...; emit v; }`` that may instead diverge. An error-only
+    ``result<E>`` has no ok value to default, so it rejects.
+
+    Attributes:
+        value: The tested operand (must evaluate to a ``result``).
+        fallback: The default expression (a ``BlockExpr`` for the block form).
+        line: Source line for diagnostics.
+    """
+
+    value: object
+    fallback: object
+    line: int
+
+
+@dataclass
+class Coalesce:
+    """A general ``lhs ?? rhs`` coalesce chain link.
+
+    The ``??`` production outside a ``try``'s own fallback clause: it chains
+    left-associatively over atomic right-hand sides and binds tighter than
+    the ternary and every binary operator, so ``p ?? q + 1`` is
+    ``(p ?? q) + 1`` and ``try g() ?? v ?? q`` is ``(try g() ?? v) ?? q``.
+    Today every arm rejects at codegen: a ``result`` left of ``??`` unwraps
+    through ``try``, and the pointer null-coalescing arm is reserved for the
+    pointer-truthiness roadmap item; the production exists so the grammar is
+    settled once.
+
+    Attributes:
+        lhs: The tested left operand.
+        rhs: The atomic fallback (see :class:`TryFallback` for the forms).
+        line: Source line for diagnostics.
+    """
+
+    lhs: object
+    rhs: object
+    line: int
+
+
+@dataclass
+class TryStmt:
+    """The ``try`` statement: ``try (ret = f()) { B } except (err) { H }``.
+
+    Binds a fresh ``ret`` (no ``let``, the ``with``-head spelling) scoped to
+    the block ``B``, which runs on ok; on error the handler ``H`` runs with
+    ``err`` bound (scoped to ``H``) and is obligation-free -- it may fall
+    through, diverge, or do nothing. There is no ``else`` arm: the block
+    already is the no-error arm. Arity 2 only (an error-only ``result<E>``
+    has no value to bind). Statement position disambiguates on
+    ``try ( IDENT =``; anything else after a statement-position ``try`` is
+    an expression statement.
+
+    Attributes:
+        name: The ok binding's name, scoped to ``body``.
+        value: The tested head expression (must evaluate to a ``result``).
+        body: The ok block's statements (``name`` in scope).
+        binder: The error binding's name, scoped to ``handler``.
+        handler: The handler block's statements.
+        line: Source line for diagnostics.
+    """
+
+    name: str
+    value: object
+    body: list
+    binder: str
+    handler: list
     line: int
 
 

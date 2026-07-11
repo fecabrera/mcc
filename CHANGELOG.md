@@ -28,6 +28,44 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Error handling stage 3: the rest of the `try` production — bare
+  propagation, the `??` fallback, and the `try` statement** — a `try` now
+  takes exactly one of three endings. **Bare `try g()`** propagates: on
+  error the enclosing function returns `error(err)`, so its return type
+  must be a result carrying the **same** declared error type
+  (`result<T2, E>` or `result<E>`) — anything else, including `main`, is a
+  compile error naming both types; on ok it yields `T`, composing as an
+  ordinary operand, and is *not* implicitly wrapped (`return try g();` in
+  a `-> result<T, E>` function errors — spell `return ok(try g());`). Over
+  an error-only `result<E>` the bare form is statement position only:
+  `try f();` is the propagate-or-continue consumer. A bare try inside a
+  `defer` body is banned like the return it desugars to. **The `??`
+  fallback**, `try g() ?? v`, discards the error and lazily evaluates a
+  default instead (side effects never run on the ok path), coercing it to
+  `T` with no requirement on the enclosing return type; the right-hand
+  side is atomic — a unary expression, a parenthesized `(expr)`, or an
+  emit-block `{ ...; emit v; }` that may instead diverge. `??` (a new
+  two-character token) binds tighter than the ternary and every binary
+  operator and chains left: `try g() ?? v ? a : b` is
+  `(try g() ?? v) ? a : b`, `try g() ?? 2 - 1` is `(try g() ?? 2) - 1`,
+  and `try g() ?? v > p ?? q` is `(try g() ?? v) > (p ?? q)` — the `??`
+  directly after a bare try operand is always the try's own clause
+  (structural, by production), and the general coalesce production ships
+  with every arm reserved: a result left of `??` unwraps through `try`,
+  and the pointer arm waits on the pointer-truthiness roadmap item. A try
+  takes one ending only (`try g() ?? v except (err) { }` is a parse
+  error), and with bare try legal, `try g() + 1 except ...` now reads
+  `(try g()) + 1` with a displaced handler — a parse error at `except`.
+  **The `try` statement**, `try (ret = f()) { B } except (err) { H }`,
+  binds a fresh `ret` scoped to `B` only (the `with`-head spelling and its
+  `try ( IDENT =` statement probe), with an obligation-free handler and
+  **no `else` arm** (the block already is the no-error arm); arity 2 only.
+  All three editor grammars pick up the new forms (tree-sitter
+  `try_expression` clauses + `try_statement` + `coalesce_expression`,
+  helix/neovim queries, VS Code tmLanguage `??`). See
+  [Propagation: bare try](docs/language.md#propagation-bare-try) and
+  [examples/types/error_handling.mc](examples/types/error_handling.mc).
+
 - **Error handling stage 2: the binding forms — `let ret, err = f();` and
   `try ... except`** — a `result` can now be *consumed*. Form 1, the
   C-flavored destructure `let ret, err = f();`, splits a `result<T, E>`

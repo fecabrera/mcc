@@ -1,0 +1,52 @@
+================================================================================
+destructuring let with two binders
+================================================================================
+
+fn main() -> int32 {
+    let ret, err = find(2);
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list)
+    (type_identifier)
+    (block
+      (let_statement
+        (identifier)
+        (identifier)
+        (call_expression
+          (identifier_expression
+            (identifier))
+          (argument_list
+            (number))))
+      (return_statement
+        (number)))))
+
+================================================================================
+destructuring let with a rest binder
+================================================================================
+
+fn main() -> int32 {
+    let head, rest... = t;
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list)
+    (type_identifier)
+    (block
+      (let_statement
+        (identifier)
+        (identifier)
+        (identifier_expression
+          (identifier)))
+      (return_statement
+        (number)))))

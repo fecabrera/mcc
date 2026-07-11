@@ -39,6 +39,7 @@ from mcc.nodes import (
     CaseType,
     Cast,
     CharLit,
+    Coalesce,
     CompoundAssign,
     Conditional,
     Const,
@@ -80,6 +81,9 @@ from mcc.nodes import (
     StructDecl,
     StructLit,
     Ternary,
+    Try,
+    TryFallback,
+    TryStmt,
     TupleLit,
     TypeAlias,
     TypeName,
@@ -5093,12 +5097,13 @@ class CodeGen:
 
         Evaluates the tested expression once, checks it is a ``result``,
         spills it to a slot, and reads the tag -- the shared head of every
-        ``try``/``except`` lowering (and of the form-1 destructure).
+        ``try`` lowering (bare, ``??``, ``except``, and the try statement;
+        the form-1 destructure inlines the same steps against its own error
+        wording, see :meth:`destructure_result`).
 
         Args:
-            expr: The ``Except`` node (or a destructuring ``Let``'s source
-                caller-evaluated equivalent -- see :meth:`destructure_result`,
-                which inlines the same steps against its own error wording).
+            expr: The ``Except``, ``Try``, ``TryFallback``, or ``TryStmt``
+                node (any node with ``value`` and ``line``).
 
         Returns:
             ``(result type, payload address, is_err)`` -- the const-stripped
@@ -5134,7 +5139,11 @@ class CodeGen:
         return result_t, payload_addr, is_err
 
     def gen_except_handler(
-        self, expr: Except, payload_addr, err_t: LangType, ctx: BlockExprCtx
+        self,
+        expr,
+        payload_addr,
+        err_t: LangType,
+        ctx: "BlockExprCtx | None",
     ):
         """Generate an ``except`` clause's handler block, binder bound.
 
@@ -5151,15 +5160,21 @@ class CodeGen:
         the emit targets a block expression opened inside it).
 
         Args:
-            expr: The ``Except`` node (binder name and handler body).
+            expr: The ``Except`` (or ``TryStmt``) node -- binder name and
+                handler body.
             payload_addr: The spilled result's payload address; the error
                 arm's bytes are live here when the handler runs.
             err_t: The declared error type ``E``.
-            ctx: The preset handler context (``cont_bb`` = the join block).
+            ctx: The preset handler context (``cont_bb`` = the join block),
+                or ``None`` for the try statement's handler, which is no
+                ``emit`` target of its own (nothing to fill -- an ``emit``
+                inside it targets an enclosing block expression, like any
+                statement arm's body).
         """
         outer_locals, outer_names = dict(self.locals), self.scope_names
         self.scope_names = set()
-        self.block_exprs.append(ctx)
+        if ctx is not None:
+            self.block_exprs.append(ctx)
         try:
             err_ptr = payload_addr
             if err_ptr.type != err_t.ir.as_pointer():
@@ -5173,7 +5188,8 @@ class CodeGen:
             self.bind_local(expr.binder, binder_slot, err_t)
             self.gen_block(expr.handler)
         finally:
-            self.block_exprs.pop()
+            if ctx is not None:
+                self.block_exprs.pop()
             self.locals, self.scope_names = outer_locals, outer_names
 
     def gen_let_except(self, stmt: Let):
@@ -5377,6 +5393,292 @@ class CodeGen:
             self.builder.branch(join_bb)
         self.builder.position_at_end(join_bb)
         return TypedValue(self.gen_load(slot), ok_t)
+
+    def gen_try_propagate(self, expr, result_t, payload_addr, is_err):
+        """Generate a bare ``try``'s error arm: return ``error(err)``.
+
+        The propagation desugar -- ``try g()`` is
+        ``try g() except (err) { return error(err); }`` -- so the enclosing
+        function's return type must absorb ``E`` explicitly: a
+        ``result<T2, E>`` or ``result<E>`` with the **same** declared error
+        type (there are no error conversions; mapping to a different error
+        type is a handler's job). The error arm binds the error value under
+        a hidden non-lexable name and routes a synthesized ``return``
+        through the normal return path, which owns defers and the coercion
+        to the return type. Leaves the builder positioned at the ok arm.
+
+        Args:
+            expr: The ``Try`` node (for its source line).
+            result_t: The operand's const-stripped ``result`` type.
+            payload_addr: The spilled result's payload address.
+            is_err: The ``i1`` tag test from :meth:`spill_result`.
+
+        Raises:
+            LangError: When the enclosing return type does not carry the
+                same error type, or the try sits inside a defer body (its
+                return could not exit the enclosing function).
+        """
+        err_t = result_t.args[-1]
+        ret_t = strip_const(self.ret_type)
+        if not (is_result(ret_t) and ret_t.args[-1] == err_t):
+            raise LangError(
+                f"try propagates {err_t}, but this function returns "
+                f"{self.ret_type}",
+                expr.line,
+            )
+        if self.defer_marks:
+            # The same escape ban a literal `return` in a defer body hits,
+            # named for the construct the user wrote.
+            raise LangError(
+                "try propagation inside a defer body cannot exit the "
+                "enclosing function; handle the error with except",
+                expr.line,
+            )
+        err_bb = self.builder.append_basic_block("try.err")
+        ok_bb = self.builder.append_basic_block("try.ok")
+        self.builder.cbranch(is_err, err_bb, ok_bb)
+        self.builder.position_at_end(err_bb)
+        outer_locals, outer_names = dict(self.locals), self.scope_names
+        self.scope_names = set()
+        try:
+            err_ptr = payload_addr
+            if err_ptr.type != err_t.ir.as_pointer():
+                err_ptr = self.builder.bitcast(
+                    payload_addr, err_t.ir.as_pointer()
+                )
+            hidden = "0try"  # not a lexable identifier: cannot collide
+            binder_slot = self.builder.alloca(err_t.ir, name="try.propagate")
+            self.builder.store(self.builder.load(err_ptr), binder_slot)
+            self.bind_local(hidden, binder_slot, err_t)
+            self.gen_statement(
+                Return(
+                    ResultLit("error", Var(hidden, expr.line), expr.line),
+                    expr.line,
+                )
+            )
+        finally:
+            self.locals, self.scope_names = outer_locals, outer_names
+        self.builder.position_at_end(ok_bb)
+
+    def gen_try_value(self, expr: Try) -> TypedValue:
+        """Lower a bare ``try g()`` in value position: propagate or yield T.
+
+        Args:
+            expr: The ``Try`` node.
+
+        Returns:
+            The ok payload as a ``TypedValue``.
+
+        Raises:
+            LangError: When the operand is not a result, has no ok value
+                (``result<E>``), or the enclosing return type cannot absorb
+                the error type.
+        """
+        result_t, payload_addr, is_err = self.spill_result(expr)
+        if len(result_t.args) == 1:
+            raise LangError(
+                f"a {result_t} has no ok value; propagate it in statement "
+                "position: try f();",
+                expr.line,
+            )
+        self.gen_try_propagate(expr, result_t, payload_addr, is_err)
+        ok_t = result_t.args[0]
+        ok_ptr = self.builder.bitcast(payload_addr, ok_t.ir.as_pointer())
+        return TypedValue(self.builder.load(ok_ptr), ok_t)
+
+    def gen_try_discard(self, expr: Try):
+        """Lower statement-position ``try f();``: propagate or continue.
+
+        The error-only ``result<E>``'s propagation consumer -- and over an
+        arity-2 result the ok value is simply discarded, like any
+        expression statement's value.
+
+        Args:
+            expr: The ``Try`` node.
+        """
+        result_t, payload_addr, is_err = self.spill_result(expr)
+        self.gen_try_propagate(expr, result_t, payload_addr, is_err)
+
+    def gen_try_fallback(self, expr: TryFallback) -> TypedValue:
+        """Lower ``try g() ?? fallback``: discard the error and default.
+
+        Branches on the tag: the ok arm loads the payload; the error arm
+        discards the error and evaluates the fallback -- lazily, only on
+        that path -- coercing it to ``T`` (adapted literals route as in any
+        typed sink). The emit-block form presets the result slot like an
+        ``except`` handler's context, and may diverge instead of emitting.
+        Nothing escapes the expression, so the enclosing return type is
+        never consulted.
+
+        Args:
+            expr: The ``TryFallback`` node.
+
+        Returns:
+            The ok payload or the fallback as a ``TypedValue``.
+
+        Raises:
+            LangError: When the operand is not a result, has no ok value to
+                default (``result<E>``), or the fallback block may fall
+                through without emitting.
+        """
+        result_t, payload_addr, is_err = self.spill_result(expr)
+        if len(result_t.args) == 1:
+            raise LangError(
+                f"a {result_t} has no ok value to default; handle it "
+                "(try f() except (err) { ... };) or propagate it "
+                "(try f();)",
+                expr.line,
+            )
+        ok_t = result_t.args[0]
+        err_bb = self.builder.append_basic_block("fallback.err")
+        ok_bb = self.builder.append_basic_block("fallback.ok")
+        join_bb = self.builder.append_basic_block("fallback.end")
+        slot = self.entry_alloca(ok_t.ir)
+        if over_aligned(ok_t):
+            slot.align = type_align(ok_t)
+        self.builder.cbranch(is_err, err_bb, ok_bb)
+        self.builder.position_at_end(err_bb)
+        if isinstance(expr.fallback, BlockExpr):
+            # `?? { ...; emit v; }` -- the handler-context machinery with a
+            # preset slot; all paths diverging is legal (the ok arm still
+            # delivers the value).
+            ctx = BlockExprCtx(
+                cont_bb=join_bb,
+                defer_depth=len(self.defer_stack),
+                slot=slot,
+                type=ok_t,
+            )
+            outer_locals, outer_names = dict(self.locals), self.scope_names
+            self.scope_names = set()
+            self.block_exprs.append(ctx)
+            try:
+                self.gen_block(expr.fallback.body)
+            finally:
+                self.block_exprs.pop()
+                self.locals, self.scope_names = outer_locals, outer_names
+            if not self.builder.block.is_terminated:
+                raise LangError(
+                    "the '??' fallback block may fall through without a "
+                    "value; emit the fallback or diverge (return, break, "
+                    "continue, panic)",
+                    expr.line,
+                )
+        else:
+            if (
+                self.struct_literal_adapts(expr.fallback, ok_t)
+                or self.str_literal_adapts(expr.fallback, ok_t)
+                or self.array_literal_adapts(expr.fallback, ok_t)
+                or self.result_literal_adapts(expr.fallback, ok_t)
+            ):
+                tv = self.gen_adapted_literal(expr.fallback, ok_t, expr.line)
+            else:
+                tv = self.coerce(
+                    self.gen_expr(expr.fallback), ok_t, expr.line,
+                    "'??' fallback",
+                )
+            self.builder.store(tv.value, slot)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(join_bb)
+        self.builder.position_at_end(ok_bb)
+        ok_ptr = self.builder.bitcast(payload_addr, ok_t.ir.as_pointer())
+        self.builder.store(self.builder.load(ok_ptr), slot)
+        self.builder.branch(join_bb)
+        self.builder.position_at_end(join_bb)
+        return TypedValue(self.gen_load(slot), ok_t)
+
+    def gen_coalesce(self, expr: Coalesce) -> TypedValue:
+        """Reject a general ``??`` coalesce (every arm is reserved today).
+
+        The production exists so the grammar is settled once: a ``??``
+        directly after a bare ``try`` operand is the try's own fallback
+        clause (structural, by production -- see ``parse_unary``); anything
+        that reaches this node is the general operator, whose arms are not
+        live yet. A ``result`` left-hand side unwraps through ``try``; a
+        pointer left-hand side is the null coalesce, reserved for the
+        pointer-truthiness roadmap item; everything else has no coalescing
+        meaning.
+
+        Args:
+            expr: The ``Coalesce`` node.
+
+        Raises:
+            LangError: Always, per left-hand-side type.
+        """
+        lhs = self.gen_expr(expr.lhs)
+        t = strip_const(lhs.type)
+        if is_result(t):
+            raise LangError(
+                f"a {t} left of '??' unwraps through try: try f() ?? v",
+                expr.line,
+            )
+        if is_pointer(t) or t is NULLT:
+            raise LangError(
+                "'??' on a pointer is null coalescing, which lands with "
+                "the pointer-truthiness roadmap item; spell the test for "
+                "now: p == null ? q : p",
+                expr.line,
+            )
+        raise LangError(
+            f"'??' coalesces pointers or supplies a try fallback; got "
+            f"{lhs.type}",
+            expr.line,
+        )
+
+    def gen_try_stmt(self, stmt: TryStmt):
+        """Lower ``try (ret = f()) { B } except (err) { H }``.
+
+        Branches on the tag: the ok arm binds a fresh ``ret`` to the
+        payload, scoped to the block ``B`` only (invisible after the
+        statement); the error arm binds ``err`` scoped to ``H``, and the
+        handler is obligation-free -- it may fall through ("log and move
+        on"), diverge, or do nothing. There is no ``else`` arm and no
+        ``emit`` target of its own (the statement produces nothing).
+
+        Args:
+            stmt: The ``TryStmt`` node.
+
+        Raises:
+            LangError: When the head is not a result, or the result has no
+                ok value to bind (``result<E>``).
+        """
+        result_t, payload_addr, is_err = self.spill_result(stmt)
+        if len(result_t.args) == 1:
+            raise LangError(
+                f"a {result_t} has no ok value to bind; handle it without "
+                "the binding: try f(); or try f() except (err) { ... };",
+                stmt.line,
+            )
+        ok_t = result_t.args[0]
+        err_bb = self.builder.append_basic_block("try.err")
+        ok_bb = self.builder.append_basic_block("try.ok")
+        join_bb = self.builder.append_basic_block("try.end")
+        self.builder.cbranch(is_err, err_bb, ok_bb)
+        self.builder.position_at_end(err_bb)
+        self.gen_except_handler(stmt, payload_addr, result_t.args[1], None)
+        err_falls = not self.builder.block.is_terminated
+        if err_falls:
+            self.builder.branch(join_bb)
+        self.builder.position_at_end(ok_bb)
+        outer_locals, outer_names = dict(self.locals), self.scope_names
+        self.scope_names = set()
+        try:
+            slot = self.builder.alloca(ok_t.ir, name=stmt.name)
+            if over_aligned(ok_t):
+                slot.align = type_align(ok_t)
+            ok_ptr = self.builder.bitcast(payload_addr, ok_t.ir.as_pointer())
+            self.builder.store(self.builder.load(ok_ptr), slot)
+            self.bind_local(stmt.name, slot, ok_t)
+            self.gen_block(stmt.body)
+        finally:
+            self.locals, self.scope_names = outer_locals, outer_names
+        ok_falls = not self.builder.block.is_terminated
+        if ok_falls:
+            self.builder.branch(join_bb)
+        self.builder.position_at_end(join_bb)
+        if not (ok_falls or err_falls):
+            # Both arms diverged: nothing reaches the join, so the
+            # statement diverges too.
+            self.builder.unreachable()
 
     def gen_struct_lit(self, expr: StructLit, struct_type: LangType = None) -> TypedValue:
         """Lower a struct literal ``struct Name { field = expr, ... }``.
@@ -6847,9 +7149,16 @@ class CodeGen:
             # field (the reference may alias one): every projection fact
             # dies, as at any through-memory store.
             self.narrowed_paths.clear()
+        elif isinstance(stmt, TryStmt):
+            self.gen_try_stmt(stmt)
         elif isinstance(stmt, ExprStmt):
             if isinstance(stmt.expr, Except):
                 self.gen_except_stmt(stmt.expr)
+            elif isinstance(stmt.expr, Try):
+                # `try f();` -- propagate or continue; over an arity-2
+                # result the ok value is discarded like any expression
+                # statement's.
+                self.gen_try_discard(stmt.expr)
             else:
                 self.gen_expr(stmt.expr)
         else:
@@ -8301,6 +8610,15 @@ class CodeGen:
             # an argument): the plain value form. The binding forms
             # (let/return/statement) intercept the node before gen_expr.
             return self.gen_except_value(expr)
+        if isinstance(expr, Try):
+            # Bare propagation composes as an ordinary operand
+            # (`1 + try g()`, an argument); statement position intercepts
+            # the node for the error-only result<E>.
+            return self.gen_try_value(expr)
+        if isinstance(expr, TryFallback):
+            return self.gen_try_fallback(expr)
+        if isinstance(expr, Coalesce):
+            return self.gen_coalesce(expr)
         if isinstance(expr, Var):
             # A name that is not a variable may be a constant or a function used
             # as a value.

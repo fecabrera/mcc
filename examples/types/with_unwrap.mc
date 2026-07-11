@@ -97,4 +97,6 @@ fn main() -> int32 {
 // appears); generic_case_arms.mc for the concrete-vs-generic detection
 // rule, the per-tag monomorphization model, and first-match-wins ordering;
 // case_type_groups.mc for one body over several named types, which the
-// single-pattern `with` head cannot express.
+// single-pattern `with` head cannot express; error_handling.mc for the
+// `try (r = f()) { }` statement, which borrows this same let-free
+// `r = expr` head spelling for its block-scoped binding.

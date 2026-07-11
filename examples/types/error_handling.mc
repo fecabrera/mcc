@@ -2,18 +2,20 @@ import "std/io";
 
 // Error handling: the `error` declaration naming a set of failure causes,
 // the builtin `result<T, E>` / `result<E>` type carrying either an ok
-// value or an error, the explicit ok()/error() constructors, and the two
-// binding forms that consume a result: the `let ret, err = f();`
-// destructure and `try ... except`. Recoverable errors are ordinary
-// values: no exceptions, no unwinding, no hidden control flow.
+// value or an error, the explicit ok()/error() constructors, and the ways
+// a result is consumed: the `let ret, err = f();` destructure, and `try`
+// with its three endings, an `except` handler, no clause (propagation),
+// or a `??` fallback, plus the block-scoped `try (r = f()) { }` statement.
+// Recoverable errors are ordinary values: no exceptions, no unwinding, no
+// hidden control flow.
 //
 // Prerequisites: enums.mc (case/when, `Name::Member` reading) and
 // block_expressions.mc (`emit`, which the except handler reuses).
 //
-// This covers stages 1 and 2 of the roadmap epic (declarations, the type,
-// the constructors, the binding forms). Still staged: the bare `try g()`
-// propagation shorthand (a compile error until it lands), the
-// `try (ret = f()) { }` statement, and the `??` fallback.
+// This covers stages 1 through 3 of the roadmap epic (declarations, the
+// type, the constructors, every consuming form). Still staged: stage 4,
+// diagnostics and rendering (an error value boxing into `{}`, a warning
+// for a silently dropped result).
 
 // An `error` declaration is enum-like but NOMINAL: a distinct int32-backed
 // type with no arithmetic, no ordering, and no implicit integer conversion
@@ -63,16 +65,39 @@ fn flush(fail: bool) -> result<file_error> {
     return ok();
 }
 
-// THE PROPAGATION IDIOM. `try` attempts the call and hands its error to
-// the `except` handler. On the error arm the handler runs with `err`
-// bound (a plain copy of the error, scoped to the handler) and here hands
-// it onward, explicitly reconstructed with error(err): with the same E the
-// construction type-checks directly, a different error type would need a
-// mapping. There is no implicit coercion. On the ok arm the handler is
-// skipped and v is the payload.
+// PROPAGATION, THE BARE TRY. `try find(key)` with no clause: on error the
+// enclosing function returns error(err) itself, so its return type must
+// carry the SAME declared error type (result<T2, E> for any T2, or
+// result<E>); anything else, including main, is a compile error naming
+// both types. On ok it yields the payload, but it is never implicitly
+// wrapped on the way back out: `return try find(key);` rejects, the ok
+// construction stays explicit (`return ok(try find(key) + 1000);` would
+// also do, since a bare try composes as an ordinary operand). Mapping to
+// a DIFFERENT error type stays a handler's job, the long spelling:
+// `try find(key) except (err) { return error(other::CAUSE); }`.
 fn wrap(key: int32) -> result<int32, file_error> {
-    let v = try find(key) except (err) { return error(err); };
+    let v = try find(key);
     return ok(v + 1000);
+}
+
+// Over the error-only result<E> there is no payload to yield, so bare try
+// is statement position only: `try flush(fail);` propagates on error and
+// simply continues on ok, the propagate-or-continue consumer. (Over a
+// result<T, E> the statement form propagates and discards the ok value.)
+// And since propagation returns, a bare try inside a defer body is banned
+// like the `return` it desugars to.
+fn flush_all(fail: bool) -> result<file_error> {
+    try flush(fail);
+    try flush(false);
+    return ok();
+}
+
+// A side-effecting default, to make the `??` fallback's laziness visible
+// from main: the counter ticks only when the fallback actually runs.
+@static let defaults_used: int32;
+fn slow_default() -> int32 {
+    defaults_used += 1;
+    return -7;
 }
 
 fn main() -> int32 {
@@ -120,7 +145,8 @@ fn main() -> int32 {
 
     // The destructure also opens a stored result, not just a fresh call.
     // (The error-only result<E> rejects here: it has no ok value to bind;
-    // its consumer is the statement-position try ... except below.)
+    // its consumers are statement position, the try ... except below or
+    // the bare `try flush(fail);` inside flush_all() above.)
     let stale, why = pending;
     if (why == file_error::TIMEOUT) {
         println("pending held TIMEOUT; stale = {}", stale);
@@ -173,13 +199,78 @@ fn main() -> int32 {
         println("never printed: flush(false) is ok");
     };
 
-    // The propagation idiom observed from outside: wrap() forwards find's
-    // error unchanged, and adds 1000 on the ok path.
+    // Bare-try propagation observed from outside: wrap() forwards find's
+    // error unchanged, and adds 1000 on the ok path. (main itself returns
+    // int32, so a bare try HERE is a compile error naming both types;
+    // main opens results with the binding forms instead.)
     let big, werr = wrap(7);
     println("wrap(7) = {} (werr reads out as {})", big, werr as int32);
     let none, werr2 = wrap(0);
     if (werr2 == file_error::NOT_FOUND) {
         println("wrap(0) propagated NOT_FOUND; none = {}", none);
+    }
+
+    // And the statement form observed the same way: flush_all(true) stops
+    // at its first `try flush(fail);` and forwards TIMEOUT; flush_all(false)
+    // continues past both and reaches ok().
+    try flush_all(true) except (err) {
+        println("flush_all(true) propagated: {}", err as int32);
+    };
+    try flush_all(false) except (err) {
+        println("never printed: flush_all(false) runs to ok()");
+    };
+
+    // DEFAULTING, THE ?? FALLBACK: `try f() ?? fallback` is the third try
+    // ending (a try takes exactly one: `?? ... except` does not combine).
+    // It discards the error and supplies a default coercing to T; nothing
+    // escapes the expression, so the enclosing return type is never
+    // consulted, which is why it is legal right here in main. (result<E>
+    // rejects the form: no ok value to default.)
+    let fell = try find(0) ?? -1;
+    println("try find(0) ?? -1 = {}", fell);
+
+    // The fallback is LAZY: it evaluates only on the error path, so its
+    // side effects never run on ok. The counter stays at 0 through the
+    // first line and ticks on the second.
+    let hit = try find(2) ?? slow_default();
+    println("ok path: hit = {}, defaults_used = {}", hit, defaults_used);
+    let dflt = try find(0) ?? slow_default();
+    println("error path: dflt = {}, defaults_used = {}", dflt, defaults_used);
+
+    // The right-hand side is atomic: a unary expression (identifier,
+    // literal, call, member/index chain, prefix -/!/~), a parenthesized
+    // (expr), or an emit-block that may do work before emitting the
+    // default (or diverge instead of emitting).
+    let logged = try find(0) ?? {
+        println("emit-block fallback: logging, then defaulting");
+        emit -2;
+    };
+    println("logged = {}", logged);
+
+    // Precedence: ?? binds tighter than the ternary and every binary
+    // operator, so the fallback reduces to a single operand before the
+    // subtraction applies: this is (try find(0) ?? 2) - 1, never ?? (2 - 1).
+    let tight = try find(0) ?? 2 - 1;
+    println("try find(0) ?? 2 - 1 = {}", tight);
+
+    // FORM B, THE TRY STATEMENT: `try (r = f()) { B } except (err) { H }`
+    // keeps the binding inside a block. The head binds a fresh r with no
+    // `let` (the same `r = expr` head spelling as the `with` statement,
+    // see with_unwrap.mc), scoped to B ONLY; B runs on ok, H runs on
+    // error with err bound (scoped to H) and is obligation-free. There is
+    // no else arm: the block already is the no-error arm.
+    try (r = find(5)) {
+        println("try statement: r = {} inside the ok block", r);
+    } except (err) {
+        println("never printed: find(5) is ok");
+    }
+
+    // r did not escape the statement above, so the name is free to be
+    // bound again by the next head.
+    try (r = find(0)) {
+        println("never printed: find(0) fails");
+    } except (err) {
+        println("try statement error arm: {}", describe(err));
     }
 
     return 0;

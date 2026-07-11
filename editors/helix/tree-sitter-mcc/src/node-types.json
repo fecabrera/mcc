@@ -124,6 +124,10 @@
           "named": true
         },
         {
+          "type": "coalesce_expression",
+          "named": true
+        },
+        {
           "type": "enum_access",
           "named": true
         },
@@ -252,6 +256,10 @@
         },
         {
           "type": "char",
+          "named": true
+        },
+        {
+          "type": "coalesce_expression",
           "named": true
         },
         {
@@ -563,6 +571,10 @@
             "named": true
           },
           {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
             "type": "enum_access",
             "named": true
           },
@@ -686,6 +698,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -892,6 +908,10 @@
           "named": true
         },
         {
+          "type": "coalesce_expression",
+          "named": true
+        },
+        {
           "type": "enum_access",
           "named": true
         },
@@ -1039,6 +1059,10 @@
           "named": true
         },
         {
+          "type": "try_statement",
+          "named": true
+        },
+        {
           "type": "unreachable_statement",
           "named": true
         },
@@ -1111,6 +1135,10 @@
         },
         {
           "type": "return_statement",
+          "named": true
+        },
+        {
+          "type": "try_statement",
           "named": true
         },
         {
@@ -1190,6 +1218,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -1332,6 +1364,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -1534,6 +1570,10 @@
           "named": true
         },
         {
+          "type": "coalesce_expression",
+          "named": true
+        },
+        {
           "type": "enum_access",
           "named": true
         },
@@ -1640,6 +1680,272 @@
     }
   },
   {
+    "type": "coalesce_expression",
+    "named": true,
+    "fields": {
+      "fallback": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "alignof_expression",
+            "named": true
+          },
+          {
+            "type": "array_expression",
+            "named": true
+          },
+          {
+            "type": "asm_expression",
+            "named": true
+          },
+          {
+            "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block_expression",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "cast_expression",
+            "named": true
+          },
+          {
+            "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
+            "type": "enum_access",
+            "named": true
+          },
+          {
+            "type": "f_string",
+            "named": true
+          },
+          {
+            "type": "float",
+            "named": true
+          },
+          {
+            "type": "identifier_expression",
+            "named": true
+          },
+          {
+            "type": "index_expression",
+            "named": true
+          },
+          {
+            "type": "len_expression",
+            "named": true
+          },
+          {
+            "type": "logical_expression",
+            "named": true
+          },
+          {
+            "type": "member_expression",
+            "named": true
+          },
+          {
+            "type": "nonnull_assert_expression",
+            "named": true
+          },
+          {
+            "type": "null",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "offsetof_expression",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "sizeof_expression",
+            "named": true
+          },
+          {
+            "type": "slice_expression",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "ternary_expression",
+            "named": true
+          },
+          {
+            "type": "try_expression",
+            "named": true
+          },
+          {
+            "type": "typename_expression",
+            "named": true
+          },
+          {
+            "type": "unary_expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "alignof_expression",
+          "named": true
+        },
+        {
+          "type": "array_expression",
+          "named": true
+        },
+        {
+          "type": "asm_expression",
+          "named": true
+        },
+        {
+          "type": "binary_expression",
+          "named": true
+        },
+        {
+          "type": "block_expression",
+          "named": true
+        },
+        {
+          "type": "boolean",
+          "named": true
+        },
+        {
+          "type": "call_expression",
+          "named": true
+        },
+        {
+          "type": "cast_expression",
+          "named": true
+        },
+        {
+          "type": "char",
+          "named": true
+        },
+        {
+          "type": "coalesce_expression",
+          "named": true
+        },
+        {
+          "type": "enum_access",
+          "named": true
+        },
+        {
+          "type": "f_string",
+          "named": true
+        },
+        {
+          "type": "float",
+          "named": true
+        },
+        {
+          "type": "identifier_expression",
+          "named": true
+        },
+        {
+          "type": "index_expression",
+          "named": true
+        },
+        {
+          "type": "len_expression",
+          "named": true
+        },
+        {
+          "type": "logical_expression",
+          "named": true
+        },
+        {
+          "type": "member_expression",
+          "named": true
+        },
+        {
+          "type": "nonnull_assert_expression",
+          "named": true
+        },
+        {
+          "type": "null",
+          "named": true
+        },
+        {
+          "type": "number",
+          "named": true
+        },
+        {
+          "type": "offsetof_expression",
+          "named": true
+        },
+        {
+          "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "sizeof_expression",
+          "named": true
+        },
+        {
+          "type": "slice_expression",
+          "named": true
+        },
+        {
+          "type": "string",
+          "named": true
+        },
+        {
+          "type": "struct_literal",
+          "named": true
+        },
+        {
+          "type": "ternary_expression",
+          "named": true
+        },
+        {
+          "type": "try_expression",
+          "named": true
+        },
+        {
+          "type": "typename_expression",
+          "named": true
+        },
+        {
+          "type": "unary_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "conditional",
     "named": true,
     "fields": {
@@ -1695,6 +2001,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -1885,6 +2195,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -2176,6 +2490,10 @@
           "named": true
         },
         {
+          "type": "try_statement",
+          "named": true
+        },
+        {
           "type": "unreachable_statement",
           "named": true
         },
@@ -2232,6 +2550,10 @@
         },
         {
           "type": "char",
+          "named": true
+        },
+        {
+          "type": "coalesce_expression",
           "named": true
         },
         {
@@ -2374,6 +2696,10 @@
         },
         {
           "type": "char",
+          "named": true
+        },
+        {
+          "type": "coalesce_expression",
           "named": true
         },
         {
@@ -2524,6 +2850,10 @@
           "named": true
         },
         {
+          "type": "try_statement",
+          "named": true
+        },
+        {
           "type": "unreachable_statement",
           "named": true
         },
@@ -2580,6 +2910,10 @@
         },
         {
           "type": "char",
+          "named": true
+        },
+        {
+          "type": "coalesce_expression",
           "named": true
         },
         {
@@ -2837,6 +3171,10 @@
             "named": true
           },
           {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
             "type": "enum_access",
             "named": true
           },
@@ -3024,6 +3362,10 @@
             "named": true
           },
           {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
             "type": "enum_access",
             "named": true
           },
@@ -3192,6 +3534,10 @@
           "named": true
         },
         {
+          "type": "coalesce_expression",
+          "named": true
+        },
+        {
           "type": "enum_access",
           "named": true
         },
@@ -3356,6 +3702,10 @@
             "named": true
           },
           {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
             "type": "enum_access",
             "named": true
           },
@@ -3485,6 +3835,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -3680,6 +4034,10 @@
             "named": true
           },
           {
+            "type": "try_statement",
+            "named": true
+          },
+          {
             "type": "unreachable_statement",
             "named": true
           },
@@ -3731,6 +4089,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -4118,6 +4480,10 @@
             "named": true
           },
           {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
             "type": "enum_access",
             "named": true
           },
@@ -4361,6 +4727,10 @@
             "named": true
           },
           {
+            "type": "try_statement",
+            "named": true
+          },
+          {
             "type": "unreachable_statement",
             "named": true
           },
@@ -4412,6 +4782,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -4557,6 +4931,10 @@
             "named": true
           },
           {
+            "type": "try_statement",
+            "named": true
+          },
+          {
             "type": "unreachable_statement",
             "named": true
           },
@@ -4630,6 +5008,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -4756,6 +5138,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -4891,6 +5277,10 @@
           "named": true
         },
         {
+          "type": "coalesce_expression",
+          "named": true
+        },
+        {
           "type": "enum_access",
           "named": true
         },
@@ -5023,6 +5413,10 @@
         },
         {
           "type": "char",
+          "named": true
+        },
+        {
+          "type": "coalesce_expression",
           "named": true
         },
         {
@@ -5168,6 +5562,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -5333,6 +5731,10 @@
           "named": true
         },
         {
+          "type": "coalesce_expression",
+          "named": true
+        },
+        {
           "type": "enum_access",
           "named": true
         },
@@ -5461,6 +5863,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -5617,6 +6023,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -5881,6 +6291,10 @@
           "named": true
         },
         {
+          "type": "coalesce_expression",
+          "named": true
+        },
+        {
           "type": "enum_access",
           "named": true
         },
@@ -6055,6 +6469,10 @@
         },
         {
           "type": "char",
+          "named": true
+        },
+        {
+          "type": "coalesce_expression",
           "named": true
         },
         {
@@ -6235,6 +6653,10 @@
             "named": true
           },
           {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
             "type": "enum_access",
             "named": true
           },
@@ -6361,6 +6783,10 @@
             "named": true
           },
           {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
             "type": "enum_access",
             "named": true
           },
@@ -6484,6 +6910,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -6781,6 +7211,10 @@
             "named": true
           },
           {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
             "type": "enum_access",
             "named": true
           },
@@ -6907,6 +7341,10 @@
             "named": true
           },
           {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
             "type": "enum_access",
             "named": true
           },
@@ -7030,6 +7468,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -7165,6 +7607,10 @@
             "named": true
           },
           {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
             "type": "enum_access",
             "named": true
           },
@@ -7253,13 +7699,189 @@
     },
     "children": {
       "multiple": false,
-      "required": true,
+      "required": false,
       "types": [
         {
           "type": "except_clause",
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "try_statement",
+    "named": true,
+    "fields": {
+      "binder": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "handler": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "alignof_expression",
+            "named": true
+          },
+          {
+            "type": "array_expression",
+            "named": true
+          },
+          {
+            "type": "asm_expression",
+            "named": true
+          },
+          {
+            "type": "binary_expression",
+            "named": true
+          },
+          {
+            "type": "block_expression",
+            "named": true
+          },
+          {
+            "type": "boolean",
+            "named": true
+          },
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "cast_expression",
+            "named": true
+          },
+          {
+            "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
+            "named": true
+          },
+          {
+            "type": "enum_access",
+            "named": true
+          },
+          {
+            "type": "f_string",
+            "named": true
+          },
+          {
+            "type": "float",
+            "named": true
+          },
+          {
+            "type": "identifier_expression",
+            "named": true
+          },
+          {
+            "type": "index_expression",
+            "named": true
+          },
+          {
+            "type": "len_expression",
+            "named": true
+          },
+          {
+            "type": "logical_expression",
+            "named": true
+          },
+          {
+            "type": "member_expression",
+            "named": true
+          },
+          {
+            "type": "nonnull_assert_expression",
+            "named": true
+          },
+          {
+            "type": "null",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "offsetof_expression",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "sizeof_expression",
+            "named": true
+          },
+          {
+            "type": "slice_expression",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "struct_literal",
+            "named": true
+          },
+          {
+            "type": "ternary_expression",
+            "named": true
+          },
+          {
+            "type": "try_expression",
+            "named": true
+          },
+          {
+            "type": "typename_expression",
+            "named": true
+          },
+          {
+            "type": "unary_expression",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -7608,6 +8230,10 @@
           "named": true
         },
         {
+          "type": "coalesce_expression",
+          "named": true
+        },
+        {
           "type": "enum_access",
           "named": true
         },
@@ -7700,6 +8326,11 @@
     "fields": {}
   },
   {
+    "type": "variadic_parameter",
+    "named": true,
+    "fields": {}
+  },
+  {
     "type": "when_arm",
     "named": true,
     "fields": {},
@@ -7757,6 +8388,10 @@
         },
         {
           "type": "char",
+          "named": true
+        },
+        {
+          "type": "coalesce_expression",
           "named": true
         },
         {
@@ -7872,6 +8507,10 @@
           "named": true
         },
         {
+          "type": "try_statement",
+          "named": true
+        },
+        {
           "type": "typename_expression",
           "named": true
         },
@@ -7955,6 +8594,10 @@
             "named": true
           },
           {
+            "type": "try_statement",
+            "named": true
+          },
+          {
             "type": "unreachable_statement",
             "named": true
           },
@@ -8006,6 +8649,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -8157,6 +8804,10 @@
             "named": true
           },
           {
+            "type": "try_statement",
+            "named": true
+          },
+          {
             "type": "unreachable_statement",
             "named": true
           },
@@ -8237,6 +8888,10 @@
             "named": true
           },
           {
+            "type": "try_statement",
+            "named": true
+          },
+          {
             "type": "unreachable_statement",
             "named": true
           },
@@ -8288,6 +8943,10 @@
           },
           {
             "type": "char",
+            "named": true
+          },
+          {
+            "type": "coalesce_expression",
             "named": true
           },
           {
@@ -8451,6 +9110,10 @@
     "named": false
   },
   {
+    "type": "...",
+    "named": false
+  },
+  {
     "type": "/",
     "named": false
   },
@@ -8512,6 +9175,10 @@
   },
   {
     "type": "?",
+    "named": false
+  },
+  {
+    "type": "??",
     "named": false
   },
   {
@@ -8722,10 +9389,6 @@
   {
     "type": "until",
     "named": false
-  },
-  {
-    "type": "variadic_parameter",
-    "named": true
   },
   {
     "type": "when",

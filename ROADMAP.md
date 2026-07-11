@@ -478,7 +478,7 @@ already do).
         handler's emit-fallback path. A bare `try g()` (no handler) is a
         staged compile error until stage 3 — implemented, see
         [Consuming a result](docs/language.md#consuming-a-result-the-destructure)
-  - [ ] stage 3: the rest of the `try` production in one change set
+  - [x] stage 3: the rest of the `try` production in one change set
         (the keyword and its `except` handler clause landed in stage 2;
         this stage adds the forms without one, settling the remaining
         grammar once: `try ( IDENT =` opens the statement, anything else
@@ -510,7 +510,8 @@ already do).
         rejects with the hint that results unwrap through `try`, and a
         pointer left-hand side rejects with a forward hint until the
         [pointer-truthiness item](#functions-and-methods) turns on its
-        null-coalescing arm over this same production
+        null-coalescing arm over this same production — implemented, see
+        [Propagation: bare try](docs/language.md#propagation-bare-try)
   - [ ] stage 4: diagnostics and rendering — `-Wunused-result`, an opt-in
         class over the shipped
         [warning registry](#metaprogramming-and-builtins) for a statement

@@ -21,7 +21,9 @@ TOKEN_SPEC = [
     # Compound-assignment operators. Listed before OP2/OP so the longest match
     # wins: `<<=`/`>>=` beat OP2's `<<`/`>>`, and `+=` etc. beat OP's `+`.
     ("OPASSIGN", r"<<=|>>=|[-+*/%&|^]="),
-    ("OP2", r"==|!=|<=|>=|<<|>>|::"),
+    # `\?\?` before the single-char OP class's `?`, so `??` lexes as one
+    # token by ordered alternation (the mechanism that makes `==` beat `=`).
+    ("OP2", r"\?\?|==|!=|<=|>=|<<|>>|::"),
     ("ANNOT", r"@[A-Za-z_]\w*"),
     ("FLOAT", r"\d+\.\d+(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+"),
     ("INT", r"0[xX][0-9a-fA-F]+|\d+"),

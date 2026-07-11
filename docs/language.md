@@ -4220,25 +4220,116 @@ works, with the same diverge-or-emit obligation (an `else` there runs on
 the ok arm but binds nothing — only the binding forms have a name to
 share). And `except` never appears without its `try`: the un-prefixed
 spelling is rejected with the fix
-(`except needs try: try f() except (err) { ... }`).
+(`except needs try: try f() except (err) { ... }`). One C-classic corner
+that buys: in `if (c) try g() except (e) { H } else { S };` the `else`
+binds to the inner try's `except` clause (greedy-inner), not to the `if`.
 
-**Propagation** is explicit — construct the outgoing result in the handler.
-With the same `E`, `error(err)` type-checks directly; a different error
-type needs a mapping:
+A `try` takes exactly **one of three endings** — the handler above, or the
+two below, which complete the production:
+
+| Ending | Spelling | On error |
+|---|---|---|
+| nothing | `try g()` | propagate: the function returns `error(err)` |
+| `??` | `try g() ?? fallback` | discard the error, default to the fallback |
+| `except` | `try g() except (err) { H } [else { S }]` | handle it |
+
+### Propagation: bare try
+
+`try g()` with no clause propagates the error up: on failure the enclosing
+function returns `error(err)`, so its return type must be a result
+carrying the **same** declared error type — `result<T2, E>` for any `T2`,
+or `result<E>`. Anything else (including `main`) is a compile error at the
+try site naming both types
+(`try propagates my_error, but this function returns int32`). There are no
+error conversions: mapping to a different error type stays a handler's job
+(`except (err) { return error(other_error::WRAPPED); }`).
 
 ```c
 fn wrap(key: int32) -> result<int32, my_error> {
-    let v = try find(key) except (err) { return error(err); };
+    let v = try find(key);           // on error: return error(err);
     return ok(v as int32);
 }
 ```
 
-The rest of the `try` production — the bare propagation expression
-(`let v = try g();`), the `try (ret = f()) { ... } except` statement, and
-the `??` fallback — is the next stage of the
-[roadmap epic](../ROADMAP.md#planned); until it lands, a `try` without its
-`except` clause is a staged compile error. See
-[examples/types/error_handling.mc](../examples/types/error_handling.mc)
+On ok the expression yields `T` and composes as an ordinary operand
+(`1 + try g()`). The yield is **not** implicitly wrapped: `return try g();`
+in a `-> result<T, E>` function hands a bare `T` where a result is
+expected — spell `return ok(try g());`. The error-only `result<E>` has no
+value to yield, so bare try over one is statement position only:
+`try f();` is the propagate-or-continue consumer (over a `result<T, E>`
+the statement form propagates and discards the ok value). And since
+propagation returns, a bare try inside a [`defer`](#defer) body is banned
+like the `return` it desugars to
+(`try propagation inside a defer body cannot exit the enclosing function`).
+
+### Defaulting: the ?? fallback
+
+`try g() ?? fallback` discards the error and supplies a default instead.
+The fallback evaluates **lazily** — only on the error path, its side
+effects never run on ok — and coerces to `T` (an untyped literal adapts).
+Nothing escapes the expression, so the enclosing return type is never
+consulted: legal in `main`, in a void function, anywhere. (A `result<E>`
+has no ok value to default, so it rejects.)
+
+The right-hand side is **atomic**: a unary expression — an identifier, a
+literal, a call `h()`, a member or index chain, the prefix forms (`-1`,
+`!flag`, `~mask`) — or a parenthesized `(expr)`, or an emit-block, which
+may instead diverge:
+
+```c
+let v = try find(k) ?? 0;                     // scalar default
+let w = try find(k) ?? (base * 2);            // computed: parenthesize
+let x = try find(k) ?? { warn(); emit 0; };   // do things, then default
+let y = try find(k) ?? { return -1; };        // or diverge instead
+```
+
+**Precedence.** `??` binds tighter than the ternary and every binary
+operator and chains left-associatively, so a `??` chain reduces to a
+single operand before any other operator applies:
+
+```c
+try g() ?? v ? a : b     // (try g() ?? v) ? a : b
+try g() ?? 2 - 1         // (try g() ?? 2) - 1
+try g() ?? v ?? q        // (try g() ?? v) ?? q
+try g() ?? v > p ?? q    // (try g() ?? v) > (p ?? q)
+```
+
+The `??` directly after a bare try operand is always the try's own
+fallback clause — structural, by production, binding tighter than the
+general operator — and only subsequent `??`s are the general coalesce,
+whose arms are reserved today: a result left of `??` unwraps through `try`
+(`try f() ?? v`), and the pointer arm (`p ?? q` null coalescing) arrives
+with the [pointer-truthiness roadmap item](../ROADMAP.md#planned). A try
+takes one ending only: `try g() ?? v except (err) { ... }` is a parse
+error.
+
+### The try statement
+
+`try (ret = f()) { B } except (err) { H }` keeps the binding inside a
+block: a fresh `ret` (no `let` — the deliberate
+[`with`](#the-with-statement) head spelling) scoped to `B`, which runs on
+ok; on error `H` runs with `err` bound (scoped to `H`), and the handler is
+**obligation-free** — fall through ("log and move on"), diverge, or do
+nothing; nothing escapes the statement. There is no `else` arm: the block
+already is the no-error arm.
+
+```c
+try (v = find(key)) {
+    println("found {}", v);
+} except (err) {
+    println("lookup failed: {}", err as int32);
+}
+// v is not in scope here
+```
+
+Statement position disambiguates on the head: `try ( IDENT =` opens the
+statement (assignment is not an expression, so the probe is total);
+anything else after a statement-position `try` is an expression statement
+— `try (r);` propagates a parenthesized operand. Arity 2 only: an
+error-only `result<E>` has nothing to bind, so `try f();` or the
+statement-position `except` form handle it without the binding.
+
+See [examples/types/error_handling.mc](../examples/types/error_handling.mc)
 for the full tour.
 
 ## Type aliases

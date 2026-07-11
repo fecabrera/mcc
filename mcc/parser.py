@@ -23,6 +23,7 @@ from mcc.nodes import (
     CaseType,
     Cast,
     CharLit,
+    Coalesce,
     CompoundAssign,
     Conditional,
     Const,
@@ -65,6 +66,9 @@ from mcc.nodes import (
     StructDecl,
     StructLit,
     Ternary,
+    Try,
+    TryFallback,
+    TryStmt,
     TupleLit,
     TypeAlias,
     TypeName,
@@ -1844,6 +1848,20 @@ class Parser:
             return self.parse_case()
         if tok.kind == "with":
             return self.parse_with()
+        if tok.kind == "try":
+            # `try ( IDENT =` opens the try statement (the with-head probe
+            # -- assignment is not an expression, so the disambiguation is
+            # total); anything else after a statement-position `try` is an
+            # expression statement (`try f();`, `try (g());`,
+            # `try f() ?? v;`, `try f() except (err) { ... };`).
+            ahead = self.tokens[self.pos + 1 : self.pos + 4]
+            if (
+                len(ahead) == 3
+                and ahead[0].kind == "("
+                and ahead[1].kind == "IDENT"
+                and ahead[2].kind == "="
+            ):
+                return self.parse_try_stmt()
         if tok.kind in ("while", "until"):
             self.advance()
             self.expect("(")
@@ -2113,6 +2131,65 @@ class Parser:
             otherwise = self.parse_block()
         return Except(subject, binder, handler, otherwise, line)
 
+    def parse_try_stmt(self):
+        """Parse ``try (ret = f()) { B } except (err) { H }``.
+
+        The statement form of the ``try`` production: a fresh ``ret`` (no
+        ``let`` -- the deliberate ``with``-head spelling, see
+        :meth:`parse_with`) bound in the parenthesized head and scoped to
+        the block ``B``; the required ``except`` handler binds ``err``
+        scoped to ``H`` and is obligation-free. There is no ``else`` arm --
+        the block already is the no-error arm -- so a trailing ``else``
+        names that rule (an ``else:`` belongs to an enclosing ``case``,
+        never to this statement). Reached only through the
+        ``try ( IDENT =`` probe in :meth:`parse_statement`.
+
+        Returns:
+            The ``TryStmt`` node.
+
+        Raises:
+            LangError: When a body is not a braced block, the handler is
+                missing, or a trailing ``else`` arm appears.
+        """
+        line = self.expect("try").line
+        self.expect("(")
+        name = self.expect("IDENT").text
+        self.expect("=")
+        with self._struct_literals(True):
+            value = self.parse_expr()
+        self.expect(")")
+        if self.cur.kind != "{":
+            raise LangError(
+                "a try statement's block is braced, as in "
+                "'try (ret = f()) { ... } except (err) { ... }'",
+                line,
+            )
+        body = self.parse_block()
+        if self.cur.kind != "except":
+            raise LangError(
+                "a try statement needs its except handler: "
+                "try (ret = f()) { ... } except (err) { ... }",
+                line,
+            )
+        except_line = self.advance().line
+        self.expect("(")
+        binder = self.expect("IDENT").text
+        self.expect(")")
+        if self.cur.kind != "{":
+            raise LangError(
+                "an except handler is a braced block, as in "
+                "'try (ret = f()) { ... } except (err) { ... }'",
+                except_line,
+            )
+        handler = self.parse_block()
+        if self.cur.kind == "else" and self.tokens[self.pos + 1].kind != ":":
+            raise LangError(
+                "a try statement takes no else arm: the block already is "
+                "the no-error arm",
+                self.cur.line,
+            )
+        return TryStmt(name, value, body, binder, handler, line)
+
     def reject_bare_except(self):
         """Reject an ``except`` trailing an expression without its ``try``.
 
@@ -2210,13 +2287,60 @@ class Parser:
             expression when no operator at this level appears.
         """
         if level == len(self.PRECEDENCE):
-            return self.parse_as()
+            return self.parse_coalesce()
         lhs = self.parse_binary(level + 1)
         while self.cur.kind in self.PRECEDENCE[level]:
             op = self.advance()
             rhs = self.parse_binary(level + 1)
             lhs = Binary(op.kind, lhs, rhs, op.line)
         return lhs
+
+    def parse_coalesce(self):
+        """Parse a left-associative general ``??`` coalesce chain.
+
+        ``??`` binds tighter than the ternary and every binary operator --
+        the whole chain reduces to one operand before the precedence climber
+        sees any operator, so ``p ?? q + 1`` is ``(p ?? q) + 1`` and
+        ``try g() ?? v > p ?? q`` is ``(try g() ?? v) > (p ?? q)``. The
+        right-hand side is atomic (see :meth:`parse_coalesce_rhs`); a
+        computed fallback parenthesizes (``?? (q + 1)``). A ``??`` directly
+        after a bare ``try`` operand is not this production: the try
+        consumes its own fallback clause first (:meth:`parse_unary`), and
+        only subsequent ``??`` chain here -- ``try g() ?? v ?? q`` is
+        ``(try g() ?? v) ?? q``.
+
+        Returns:
+            A ``Coalesce`` chain, or the inner expression when no ``??``
+            appears.
+        """
+        expr = self.parse_as()
+        while self.cur.kind == "??":
+            line = self.advance().line
+            expr = Coalesce(expr, self.parse_coalesce_rhs(), line)
+        return expr
+
+    def parse_coalesce_rhs(self):
+        """Parse a ``??`` clause's atomic right-hand side.
+
+        A unary expression -- an identifier, a literal, a call ``h()``, a
+        member or index chain, the prefix forms (``-1``, ``!1``, ``~1``,
+        ``&x``), a postfix ``p!`` -- or a parenthesized ``(expr)``, or an
+        emit-block ``{ ...; emit v; }``, which may instead diverge. A ``{``
+        here is always the emit-block (never a bare struct literal): the
+        fallback runs only on the error path, so it is a block of
+        statements first.
+
+        Returns:
+            The parsed fallback expression node.
+        """
+        if self.cur.kind == "{":
+            tok = self.advance()
+            body = []
+            while self.cur.kind != "}":
+                body.append(self.parse_statement())
+            self.expect("}")
+            return BlockExpr(body, tok.line)
+        return self.parse_unary()
 
     def parse_as(self):
         """Parse a chain of ``as`` casts.
@@ -2238,28 +2362,40 @@ class Parser:
 
         Also the home of the ``try`` expression: ``try`` binds the call
         chain that follows (a unary expression, per the epic's grammar) and
-        in this stage must carry its ``except`` handler clause immediately
-        after -- the bare propagation form and the ``??`` fallback are the
-        next stage of the roadmap epic. Sitting at unary level, a
-        ``try ... except (err) { ... }`` is an ordinary operand: it
-        composes into larger expressions (``1 + try f() except ...``) and
-        the binding forms recognize it when it is the *whole* initializer,
-        return value, or statement.
+        takes exactly one of its three endings -- nothing (propagate the
+        error up: the enclosing return type must carry the same error
+        type), ``?? fallback`` (discard the error and default -- the try's
+        own clause, consumed here, so it binds tighter than the general
+        coalesce production in :meth:`parse_coalesce`), or
+        ``except (err) { ... }`` (handle it). The endings do not combine.
+        Sitting at unary level, a ``try`` expression is an ordinary
+        operand: it composes into larger expressions
+        (``1 + try f() except ...``) and the binding forms recognize an
+        ``except`` form when it is the *whole* initializer, return value,
+        or statement.
 
         Returns:
-            A ``Unary`` node, an ``Except`` node for a ``try`` expression,
-            or a postfix expression when no prefix operator appears.
+            A ``Unary`` node; a ``Try``, ``TryFallback``, or ``Except``
+            node for a ``try`` expression; or a postfix expression when no
+            prefix operator appears.
         """
         if self.cur.kind == "try":
             line = self.advance().line
             operand = self.parse_unary()
-            if self.cur.kind != "except":
-                raise LangError(
-                    "try without a handler is not yet supported; add "
-                    "except (err) { ... }",
-                    line,
-                )
-            return self.parse_except(operand)
+            if self.cur.kind == "??":
+                self.advance()
+                fallback = self.parse_coalesce_rhs()
+                if self.cur.kind == "except":
+                    raise LangError(
+                        "a try takes one ending -- nothing (propagate), "
+                        "'?? fallback' (default), or 'except (err) { ... }' "
+                        "(handle) -- not two",
+                        self.cur.line,
+                    )
+                return TryFallback(operand, fallback, line)
+            if self.cur.kind == "except":
+                return self.parse_except(operand)
+            return Try(operand, line)
         if self.cur.kind in ("-", "!", "*", "&", "~"):
             op = self.advance()
             return Unary(op.kind, self.parse_unary(), op.line)

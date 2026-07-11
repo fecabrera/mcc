@@ -24,6 +24,21 @@ expression-statement position (the `result<E>` consumer, obligation-free).
 Where a value escapes, the handler must diverge or `emit` a fallback; `else`
 is the ok-arm only (Python's try/except/else) and is skipped on the
 emit-fallback path.
+
+Stage 3 completes the `try` production (its tests in the stage-3 sections
+below): a try takes exactly ONE of three endings. Bare `try g()` propagates
+-- on error the enclosing function returns `error(err)`, so its return type
+must be a result carrying the SAME declared error type; `try g() ?? fallback`
+discards the error and lazily evaluates an atomic fallback (a unary
+expression, a parenthesized `(expr)`, or an emit-block that may diverge) with
+no requirement on the enclosing return type; `except (err) { ... }` handles
+(stage 2). `??` binds tighter than the ternary and every binary operator and
+chains left; the try's own fallback clause binds tighter still (structural,
+by production). The general coalesce production exists with every arm
+rejected: a result unwraps through try, and the pointer null-coalescing arm
+waits on the pointer-truthiness roadmap item. The statement form
+`try (ret = f()) { B } except (err) { H }` binds a fresh `ret` scoped to `B`
+with an obligation-free handler and no `else` arm.
 """
 
 import re
@@ -1036,15 +1051,12 @@ def test_try_composes_as_an_operand():
 
 
 def test_try_binds_the_call_chain():
-    # The handler clause follows the try operand immediately: `try g() + 1
-    # except ...` is not "try over the sum" -- the clause is missing where
-    # this stage requires it.
+    # With bare try legal, `try g() + 1` is `(try g()) + 1` -- try binds the
+    # call chain, and a handler displaced past the `+ 1` has no try left to
+    # attach to: the parse error at `except` names the fix.
     with pytest.raises(
         LangError,
-        match=re.escape(
-            "try without a handler is not yet supported; add "
-            "except (err) { ... }"
-        ),
+        match=re.escape("except needs try: try f() except (err) { ... }"),
     ):
         compile_ir(
             DECL + FIND
@@ -1052,22 +1064,6 @@ def test_try_binds_the_call_chain():
             "    let v = try find(1) + 1 except (err) { emit 0; };\n"
             "    return v;\n"
             "}\n"
-        )
-
-
-def test_bare_try_is_staged():
-    # Propagation (`let v = try g();`) is the next stage of the epic; until
-    # then a try without its handler names the fix.
-    with pytest.raises(
-        LangError,
-        match=re.escape(
-            "try without a handler is not yet supported; add "
-            "except (err) { ... }"
-        ),
-    ):
-        compile_ir(
-            DECL + FIND
-            + "fn f() -> int64 { let v = try find(1); return v; }"
         )
 
 
@@ -1560,3 +1556,765 @@ def test_except_is_a_reserved_word():
 def test_try_is_a_reserved_word():
     with pytest.raises(LangError):
         compile_ir("fn f() { let try: int32 = 1; }")
+
+
+# --------------------------------------------- stage 3: bare-try propagation
+
+def test_bare_try_propagates_both_arms():
+    # `try g()` yields T on ok; on error the enclosing function returns
+    # `error(err)` -- the caller observes the same error.
+    assert run(
+        DECL + FIND
+        + """
+        fn wrap(key: int32) -> result<int64, my_error> {
+            let v = try find(key);
+            return ok(v + 1);
+        }
+        fn main() -> int32 {
+            let a, e1 = wrap(3);
+            if (e1) { return 1; }
+            let b, e2 = wrap(0);
+            if (e2 as int32 != 1) { return 2; }
+            return (a - 7 + 42) as int32;
+        }
+        """
+    ) == 42
+
+
+def test_bare_try_composes_as_an_operand():
+    # Unary level, like the except form: `1 + try g()` and an argument.
+    assert run(
+        DECL + FIND
+        + """
+        fn use(v: int64) -> int64 { return v + 2; }
+        fn wrap() -> result<int64, my_error> {
+            let a = 1 as int64 + try find(3);   // 1 + 6
+            let b = use(try find(5));           // 10 + 2
+            return ok(a + b);
+        }
+        fn main() -> int32 {
+            let v, err = wrap();
+            return (v + 23) as int32;           // 19 + 23
+        }
+        """
+    ) == 42
+
+
+def test_bare_try_requires_an_absorbing_return_type():
+    # The enclosing return type must be a result carrying the SAME declared
+    # error type; main() -> int32 is not one. The error names both types.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "try propagates my_error, but this function returns int32"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn main() -> int32 { let v = try find(1); return 0; }"
+        )
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "try propagates my_error, but this function returns void"
+        ),
+    ):
+        compile_ir(DECL + FIND + "fn f() { let v = try find(1); }")
+
+
+def test_bare_try_between_two_error_types_rejects():
+    # No error conversions exist (mapping is a handler's job): a result
+    # return type with a DIFFERENT declared error type does not absorb.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "try propagates my_error, but this function returns "
+            "result<int64, other_error>"
+        ),
+    ):
+        compile_ir(
+            DECL + "error other_error { OOPS }\n" + FIND
+            + "fn wrap(k: int32) -> result<int64, other_error> {\n"
+            "    let v = try find(k);\n"
+            "    return ok(v);\n"
+            "}\n"
+        )
+
+
+def test_return_try_is_not_implicitly_wrapped():
+    # `return try g();` yields a bare T where the result is expected; there
+    # is no implicit value-to-result coercion, so the correct spelling is
+    # `return ok(try g());`.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "return value: expected result<int64, my_error>, got int64"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn wrap(k: int32) -> result<int64, my_error> {\n"
+            "    return try find(k);\n"
+            "}\n"
+        )
+    # The wrapped spelling works, both arms.
+    assert run(
+        DECL + FIND
+        + """
+        fn wrap(k: int32) -> result<int64, my_error> {
+            return ok(try find(k));
+        }
+        fn main() -> int32 {
+            let v, err = wrap(21);
+            let v2, err2 = wrap(0);
+            if (err or !(err2 as int32 == 1)) { return 1; }
+            return v as int32;
+        }
+        """
+    ) == 42
+
+
+def test_bare_try_on_the_error_only_result_needs_statement_position():
+    # A result<E> has no payload for `try` to yield in value position.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "a result<my_error> has no ok value; propagate it in statement "
+            "position: try f();"
+        ),
+    ):
+        compile_ir(
+            DECL + FLUSH
+            + "fn f() -> result<my_error> {\n"
+            "    let x = try flush(1);\n"
+            "    return ok();\n"
+            "}\n"
+        )
+
+
+def test_bare_try_statement_propagates_the_error_only_result():
+    # `try f();` in statement position: propagate-or-continue, the
+    # error-only consumer.
+    assert run(
+        DECL + FLUSH
+        + """
+        fn run_it(fail: int32) -> result<my_error> {
+            try flush(fail);
+            return ok();
+        }
+        fn main() -> int32 {
+            let e1 = run_it(0);
+            let e2 = run_it(1);
+            let bad, err = find_state(e1, e2);
+            return bad;
+        }
+        fn find_state(a: result<my_error>, b: result<my_error>)
+                -> result<int32, my_error> {
+            try a;                       // ok: continues
+            let out: int32 = 42;
+            try (x = probe(b)) { out = -1; } except (err) {
+                if (err as int32 != 2) { out = -2; }
+            }
+            return ok(out);
+        }
+        fn probe(r: result<my_error>) -> result<int32, my_error> {
+            try r;                       // propagates b's PERMISSION
+            return ok(1);
+        }
+        """
+    ) == 42
+
+
+def test_bare_try_statement_discards_the_ok_value():
+    # Over an arity-2 result, statement-position `try g();` propagates on
+    # error and discards T on ok, like any expression statement's value.
+    assert run(
+        DECL + FIND
+        + """
+        fn peek(k: int32) -> result<int64, my_error> {
+            try find(k);
+            return ok(42 as int64);
+        }
+        fn main() -> int32 {
+            let v, err = peek(3);
+            return v as int32;
+        }
+        """
+    ) == 42
+
+
+def test_bare_try_inside_a_defer_is_banned():
+    # Propagation returns out of the enclosing function -- exactly what a
+    # defer body cannot do; the ban names the construct the user wrote.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "try propagation inside a defer body cannot exit the enclosing "
+            "function; handle the error with except"
+        ),
+    ):
+        compile_ir(
+            DECL + FLUSH
+            + "fn f() -> result<my_error> {\n"
+            "    defer { try flush(1); }\n"
+            "    return ok();\n"
+            "}\n"
+        )
+
+
+def test_bare_try_in_a_generic_function():
+    # Propagation inside a monomorphized body: the absorb check runs per
+    # instantiation against the instantiated return type.
+    assert run(
+        DECL + FIND
+        + """
+        fn pass<T>(r: result<T, my_error>) -> result<T, my_error> {
+            return ok(try r);
+        }
+        fn main() -> int32 {
+            let v, err = pass(find(21));
+            if (err) { return -1; }
+            return v as int32;
+        }
+        """
+    ) == 42
+
+
+# ------------------------------------------------- stage 3: the ?? fallback
+
+def test_fallback_supplies_the_default_on_error():
+    # On ok the payload; on error the fallback, coerced to T (the untyped
+    # literal adapts to int64). Legal in main: no absorb requirement.
+    assert run(
+        DECL + FIND
+        + """
+        fn main() -> int32 {
+            let a = try find(3) ?? 100;    // ok arm: 6
+            let b = try find(0) ?? 36;     // error arm: the default
+            return (a + b) as int32;
+        }
+        """
+    ) == 42
+
+
+def test_fallback_is_lazy():
+    # The fallback evaluates only on the error path: side effects must not
+    # run when the call succeeds.
+    assert run(
+        DECL + FIND
+        + """
+        @static let hits: int32;
+        fn bump() -> int64 { hits = hits + 1; return 40; }
+        fn main() -> int32 {
+            let a = try find(3) ?? bump();   // ok: bump must NOT run
+            let b = try find(0) ?? bump();   // error: bump runs once
+            return hits + (a - 5 + b) as int32;   // 1 + 1 + 40
+        }
+        """
+    ) == 42
+
+
+def test_fallback_emit_block():
+    # `?? { ...; emit v; }` runs statements on the error path and emits the
+    # fallback.
+    assert run(
+        DECL + FIND
+        + """
+        fn main() -> int32 {
+            let note: int32 = 0;
+            let v = try find(0) ?? { note = 2; emit 40; };
+            return (v as int32) + note;
+        }
+        """
+    ) == 42
+
+
+def test_fallback_emit_block_may_diverge():
+    # All paths diverging is legal: the ok arm still delivers the value.
+    assert run(
+        DECL + FIND
+        + """
+        fn get(k: int32) -> int32 {
+            let v = try find(k) ?? { return -1; };
+            return v as int32;
+        }
+        fn main() -> int32 {
+            if (get(0) != -1) { return 1; }
+            return get(21);
+        }
+        """
+    ) == 42
+
+
+def test_fallback_block_must_emit_or_diverge():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "the '??' fallback block may fall through without a value; "
+            "emit the fallback or diverge (return, break, continue, panic)"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn f() -> int32 {\n"
+            "    let v = try find(1) ?? { let note: int32 = 1; };\n"
+            "    return v as int32;\n"
+            "}\n"
+        )
+
+
+def test_fallback_coerces_to_the_ok_type():
+    with pytest.raises(
+        LangError,
+        match=re.escape("'??' fallback: expected int64, got bool"),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn f() -> int64 { return try find(1) ?? true; }"
+        )
+
+
+def test_fallback_takes_atomic_forms():
+    # The ruled atomic right-hand sides: a call, prefix forms, a member
+    # chain, a parenthesized expression.
+    assert run(
+        DECL + FIND
+        + """
+        struct pair { a: int64; b: int64; }
+        fn fallback() -> int64 { return 30; }
+        fn main() -> int32 {
+            let p = struct pair { a = 3, b = 4 };
+            let s: int32 = 0;
+            s = s + (try find(0) ?? fallback()) as int32;   // 30
+            s = s + (try find(0) ?? -1) as int32;           // 29
+            s = s + (try find(0) ?? ~0) as int32;           // 28
+            s = s + (try find(0) ?? p.a) as int32;          // 31
+            s = s + (try find(0) ?? (5 + 6)) as int32;      // 42
+            return s;
+        }
+        """
+    ) == 42
+
+
+def test_fallback_rejects_the_error_only_result():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "a result<my_error> has no ok value to default; handle it "
+            "(try f() except (err) { ... };) or propagate it (try f();)"
+        ),
+    ):
+        compile_ir(
+            DECL + FLUSH
+            + "fn f() { let x = try flush(1) ?? 0; }"
+        )
+
+
+def test_fallback_and_except_do_not_combine():
+    # A try takes exactly one ending.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "a try takes one ending -- nothing (propagate), '?? fallback' "
+            "(default), or 'except (err) { ... }' (handle) -- not two"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn f() { let x = try find(1) ?? 1 except (e) { }; }"
+        )
+
+
+def test_fallback_inside_a_defer_is_legal():
+    # Nothing escapes the expression, so the defer bans have nothing to say.
+    assert run(
+        DECL + FIND
+        + """
+        fn main() -> int32 {
+            let seen: int32 = 0;
+            { defer { seen = (try find(0) ?? 42) as int32; } }
+            return seen;
+        }
+        """
+    ) == 42
+
+
+# ------------------------------------ stage 3: ?? precedence (pinned rulings)
+
+def test_fallback_binds_tighter_than_the_ternary():
+    # Pinned: `try g() ?? v ? a : b` is `(try g() ?? v) ? a : b`.
+    assert run(
+        DECL
+        + """
+        error flag_error { BAD }
+        fn flag(fail: int32) -> result<bool, flag_error> {
+            if (fail) { return error(flag_error::BAD); }
+            return ok(true);
+        }
+        fn main() -> int32 {
+            let a = try flag(0) ?? false ? 40 : 1;   // ok(true) -> 40
+            let b = try flag(1) ?? false ? 1 : 2;    // fallback false -> 2
+            return a + b;
+        }
+        """
+    ) == 42
+
+
+def test_fallback_binds_tighter_than_binary_operators():
+    # Pinned: `try g() ?? 2 - 1` is `(try g() ?? 2) - 1`; a computed
+    # fallback spells `?? (2 - 1)`.
+    assert run(
+        DECL + FIND
+        + """
+        fn main() -> int32 {
+            let a = try find(0) ?? 2 - 1;      // (2) - 1 = 1
+            let b = try find(0) ?? (2 - 1);    // 1
+            let c = try find(20) ?? 2 - 1;     // (40) - 1 = 39
+            return (a + b + c + 1) as int32;
+        }
+        """
+    ) == 42
+
+
+def test_fallback_chains_left_into_the_general_coalesce():
+    # Pinned: `try g() ?? v ?? q` is `(try g() ?? v) ?? q` -- the second
+    # `??` is the general coalesce, whose non-pointer arm rejects until the
+    # pointer item ships.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'??' coalesces pointers or supplies a try fallback; got int64"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn f() { let x = try find(1) ?? 1 ?? 2; }"
+        )
+
+
+def test_coalesce_chains_group_as_comparison_operands():
+    # Pinned verbatim: `try g() ?? v > p ?? q` is
+    # `(try g() ?? v) > (p ?? q)` -- each ?? chain reduces to an operand
+    # before the comparison; the error firing on `p ?? q`'s pointer arm
+    # proves the right-hand chain grouped under the `>`.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'??' on a pointer is null coalescing, which lands with the "
+            "pointer-truthiness roadmap item; spell the test for now: "
+            "p == null ? q : p"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn f() {\n"
+            "    let p: int64* = null;\n"
+            "    let q: int64* = null;\n"
+            "    let x = try find(1) ?? 0 > p ?? q;\n"
+            "}\n"
+        )
+    # And the runnable twin: two try chains on either side of the `>`.
+    assert run(
+        DECL + FIND
+        + """
+        fn main() -> int32 {
+            let big = try find(5) ?? 0 > try find(1) ?? 100;   // 10 > 2
+            if (big) { return 42; }
+            return 0;
+        }
+        """
+    ) == 42
+
+
+def test_coalesce_on_a_result_needs_try():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "a result<int64, my_error> left of '??' unwraps through try: "
+            "try f() ?? v"
+        ),
+    ):
+        compile_ir(DECL + FIND + "fn f() { let x = find(1) ?? 0; }")
+
+
+def test_coalesce_on_a_pointer_is_reserved():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'??' on a pointer is null coalescing, which lands with the "
+            "pointer-truthiness roadmap item; spell the test for now: "
+            "p == null ? q : p"
+        ),
+    ):
+        compile_ir(
+            "fn f() { let p: int32* = null; let q = p ?? p; }"
+        )
+
+
+def test_coalesce_on_other_types_rejects():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'??' coalesces pointers or supplies a try fallback; got int32"
+        ),
+    ):
+        compile_ir("fn f() { let a = 1 ?? 2; }")
+
+
+# --------------------------------------------- stage 3: the try statement
+
+def test_try_statement_both_arms():
+    # Ok: the fresh binding runs the block; error: the handler runs with
+    # the binder bound, obligation-free.
+    assert run(
+        DECL + FIND
+        + """
+        fn main() -> int32 {
+            let out: int32 = 0;
+            try (v = find(21)) { out = v as int32; } except (err) { out = -1; }
+            try (v = find(0)) { out = -2; } except (err) {
+                out = out + (err as int32) - 1;
+            }
+            return out;   // 42 + 1 - 1
+        }
+        """
+    ) == 42
+
+
+def test_try_statement_handler_may_fall_through():
+    # Obligation-free: fall through and continue after the statement.
+    assert run(
+        DECL + FIND
+        + """
+        fn main() -> int32 {
+            try (v = find(0)) { return -1; } except (err) { }
+            return 42;
+        }
+        """
+    ) == 42
+
+
+def test_try_statement_binding_is_scoped_to_the_block():
+    # `ret is not available here` -- the binding dies with the block.
+    with pytest.raises(LangError, match=re.escape("undefined variable 'v'")):
+        compile_ir(
+            DECL + FIND
+            + "fn f() -> int32 {\n"
+            "    try (v = find(1)) { } except (e) { }\n"
+            "    return v as int32;\n"
+            "}\n"
+        )
+
+
+def test_try_statement_binder_is_scoped_to_the_handler():
+    with pytest.raises(LangError, match=re.escape("undefined variable 'e'")):
+        compile_ir(
+            DECL + FIND
+            + "fn f() -> int32 {\n"
+            "    try (v = find(1)) { } except (e) { }\n"
+            "    return e as int32;\n"
+            "}\n"
+        )
+
+
+def test_try_statement_bindings_shadow_and_restore():
+    # Both names may shadow enclosing locals; the outer values are intact
+    # after the statement.
+    assert run(
+        DECL + FIND
+        + """
+        fn main() -> int32 {
+            let v: int32 = 40;
+            let err: int32 = 2;
+            try (v = find(0)) { v; } except (err) { let inner = err; }
+            return v + err;
+        }
+        """
+    ) == 42
+
+
+def test_try_statement_rejects_the_error_only_result():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "a result<my_error> has no ok value to bind; handle it without "
+            "the binding: try f(); or try f() except (err) { ... };"
+        ),
+    ):
+        compile_ir(
+            DECL + FLUSH
+            + "fn f() { try (v = flush(1)) { } except (e) { } }"
+        )
+
+
+def test_try_statement_takes_no_else():
+    # Ruled: the block already is the no-error arm.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "a try statement takes no else arm: the block already is the "
+            "no-error arm"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn f() { try (v = find(1)) { } except (e) { } else { } }"
+        )
+
+
+def test_try_statement_needs_its_handler():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "a try statement needs its except handler: "
+            "try (ret = f()) { ... } except (err) { ... }"
+        ),
+    ):
+        compile_ir(DECL + FIND + "fn f() { try (v = find(1)) { } }")
+
+
+def test_try_statement_blocks_are_braced():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "a try statement's block is braced, as in "
+            "'try (ret = f()) { ... } except (err) { ... }'"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn f() { try (v = find(1)) return; except (e) { } }"
+        )
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "an except handler is a braced block, as in "
+            "'try (ret = f()) { ... } except (err) { ... }'"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn f() { try (v = find(1)) { } except (e) return; }"
+        )
+
+
+def test_try_statement_head_needs_a_result():
+    with pytest.raises(
+        LangError,
+        match=re.escape("try needs a result value, got int32"),
+    ):
+        compile_ir(
+            "fn g() -> int32 { return 1; }\n"
+            "fn f() { try (v = g()) { } except (e) { } }"
+        )
+
+
+def test_statement_position_try_disambiguates_on_the_head():
+    # `try ( IDENT =` opens the statement; anything else is an expression
+    # statement -- `try (r);` and `try (g());` propagate a parenthesized
+    # operand.
+    assert run(
+        DECL + FLUSH
+        + """
+        fn run_both(fail: int32) -> result<my_error> {
+            let r = flush(fail);
+            try (r);
+            try (flush(fail));
+            return ok();
+        }
+        fn main() -> int32 {
+            let a = run_both(0);
+            let got, err = check(run_both(1));
+            return got + (err as int32);   // 42 + 0
+        }
+        fn check(r: result<my_error>) -> result<int32, my_error> {
+            try (v = probe(r)) { return ok(-1); } except (err) {
+                return ok(40 + err as int32);
+            }
+        }
+        fn probe(r: result<my_error>) -> result<int32, my_error> {
+            try r;
+            return ok(40);
+        }
+        """
+    ) == 42
+
+
+def test_try_statement_all_arms_diverging_diverges():
+    # Both arms diverge: the statement diverges, and the dead-code class
+    # names it as a whole-statement divergence.
+    src = (
+        DECL + FIND
+        + "fn f() -> int32 {\n"
+        "    try (v = find(1)) { return 1; } except (err) { return -1; }\n"
+        "    let dead: int32 = 0;\n"
+        "    return dead;\n"
+        "}\n"
+    )
+    cg = CodeGen(Parser(tokenize(src)).parse_program(), "test")
+    cg.generate()
+    dead = [w for w in cg.warnings if w.wclass == "dead-code"]
+    assert [w.message for w in dead] == [
+        "unreachable code: every path through the statement above diverges"
+    ]
+
+
+def test_try_statement_falling_arms_no_dead_code_misfire():
+    src = (
+        DECL + FIND
+        + "fn f() -> int32 {\n"
+        "    try (v = find(1)) { } except (err) { }\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    cg = CodeGen(Parser(tokenize(src)).parse_program(), "test")
+    cg.generate()
+    assert [w for w in cg.warnings if w.wclass == "dead-code"] == []
+
+
+def test_try_statement_handler_in_a_defer_obeys_the_escape_ban():
+    # Form B inside a defer body: a handler that returns or breaks out of
+    # the defer's scope hits the existing bans, unchanged.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'return' inside a defer body cannot exit the enclosing function"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn f() {\n"
+            "    defer { try (v = find(1)) { } except (e) { return; } }\n"
+            "}\n"
+        )
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'break' inside a defer body cannot exit the enclosing loop"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn f() {\n"
+            "    while (true) {\n"
+            "        defer { try (v = find(1)) { } except (e) { break; } }\n"
+            "        break;\n"
+            "    }\n"
+            "}\n"
+        )
+
+
+def test_dangling_else_binds_the_inner_try():
+    # `if (c) try ... except (e) { } else { }`: the else belongs to the
+    # inner try's except clause (greedy-inner, C's dangling-else class),
+    # not to the if -- so it runs on the try's ok arm even when `c` holds.
+    assert run(
+        DECL + FIND
+        + """
+        fn main() -> int32 {
+            let seen: int32 = 0;
+            if (true) try find(1) except (e) { seen = -1; } else { seen = 42; };
+            return seen;
+        }
+        """
+    ) == 42
