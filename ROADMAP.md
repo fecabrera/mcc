@@ -370,7 +370,10 @@ already do).
       story also covers how an enum boxes into the planned
       [`any`](#structs-arrays-and-data-layout): a transparent enum carries
       its underlying type's tag, a nominal enum gets its own type-id,
-      silently changing which `case type` arm matches. It is the
+      silently changing which `case type` arm matches. The planned
+      [error declarations](#types-and-generics) below already commit to
+      the nominal model from birth, inside a brand-new declaration kind
+      where no existing code can break. It is the
       genuine prerequisite for both dependents nested below: the directional
       conversion safety that [enum member reuse](#types-and-generics) above
       suggests, and enum-aware `case` exhaustiveness (today `case` is pure
@@ -395,6 +398,110 @@ already do).
           a later flip to an error once the stdlib and examples are clean. That
           non-fatal first phase rides the shipped
           [warning subsystem](#metaprogramming-and-builtins)
+- [ ] Error handling — recoverable errors as values: a dedicated `error`
+      declaration naming the causes, a builtin `result<T, E>` / `result<E>`
+      template type carrying either the ok value or the error, explicit
+      construction, and consumption forms that keep the error path a local,
+      visible branch. The recoverable complement of the shipped stdlib
+      [`panic`/`assert`](#functions-and-methods) (the unrecoverable lane),
+      and what retires the out-param-plus-`bool` and sentinel-return idioms
+      the stdlib leans on today (`dict_get(self, key, mut out) -> bool`).
+      No exceptions, no unwinding, no hidden control flow, and no `void`
+      anywhere: a function that can only fail returns `result<E>`:
+  ```c
+  error my_error {
+      NOT_FOUND = "Not Found",
+      IO_ERROR = "I/O Error",
+  }
+
+  fn my_func() -> result<int64, my_error> {
+      if (missing) { return error(my_error::NOT_FOUND); }
+      return ok(value);
+  }
+  ```
+  The `error` declaration is enum-like but **nominal** and `int32`-backed:
+  variants auto-number from 1 in declaration order (explicit values are
+  allowed; `= 0` and duplicate values reject), so every variant is non-zero
+  by construction and zero is the reserved, **unnameable** no-error state
+  that makes `if (err)` a total check. A variant may carry an optional
+  display string, as above (how a display string and an explicit integer
+  value combine on one variant is a sub-detail settled with the
+  implementation). Deliberately nominal from birth, front-running the
+  [nominal enums](#types-and-generics) migration above inside a new
+  declaration kind where no existing code can break; an `error` declaration
+  is the **only** admissible `E` (primitives, structs, and plain enums
+  reject at instantiation). `result` itself is a compiler-built interned
+  template on the `slice`/`tuple`/[`any`](#structs-arrays-and-data-layout)
+  pattern, laid out as a tag plus a union of the arms over the shipped
+  union layout machinery; `ok(v)` / `ok()` (`result<E>` only) / `error(e)`
+  are the **only** constructors, context-typed like a bare struct literal,
+  with no implicit value-to-result coercion in either direction (and
+  `error(` the builtin, `error name {` the declaration, and the
+  `@error(msg)` directive are three spellings that never collide). Staged:
+  - [ ] stage 1: `error` declarations, the `result` type, and the
+        constructors — the declaration kind (nominal registration,
+        auto-numbering, display strings, `==`/`!=` against its own
+        members, truthiness, `case`, `.mci` round-trip), the
+        `result<T, E>` / `result<E>` builtin (arity 1 or 2; `E` must be an
+        `error` declaration), and the `ok()`/`error()` builtins with their
+        context-required and wrong-arity diagnostics:
+    - [ ] variant payloads — `SHORT_READ(uint64)`, a variant carrying
+          data: rides the same tag-plus-union machinery `result`
+          introduces, and the declaration head is chosen so payload parens
+          are purely additive
+    - [ ] `case` over an error — exhaustiveness over a declared error's
+          variants, the error-decl counterpart of the enum
+          [exhaustiveness item](#types-and-generics) above, with the same
+          warning-first staging; unlike the enum item it waits on no
+          nominal migration, the declaration is nominal from birth
+    - [ ] `result<E>` tag folding — a layout optimization the reserved
+          zero state makes possible: fold the tag into the error value
+          itself, so `result<E>` is the size of bare `E`
+    - [ ] `errdefer` — deferred cleanup that runs only when the enclosing
+          scope exits with an error, composing with the shipped
+          [`defer`](docs/language.md#defer) machinery
+          (cleanup-on-failure without restating it in every handler)
+  - [ ] stage 2: the binding forms — form 1, the C-flavored destructure
+        `let ret, err = f();` (`err` is the variant or the zero state,
+        `ret` the ok value or zero-filled, `if (err)` the check; lowered
+        as a tag select, never as a union-arm pun; rejects `result<E>`,
+        which has no value to bind), and form A, the handler form
+        `let ret = f() except (err) { H } [else { S }];`, also on `return`
+        and in expression-statement position (`f() except (err) { H };`,
+        the `result<E>` consumer, where the handler is obligation-free).
+        Where a value escapes, the handler must diverge or `emit` a
+        fallback; `else` is the ok-arm only, Python-style: it runs on
+        `ok(v)` and is skipped on the handler's emit-fallback path
+  - [ ] stage 3: `try` — both uses of the keyword in one change set,
+        settling its grammar once (`try ( IDENT =` opens the statement,
+        anything else is the expression, the shipped `with`-head
+        discipline). The statement form:
+        `try (ret = f()) { B } except (err) { H }` binds a fresh `ret`
+        scoped to `B` with an obligation-free handler, and takes **no
+        `else` arm**: the `try` block already is the no-error arm. The
+        propagation expression: `let ret = try g();` desugars to
+        `g() except (err) { return error(err); }` and requires the
+        enclosing return type to carry the **same** `E` (a compile error
+        naming both types otherwise; mapping between error types is a
+        handler's job)
+  - [ ] stage 4: diagnostics and rendering — `-Wunused-result`, an opt-in
+        class over the shipped
+        [warning registry](#metaprogramming-and-builtins) for a statement
+        that discards a `result` (the accidental-ignore hole the design
+        exists to close); per-declaration variant name/display tables and
+        an `error_name(err)` builtin rendering a variant's name or its
+        declared display string; automatic `{}` rendering of an error
+        value through [formatted print](#strings-and-formatting) is the
+        follow-up, once formatting user-declared types has a general
+        answer
+  - [ ] stdlib adoption wave — migrate the mcc-native out-param surface
+        (the `dict_get`/`list_get`/`set_get`/`string_get` family and
+        future file/parse APIs) to `result` returns, explicitly **after**
+        the language stages above and coordinated with the
+        [receiver-kind migration](#functions-and-methods) so stdlib
+        signatures churn once, not twice; `libc/` bindings keep their C
+        sentinel returns (fixed ABI), with mcc-native wrappers as the
+        result-typed surface
 
 ### Modules and imports
 

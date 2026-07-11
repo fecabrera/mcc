@@ -53,6 +53,12 @@ areas:
 
 ### 1. Error handling model — the single biggest gap
 
+> **Update (2026-07-11):** designed and promoted to the
+> [roadmap](../ROADMAP.md#types-and-generics) as `result<T, E>` /
+> `result<E>` over dedicated `error` declarations, with `try`
+> propagation and `errdefer` as staged items — the error-union
+> recommendation below, satisfied in spirit under a different surface.
+
 Today errors are libc-style: sentinel returns and `errno`. Nothing on the
 roadmap addresses this, yet it shapes every API the stdlib will ever grow.
 
