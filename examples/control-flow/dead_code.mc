@@ -22,7 +22,7 @@ import "std/io";
 //
 //   pipenv run python -m mcc examples/control-flow/dead_code.mc --run -Wdead-code
 //     examples/control-flow/dead_code.mc: warning: line N: unreachable code: nothing runs after the 'return' above [-Wdead-code]
-//     ... one line per dead region below (eight in this file), then the
+//     ... one line per dead region below (nine in this file), then the
 //     program runs normally with its output unchanged. Under -Werror each
 //     line promotes to `error: ... [-Werror=dead-code]` and the build
 //     fails; `-Wall` enables this class along with the rest.
@@ -106,6 +106,19 @@ fn cleanup_demo() {
     defer println("dead defer");    // warns: nothing runs after the 'return' above
 }
 
+// A break-free forever loop is a killer too: constant-condition folding
+// removes its exit block entirely, so the loop diverges (see forever.mc)
+// and its tail is a dead region like any other. No trailing return is
+// needed after it; adding one would just extend this region.
+fn poll_forever(target: int32) -> int32 {
+    let tries: int32 = 0;
+    while (true) {
+        tries += 1;
+        if (tries == target) { return tries; }
+    }
+    println("polled");          // warns: nothing runs after a loop that never exits
+}
+
 fn main() -> int32 {
     println("classify(-5) = {}", classify(-5));
     println("first_multiple(3, 10) = {}", first_multiple(3, 10));
@@ -113,6 +126,7 @@ fn main() -> int32 {
     println("ensure_positive(5) = {}", ensure_positive(5));
     println("magnitude(-8) = {}", magnitude(-8));
     cleanup_demo();
+    println("poll_forever(3) = {}", poll_forever(3));
 
     // Inside a block expression, `emit` is the divergence: it ends the
     // block with its value, so trailing statements are dead.
@@ -123,11 +137,11 @@ fn main() -> int32 {
     };
     println("doubled = {}", doubled);
 
-    // THE DELIBERATE NON-CASE. Code after `while (true)` does NOT warn,
-    // even when `break` is the only way out: the generator still emits the
-    // loop's exit edge, so the tail is structurally reachable today. The
-    // constant-condition loop folding item on the roadmap will extend the
-    // class here.
+    // THE GATE. Code after a forever loop WITH a `break` does NOT warn:
+    // the break keeps the loop's exit block, so the tail stays reachable,
+    // live, and it runs (the println below prints). Only a break-FREE
+    // always-run loop diverges and kills its tail, as poll_forever above
+    // shows. The full folding story is in forever.mc.
     let i: int32 = 0;
     while (true) {
         i += 1;
@@ -142,6 +156,6 @@ fn main() -> int32 {
 
 // See also: types/unchecked_dereference.mc for the opt-in class framework
 // this class rides (-W<name>, -Wall, the unknown-class hard error, and the
-// [-Werror=<name>] promotion); unreachable.mc and functions/noreturn.mc
-// for the diverging constructs themselves; defer.mc for what a *live*
-// defer does at block exit.
+// [-Werror=<name>] promotion); unreachable.mc, functions/noreturn.mc, and
+// forever.mc for the diverging constructs themselves; defer.mc for what a
+// *live* defer does at block exit.

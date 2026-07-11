@@ -85,3 +85,11 @@ fn main() -> int32 {
 // unrun, matching C, where exit() never unwinds the calling stack. Code
 // that must clean up should return an error up to main instead of exiting
 // deep in the call tree. See functions/noreturn.mc.
+//
+// Control flow cannot jump *out* of a defer body either: the body runs
+// while its scope is already unwinding, so `defer break;` is the compile
+// error "'break' inside a defer body cannot exit the enclosing loop", and
+// the same holds for continue, return, and an emit aimed at an outer block
+// expression. Constructs opened *inside* the body reset the judgment:
+// build_labels' cleanup loop above is fine because the loop itself lives
+// in the defer, and it could break or continue itself as usual.

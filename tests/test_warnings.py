@@ -880,10 +880,9 @@ def test_a_dead_defer_warns_and_never_runs():
     assert run(src) == 42
 
 
-def test_code_after_while_true_is_not_dead():
-    # The generator still emits the loop's exit edge, so code after
-    # `while (true)` is structurally reachable today; the constant-condition
-    # folding roadmap item will extend the class to cover it.
+def test_code_after_a_breaking_forever_loop_stays_live():
+    # The fold's gate: a `break` anywhere in the body keeps the loop's end
+    # block reachable, so the code after it is live and never warns.
     src = """
     fn main() -> int32 {
         while (true) { break; }
@@ -891,6 +890,55 @@ def test_code_after_while_true_is_not_dead():
     }
     """
     assert dead_code_warnings(src) == []
+
+
+def test_code_after_a_forever_loop_warns():
+    # Constant-condition folding removes the never-taken exit edge, so with
+    # no `break` in the body nothing after the loop can run.
+    src = """
+    fn main() -> int32 {
+        while (true) {
+            if (false) { return 1; }
+        }
+        return 0;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after a loop that never exits", 6),
+    ]
+
+
+def test_code_after_a_forever_until_loop_warns():
+    # `until (false)` is the dual spelling; same fold, same warning.
+    src = """
+    fn main() -> int32 {
+        until (false) {
+            if (false) { return 1; }
+        }
+        return 0;
+    }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after a loop that never exits", 6),
+    ]
+
+
+def test_forever_loop_warning_is_type_free_across_instantiations():
+    # Byte-identical per instantiation, so the driver's print-time dedup
+    # collapses the generic re-emissions to one diagnostic.
+    src = """
+    fn spin<T>(v: T) -> int32 {
+        while (true) {
+            if (false) { return 1; }
+        }
+        return 0;
+    }
+    fn main() -> int32 { return spin(1) + spin(true) - 2; }
+    """
+    assert dead_code_warnings(src) == [
+        ("unreachable code: nothing runs after a loop that never exits", 6),
+        ("unreachable code: nothing runs after a loop that never exits", 6),
+    ]
 
 
 def test_dead_tail_inside_a_live_static_if_arm_warns():

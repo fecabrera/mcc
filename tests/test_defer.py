@@ -5,7 +5,10 @@ of the block, return, break, and continue -- and a returned value is computed
 before they run.
 """
 
-from helpers import run
+import pytest
+
+from mcc.errors import LangError
+from helpers import compile_ir, run
 
 
 def out(capfd, source):
@@ -146,3 +149,126 @@ def test_realistic_alloc_free(capfd):
     }
     """
     assert out(capfd, source) == "A"
+
+
+# --- control flow cannot jump out of a defer body ---
+#
+# A defer body runs while its scope is already unwinding: a break/continue/
+# emit targeting a construct outside the body (or any return) would re-unwind
+# the very scope whose defers are running -- pre-fix, the compiler recursed
+# to death on these. Each is a compile-time error at the offending statement;
+# a loop or block expression opened *inside* the body remains fair game.
+
+def test_break_inside_a_defer_body_is_rejected():
+    source = """
+    fn main() -> int32 {
+        while (true) { defer break; }
+        return 0;
+    }
+    """
+    with pytest.raises(
+        LangError, match="'break' inside a defer body cannot exit the enclosing loop"
+    ):
+        compile_ir(source)
+
+
+def test_continue_inside_a_defer_body_is_rejected():
+    source = """
+    fn main() -> int32 {
+        while (true) { defer continue; }
+        return 0;
+    }
+    """
+    with pytest.raises(
+        LangError,
+        match="'continue' inside a defer body cannot continue the enclosing loop",
+    ):
+        compile_ir(source)
+
+
+def test_return_inside_a_defer_body_is_rejected():
+    source = """
+    fn main() -> int32 {
+        {
+            defer return 1;
+        }
+        return 0;
+    }
+    """
+    with pytest.raises(
+        LangError,
+        match="'return' inside a defer body cannot exit the enclosing function",
+    ):
+        compile_ir(source)
+
+
+def test_emit_inside_a_defer_body_is_rejected():
+    source = """
+    fn main() -> int32 {
+        let x: int32 = {
+            defer emit 5;
+            emit 3;
+        };
+        return x;
+    }
+    """
+    with pytest.raises(
+        LangError,
+        match="'emit' inside a defer body cannot exit the enclosing "
+        "block expression",
+    ):
+        compile_ir(source)
+
+
+def test_loop_opened_inside_a_defer_body_may_break(capfd):
+    # The judgment resets at constructs opened inside the body: this break
+    # targets the defer's own loop, never the enclosing one.
+    source = r"""
+    import "libc/stdio";
+    fn main() -> int32 {
+        let n: int32 = 0;
+        while (n < 2) {
+            defer {
+                while (true) { break; }
+                printf("D");
+            }
+            n += 1;
+        }
+        return 0;
+    }
+    """
+    assert out(capfd, source) == "DD"
+
+
+def test_block_expr_opened_inside_a_defer_body_may_emit(capfd):
+    source = r"""
+    import "libc/stdio";
+    fn main() -> int32 {
+        let x: int32 = {
+            defer {
+                let y: int32 = { printf("D"); emit 1; };
+                printf("%d", y);
+            }
+            emit 3;
+        };
+        return x - 3;
+    }
+    """
+    assert out(capfd, source) == "D1"
+
+
+def test_nested_defer_cannot_break_the_outer_defers_loop():
+    # One level down, same rule: the inner defer's break targets a loop
+    # opened outside the *inner* body.
+    source = """
+    fn main() -> int32 {
+        defer {
+            while (true) { defer break; }
+        }
+        return 0;
+    }
+    """
+    with pytest.raises(
+        LangError, match="'break' inside a defer body cannot exit the enclosing loop"
+    ):
+        compile_ir(source)

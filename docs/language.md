@@ -839,9 +839,11 @@ The rules:
   Falling off the end of the body is *not* an error (C11 `_Noreturn`
   semantics): the promise is the author's, and the compiler plants an
   [`unreachable`](#the-unreachable-statement) there, so actually reaching
-  the end is **undefined behavior**. This is also what makes the canonical
-  spin form legal — `@noreturn fn spin() { while (true) {} }` needs no
-  unreachable trailing return.
+  the end is **undefined behavior**. The canonical spin form
+  `@noreturn fn spin() { while (true) {} }` never even gets that far:
+  [constant-condition folding](#control-flow) makes the loop itself
+  diverge, so nothing is planted and no trailing anything is needed — the
+  planted `unreachable` covers non-loop fall-offs.
 - **[Defers](#defer) do not run at a `@noreturn` call.** A call that never
   returns is not a block exit, so enclosing `defer`s are skipped on that
   path — matching C, where `exit()` does not unwind the stack.
@@ -1691,19 +1693,22 @@ example.mc: warning: line 4: unreachable code: nothing runs after the 'return' a
 
 One warning per dead region, at its first statement, naming the construct
 that killed it (`'break'`, `'unreachable'`, "a call to a `@noreturn`
-function", "every path through the statement above diverges", ...). The
-messages never name types or callees — dead code is dropped before it is
-ever type-checked, and the type-free wording keeps a generic body's
-per-instantiation re-emissions byte-identical so the print-time dedup
-collapses them to a single diagnostic. Like every opt-in class, it never
-changes the code generated.
+function", "a loop that never exits", "every path through the statement
+above diverges", ...). The messages never name types or callees — dead
+code is dropped before it is ever type-checked, and the type-free wording
+keeps a generic body's per-instantiation re-emissions byte-identical so
+the print-time dedup collapses them to a single diagnostic. Like every
+opt-in class, it never changes the code generated.
+
+Code after a `break`-free `while (true)` is one of the killers:
+[constant-condition folding](#control-flow) removes the loop's never-taken
+exit edge, so nothing past the loop can run and the region reports as
+`unreachable code: nothing runs after a loop that never exits`.
 
 What does *not* warn, deliberately:
 
-- **Code after `while (true)`** — the generator still emits the loop's
-  exit edge, so the following code is structurally reachable today. The
-  constant-condition loop folding item on the roadmap will extend the
-  class's reach here.
+- **Code after a forever-loop containing a `break`** — the break keeps the
+  loop's exit reachable, so the code after it is live, exactly as it runs.
 - **The dead branch of an `@if`** — a not-taken compile-time branch is
   structurally unseen (never walked, never type-checked), which is its
   point; only a dead *tail inside the taken branch* warns.
@@ -1949,6 +1954,44 @@ Conditions accept `bool` or any integer (compared against zero, as in C).
 A body that is a single statement does not need braces:
 `if (x > 10) return x;`
 `break` and `continue` apply to the innermost enclosing loop.
+
+**Constant-condition folding.** A loop whose condition folds to always-run
+at compile time — `while (true)`, `while (1)`, its dual `until (false)`, a
+`const` reference, constant arithmetic (anything the
+[constant folder](#constants) handles) — emits no exit edge, and when no
+`break` targets the loop, no exit block at all: the loop **diverges**, like
+a `return`. That lifts two checks that used to force dummy code:
+
+```c
+fn next_request() -> int32 {
+    while (true) {                      // no exit edge: the loop diverges
+        let r: int32 = poll();
+        if (r != 0) { return r; }
+    }
+}                                       // no dummy trailing return needed
+
+let first: int32 = {
+    while (true) {
+        let r: int32 = poll();
+        if (r != 0) { emit r; }         // emit leaves by its own edge
+    }
+};                                      // no trailing emit needed either
+```
+
+The gate is the `break`: one anywhere in the body — including inside a
+`case` arm, a nested block expression, or a `defer` — keeps the exit block,
+and the code after the loop stays live (and both checks above apply again).
+`return`, `emit`, `continue`, and [`@noreturn`](#noreturn-functions) calls
+leave by their own edges (or not at all) and never gate the fold; a `break`
+inside a *nested* loop targets that loop and does not gate the outer one.
+With the exit edge gone, code after a `break`-free forever-loop can never
+run — [`-Wdead-code`](#-wdead-code) reports it.
+
+Two non-goals, deliberately: the never-runs duals (`while (false)` /
+`until (true)`) keep their blocks and their fully type-checked body, like
+`if (false)`; and `for` loops are untouched — every `for` form exits on a
+runtime comparison, and no constant-true spelling exists. See
+[examples/control-flow/forever.mc](../examples/control-flow/forever.mc).
 
 `for x in obj` iterates anything that supplies the **`_it`/`_next` protocol** —
 a pair of functions named after the iterable's struct, which the compiler
@@ -2212,6 +2255,23 @@ but never unwinds the calling stack. Code that must clean up should
 [`unreachable;`](#the-unreachable-statement) likewise runs no defers — a
 path that never happens has nothing to unwind. See
 [examples/control-flow/defer.mc](../examples/control-flow/defer.mc).
+
+**Control flow cannot jump out of a defer body.** A defer runs while its
+scope is already unwinding, so a jump that leaves the body would re-unwind
+the very scope whose defers are running. Each is a compile-time error at
+the offending statement:
+
+- `defer break;` — `'break' inside a defer body cannot exit the enclosing
+  loop`, and the same for `continue`;
+- `return` anywhere in a defer body — `'return' inside a defer body cannot
+  exit the enclosing function`;
+- an `emit` targeting a [block expression](#block-expressions) outside the
+  body — `'emit' inside a defer body cannot exit the enclosing block
+  expression`.
+
+The judgment resets at constructs opened *inside* the body: a loop declared
+in the defer may `break`/`continue` itself, and a block expression declared
+in the defer may `emit`, as usual.
 
 ## Block expressions
 

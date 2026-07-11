@@ -28,6 +28,27 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Constant-condition loop folding** — a loop whose condition folds to
+  always-run at compile time (`while (true)`, `while (1)`, the dual
+  `until (false)`, `const` references, constant arithmetic) no longer
+  emits its never-taken exit edge, and with no `break` in the body no
+  exit block at all: the loop **diverges**. That lifts two checks that
+  used to demand dummy code — `fn f() -> int32 { while (true) {...} }`
+  no longer needs a trailing `return` after the loop, and a block
+  expression may end in a forever-loop that `emit`s from inside. The
+  gate is the `break`: one anywhere in the body (a `case` arm, a nested
+  block expression, a `defer`) keeps the exit block and the code after
+  the loop live, while `return`/`emit`/`continue`/`@noreturn` calls
+  never gate the fold. Code after a `break`-free forever-loop can now
+  never run, so [`-Wdead-code`](docs/language.md#-wdead-code) reports it
+  (`unreachable code: nothing runs after a loop that never exits`).
+  `-O0` objects and `--emit-llvm` output lose the dead blocks (default
+  `-O2` output was already clean). Out of scope by design: the
+  never-runs duals (`while (false)` keeps its fully type-checked body,
+  like `if (false)`) and `for` loops (every form exits on a runtime
+  comparison). See [Control flow](docs/language.md#control-flow) and
+  [forever.mc](examples/control-flow/forever.mc).
+
 - **stdlib `panic` and `assert`** — `std/io` grows the report-and-abort
   guards: `panic(msg)` writes `panic: <msg>` verbatim to standard error
   (braces stay literal, so runtime text is always safe), and
@@ -160,6 +181,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   silently from a function value. See
   [@nonnull-carrying function types](docs/language.md#nonnull-carrying-function-types)
   and [nonnull_callbacks.mc](examples/functions/nonnull_callbacks.mc).
+
+### Fixed
+
+- **Control flow escaping a `defer` body crashed the compiler** — `defer
+  break;` (and `continue`/`return`/`emit` jumping out of a defer body)
+  sent the generator into infinite recursion: the jump re-ran the very
+  defer scope being unwound, aborting compilation with a Python
+  `RecursionError`. Each is now a compile-time error at the offending
+  statement — `'break' inside a defer body cannot exit the enclosing
+  loop`, and likewise for `continue` (…`cannot continue the enclosing
+  loop`), `return` (…`cannot exit the enclosing function`), and `emit`
+  (…`cannot exit the enclosing block expression`). A loop or block
+  expression opened *inside* the defer body still breaks/emits as usual.
+  See [Defer](docs/language.md#defer).
 
 ## [0.7.0] - 2026-07-10
 

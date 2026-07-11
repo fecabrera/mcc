@@ -316,6 +316,7 @@ class GenContext:
     current_noreturn: "str | None" = dataclass_field(metadata={})
     scope_names: set = dataclass_field(metadata={"fork": set})
     defer_stack: list = dataclass_field(metadata={"fork": _fork_defer_stack})
+    defer_marks: list = dataclass_field(metadata={"fork": list})
     block_exprs: list = dataclass_field(metadata={"fork": list})
     const_locals: set = dataclass_field(metadata={"fork": set})
     mut_locals: set = dataclass_field(metadata={"fork": set})
@@ -717,11 +718,20 @@ class CodeGen:
         # The enclosing @noreturn function's name, or None: set per body by
         # gen_function, so the Return arm can reject `return` inside one.
         self.current_noreturn: str | None = None
-        # Enclosing loops, innermost last: (continue target, break target).
-        self.loops: list[tuple[ir.Block, ir.Block]] = []
+        # Enclosing loops, innermost last: (continue target, break target,
+        # defer depth). The break target is None for a folded forever-loop,
+        # which by construction no break can reach.
+        self.loops: list[tuple[ir.Block, ir.Block | None, int]] = []
         # Enclosing block-expressions, innermost last; each `emit` targets the
         # last. See BlockExprCtx.
         self.block_exprs: list[BlockExprCtx] = []
+        # Defer bodies being generated, innermost last: (len(loops),
+        # len(block_exprs)) at entry. A break/continue/emit inside a defer
+        # body may only target a loop / block expression opened *inside* the
+        # body (a return never may): control that jumps out of a defer body
+        # would re-unwind the very scope whose defers are running. Compared
+        # against at the jump statements themselves.
+        self.defer_marks: list[tuple[int, int]] = []
         self.str_count = 0
         # One rodata global per distinct string contents; identical literals
         # (source strings and `typename` results alike) share bytes.
@@ -800,8 +810,8 @@ class CodeGen:
         Args:
             prev: The statement that terminated the block (a ``return``,
                 ``break``, ``continue``, ``unreachable``, ``emit``, a call to
-                a ``@noreturn`` function, or a construct all of whose paths
-                diverge).
+                a ``@noreturn`` function, a loop that never exits, or a
+                construct all of whose paths diverge).
             stmt: The first unreachable statement; the warning points at its
                 line.
         """
@@ -819,6 +829,11 @@ class CodeGen:
             # Only a direct call to a @noreturn function terminates the
             # block from expression-statement position.
             what = "nothing runs after a call to a @noreturn function"
+        elif isinstance(prev, While):
+            # A loop can only terminate the block when its constant-true
+            # condition folded away the exit edge and no `break` targets it
+            # (see the While arm); nothing past it can ever run.
+            what = "nothing runs after a loop that never exits"
         else:
             # A statement with internal control flow -- if/case/@if/a bare
             # block -- every generated path of which diverged.
@@ -4659,6 +4674,7 @@ class CodeGen:
         self.defer_stack = []
         self.loops = []  # break/continue cannot escape into a caller's loop
         self.block_exprs = []  # emit cannot escape into a caller's block-expr
+        self.defer_marks = []  # a body instantiated mid-defer is not "in" it
         hidden = self.hidden_ref_indices(func, params)
         self.const_locals = set(func.const_params)
         self.mut_locals = set(func.mut_params)
@@ -4694,10 +4710,12 @@ class CodeGen:
         if not self.builder.block.is_terminated:
             if func.noreturn:
                 # C11 _Noreturn semantics: the promise is the author's, so
-                # falling off the end is undefined behavior, not an error --
-                # which is what makes `fn spin() { while (true) {} }` legal
-                # as @noreturn (the loop's end block exists but is never
-                # reached; documented in docs/language.md).
+                # falling off the end is undefined behavior, not an error.
+                # (The canonical spin `fn spin() { while (true) {} }` never
+                # gets here: constant-condition folding leaves its body
+                # terminated, so the loop diverges by itself; the planted
+                # unreachable covers non-loop fall-offs. Documented in
+                # docs/language.md.)
                 self.builder.unreachable()
             elif ret is VOID:
                 self.builder.ret_void()
@@ -4757,13 +4775,25 @@ class CodeGen:
         Each body runs while the block's locals are still in scope, so it can
         refer to them.
 
+        Each body generates under a defer mark recording the loops and block
+        expressions visible at entry: a ``break``/``continue``/``emit``
+        targeting one of those (or any ``return``) would jump out of the
+        defer body and re-unwind the scope whose defers are running, so the
+        jump statements reject it against the mark. A loop or block
+        expression opened *inside* the body is past the mark and stays fair
+        game.
+
         Args:
             scope: The list of deferred action bodies for one block.
         """
         for body in reversed(scope):
             if self.builder.block.is_terminated:
                 break
-            self.gen_block(body)
+            self.defer_marks.append((len(self.loops), len(self.block_exprs)))
+            try:
+                self.gen_block(body)
+            finally:
+                self.defer_marks.pop()
 
     def run_defers_through(self, depth: int):
         """Unwind deferred scopes from the innermost down to a given depth.
@@ -5499,6 +5529,15 @@ class CodeGen:
                 loop), surfaced from the per-statement handling.
         """
         if isinstance(stmt, Return):
+            # A return is always a jump out of a running defer body (there
+            # are no nested functions): it would re-unwind the very scope
+            # whose defers are running (see run_deferred_scope).
+            if self.defer_marks:
+                raise LangError(
+                    "'return' inside a defer body cannot exit the "
+                    "enclosing function",
+                    stmt.line,
+                )
             if self.current_noreturn is not None:
                 raise LangError(
                     f"cannot return from @noreturn function "
@@ -5554,6 +5593,17 @@ class CodeGen:
             if not self.block_exprs:
                 raise LangError(
                     "emit outside a block expression; did you mean return?", stmt.line
+                )
+            # An emit inside a defer body may only target a block expression
+            # opened inside that body (see run_deferred_scope and Break).
+            if (
+                self.defer_marks
+                and len(self.block_exprs) <= self.defer_marks[-1][1]
+            ):
+                raise LangError(
+                    "'emit' inside a defer body cannot exit the "
+                    "enclosing block expression",
+                    stmt.line,
                 )
             ctx = self.block_exprs[-1]
             # Evaluate the value before the defers run, so a defer cannot clobber
@@ -5833,16 +5883,39 @@ class CodeGen:
             # (header facts below re-prove per back edge regardless).
             self.narrowed_nonnull -= self.loop_kill_set(stmt)
             self.narrowed_paths.clear()
+            # Constant-condition folding: a condition that folds to
+            # always-run (`while (true)`, `while (1)`, `until (false)`, a
+            # const reference) never takes its exit edge, so the cbranch
+            # becomes an unconditional branch -- and when no `break` can
+            # target this loop, the end block is not created at all: the
+            # loop diverges, which is what lifts the missing-return /
+            # missing-emit checks for code that never falls out of it and
+            # funnels any trailing statements into gen_block's dead-code
+            # skip. A `break` anywhere in the body (a `case` arm, a nested
+            # block expression, a `defer`) keeps the end block: it is then
+            # reachable and the code after the loop stays live. `return`,
+            # `emit`, and `@noreturn` calls leave by their own edges and
+            # never touch the end block, so they do not gate the fold.
+            truth = self.const_cond_truth(stmt.cond)
+            forever = truth is not None and truth != stmt.until
+            breaks = contains_break(stmt.body)
             cond_bb = self.builder.append_basic_block(f"{kind}.cond")
             body_bb = self.builder.append_basic_block(f"{kind}.body")
-            end_bb = self.builder.append_basic_block(f"{kind}.end")
+            end_bb = None
+            if not forever or breaks:
+                end_bb = self.builder.append_basic_block(f"{kind}.end")
             self.builder.branch(cond_bb)
             self.builder.position_at_end(cond_bb)
-            cond = self.gen_cond(stmt.cond)
-            if stmt.until:
-                self.builder.cbranch(cond, end_bb, body_bb)
+            if forever:
+                # The header block survives as the `continue` target (and
+                # the back edge's); simplifycfg merges the trivial branch.
+                self.builder.branch(body_bb)
             else:
-                self.builder.cbranch(cond, body_bb, end_bb)
+                cond = self.gen_cond(stmt.cond)
+                if stmt.until:
+                    self.builder.cbranch(cond, end_bb, body_bb)
+                else:
+                    self.builder.cbranch(cond, body_bb, end_bb)
             self.builder.position_at_end(body_bb)
             # Header narrowing: the body only runs with the condition true
             # (`while`) / false (`until`), so `while (p != null)` proves p at
@@ -5862,17 +5935,23 @@ class CodeGen:
             self.retract_narrowed(added)
             if not self.builder.block.is_terminated:
                 self.builder.branch(cond_bb)
-            self.builder.position_at_end(end_bb)
-            # Post-exit narrowing: the normal exit edge leaves the condition
-            # false (`while`) / true (`until`), so `while (p == null) { ... }`
-            # proves p after the loop no matter what the body did -- unless a
-            # `break` can reach the end without re-testing the condition.
-            if not contains_break(stmt.body):
-                self.narrow_nonnull(
-                    self.narrowable_guard_names(
-                        stmt.cond, "!=" if stmt.until else "=="
+            # A fully folded loop (forever, no break) has no end block: the
+            # builder stays in the body's terminated block, so the statement
+            # counts as diverging (no trailing return/emit needed, trailing
+            # statements are dead).
+            if end_bb is not None:
+                self.builder.position_at_end(end_bb)
+                # Post-exit narrowing: the normal exit edge leaves the
+                # condition false (`while`) / true (`until`), so
+                # `while (p == null) { ... }` proves p after the loop no
+                # matter what the body did -- unless a `break` can reach the
+                # end without re-testing the condition.
+                if not breaks:
+                    self.narrow_nonnull(
+                        self.narrowable_guard_names(
+                            stmt.cond, "!=" if stmt.until else "=="
+                        )
                     )
-                )
         elif isinstance(stmt, Conditional):
             # Compile-time @if: emit only the live branch's statements, inline
             # in the current scope. The dead branch is never type-checked.
@@ -5897,12 +5976,27 @@ class CodeGen:
         elif isinstance(stmt, Break):
             if not self.loops:
                 raise LangError("'break' outside a loop", stmt.line)
+            # A break inside a defer body may only target a loop opened
+            # inside that body: jumping to an outer loop would re-unwind the
+            # scope whose defers are being run (see run_deferred_scope).
+            if self.defer_marks and len(self.loops) <= self.defer_marks[-1][0]:
+                raise LangError(
+                    "'break' inside a defer body cannot exit the "
+                    "enclosing loop",
+                    stmt.line,
+                )
             self.run_defers_through(self.loops[-1][2])  # the loop body and inner
             if not self.builder.block.is_terminated:
                 self.builder.branch(self.loops[-1][1])
         elif isinstance(stmt, Continue):
             if not self.loops:
                 raise LangError("'continue' outside a loop", stmt.line)
+            if self.defer_marks and len(self.loops) <= self.defer_marks[-1][0]:
+                raise LangError(
+                    "'continue' inside a defer body cannot continue the "
+                    "enclosing loop",
+                    stmt.line,
+                )
             self.run_defers_through(self.loops[-1][2])
             if not self.builder.block.is_terminated:
                 self.builder.branch(self.loops[-1][0])
@@ -7262,6 +7356,32 @@ class CodeGen:
             )
         self.warn_deprecated(next_name, func.deprecated_msg, line)
         return fn, params[1].pointee, self.effect_bits.get(id(func)) is False
+
+    def const_cond_truth(self, expr) -> bool | None:
+        """The compile-time truth of a loop condition, or ``None``.
+
+        Try-folds the expression with :meth:`eval_const` (the house constant
+        folder: literals, const references, ``sizeof``, casts, constant
+        arithmetic). Only a ``bool`` or integer result counts -- the types
+        :meth:`gen_cond` accepts -- so anything else (a runtime value, a
+        misplaced string, a private const) returns ``None`` and the caller
+        falls through to the ordinary runtime path, which reports the same
+        error the expression always produced.
+
+        Args:
+            expr: The condition expression.
+
+        Returns:
+            The condition's truth when it folds to a bool/integer constant,
+            else ``None``.
+        """
+        try:
+            tv = self.eval_const(expr, expr.line)
+        except LangError:
+            return None
+        if tv.type is not BOOL and not is_integer(tv.type):
+            return None
+        return bool(tv.value.constant)
 
     def gen_cond(self, expr) -> ir.Value:
         """Evaluate an expression as an ``i1`` condition.

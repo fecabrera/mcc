@@ -2026,11 +2026,18 @@ already do).
         re-emissions dedup); defers dropped because another *defer*
         diverged are deliberately out of scope — a different diagnostic;
         implemented, see [-Wdead-code](docs/language.md#-wdead-code)
-  - [ ] constant-condition loop folding — recognize `while (true)`-style
+  - [x] constant-condition loop folding — recognize `while (true)`-style
         loops during generation so the never-taken exit edge (and its empty
         `end` block before a `@noreturn` body's auto-`unreachable`) never
         gets emitted, as optimizer cleanliness — and, with the exit edge
-        gone, extend `-Wdead-code`'s reach to the code after such a loop
+        gone, extend `-Wdead-code`'s reach to the code after such a loop;
+        implemented (any constant-folded condition, `until (false)` as the
+        dual, gated on a `break`-free body — a `break` keeps the exit
+        block and the code after the loop live; the divergence also lifts
+        the missing-return and missing-emit checks). Non-goals: the
+        never-runs duals (`while (false)` keeps its type-checked body,
+        like `if (false)`) and `for` loops (every form exits on a runtime
+        comparison); see [Control flow](docs/language.md#control-flow)
 
 ### Metaprogramming and builtins
 

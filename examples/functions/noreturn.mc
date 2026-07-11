@@ -43,10 +43,12 @@ fn checked_first(p: int32*) -> int32 {
 }
 
 // Falling off the end of a @noreturn body is not an error: the promise is
-// the author's, and the compiler plants an `unreachable` at the end, so
-// actually reaching it is undefined behavior (C11 _Noreturn semantics).
-// That is what makes the canonical spin form legal with no trailing
-// anything -- the loop simply never falls through.
+// the author's, and on any path that could fall off the compiler plants an
+// `unreachable`, so actually reaching it is undefined behavior (C11
+// _Noreturn semantics). The canonical spin form does not even need that: a
+// break-free `while (true)` diverges by itself (constant-condition
+// folding, see control-flow/forever.mc), so spin's body has no end to fall
+// off and no planted `unreachable` remains in its IR.
 @noreturn fn spin() {
     while (true) {}
 }
