@@ -105,9 +105,10 @@ fn main() -> int32 {
     // A collecting function (args...) is a value too: its type spells the
     // sugar's underlying parameter, fn(const slice<const any>) -> R, and a
     // call through the value takes that trailing slice explicitly --
-    // collection is a direct-call affordance (native_variadics.mc). The one
-    // convention no fn type expresses is a `-> mut T` return: a
-    // mut-returning function still cannot become a value (mut_returns.mc).
+    // collection is a direct-call affordance (native_variadics.mc). The
+    // return convention rides in the type the same way: fn(...) -> mut T
+    // types a mut-returning function, and a call through the value is the
+    // same lvalue a direct call is (mut_return_callbacks.mc).
     return 0;
 }
 
@@ -116,4 +117,6 @@ fn main() -> int32 {
 // callbacks; nonnull_callbacks.mc for the contract-carrying sibling, where
 // the annotation converts contravariantly and `as` strips it (a convention
 // does neither); pointer_decay.mc for the decay rule the indirect call
-// reuses; types/generic_alias.mc for generic aliases like cmp<T>.
+// reuses; mut_return_callbacks.mc for the return-side convention,
+// fn(...) -> mut T values written through; types/generic_alias.mc for
+// generic aliases like cmp<T>.

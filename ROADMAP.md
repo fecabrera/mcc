@@ -915,10 +915,20 @@ already do).
         and the `@format` desugars stay direct-call affordances; implemented,
         see [mut/const-carrying function
         types](docs/language.md#mutconst-carrying-function-types):
-    - [ ] `-> mut T` in function types — the one remaining convention a
-          `fn(...)` type cannot express: a `mut`-returning function still
-          cannot become a function value, since the returned lvalue-ness
-          would be invisible to the plain `-> T` spelling
+    - [x] `-> mut T` in function types — the return convention joins the
+          parameter ones: `fn(...) -> mut T` is a distinct, non-coercible
+          type (either direction, no `as` hatch — a mut return is passed as
+          a pointer to the returned storage, a fact no cast could bridge),
+          the bare name of a `mut`-returning function infers it (the last
+          function-value ban is gone), and a call through the value is the
+          same lvalue expression a direct call is — assignable (field-held
+          callees included), projectable, re-lendable as a `mut` argument,
+          and vouching in formation chains like a named `-> mut` candidate.
+          `-> mut void` rejects per use (generic aliases validate per
+          binding) and `-> mut const T` is banned at parse time in both
+          the declaration and fn-type slots; implemented, see
+          [mut/const-carrying function
+          types](docs/language.md#mutconst-carrying-function-types)
   - [x] generic overloads mixing `mut` — overloads of one generic name may
         disagree on which positions are `mut`: at a position any candidate
         marks `mut`, an lvalue argument's address is formed up front and the

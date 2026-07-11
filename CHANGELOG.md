@@ -18,6 +18,35 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`mut` returns in function types — `fn(...) -> mut T`** — the return
+  convention joins the parameter ones, lifting the last function-value
+  ban: a [`mut`-returning](docs/language.md#mut-returns) function is now a
+  legal function value, `let f = counter_ref;` infers the carrying type
+  (the old "cannot take a function value ... it returns mut" rejection is
+  gone), and a call through the value is the **same lvalue expression a
+  direct call is** — assignable (`f() = v`, `f() += v`, field-held
+  callees like `table.get() = v` included), projectable
+  (`f(s).field = v`, `f(t)[i] = v`), re-lendable as another call's `mut`
+  argument, and vouching in `mut`-return formation chains exactly like a
+  named `-> mut` candidate (`return get(s).field;` through a fn-value
+  `get`), with the same guarantees — the callee's own body passed the
+  formation and storage rules when it compiled. Like the parameter
+  conventions there is **no variance and no hatch**: a `fn() -> mut int32`
+  call returns a pointer to the vouched storage where a `fn() -> int32`
+  call returns the value, so the types are not convertible in either
+  direction, and an `as` between them is rejected with an error that
+  explains why no cast is offered (same-convention reinterprets and the
+  `@nonnull`-stripping hatch still work; laundering through `uint8*`
+  remains UB like any forged address). `fn() -> mut void` rejects per
+  use, so `type getter<T> = fn() -> mut T` validates per binding, and
+  `-> mut const T` is banned at parse time in both the declaration and
+  fn-type slots (a mut return must be writable). The convention is part
+  of the type's identity: `.mci` interface stubs spell it, templates
+  instantiate the carrying and plain forms distinctly, and `&f()` stays
+  rejected (the reference must not escape its full expression). See
+  [mut/const-carrying function types](docs/language.md#mutconst-carrying-function-types)
+  and [mut_return_callbacks.mc](examples/functions/mut_return_callbacks.mc).
+
 - **`mut`/`const`-carrying function types — `fn(mut char)`,
   `fn(const struct big) -> int64`** — a function type now spells the
   per-parameter hidden-reference calling conventions, lifting the last
@@ -47,8 +76,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   functions ride along: `fn total(args...)` is a legal value of type
   `fn(const slice<const any>) -> ...`, whose calls take the trailing
   slice explicitly — collection and the compile-time `@format` desugars
-  stay direct-call affordances. A `-> mut T` return remains inexpressible
-  in a function type (its own roadmap follow-up). See
+  stay direct-call affordances. A `-> mut T` return was the one
+  convention still inexpressible here; it ships in the entry above. See
   [mut/const-carrying function types](docs/language.md#mutconst-carrying-function-types)
   and [mut_callbacks.mc](examples/functions/mut_callbacks.mc).
 

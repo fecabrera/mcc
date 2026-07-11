@@ -33,9 +33,10 @@ class TypeRef:
             parameter position of a ``fn(...)`` type, where it spells the
             per-parameter non-null contract the function value carries, as in
             ``fn(@nonnull char*) -> void``.
-        mut: A leading ``mut`` keyword -- meaningful only in the parameter
-            position of a ``fn(...)`` type, where it spells a by-reference
-            writable parameter, as in ``fn(mut char) -> void``.
+        mut: A leading ``mut`` keyword -- meaningful only inside a ``fn(...)``
+            type: in a parameter position it spells a by-reference writable
+            parameter, as in ``fn(mut char) -> void``; on the ``ret`` type it
+            spells a ``mut`` return, as in ``fn(uint64) -> mut char``.
     """
 
     name: str
@@ -47,7 +48,7 @@ class TypeRef:
     const: bool = False  # a leading `const` read-only qualifier
     variadic: bool = False  # a trailing `...` in a fn(...) type's parameters
     nonnull: bool = False  # a leading `@nonnull` (fn-type parameter position)
-    mut: bool = False  # a leading `mut` (fn-type parameter position)
+    mut: bool = False  # a leading `mut` (fn-type parameter or return position)
 
     def __str__(self) -> str:
         """Render the type back to its source spelling.
@@ -966,7 +967,9 @@ class StoreCall:
     codegen (a plain result is not assignable).
 
     Attributes:
-        call: The ``Call`` whose ``mut`` return is the assignment target.
+        call: The ``Call`` (or ``CallExpr``, for a call through a
+            function-pointer expression such as a struct field) whose
+            ``mut`` return is the assignment target.
         value: The expression to store.
         line: Source line for diagnostics.
     """

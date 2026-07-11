@@ -56,7 +56,7 @@ parameter modifiers (`const`, `mut`, `@noalias`, `@nonnull`), `mut` returns
 functions (`@noreturn`),
 variadics (C `...` and native collecting), and function pointers, including
 the function types that carry a `@nonnull` contract or spell the `mut`/`const`
-hidden-reference conventions.
+hidden-reference conventions and the `-> mut` return convention.
 
 | Example | Shows |
 |---------|-------|
@@ -82,6 +82,7 @@ hidden-reference conventions.
 | [function_pointers.mc](functions/function_pointers.mc) | `fn(...) -> R` types (incl. variadic `fn(A, ...)`), callbacks in structs, dispatch tables, `const`/`@static` function aliases, `null` callbacks |
 | [nonnull_callbacks.mc](functions/nonnull_callbacks.mc) | `fn(@nonnull T*) -> R` function types carrying the @nonnull contract: a @nonnull function as a legal value (`let f = first;` infers the annotated type), calls through the value running the same call-site null proof as a direct call, the contravariant lift (a plain function into an annotated let / argument / @static dispatch table; the dropping direction a compile error), the contract-stripping `as` hatch (UB if actually null), and the extern asymmetry (`let n = strlen;` checks strictly where direct extern calls stay graded) |
 | [mut_callbacks.mc](functions/mut_callbacks.mc) | `fn(mut T)` / `fn(const struct ...)` function types spelling the hidden-reference conventions: a mutating callback in a @static dispatch table, calls through the value enforcing the same writable-lvalue and pointer-decay rules as direct calls, the convention convertible in neither direction with no `as` hatch (same-shape reinterprets stay open), const-scalar erasure making `type cmp<T> = fn(const T, const T) -> bool` inhabitable at scalar and struct `T` alike |
+| [mut_return_callbacks.mc](functions/mut_return_callbacks.mc) | `fn(...) -> mut T` function types carrying the return convention: a mut-returning accessor as a legal value (inferred and declared), calls through the value assignable and compound-assignable like a direct call, a field-held callee written through, the result re-lent into a `mut` parameter, an indirect callee vouching inside another function's formation chain, and the convention convertible in neither direction with no `as` hatch |
 
 ## types/
 

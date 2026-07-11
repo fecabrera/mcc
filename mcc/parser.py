@@ -159,9 +159,10 @@ def is_lvalue(expr) -> bool:
     """Whether an expression is a valid assignment target.
 
     The forms an assignment accepts: a variable, ``*ptr``, an index
-    ``base[i]``, a member ``base.field``/``base->field``, or a named call
-    ``f(...)`` -- assignable when the callee returns ``mut`` (checked at
-    codegen, where the callee is resolved).
+    ``base[i]``, a member ``base.field``/``base->field``, or a call --
+    named ``f(...)`` or through a function-pointer expression
+    ``s.handler(...)`` -- assignable when the callee returns ``mut``
+    (checked at codegen, where the callee is resolved).
 
     Args:
         expr: The parsed target expression.
@@ -170,7 +171,7 @@ def is_lvalue(expr) -> bool:
         ``True`` when ``expr`` is an assignable lvalue.
     """
     return (
-        isinstance(expr, (Var, Index, Member, Call))
+        isinstance(expr, (Var, Index, Member, Call, CallExpr))
         or (isinstance(expr, Unary) and expr.op == "*")
     )
 
@@ -774,7 +775,8 @@ class Parser:
         """Parse a function-pointer type ``fn(A, B) -> R``.
 
         A missing ``-> R`` means the function returns ``void``, as in a
-        declaration.
+        declaration; ``-> mut R`` spells a ``mut`` return, riding on the
+        return ``TypeRef``'s ``mut`` flag like a parameter's.
 
         Args:
             greedy_stars: Passed to :meth:`parse_stars` for any ``*`` that
@@ -836,7 +838,21 @@ class Parser:
             ref.mut = is_mut
             params.append(ref)
         self.expect(")")
-        ret = self.parse_type_ref() if self.accept("->") else TypeRef("void")
+        ret = TypeRef("void")
+        if self.accept("->"):
+            # `-> mut T`: the type spells a mut return (a call through the
+            # value is an lvalue expression), riding on the return TypeRef's
+            # `mut` flag exactly as a parameter's does.
+            mut_tok = self.cur if self.cur.kind == "mut" else None
+            is_mut = bool(self.accept("mut"))
+            ret = self.parse_type_ref()
+            if is_mut and ret.const:
+                raise LangError(
+                    "a return cannot be both mut and const "
+                    "(a mut return must be writable)",
+                    mut_tok.line,
+                )
+            ret.mut = is_mut
         return TypeRef(
             "fn",
             [],
@@ -1362,10 +1378,17 @@ class Parser:
         mut_return = False
         if self.accept("->"):
             # `-> mut T`: the function returns an lvalue (a reference to
-            # caller-reachable storage). A flag on the declaration, not part
-            # of the type -- a fn(...) -> T pointer type stays closed to it.
+            # caller-reachable storage). A flag on the declaration; the
+            # fn(...) -> mut T pointer type spells the same convention.
+            mut_tok = self.cur if self.cur.kind == "mut" else None
             mut_return = bool(self.accept("mut"))
             ret_type = self.parse_type_ref()
+            if mut_return and ret_type.const:
+                raise LangError(
+                    "a return cannot be both mut and const "
+                    "(a mut return must be writable)",
+                    mut_tok.line,
+                )
         if variadic and type_params:
             raise LangError("a generic function cannot be variadic", line)
         if const_params and extern:
@@ -1780,10 +1803,11 @@ class Parser:
                 return StoreIndex(expr.base, expr.index, value, tok.line)
             if isinstance(expr, Member):
                 return StoreMember(expr.base, expr.field, expr.arrow, value, tok.line)
-            if isinstance(expr, Call):
-                # `f(s, i) = v;` -- assignment through a mut-returning call.
-                # Whether the callee actually returns mut is a codegen check
-                # (the callee resolves there).
+            if isinstance(expr, (Call, CallExpr)):
+                # `f(s, i) = v;` -- assignment through a mut-returning call,
+                # named or through a function-pointer expression (a struct
+                # field, a parenthesized value). Whether the callee actually
+                # returns mut is a codegen check (the callee resolves there).
                 return StoreCall(expr, value, tok.line)
             raise LangError("invalid assignment target", tok.line)
         if self.cur.kind in COMPOUND_ASSIGN_OPS:

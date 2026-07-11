@@ -104,5 +104,7 @@ fn main() -> int32 {
 
 // See also: mut_params.mc for `mut` parameters, the argument-side half of
 // the same no-escape reference; mut_overloads.mc for how an lvalue call
-// argument keeps mut overload candidates viable; docs/language.md "mut
-// returns" for the full formation and storage rules.
+// argument keeps mut overload candidates viable; mut_return_callbacks.mc
+// for the accessor riding in a function type (fn(...) -> mut T values and
+// field-held callees, written through like a direct call);
+// docs/language.md "mut returns" for the full formation and storage rules.

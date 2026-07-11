@@ -234,13 +234,17 @@ nothing adapts or widens).
 `-> mut` works on generics (`fn pick<T>(mut a: T, mut b: T, f: bool) ->
 mut T`), with the formation and void rules checked per instance. It is
 rejected on `@extern` and `@asm` functions (the pointer-typed return would
-change the C calling convention), on `main`, and on `void` (there is no
-storage to reference); a `-> mut` function cannot become a [function
-value](#function-pointers) (the plain `fn(...) -> T` type cannot express
-it), and overloads differing only in `-> mut` collide as duplicates, like
-any return-type-only pair. In an [interface file](#interface-files) the
-marker is re-emitted on the prototype and must match the definition
-exactly.
+change the C calling convention), on `main`, on `void` (there is no
+storage to reference), and composed with `const` (a mut return must be
+writable, so `-> mut const T` is banned at parse time); overloads
+differing only in `-> mut` collide as duplicates, like any
+return-type-only pair. A `-> mut` function is a legal [function
+value](#function-pointers): the `fn(...) -> mut T` type spells the return
+convention, and a call through the value is the same lvalue expression a
+direct call is (see [mut/const-carrying function
+types](#mutconst-carrying-function-types)). In an [interface
+file](#interface-files) the marker is re-emitted on the prototype and must
+match the definition exactly.
 
 One programmer's-problem caveat, the same one [container
 cursors](#control-flow) have: a `mut` return that points into a
@@ -2716,10 +2720,11 @@ convention; the types are not convertible)
 ```
 
 An `as` between two function types is allowed only when their `mut`/`const`
-shape matches — a same-shape signature reinterpret, including stripping a
-`@nonnull` contract, still works. (Laundering through a data pointer,
-`f as uint8* as fn(char)`, remains possible and is undefined behavior,
-exactly like forging an address with `as fn(...)`.)
+shape and their return convention match — a same-shape signature
+reinterpret, including stripping a `@nonnull` contract, still works.
+(Laundering through a data pointer, `f as uint8* as fn(char)`, remains
+possible and is undefined behavior, exactly like forging an address with
+`as fn(...)`.)
 
 `const` carries into the type only where it changes the convention — on an
 aggregate (a struct, union, slice, or tuple). On a by-value scalar it is
@@ -2741,9 +2746,44 @@ let cb: cmp<struct big> = big_less;
 Like the `@nonnull` contract, the convention is part of the type's
 identity: it is spelled in `.mci` [interface files](#interface-files),
 instantiates templates distinctly, and a prototype must spell it exactly as
-its definition does. A [`-> mut T` return](#mut-returns) is the one
-remaining convention a function type cannot express, so a `mut`-returning
-function still cannot become a function value.
+its definition does.
+
+The return convention is spelled the same way: `fn(...) -> mut T` is the
+type of a [`mut`-returning](#mut-returns) function, so the last
+function-value ban is gone. The bare name of a `-> mut` function infers the
+carrying type, and a call through the value is the same **lvalue
+expression** a direct call is — assignable (`f() = v`, `f() += v`),
+projectable (`f(s).field = v`, `f(t)[i] = v`), and re-lendable as another
+call's `mut` argument — with the same guarantees, since the callee's own
+body passed the formation and storage rules when it compiled. A field-held
+callee works too (`table.get(i) = v` stores through the returned
+reference), and `&f()` stays rejected (the reference must not escape its
+full expression). Inside another `-> mut` function the value composes into
+formation chains: a chain-position call through a `fn(...) -> mut T`
+value vouches for its storage exactly as a named `-> mut` candidate does.
+
+```c
+@static let counter: int32 = 0;
+fn counter_ref() -> mut int32 { return counter; }
+
+fn main() -> int32 {
+    let f = counter_ref;    // inferred: fn() -> mut int32
+    f() = 41;               // assignment through the returned lvalue
+    f() += 1;               // compound assignment
+    return f();             // value context: loads (counter is 42)
+}
+```
+
+Like the parameter conventions, the mut return is **not convertible** — in
+either direction, with no `as` hatch: a `fn() -> mut int32` call returns a
+pointer to the vouched storage where a `fn() -> int32` call returns the
+value itself, so no call sequence through the wrong type could be correct
+(the mismatch error says a mut return is passed as a pointer to the
+returned storage). `fn() -> mut void` is rejected per use — there is no
+storage to reference — so a generic alias like
+`type getter<T> = fn() -> mut T` is validated per binding, and
+`-> mut const T` is banned at parse time in both the declaration and the
+fn-type slot (a mut return must be writable).
 
 A [collecting](#native-variadic-arguments) function is a function value
 too — its trailing `args...` parameter is sugar for `const args:
@@ -2756,7 +2796,9 @@ f-strings — do not apply through a value either (the runtime sequential
 form still works, since the callee parses its format string at runtime).
 
 See
-[examples/functions/mut_callbacks.mc](../examples/functions/mut_callbacks.mc).
+[examples/functions/mut_callbacks.mc](../examples/functions/mut_callbacks.mc)
+and
+[examples/functions/mut_return_callbacks.mc](../examples/functions/mut_return_callbacks.mc).
 
 ## Arrays
 

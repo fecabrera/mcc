@@ -2775,6 +2775,26 @@ class CodeGen:
             params = tuple(self.lang_type(p, line) for p in ref.params)
             nonnull = frozenset(i for i, p in enumerate(ref.params) if p.nonnull)
             mutref = frozenset(i for i, p in enumerate(ref.params) if p.mut)
+            mutret = ref.ret is not None and ref.ret.mut
+            if mutret:
+                # Per use, like the @nonnull rule below, so a generic alias
+                # like `type getter<T> = fn() -> mut T` is validated against
+                # each binding (mirroring check_mut_return_decl's per-instance
+                # placement on the declaration side).
+                if ret is VOID:
+                    raise LangError(
+                        "a function type cannot return mut void (there is "
+                        "no storage to reference)",
+                        line,
+                    )
+                if ret.const:
+                    # The parse-time compose ban, re-checked here for a
+                    # const that rides in through a generic binding.
+                    raise LangError(
+                        "a return cannot be both mut and const "
+                        "(a mut return must be writable)",
+                        line,
+                    )
             # Checked per use, so a generic alias like `type cb<T> =
             # fn(@nonnull T*)` is validated against each binding (mirrors
             # mark_nonnull's declaration-site rule).
@@ -2787,7 +2807,9 @@ class CodeGen:
             # aggregate it records the hidden-reference index, on a scalar it
             # drops -- per use, so `type cmp<T> = fn(const T, const T)` gets
             # the right convention at each binding.
-            base = function_type(ret, params, ref.variadic, nonnull, mutref)
+            base = function_type(
+                ret, params, ref.variadic, nonnull, mutref, mutret=mutret
+            )
             for _ in range(ref.stars):
                 base = pointer_to(base)
             return self.apply_dims(base, ref.dims, line)
@@ -5300,6 +5322,7 @@ class CodeGen:
             and tv.type.signature == expected.signature
             and tv.type.mutref == expected.mutref
             and tv.type.constref == expected.constref
+            and tv.type.mutret == expected.mutret
             and tv.type.nonnull <= expected.nonnull
         ):
             return TypedValue(tv.value, expected)
@@ -5340,12 +5363,13 @@ class CodeGen:
         The hinted variant of the coercion failure, shared by :meth:`coerce`
         and :meth:`const_coerce`, for two function-pointer types sharing one
         underlying signature. A differing ``mut``/``const`` hidden-reference
-        shape is a calling-convention mismatch: the two types are simply not
-        convertible, and the error says so with **no** hatch (an ``as`` here
-        would be a miscompile recipe -- the callee reads a pointer where the
-        caller passed a value, or vice versa). Otherwise the mismatch is the
-        dropping direction of the ``@nonnull`` contravariant rule, and the
-        error says why it is banned and names the explicit ``as`` hatch.
+        shape, or a differing ``mut`` return, is a calling-convention
+        mismatch: the two types are simply not convertible, and the error
+        says so with **no** hatch (an ``as`` here would be a miscompile
+        recipe -- the callee reads a pointer where the caller passed a
+        value, or vice versa). Otherwise the mismatch is the dropping
+        direction of the ``@nonnull`` contravariant rule, and the error says
+        why it is banned and names the explicit ``as`` hatch.
 
         Args:
             src: The value's function-pointer type.
@@ -5368,6 +5392,14 @@ class CodeGen:
                     f"{context}: expected {expected}, got {src} (a {kind} "
                     "parameter is passed by hidden reference, a different "
                     "calling convention; the types are not convertible)",
+                    line,
+                )
+            if src.mutret != expected.mutret:
+                raise LangError(
+                    f"{context}: expected {expected}, got {src} (a mut "
+                    "return is passed as a pointer to the returned storage, "
+                    "a different calling convention; the types are not "
+                    "convertible)",
                     line,
                 )
             raise LangError(
@@ -6559,10 +6591,11 @@ class CodeGen:
                 )
             self.narrowed_paths.clear()
             return self.gen_member_addr(target.base, target.field, target.arrow, line)
-        if isinstance(target, Call):
+        if isinstance(target, (Call, CallExpr)):
             # `f(s, i) op= v` -- the call's mut return is the target, exactly
             # as in a plain assignment through it (a through-memory store:
-            # every projection fact dies).
+            # every projection fact dies). A CallExpr target (a field-held
+            # callback) resolves through gen_addr's CallExpr arm the same way.
             entry = self.gen_addr(target, line)
             self.narrowed_paths.clear()
             return entry
@@ -7831,6 +7864,28 @@ class CodeGen:
                 f"{expr.name!r} that does not return mut",
                 line,
             )
+        if isinstance(expr, CallExpr):
+            # A call through a function-pointer expression (a field-held
+            # callback, a parenthesized value). The whole expression being
+            # the call defers to gen_addr's CallExpr arm; in chain position
+            # the callee's spelled type must vouch -- `fn(...) -> mut T` --
+            # exactly as a named candidate's declaration does.
+            if top:
+                return
+            callee_t = self.lvalue_type(expr.callee)
+            if callee_t is not None:
+                callee_t = strip_const(callee_t)
+            if (
+                callee_t is not None
+                and is_function(callee_t)
+                and callee_t.mutret
+            ):
+                return
+            raise LangError(
+                f"{base}; the chain passes through an indirect call that "
+                "does not return mut",
+                line,
+            )
         raise LangError(
             f"{base}; the returned expression must be an lvalue chain "
             "(members, elements, dereferences, and calls that return mut)",
@@ -7844,8 +7899,9 @@ class CodeGen:
         the name must carry ``-> mut`` (a mixed set is conservatively
         rejected -- the winner is not known while the formation rule is
         being enforced). A variable or const shadowing the name is an
-        indirect call, and a function-pointer type cannot express a ``mut``
-        return.
+        indirect call: it vouches exactly when its function-pointer type
+        spells ``-> mut`` (the type's ``mutret`` bit is the same trust
+        channel a direct call's registry bit is).
 
         Args:
             call: The ``Call`` node in chain position.
@@ -7853,8 +7909,12 @@ class CodeGen:
         Returns:
             ``True`` when the call is certainly a ``mut`` return.
         """
-        if self.var_type_of(call.name) is not None or call.name in self.consts:
-            return False
+        var_type = self.var_type_of(call.name)
+        if var_type is None and call.name in self.consts:
+            var_type = self.consts[call.name].type
+        if var_type is not None:
+            var_type = strip_const(var_type)
+            return is_function(var_type) and var_type.mutret
         key = (self.current_source, call.name)
         static_template = self.static_templates.get(key)
         if static_template is not None:
@@ -8013,6 +8073,23 @@ class CodeGen:
                 raise LangError(
                     f"the call to {expr.name!r} does not return mut, so "
                     "its result is not assignable",
+                    line,
+                )
+            return tv.lvalue, tv.type, None, False
+        if isinstance(expr, CallExpr):
+            # A call through a function-pointer expression (a field-held
+            # callback table, a parenthesized value): the value's type
+            # spells the mut return, so the same lvalue rule applies --
+            # and the same guarantees hold, since the callee's own body
+            # passed the formation and storage checks when it compiled.
+            callee = self.gen_expr(expr.callee)
+            tv = self.gen_indirect_call(
+                callee, expr.args, f"call to {callee.type}", expr.line
+            )
+            if tv.lvalue is None:
+                raise LangError(
+                    f"the call to a {callee.type} value does not return "
+                    "mut, so its result is not assignable",
                     line,
                 )
             return tv.lvalue, tv.type, None, False
@@ -8787,10 +8864,11 @@ class CodeGen:
         # casts like one: between pointer kinds, and to/from a 64-bit integer
         # address -- exactly as a function name converts to an address in C.
         # One carve-out: between two function types, the mut/const
-        # hidden-reference shape must match. Same-shape reinterpretation
-        # (including stripping a @nonnull contract) stays open, but a shape
-        # change is a calling-convention change -- there is no call sequence
-        # an `as` could make correct, so it is not offered.
+        # hidden-reference shape and the mut return must match. Same-shape
+        # reinterpretation (including stripping a @nonnull contract) stays
+        # open, but a shape change is a calling-convention change -- there
+        # is no call sequence an `as` could make correct, so it is not
+        # offered.
         if (
             is_function(src)
             and is_function(target)
@@ -8801,6 +8879,20 @@ class CodeGen:
                 f"cannot cast {src} to {target}: a {kind} parameter is "
                 "passed by hidden reference, a different calling "
                 "convention; the types are not convertible",
+                expr.line,
+            )
+        if (
+            is_function(src)
+            and is_function(target)
+            and src.mutret != target.mutret
+        ):
+            # A mut return is the same class of carve-out: the return
+            # conventions differ (a pointer to storage versus the value),
+            # so no call sequence an `as` produced could be correct.
+            raise LangError(
+                f"cannot cast {src} to {target}: a mut return is passed "
+                "as a pointer to the returned storage, a different "
+                "calling convention; the types are not convertible",
                 expr.line,
             )
         src_addr = is_pointer(src) or is_function(src)
@@ -10030,6 +10122,7 @@ class CodeGen:
             and tv.type.signature == expected.signature
             and tv.type.mutref == expected.mutref
             and tv.type.constref == expected.constref
+            and tv.type.mutret == expected.mutret
             and tv.type.nonnull <= expected.nonnull
         ):
             return TypedValue(tv.value, expected)
@@ -10459,24 +10552,17 @@ class CodeGen:
             symbol = name
         if symbol is None:
             return None
-        if symbol in self.mut_ret:
-            # The pointer-typed return (and the lvalue-ness of a call) is
-            # invisible to a plain fn(...) -> T type; a call through the
-            # pointer would read the address as the value.
-            raise LangError(
-                f"cannot take a function value of {name!r}: it returns mut, "
-                "which a plain function type cannot express",
-                line,
-            )
         # A function value is a call site in waiting: warn here, since calls
         # through the pointer are indirect and can no longer be attributed.
         self.warn_deprecated(name, self.deprecated_syms.get(symbol), line)
         ret, params, variadic = self.signatures[symbol]
         # The value's type spells the function's whole call contract --
-        # @nonnull, mut, and const-aggregate hidden references -- so a call
-        # through it runs the same call-site checks and passes the same
-        # by-reference arguments as a direct call. This is what lets an
-        # annotated or hidden-reference function be a function value at all.
+        # @nonnull, mut, const-aggregate hidden references, and a mut
+        # return -- so a call through it runs the same call-site checks,
+        # passes the same by-reference arguments, and yields the same
+        # lvalue-ness as a direct call. This is what lets an annotated or
+        # hidden-reference or mut-returning function be a function value
+        # at all.
         mutref = self.mut_ref.get(symbol, frozenset())
         return TypedValue(
             self.funcs[symbol],
@@ -10487,6 +10573,7 @@ class CodeGen:
                 self.nonnull_ref.get(symbol, frozenset()),
                 mutref,
                 self.hidden_ref.get(symbol, frozenset()) - mutref,
+                mutret=symbol in self.mut_ret,
             ),
         )
 
@@ -10667,7 +10754,15 @@ class CodeGen:
             mut=callee.type.mutref,
             nonnull=callee.type.nonnull,
         )
-        return TypedValue(self.emit_call(callee.value, args), ret)
+        raw = self.emit_call(callee.value, args)
+        if callee.type.mutret:
+            # A mut return arrives as a pointer to the vouched storage,
+            # exactly as on the direct path: load eagerly for value contexts
+            # (folded away when unused) and carry the address for the lvalue
+            # surfaces -- assignment, projection, and mut re-lending all key
+            # on `lvalue` and ride free.
+            return TypedValue(self.gen_load(raw), ret, lvalue=raw)
+        return TypedValue(raw, ret)
 
     @staticmethod
     def scan_positional(

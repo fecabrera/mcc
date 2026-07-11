@@ -67,6 +67,13 @@ class LangType:
             function-pointer type -- passed by hidden reference like ``mut``,
             but read-only. Spelled into the ``name`` and reflected in the LLVM
             parameter type; excluded from equality/hash like ``nonnull``.
+        mutret: ``True`` for a function-pointer type with a ``mut`` return
+            (``fn(...) -> mut T``) -- the call returns a pointer to
+            caller-reachable storage, so a call through the value is an
+            lvalue expression, exactly like a direct call to a
+            ``-> mut`` function. Spelled into the ``name`` (identity) and
+            reflected in the LLVM return type (a pointer); excluded from
+            equality/hash like ``nonnull``.
         element: Element type of a fixed-size array, else ``None``.
         count: Length of a fixed-size array, else ``None``.
         const: ``True`` for a read-only ``const T`` view -- IR-identical to
@@ -99,6 +106,7 @@ class LangType:
     nonnull: frozenset = field(default=frozenset(), compare=False)
     mutref: frozenset = field(default=frozenset(), compare=False)
     constref: frozenset = field(default=frozenset(), compare=False)
+    mutret: bool = field(default=False, compare=False)
     element: "LangType | None" = None
     count: int | None = None
     const: bool = False
@@ -268,6 +276,7 @@ def function_type(
     nonnull: frozenset = frozenset(),
     mutref: frozenset = frozenset(),
     constref: frozenset = frozenset(),
+    mutret: bool = False,
 ) -> LangType:
     """Build a function-pointer type, e.g. ``fn(int32, int32) -> int32``.
 
@@ -296,6 +305,10 @@ def function_type(
         constref: Indices of ``const`` aggregate parameters -- passed by
             hidden (read-only) reference; unioned with the indices derived
             from ``const``-qualified aggregate types in ``params``.
+        mutret: ``True`` for a ``-> mut`` return -- the call returns a
+            pointer to the returned storage (never erased: a ``mut`` return
+            always changes the return convention), spelled into the name and
+            reflected in the LLVM return type.
 
     Returns:
         A ``LangType`` for the function-pointer type.
@@ -312,7 +325,7 @@ def function_type(
     constref = frozenset(derived)
     hidden = mutref | constref
     fnty = ir.FunctionType(
-        ret.ir,
+        ret.ir.as_pointer() if mutret else ret.ir,
         [p.ir.as_pointer() if i in hidden else p.ir for i, p in enumerate(params)],
         var_arg=variadic,
     )
@@ -325,7 +338,11 @@ def function_type(
     ]
     if variadic:
         parts.append("...")
-    name = "fn(" + ", ".join(parts) + ") -> " + ret.name
+    name = (
+        "fn(" + ", ".join(parts) + ") -> "
+        + ("mut " if mutret else "")
+        + ret.name
+    )
     return LangType(
         name,
         fnty.as_pointer(),
@@ -334,6 +351,7 @@ def function_type(
         nonnull=nonnull,
         mutref=mutref,
         constref=constref,
+        mutret=mutret,
     )
 
 

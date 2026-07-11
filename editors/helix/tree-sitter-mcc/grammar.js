@@ -204,7 +204,7 @@ module.exports = grammar({
         optional($.type_parameters),
         $.parameter_list,
         // `-> mut T` marks a mut return (a function returning an lvalue);
-        // the fn(...) -> T pointer *type* below stays closed to it.
+        // the fn(...) -> mut T pointer *type* below spells it too.
         optional(seq('->', optional('mut'), field('return_type', $._type))),
         field('body', choice($.block, $.asm_block)),
       ),
@@ -332,7 +332,9 @@ module.exports = grammar({
           // A parameter type takes the per-parameter annotation slot
           // (`fn(@nonnull char*) -> int32` carries the @nonnull contract)
           // and a `mut` marker (`fn(mut char)` spells the by-reference
-          // convention); `const` rides in through const_type.
+          // convention); `const` rides in through const_type. The return
+          // slot takes `mut` too (`fn(uint64) -> mut char` spells a mut
+          // return), like the declaration rules above.
           commaSep(
             choice(
               seq(repeat($.annotation), optional('mut'), $._type),
@@ -340,7 +342,7 @@ module.exports = grammar({
             ),
           ),
           ')',
-          optional(seq('->', $._type)),
+          optional(seq('->', optional('mut'), $._type)),
         ),
       ),
 

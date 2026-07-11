@@ -80,10 +80,13 @@ def test_mut_return_rejected_on_asm():
         parse('@asm fn f(n: int32) -> mut int32 { "nop" }')
 
 
-def test_fn_pointer_type_stays_closed():
-    # The fn(...) -> T *type* cannot spell a mut return.
-    with pytest.raises(LangError):
-        parse("fn main() { let g: fn(int32) -> mut int32; }")
+def test_fn_pointer_type_spells_mut_return():
+    # The fn(...) -> mut T *type* spells a mut return (see
+    # test_mut_return_fn_types.py for the full behavior).
+    program = parse("fn main() { let g: fn(int32) -> mut int32; }")
+    (let,) = program.functions[0].body
+    assert let.type_name.ret.mut
+    assert str(let.type_name) == "fn(int32) -> mut int32"
 
 
 # ------------------------------------------------------------ declaration bans
@@ -641,18 +644,15 @@ def test_void_call_not_assignable():
 # ------------------------------------------------------------ function values
 
 
-def test_mut_returning_function_value_rejected():
-    # Without mut params (which reject first), the mut return alone bans the
-    # function value: a plain fn(...) -> T type cannot express it.
-    with pytest.raises(
-        LangError,
-        match="cannot take a function value of 'counter_ref': it returns mut",
-    ):
-        compile_ir(
-            "@static let counter: int32 = 0;\n"
-            "fn counter_ref() -> mut int32 { return counter; }\n"
-            "fn main() -> int32 { let f = counter_ref; return 0; }"
-        )
+def test_mut_returning_function_value_infers_the_carrying_type():
+    # The last function-value ban is gone: the inferred type spells the mut
+    # return, and a call through the value is an lvalue expression (see
+    # test_mut_return_fn_types.py for the full behavior).
+    assert run(
+        "@static let counter: int32 = 0;\n"
+        "fn counter_ref() -> mut int32 { return counter; }\n"
+        "fn main() -> int32 { let f = counter_ref; f() = 9; return counter; }"
+    ) == 9
 
 
 # ------------------------------------------------------------------- generics
