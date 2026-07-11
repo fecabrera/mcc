@@ -475,7 +475,32 @@ module.exports = grammar({
         $.binary_expression,
         $.cast_expression,
         $.unary_expression,
+        $.try_expression,
         $._postfix_expression,
+      ),
+
+    // `try f() except (err) { H } [else { S }]` -- the result handler form.
+    // `try` binds the call chain that follows (a unary-level prefix, so the
+    // whole form composes as an operand) and carries its except clause; the
+    // bare propagation form and the `??` fallback are later stages. The
+    // binder is parenthesized, both bodies are braced blocks, and the
+    // optional `else` is the ok-arm block.
+    try_expression: ($) =>
+      prec.right(
+        PREC.unary,
+        seq('try', field('operand', $._expression), $.except_clause),
+      ),
+
+    except_clause: ($) =>
+      prec.right(
+        seq(
+          'except',
+          '(',
+          field('binder', $.identifier),
+          ')',
+          field('handler', $.block),
+          optional(seq('else', field('alternative', $.block))),
+        ),
       ),
 
     // `cond ? a : b`, the loosest operator and right-associative, so

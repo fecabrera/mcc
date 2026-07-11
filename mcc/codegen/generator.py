@@ -48,6 +48,7 @@ from mcc.nodes import (
     EnumAccess,
     EnumDecl,
     ErrorDirective,
+    Except,
     ExprStmt,
     FloatLit,
     For,
@@ -829,9 +830,14 @@ class CodeGen:
         elif isinstance(prev, Emit):
             what = "nothing runs after 'emit'"
         elif isinstance(prev, ExprStmt):
-            # Only a direct call to a @noreturn function terminates the
-            # block from expression-statement position.
-            what = "nothing runs after a call to a @noreturn function"
+            if isinstance(prev.expr, Except):
+                # A statement-position except terminates the block when its
+                # handler diverges and a diverging else closes the ok arm.
+                what = "every path through the statement above diverges"
+            else:
+                # Only a direct call to a @noreturn function terminates the
+                # block from expression-statement position.
+                what = "nothing runs after a call to a @noreturn function"
         elif isinstance(prev, While):
             # A loop can only terminate the block when its constant-true
             # condition folded away the exit edge and no `break` targets it
@@ -5082,6 +5088,296 @@ class CodeGen:
             raise LangError("block expression never emits a value", expr.line)
         return TypedValue(self.gen_load(ctx.slot), ctx.type)
 
+    def spill_result(self, expr) -> tuple:
+        """Evaluate a ``try`` expression's operand and split it open.
+
+        Evaluates the tested expression once, checks it is a ``result``,
+        spills it to a slot, and reads the tag -- the shared head of every
+        ``try``/``except`` lowering (and of the form-1 destructure).
+
+        Args:
+            expr: The ``Except`` node (or a destructuring ``Let``'s source
+                caller-evaluated equivalent -- see :meth:`destructure_result`,
+                which inlines the same steps against its own error wording).
+
+        Returns:
+            ``(result type, payload address, is_err)`` -- the const-stripped
+            ``result<...>`` type, the payload field's address, and the
+            ``i1`` tag test (true on the error arm).
+
+        Raises:
+            LangError: When the subject is not a ``result``.
+        """
+        subj = self.gen_expr(expr.value)
+        result_t = strip_const(subj.type)
+        if not is_result(result_t):
+            raise LangError(
+                f"try needs a result value, got {subj.type}", expr.line
+            )
+        slot = self.builder.alloca(result_t.ir, name="except.subject")
+        if over_aligned(result_t):
+            slot.align = type_align(result_t)
+        self.builder.store(subj.value, slot)
+        indices = result_t.elem_indices
+        tag_addr = self.builder.gep(
+            slot, [I32_ZERO, ir.Constant(ir.IntType(32), indices[0])],
+            inbounds=True,
+        )
+        payload_addr = self.builder.gep(
+            slot, [I32_ZERO, ir.Constant(ir.IntType(32), indices[1])],
+            inbounds=True,
+        )
+        tag = self.builder.load(tag_addr, name="except.tag")
+        is_err = self.builder.icmp_unsigned(
+            "!=", tag, ir.Constant(UINT8.ir, 0)
+        )
+        return result_t, payload_addr, is_err
+
+    def gen_except_handler(
+        self, expr: Except, payload_addr, err_t: LangType, ctx: BlockExprCtx
+    ):
+        """Generate an ``except`` clause's handler block, binder bound.
+
+        The handler is a block-expression variant where every path may
+        diverge (``gen_block_expr``'s "never emits" error does not apply --
+        ``except (err) { return -1; }`` is the common handler): the caller
+        presets the context's slot and type (or ``no_value``), pushes
+        nothing, and decides afterwards what a fall-through means. The
+        binder is a plain (non-const) copy of the error value, scoped to
+        the handler only -- the binder-in-arm precedent of ``case type``'s
+        ``when T t:`` -- and the context joins ``block_exprs`` so an
+        ``emit`` inside targets the handler (which is also what keeps
+        ``except (err) { emit fallback; }`` legal inside a ``defer`` body:
+        the emit targets a block expression opened inside it).
+
+        Args:
+            expr: The ``Except`` node (binder name and handler body).
+            payload_addr: The spilled result's payload address; the error
+                arm's bytes are live here when the handler runs.
+            err_t: The declared error type ``E``.
+            ctx: The preset handler context (``cont_bb`` = the join block).
+        """
+        outer_locals, outer_names = dict(self.locals), self.scope_names
+        self.scope_names = set()
+        self.block_exprs.append(ctx)
+        try:
+            err_ptr = payload_addr
+            if err_ptr.type != err_t.ir.as_pointer():
+                # Arity 2: the payload is the internal union; read the error
+                # arm through a cast of its address, as a union member load.
+                err_ptr = self.builder.bitcast(
+                    payload_addr, err_t.ir.as_pointer()
+                )
+            binder_slot = self.builder.alloca(err_t.ir, name=expr.binder)
+            self.builder.store(self.builder.load(err_ptr), binder_slot)
+            self.bind_local(expr.binder, binder_slot, err_t)
+            self.gen_block(expr.handler)
+        finally:
+            self.block_exprs.pop()
+            self.locals, self.scope_names = outer_locals, outer_names
+
+    def gen_let_except(self, stmt: Let):
+        """Lower ``let ret = try f() except (err) { H } [else { S }];``.
+
+        Value position: branch on the tag. On ok, ``ret``'s slot takes the
+        payload, the optional ``else`` block runs with ``ret`` in scope (the
+        ok arm only -- Python's ``try``/``except``/``else``), and control
+        falls through with ``ret`` live after the statement. On error the
+        handler runs with the binder bound and **must** diverge (return,
+        break, continue, panic) or ``emit`` a fallback that fills the same
+        slot -- on that fallback path ``else`` does *not* run (a fallback is
+        not an ok), but code after does, ``ret`` = the fallback. The
+        handler is generated before ``ret`` is bound, so the initializer
+        cannot read the name it defines; ``else`` is generated after, so it
+        can.
+
+        Also the ``return``-position lowering, through the hidden-let
+        desugar in the ``Return`` arm.
+
+        Args:
+            stmt: The ``Let`` whose value is an ``Except``.
+
+        Raises:
+            LangError: When the subject is not a result, the result has no
+                ok value (``result<E>``), or the handler may fall through
+                without emitting.
+        """
+        expr = stmt.value
+        result_t, payload_addr, is_err = self.spill_result(expr)
+        if len(result_t.args) == 1:
+            raise LangError(
+                f"a {result_t} has no ok value to bind; handle it in "
+                "statement position: try f() except (err) { ... };",
+                expr.line,
+            )
+        ok_t = result_t.args[0]
+        declared = ok_t
+        if stmt.type_name is not None:
+            declared = self.lang_type(stmt.type_name, stmt.line)
+            if declared is VOID:
+                raise LangError("cannot declare a void variable", stmt.line)
+        err_bb = self.builder.append_basic_block("except.err")
+        ok_bb = self.builder.append_basic_block("except.ok")
+        join_bb = self.builder.append_basic_block("except.end")
+        # The let's own slot doubles as the handler's emit target; it is
+        # written in both arms and read after the join, so it lives in the
+        # entry block (the block-expression discipline).
+        slot = self.entry_alloca(declared.ir, stmt.name)
+        if over_aligned(declared):
+            slot.align = type_align(declared)
+        self.builder.cbranch(is_err, err_bb, ok_bb)
+        self.builder.position_at_end(err_bb)
+        ctx = BlockExprCtx(
+            cont_bb=join_bb,
+            defer_depth=len(self.defer_stack),
+            slot=slot,
+            type=declared,
+        )
+        self.gen_except_handler(expr, payload_addr, result_t.args[1], ctx)
+        if not self.builder.block.is_terminated:
+            raise LangError(
+                "the except handler may fall through without a value; emit "
+                "a fallback or diverge (return, break, continue, panic)",
+                expr.line,
+            )
+        self.builder.position_at_end(ok_bb)
+        ok_ptr = self.builder.bitcast(payload_addr, ok_t.ir.as_pointer())
+        tv = self.coerce(
+            TypedValue(self.builder.load(ok_ptr), ok_t),
+            declared, stmt.line, f"let {stmt.name}",
+        )
+        self.builder.store(tv.value, slot)
+        self.bind_local(stmt.name, slot, declared)
+        if expr.otherwise is not None:
+            self.gen_block(expr.otherwise)
+        ok_falls = not self.builder.block.is_terminated
+        if ok_falls:
+            self.builder.branch(join_bb)
+        self.builder.position_at_end(join_bb)
+        if not (ok_falls or ctx.emitted):
+            # The handler diverged and a diverging else closed the ok arm:
+            # nothing reaches the join, so the statement diverges too.
+            self.builder.unreachable()
+
+    def gen_except_stmt(self, expr: Except):
+        """Lower statement ``try f() except (err) { H } [else { S }];``.
+
+        No value escapes the statement, so the handler is obligation-free:
+        it may fall through (log and move on), diverge, or -- over a
+        two-arm result -- still ``emit`` a fallback, which is simply
+        discarded. This is also the ``result<E>`` consumer (the one
+        position an error-only result can be handled), where an ``emit``
+        rejects instead: there is no ok value to stand in for. The
+        optional ``else`` stays the ok-arm block.
+
+        Args:
+            expr: The ``Except`` node.
+
+        Raises:
+            LangError: When the subject is not a result.
+        """
+        result_t, payload_addr, is_err = self.spill_result(expr)
+        err_bb = self.builder.append_basic_block("except.err")
+        ok_bb = self.builder.append_basic_block("except.ok")
+        join_bb = self.builder.append_basic_block("except.end")
+        ctx = BlockExprCtx(
+            cont_bb=join_bb, defer_depth=len(self.defer_stack)
+        )
+        if len(result_t.args) == 2:
+            # A discarded fallback slot keeps emit's semantics uniform with
+            # the value positions (the value must still coerce to T).
+            ctx.type = result_t.args[0]
+            ctx.slot = self.entry_alloca(ctx.type.ir)
+            if over_aligned(ctx.type):
+                ctx.slot.align = type_align(ctx.type)
+        else:
+            ctx.no_value = str(result_t)
+        self.builder.cbranch(is_err, err_bb, ok_bb)
+        self.builder.position_at_end(err_bb)
+        self.gen_except_handler(expr, payload_addr, result_t.args[-1], ctx)
+        err_falls = not self.builder.block.is_terminated
+        if err_falls:
+            self.builder.branch(join_bb)
+        self.builder.position_at_end(ok_bb)
+        if expr.otherwise is not None:
+            self.gen_block(expr.otherwise)
+        ok_falls = not self.builder.block.is_terminated
+        if ok_falls:
+            self.builder.branch(join_bb)
+        self.builder.position_at_end(join_bb)
+        if not (ok_falls or err_falls or ctx.emitted):
+            self.builder.unreachable()
+
+    def gen_except_value(self, expr: Except) -> TypedValue:
+        """Lower a ``try ... except`` nested inside a larger expression.
+
+        The ``try`` expression sits at unary level, so it composes as an
+        ordinary operand (``1 + try f() except (err) { emit 0; }``, an
+        argument, a condition). Same value-position semantics as the
+        ``let`` form -- the handler must diverge or ``emit`` a fallback,
+        the optional ``else`` runs on the ok arm (with no binding of its
+        own: there is no name here) -- minus the binding.
+
+        Args:
+            expr: The ``Except`` node.
+
+        Returns:
+            The ok value or the handler's fallback as a ``TypedValue``.
+
+        Raises:
+            LangError: When the operand is not a result, the result has no
+                ok value (``result<E>``), the handler may fall through
+                without emitting, or every path diverges (nothing produces
+                the operand's value).
+        """
+        result_t, payload_addr, is_err = self.spill_result(expr)
+        if len(result_t.args) == 1:
+            raise LangError(
+                f"a {result_t} has no ok value to bind; handle it in "
+                "statement position: try f() except (err) { ... };",
+                expr.line,
+            )
+        ok_t = result_t.args[0]
+        err_bb = self.builder.append_basic_block("except.err")
+        ok_bb = self.builder.append_basic_block("except.ok")
+        join_bb = self.builder.append_basic_block("except.end")
+        slot = self.entry_alloca(ok_t.ir)
+        if over_aligned(ok_t):
+            slot.align = type_align(ok_t)
+        self.builder.cbranch(is_err, err_bb, ok_bb)
+        self.builder.position_at_end(err_bb)
+        ctx = BlockExprCtx(
+            cont_bb=join_bb,
+            defer_depth=len(self.defer_stack),
+            slot=slot,
+            type=ok_t,
+        )
+        self.gen_except_handler(expr, payload_addr, result_t.args[1], ctx)
+        if not self.builder.block.is_terminated:
+            raise LangError(
+                "the except handler may fall through without a value; emit "
+                "a fallback or diverge (return, break, continue, panic)",
+                expr.line,
+            )
+        self.builder.position_at_end(ok_bb)
+        ok_ptr = self.builder.bitcast(payload_addr, ok_t.ir.as_pointer())
+        self.builder.store(self.builder.load(ok_ptr), slot)
+        if expr.otherwise is not None:
+            self.gen_block(expr.otherwise)
+        if self.builder.block.is_terminated:
+            if not ctx.emitted:
+                # A diverging else closed the ok arm and the handler never
+                # emits: no path can deliver the operand's value.
+                raise LangError(
+                    "this try expression never produces a value: the "
+                    "handler and the else block both diverge",
+                    expr.line,
+                )
+        else:
+            self.builder.branch(join_bb)
+        self.builder.position_at_end(join_bb)
+        return TypedValue(self.gen_load(slot), ok_t)
+
     def gen_struct_lit(self, expr: StructLit, struct_type: LangType = None) -> TypedValue:
         """Lower a struct literal ``struct Name { field = expr, ... }``.
 
@@ -5869,6 +6165,27 @@ class CodeGen:
                     f"{self.current_noreturn!r} (it promises never to return)",
                     stmt.line,
                 )
+            if isinstance(stmt.value, Except):
+                # `return try f() except (err) { H } [else { S }];`: desugar to
+                # a hidden let (evaluate once, run the handler/else arms, fill
+                # the ok slot) followed by an ordinary return of the slot, so
+                # the normal return path owns defers, coercion to the return
+                # type, and the mut-return discipline. The name is not a
+                # lexable identifier, so it cannot collide.
+                hidden = "0except"
+                self.gen_statement(Let(hidden, None, stmt.value, stmt.line))
+                try:
+                    # When the handler diverges and a diverging else keeps
+                    # even the ok arm from falling through, the join is
+                    # already unreachable and there is nothing to return.
+                    if not self.builder.block.is_terminated:
+                        self.gen_statement(
+                            Return(Var(hidden, stmt.line), stmt.line)
+                        )
+                finally:
+                    del self.locals[hidden]
+                    self.scope_names.discard(hidden)
+                return
             if stmt.value is None:
                 if self.ret_type is not VOID:
                     raise LangError(f"return needs a {self.ret_type} value", stmt.line)
@@ -5933,10 +6250,18 @@ class CodeGen:
                     stmt.line,
                 )
             ctx = self.block_exprs[-1]
+            if ctx.no_value is not None:
+                # A statement-position except over a result<E>: the handler
+                # has no ok value to fall back to.
+                raise LangError(
+                    f"a {ctx.no_value} has no ok value; the except handler "
+                    "has nothing to emit",
+                    stmt.line,
+                )
             # Evaluate the value before the defers run, so a defer cannot clobber
             # what is being emitted (as with a return value).
-            tv = self.gen_expr(stmt.value)
             if ctx.type is None:
+                tv = self.gen_expr(stmt.value)
                 # The first emit fixes the block's type and result slot. An
                 # untyped constant resolves to its own type (int32/float64);
                 # `null` has no inferable type, so it must be cast.
@@ -5949,7 +6274,22 @@ class CodeGen:
                 ctx.type = tv.type
                 ctx.slot = self.entry_alloca(ctx.type.ir)
             else:
-                tv = self.coerce(tv, ctx.type, stmt.line, "emit")
+                # A preset type (an except handler's fallback slot) makes the
+                # emit a typed sink: adapted literals route exactly as in a
+                # typed let -- `emit "hi"` borrows into a slice<char> slot,
+                # `emit ok(v)` builds a nested result -- before coercion.
+                if (
+                    self.struct_literal_adapts(stmt.value, ctx.type)
+                    or self.str_literal_adapts(stmt.value, ctx.type)
+                    or self.array_literal_adapts(stmt.value, ctx.type)
+                    or self.result_literal_adapts(stmt.value, ctx.type)
+                ):
+                    tv = self.gen_adapted_literal(stmt.value, ctx.type, stmt.line)
+                else:
+                    tv = self.coerce(
+                        self.gen_expr(stmt.value), ctx.type, stmt.line, "emit"
+                    )
+            ctx.emitted = True
             self.gen_store(tv.value, ctx.slot)
             self.run_defers_through(ctx.defer_depth)
             if not self.builder.block.is_terminated:
@@ -5962,6 +6302,9 @@ class CodeGen:
                 raise LangError(
                     f"variable {stmt.name!r} already declared in this scope", stmt.line
                 )
+            if isinstance(stmt.value, Except):
+                self.gen_let_except(stmt)
+                return
             if stmt.value is None:  # let x: T; -- uninitialized, like a C local
                 declared = self.lang_type(stmt.type_name, stmt.line)
                 if declared is VOID:
@@ -6505,7 +6848,10 @@ class CodeGen:
             # dies, as at any through-memory store.
             self.narrowed_paths.clear()
         elif isinstance(stmt, ExprStmt):
-            self.gen_expr(stmt.expr)
+            if isinstance(stmt.expr, Except):
+                self.gen_except_stmt(stmt.expr)
+            else:
+                self.gen_expr(stmt.expr)
         else:
             raise LangError(f"cannot compile statement {stmt!r}", stmt.line)
 
@@ -7950,6 +8296,11 @@ class CodeGen:
             return self.gen_tuple_lit(expr)
         if isinstance(expr, BlockExpr):
             return self.gen_block_expr(expr)
+        if isinstance(expr, Except):
+            # A try...except nested inside a larger expression (an operand,
+            # an argument): the plain value form. The binding forms
+            # (let/return/statement) intercept the node before gen_expr.
+            return self.gen_except_value(expr)
         if isinstance(expr, Var):
             # A name that is not a variable may be a constant or a function used
             # as a value.
@@ -8943,6 +9294,9 @@ class CodeGen:
                 arity does not match the binder count.
         """
         tv = self.gen_expr(stmt.value)
+        if is_result(strip_const(tv.type)):
+            self.destructure_result(stmt, tv)
+            return
         names = [stmt.name, *stmt.extra]
         fixed = len(names) - 1 if stmt.rest else len(names)
         if is_tuple(strip_const(tv.type)):
@@ -8985,6 +9339,95 @@ class CodeGen:
         del self.locals[hidden]
         self.scope_names.discard(hidden)
 
+    def destructure_result(self, stmt: Let, tv: TypedValue):
+        """Lower form 1, ``let ret, err = f();`` over a ``result<T, E>``.
+
+        Exactly two binders (no rest): ``ret`` takes the ok value, ``err``
+        the error. Lowered as a tag select -- **never** a raw read of the
+        other union arm, whose bytes are the stored arm's, not zero: both
+        slots zero-fill first, then a branch on the tag stores only the
+        live arm's value into its binder. So on success ``err`` is the
+        error type's all-zero value -- the reserved, unnameable no-error
+        state, falsy by construction (every declared variant is non-zero),
+        making ``if (err)`` a total check for **any** declared error type
+        -- and on failure ``ret`` is the zero value of ``T``.
+
+        The error-only ``result<E>`` rejects: there is no ok value to bind
+        (its consumer is statement-position ``except``).
+
+        Args:
+            stmt: The destructuring ``Let``.
+            tv: The already-evaluated source value.
+
+        Raises:
+            LangError: On a ``result<E>`` source, a binder count other than
+                two, a rest binder, or a duplicate binder name.
+        """
+        result_t = strip_const(tv.type)
+        if len(result_t.args) == 1:
+            raise LangError(
+                f"cannot destructure {tv.type}: it has no ok value; handle "
+                "it with except: try f() except (err) { ... };",
+                stmt.line,
+            )
+        names = [stmt.name, *stmt.extra]
+        if stmt.rest or len(names) != 2:
+            binders = f"{len(names)} binder" + ("" if len(names) == 1 else "s")
+            if stmt.rest:
+                binders += " and a rest"
+            raise LangError(
+                f"cannot destructure {tv.type} into {binders} (it binds a "
+                "value and an error: let ret, err = f();)",
+                stmt.line,
+            )
+        ok_t, err_t = result_t.args
+        # Spill the source and read the tag, as an except clause does.
+        src = self.builder.alloca(result_t.ir, name="destructure.src")
+        if over_aligned(result_t):
+            src.align = type_align(result_t)
+        self.builder.store(tv.value, src)
+        indices = result_t.elem_indices
+        tag_addr = self.builder.gep(
+            src, [I32_ZERO, ir.Constant(ir.IntType(32), indices[0])],
+            inbounds=True,
+        )
+        payload_addr = self.builder.gep(
+            src, [I32_ZERO, ir.Constant(ir.IntType(32), indices[1])],
+            inbounds=True,
+        )
+        tag = self.builder.load(tag_addr, name="destructure.tag")
+        is_err = self.builder.icmp_unsigned(
+            "!=", tag, ir.Constant(UINT8.ir, 0)
+        )
+        # Both binders zero-fill up front (the arm the tag does not select
+        # keeps the zero), then each arm stores only its own live value.
+        slots = []
+        for name, arm_t in ((names[0], ok_t), (names[1], err_t)):
+            if name in self.scope_names:
+                raise LangError(
+                    f"variable {name!r} already declared in this scope",
+                    stmt.line,
+                )
+            slot = self.entry_alloca(arm_t.ir, name)
+            if over_aligned(arm_t):
+                slot.align = type_align(arm_t)
+            self.builder.store(ir.Constant(arm_t.ir, None), slot)
+            self.bind_local(name, slot, arm_t)
+            slots.append(slot)
+        err_bb = self.builder.append_basic_block("destructure.err")
+        ok_bb = self.builder.append_basic_block("destructure.ok")
+        end_bb = self.builder.append_basic_block("destructure.end")
+        self.builder.cbranch(is_err, err_bb, ok_bb)
+        self.builder.position_at_end(ok_bb)
+        ok_ptr = self.builder.bitcast(payload_addr, ok_t.ir.as_pointer())
+        self.builder.store(self.builder.load(ok_ptr), slots[0])
+        self.builder.branch(end_bb)
+        self.builder.position_at_end(err_bb)
+        err_ptr = self.builder.bitcast(payload_addr, err_t.ir.as_pointer())
+        self.builder.store(self.builder.load(err_ptr), slots[1])
+        self.builder.branch(end_bb)
+        self.builder.position_at_end(end_bb)
+
     def destructure_error(self, base_expr, base: TypedValue) -> str:
         """Word the rejection for a non-tuple, non-slice destructuring source.
 
@@ -9009,13 +9452,6 @@ class CodeGen:
             return (
                 "cannot destructure a string literal; borrow it first: "
                 'let a, b = "..." as slice<char>;'
-            )
-        if is_result(base.type):
-            # No misleading borrow hint: a result has no element view. (Its
-            # binding forms are a planned, separate stage.)
-            return (
-                f"cannot destructure {base.type}; "
-                "only a tuple or slice can be destructured"
             )
         if is_aggregate(base.type):
             return (

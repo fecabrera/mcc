@@ -28,6 +28,41 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Error handling stage 2: the binding forms — `let ret, err = f();` and
+  `try ... except`** — a `result` can now be *consumed*. Form 1, the
+  C-flavored destructure `let ret, err = f();`, splits a `result<T, E>`
+  into exactly two binders: on success `err` is the reserved zero no-error
+  state (falsy by construction, so `if (err)` is a total check for every
+  declared error type) and on failure `ret` is the zero value of `T` —
+  lowered as a tag select that zero-fills the unselected binder, never a
+  raw read of the other union arm's bytes. The error-only `result<E>`
+  rejects (nothing to bind); tuple/slice destructuring is unchanged. Form
+  A, the handler form: `try expr except (err) { H } [else { S }]` — `try`
+  binds the call chain that follows and hands its error to the `except`
+  clause, with `err` a plain copy of `E` scoped to the handler. Where a
+  value escapes (a `let` initializer, a `return` value) the handler must
+  diverge (`return`/`break`/`continue`/`panic`) or `emit` a fallback
+  coercing to `T`; as a whole expression statement it is obligation-free,
+  and that form is the `result<E>` consumer. `try` sits at unary level, so
+  the whole form also composes as an ordinary operand
+  (`1 + try f() except (err) { emit 0; }`). The optional `else` block is
+  the **ok arm only** (Python's `try`/`except`/`else`): it runs on `ok(v)`
+  and is *skipped* on the handler's emit-fallback path, though code after
+  the statement still runs with the fallback. `emit` inside a handler
+  targets the `try` expression like a block expression, which is exactly
+  what keeps `try f() except (err) { emit fallback; }` legal inside a
+  `defer` body while a handler that `return`s stays banned there by the
+  defer-escape rules. Propagation is the explicit idiom
+  `let v = try g() except (err) { return error(err); };` (same `E`;
+  mapping between error types is the handler's job — no implicit
+  coercion). `try` and `except` become reserved keywords (`except` never
+  appears without its `try`; a bare `try g()` — the propagation
+  expression — stays a staged compile error until the epic's next stage),
+  and all three editor grammars highlight the form (tree-sitter
+  `try_expression`, helix/neovim queries, VS Code tmLanguage). See
+  [Consuming a result](docs/language.md#consuming-a-result-the-destructure)
+  and [examples/types/error_handling.mc](examples/types/error_handling.mc).
+
 - **Error handling stage 1: `error` declarations, `result<T, E>`, and the
   `ok()`/`error()` constructors** — recoverable errors as values, the
   recoverable complement of `panic`/`assert`. An `error` declaration

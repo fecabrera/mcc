@@ -462,26 +462,33 @@ already do).
           scope exits with an error, composing with the shipped
           [`defer`](docs/language.md#defer) machinery
           (cleanup-on-failure without restating it in every handler)
-  - [ ] stage 2: the binding forms — form 1, the C-flavored destructure
+  - [x] stage 2: the binding forms — form 1, the C-flavored destructure
         `let ret, err = f();` (`err` is the variant or the zero state,
         `ret` the ok value or zero-filled, `if (err)` the check; lowered
         as a tag select, never as a union-arm pun; rejects `result<E>`,
         which has no value to bind), and form A, the handler form
-        `let ret = f() except (err) { H } [else { S }];`, also on `return`
-        and in expression-statement position (`f() except (err) { H };`,
-        the `result<E>` consumer, where the handler is obligation-free).
-        Where a value escapes, the handler must diverge or `emit` a
-        fallback; `else` is the ok-arm only, Python-style: it runs on
-        `ok(v)` and is skipped on the handler's emit-fallback path
-  - [ ] stage 3: `try` — the whole production in one change set,
-        settling the keyword's grammar once (`try ( IDENT =` opens the
-        statement, anything else is the expression, the shipped
-        `with`-head discipline). The statement form:
+        `let ret = try f() except (err) { H } [else { S }];` — `try`
+        binds the call chain that follows and carries its `except`
+        clause (both reserved keywords; `except` never appears without
+        `try`) — also on `return` and as a whole expression statement
+        (`try f() except (err) { H };`, the `result<E>` consumer, where
+        the handler is obligation-free). Where a value escapes, the
+        handler must diverge or `emit` a fallback; `else` is the ok-arm
+        only, Python-style: it runs on `ok(v)` and is skipped on the
+        handler's emit-fallback path. A bare `try g()` (no handler) is a
+        staged compile error until stage 3 — implemented, see
+        [Consuming a result](docs/language.md#consuming-a-result-the-destructure)
+  - [ ] stage 3: the rest of the `try` production in one change set
+        (the keyword and its `except` handler clause landed in stage 2;
+        this stage adds the forms without one, settling the remaining
+        grammar once: `try ( IDENT =` opens the statement, anything else
+        is the expression, the shipped `with`-head discipline). The
+        statement form:
         `try (ret = f()) { B } except (err) { H }` binds a fresh `ret`
         scoped to `B` with an obligation-free handler, and takes **no
         `else` arm**: the `try` block already is the no-error arm. The
         propagation expression: `let ret = try g();` desugars to
-        `g() except (err) { return error(err); }` and requires the
+        `try g() except (err) { return error(err); }` and requires the
         enclosing return type to carry the **same** `E` (a compile error
         naming both types otherwise; mapping between error types is a
         handler's job). The `??` fallback: `try g() ?? v` discards the

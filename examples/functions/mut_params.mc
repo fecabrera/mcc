@@ -24,7 +24,9 @@ fn twice(mut n: int32) {
 }
 
 // The classic out-parameter shape: return success, deliver the value
-// through `mut` -- no pointer in the signature.
+// through `mut` -- no pointer in the signature. (When a failure deserves a
+// named cause, `result<T, E>` carries the value and the error in one
+// return instead: see types/error_handling.mc.)
 fn find(haystack: slice<const int32>, needle: int32, mut index: uint64) -> bool {
     for pair in enumerate(haystack) {
         if (pair.value == needle) {

@@ -71,6 +71,8 @@
   "case"
   "when"
   "with"
+  "try"
+  "except"
 ] @keyword.control.conditional
 
 [

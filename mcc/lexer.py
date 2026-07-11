@@ -11,7 +11,7 @@ KEYWORDS = {"fn", "return", "let", "const", "if", "else", "while", "until",
             "break", "continue", "defer", "for", "in", "case", "when", "and",
             "or", "true", "false", "import", "as", "sizeof", "alignof",
             "offsetof", "typename", "len", "struct", "extends", "null", "emit",
-            "enum", "union", "mut", "unreachable", "with"}
+            "enum", "union", "mut", "unreachable", "with", "try", "except"}
 
 TOKEN_SPEC = [
     ("COMMENT", r"//[^\n]*|/\*(?s:.*?)\*/"),

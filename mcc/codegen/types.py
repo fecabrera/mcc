@@ -158,18 +158,32 @@ class BlockExprCtx:
     created lazily on the first ``emit`` (the block's type is its emit type);
     later emits coerce to it.
 
+    An ``except`` handler rides the same context with the slot and type
+    *preset* (the handler fills the ok value's slot, whose type the tested
+    result fixes), so its emits coerce to the known type -- and adapted
+    literals route -- instead of fixing one lazily.
+
     Attributes:
         cont_bb: The continuation block; every ``emit`` branches here.
         defer_depth: The ``defer_stack`` depth on entry, so an ``emit`` unwinds
             exactly the block's own deferred scopes.
         slot: The result alloca, or ``None`` until the first ``emit``.
         type: The block's value type, or ``None`` until the first ``emit``.
+        emitted: Whether any ``emit`` targeted this context -- whether the
+            continuation block is reachable from the handler's arm (an
+            ``except`` in value position needs to know; a plain block
+            expression reads ``type`` instead).
+        no_value: For a statement-position ``except`` over a ``result<E>``:
+            the result type's name, so an ``emit`` in the handler rejects
+            (there is no ok value to fall back to). ``None`` everywhere else.
     """
 
     cont_bb: ir.Block
     defer_depth: int
     slot: object = None
     type: "LangType | None" = None
+    emitted: bool = False
+    no_value: "str | None" = None
 
 
 @dataclass

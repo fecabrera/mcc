@@ -4138,13 +4138,108 @@ type — a member, a parameter, a stored value — and nothing else. `ok` and
 `error` are not keywords: only the call shape `ok(` / `error(` is claimed,
 so both names remain ordinary identifiers.
 
-Stage 1 ships the declarations, the type, and the constructors; the
-consumption forms — the destructure `let ret, err = f();`, the
-`except`/`else` handler form, and `try` — are the next stages of the
-[roadmap epic](../ROADMAP.md#planned). Until they land, a result can be
-constructed, returned, passed, and stored, and an error value tested
-directly; see
-[examples/types/error_handling.mc](../examples/types/error_handling.mc).
+### Consuming a result: the destructure
+
+`let ret, err = f();` splits a `result<T, E>` into its two binders — the
+C-flavored check style. Exactly one of the two is "live":
+
+```c
+let value, err = find(7);
+if (err) { /* value is the zero value of int64 */ }
+else     { /* err is the zero no-error state; value is the payload */ }
+```
+
+- On success, `ret` is the ok value and `err` is the **reserved zero
+  no-error state** — falsy by construction, since every declared variant is
+  non-zero — so `if (err)` is a total check for *any* declared error type.
+- On failure, `err` is the error and `ret` is the **zero value of `T`**
+  (zero-filled, not the stored error's bytes reinterpreted — the lowering
+  branches on the tag and never reads the other union arm).
+
+The destructure takes exactly two binders, no rest binder, and no type
+annotations (each binder takes its arm's type). The error-only `result<E>`
+has no ok value to bind, so it rejects here — the statement-position
+`try`/`except` below is its consumer. Tuple and slice
+[destructuring](#variables) is unchanged.
+
+### Consuming a result: try ... except
+
+`try` attempts the call that follows and hands its error to the `except`
+clause: `try f() except (err) { H } [else { S }]`. The `try` binds the
+call chain immediately after it (a unary-level prefix — the handler
+belongs to that call, not to any larger expression around it); the binder
+is parenthesized and both bodies are braced blocks:
+
+```c
+let v = try find(key) except (err) {   // err: the error value, scoped here
+    return -1;                         // diverge ...
+    // ... or supply a fallback:  emit 0;
+} else {
+    println("found {}", v);            // the ok arm; v is in scope
+};
+// v is also in scope here
+```
+
+Where a value escapes — a `let` initializer or a `return` value — the
+handler **must diverge** (`return`, `break`, `continue`, a call to a
+`@noreturn` function such as `panic`) **or `emit` a fallback** that
+coerces to `T` and stands in for the ok value. `emit` inside the handler
+targets the `try` expression like a [block expression](#block-expressions)
+— nested block expressions inside the handler keep their own `emit`
+targets, and inside a [`defer`](#defer) body the handler's `emit` stays
+legal (it targets a block opened inside the defer) while a handler that
+`return`s falls to the existing defer-escape ban.
+
+The optional `else` block is the **ok arm only** — Python's
+`try`/`except`/`else`. On success it runs with the bound value in scope;
+on the handler's **emit-fallback path it does not run** (a fallback is not
+an ok), but code after the statement does, with the binding set to the
+fallback. That corner is the one place the value is live after the
+statement without `else` having run:
+
+| Path | handler `H` | `else` `S` | code after |
+|---|---|---|---|
+| ok | — | runs (`ret` in scope) | runs, `ret` = payload |
+| error, `H` diverges | runs | skipped | skipped |
+| error, `H` emits | runs | **skipped** | runs, `ret` = fallback |
+
+As a whole **expression statement** nothing escapes, so the handler is
+obligation-free — it may fall through ("log and move on"), diverge, or
+still `emit` a discarded fallback. This is also the `result<E>` consumer:
+
+```c
+try flush() except (err) { println("flush failed: {}", err as int32); };
+```
+
+(For a `result<E>` there is no ok value, so `emit` rejects inside the
+handler, and the `let`/`return` forms reject the call outright.)
+
+Because `try` sits at unary level, a `try ... except` also composes as an
+ordinary operand — `let n = 1 + try find(k) except (err) { emit 0; };`
+works, with the same diverge-or-emit obligation (an `else` there runs on
+the ok arm but binds nothing — only the binding forms have a name to
+share). And `except` never appears without its `try`: the un-prefixed
+spelling is rejected with the fix
+(`except needs try: try f() except (err) { ... }`).
+
+**Propagation** is explicit — construct the outgoing result in the handler.
+With the same `E`, `error(err)` type-checks directly; a different error
+type needs a mapping:
+
+```c
+fn wrap(key: int32) -> result<int32, my_error> {
+    let v = try find(key) except (err) { return error(err); };
+    return ok(v as int32);
+}
+```
+
+The rest of the `try` production — the bare propagation expression
+(`let v = try g();`), the `try (ret = f()) { ... } except` statement, and
+the `??` fallback — is the next stage of the
+[roadmap epic](../ROADMAP.md#planned); until it lands, a `try` without its
+`except` clause is a staged compile error. See
+[examples/types/error_handling.mc](../examples/types/error_handling.mc)
+for the full tour.
 
 ## Type aliases
 

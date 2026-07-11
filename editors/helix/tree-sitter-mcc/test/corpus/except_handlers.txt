@@ -1,0 +1,143 @@
+================================================================================
+let with a try...except handler
+================================================================================
+
+fn main() -> int32 {
+    let v = try find(0) except (err) { emit -1; };
+    return v;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (let_statement
+        name: (identifier)
+        value: (try_expression
+          operand: (call_expression
+            function: (identifier_expression
+              (identifier))
+            arguments: (argument_list
+              (number)))
+          (except_clause
+            binder: (identifier)
+            handler: (block
+              (emit_statement
+                (unary_expression
+                  (number)))))))
+      (return_statement
+        (identifier_expression
+          (identifier))))))
+
+================================================================================
+let with a try...except handler and an else arm
+================================================================================
+
+fn main() -> int32 {
+    let v = try find(0) except (err) { return 1; } else { log(v); };
+    return v;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (let_statement
+        name: (identifier)
+        value: (try_expression
+          operand: (call_expression
+            function: (identifier_expression
+              (identifier))
+            arguments: (argument_list
+              (number)))
+          (except_clause
+            binder: (identifier)
+            handler: (block
+              (return_statement
+                (number)))
+            alternative: (block
+              (expression_statement
+                (call_expression
+                  function: (identifier_expression
+                    (identifier))
+                  arguments: (argument_list
+                    (identifier_expression
+                      (identifier)))))))))
+      (return_statement
+        (identifier_expression
+          (identifier))))))
+
+================================================================================
+return with a try...except handler
+================================================================================
+
+fn get() -> int64 {
+    return try find(0) except (err) { emit -1; };
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (return_statement
+        (try_expression
+          operand: (call_expression
+            function: (identifier_expression
+              (identifier))
+            arguments: (argument_list
+              (number)))
+          (except_clause
+            binder: (identifier)
+            handler: (block
+              (emit_statement
+                (unary_expression
+                  (number))))))))))
+
+================================================================================
+statement-position try...except handler
+================================================================================
+
+fn main() -> int32 {
+    try flush(1) except (err) { note(err); };
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (try_expression
+          operand: (call_expression
+            function: (identifier_expression
+              (identifier))
+            arguments: (argument_list
+              (number)))
+          (except_clause
+            binder: (identifier)
+            handler: (block
+              (expression_statement
+                (call_expression
+                  function: (identifier_expression
+                    (identifier))
+                  arguments: (argument_list
+                    (identifier_expression
+                      (identifier)))))))))
+      (return_statement
+        (number)))))

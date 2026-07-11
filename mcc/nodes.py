@@ -1188,6 +1188,38 @@ class ResultLit:
 
 
 @dataclass
+class Except:
+    """A ``try`` expression: ``try expr except (err) { H } [else { S }]``.
+
+    ``try`` binds the call chain that follows (a unary-level prefix, so the
+    whole form composes as an operand) and in this stage always carries its
+    ``except`` clause -- the bare propagation form and the ``??`` fallback
+    are later stages. Branches on the result's tag: on error the handler
+    ``H`` runs with ``binder`` bound to the error value (a plain copy,
+    scoped to ``H``); on ok the optional ``else`` block ``S`` runs. Where a
+    value escapes, ``H`` must diverge or ``emit`` a fallback for it; as a
+    whole expression statement it is obligation-free. ``S`` is the ok arm
+    only (Python's ``try``/``except``/``else``): it is skipped on the
+    handler's emit-fallback path. The binding forms (a ``let`` initializer,
+    a ``return`` value, an expression statement) special-case the node when
+    it is the whole expression; anywhere else it lowers as a plain value.
+
+    Attributes:
+        value: The tested ``try`` operand (must evaluate to a ``result``).
+        binder: The error binding's name, scoped to ``handler``.
+        handler: The handler block's statements.
+        otherwise: The ``else`` block's statements, or ``None`` when absent.
+        line: Source line for diagnostics.
+    """
+
+    value: object
+    binder: str
+    handler: list
+    otherwise: list | None
+    line: int
+
+
+@dataclass
 class Var:
     """A reference to a named variable, constant, or function.
 

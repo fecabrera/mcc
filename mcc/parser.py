@@ -32,6 +32,7 @@ from mcc.nodes import (
     EnumAccess,
     EnumDecl,
     ErrorDirective,
+    Except,
     ExprStmt,
     Import,
     FloatLit,
@@ -1766,6 +1767,7 @@ class Parser:
         if tok.kind == "return":
             self.advance()
             value = None if self.cur.kind == ";" else self.parse_expr()
+            self.reject_bare_except()
             self.expect(";")
             return Return(value, tok.line)
         if tok.kind == "emit":
@@ -1801,6 +1803,15 @@ class Parser:
                     )
                 self.expect("=")
                 value = self.parse_expr()
+                self.reject_bare_except()
+                if isinstance(value, Except):
+                    raise LangError(
+                        "a destructuring let does not take an except "
+                        "handler; bind the value alone (let ret = try f() "
+                        "except (err) { ... };) or test the error "
+                        "(let ret, err = f();)",
+                        tok.line,
+                    )
                 self.expect(";")
                 return Let(name, None, value, tok.line, names[1:], rest)
             type_name = self.parse_type_ref() if self.accept(":") else None
@@ -1814,6 +1825,7 @@ class Parser:
                 return Let(name, type_name, None, tok.line)
             self.expect("=")
             value = self.parse_expr()
+            self.reject_bare_except()
             self.expect(";")
             return Let(name, type_name, value, tok.line)
         if tok.kind == "if":
@@ -1864,6 +1876,7 @@ class Parser:
                 iterable = self.parse_expr()
             return For(var, iterable, self.parse_body(), tok.line)
         expr = self.parse_expr()
+        self.reject_bare_except()
         if self.accept("="):
             value = self.parse_expr()
             self.expect(";")
@@ -2055,6 +2068,68 @@ class Parser:
             is_with=True,
         )
 
+    def parse_except(self, subject):
+        """Parse an ``except (err) { H } [else { S }]`` handler clause.
+
+        The clause of the ``try`` expression (see :meth:`parse_unary`):
+        ``try g() except (err) { ... }``. ``except`` never appears without
+        its ``try`` (:meth:`reject_bare_except` gives the hint at the old
+        attachment positions). The binder is parenthesized (statement-head
+        house style) and both bodies are braced blocks: the handler is an
+        ``emit`` target, so a brace-less statement would leave the
+        enclosing statement's own ``;`` ambiguous. The optional ``else`` is
+        the ok-arm block; an ``else:`` belongs to an enclosing ``case``,
+        never to this clause.
+
+        Args:
+            subject: The already-parsed ``try`` operand the clause tests.
+
+        Returns:
+            The ``Except`` node.
+
+        Raises:
+            LangError: When the handler or else body is not a braced block.
+        """
+        line = self.expect("except").line
+        self.expect("(")
+        binder = self.expect("IDENT").text
+        self.expect(")")
+        if self.cur.kind != "{":
+            raise LangError(
+                "an except handler is a braced block, as in "
+                "'try f() except (err) { ... }'",
+                line,
+            )
+        handler = self.parse_block()
+        otherwise = None
+        if self.cur.kind == "else" and self.tokens[self.pos + 1].kind != ":":
+            else_line = self.advance().line
+            if self.cur.kind != "{":
+                raise LangError(
+                    "an except else is a braced block, as in "
+                    "'try f() except (err) { ... } else { ... }'",
+                    else_line,
+                )
+            otherwise = self.parse_block()
+        return Except(subject, binder, handler, otherwise, line)
+
+    def reject_bare_except(self):
+        """Reject an ``except`` trailing an expression without its ``try``.
+
+        The handler is a clause of the ``try`` expression, never a postfix
+        attachment; at the statement heads where the un-prefixed spelling
+        would otherwise die on the generic "expected ';'" this names the
+        fix.
+
+        Raises:
+            LangError: When the current token is ``except``.
+        """
+        if self.cur.kind == "except":
+            raise LangError(
+                "except needs try: try f() except (err) { ... }",
+                self.cur.line,
+            )
+
     # Expressions, by descending precedence level. `or` is loosest, then
     # `and`; both bind looser than comparisons, so `a > 0 or b < 0` needs no
     # parentheses. They short-circuit, so they are not part of PRECEDENCE.
@@ -2161,10 +2236,30 @@ class Parser:
     def parse_unary(self):
         """Parse a prefix unary operator (``-``, ``!``, ``*``, ``&``) or below.
 
+        Also the home of the ``try`` expression: ``try`` binds the call
+        chain that follows (a unary expression, per the epic's grammar) and
+        in this stage must carry its ``except`` handler clause immediately
+        after -- the bare propagation form and the ``??`` fallback are the
+        next stage of the roadmap epic. Sitting at unary level, a
+        ``try ... except (err) { ... }`` is an ordinary operand: it
+        composes into larger expressions (``1 + try f() except ...``) and
+        the binding forms recognize it when it is the *whole* initializer,
+        return value, or statement.
+
         Returns:
-            A ``Unary`` node, or a postfix expression when no prefix operator
-            appears.
+            A ``Unary`` node, an ``Except`` node for a ``try`` expression,
+            or a postfix expression when no prefix operator appears.
         """
+        if self.cur.kind == "try":
+            line = self.advance().line
+            operand = self.parse_unary()
+            if self.cur.kind != "except":
+                raise LangError(
+                    "try without a handler is not yet supported; add "
+                    "except (err) { ... }",
+                    line,
+                )
+            return self.parse_except(operand)
         if self.cur.kind in ("-", "!", "*", "&", "~"):
             op = self.advance()
             return Unary(op.kind, self.parse_unary(), op.line)
