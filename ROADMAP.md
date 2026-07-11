@@ -473,10 +473,10 @@ already do).
         Where a value escapes, the handler must diverge or `emit` a
         fallback; `else` is the ok-arm only, Python-style: it runs on
         `ok(v)` and is skipped on the handler's emit-fallback path
-  - [ ] stage 3: `try` — both uses of the keyword in one change set,
-        settling its grammar once (`try ( IDENT =` opens the statement,
-        anything else is the expression, the shipped `with`-head
-        discipline). The statement form:
+  - [ ] stage 3: `try` — the whole production in one change set,
+        settling the keyword's grammar once (`try ( IDENT =` opens the
+        statement, anything else is the expression, the shipped
+        `with`-head discipline). The statement form:
         `try (ret = f()) { B } except (err) { H }` binds a fresh `ret`
         scoped to `B` with an obligation-free handler, and takes **no
         `else` arm**: the `try` block already is the no-error arm. The
@@ -484,7 +484,26 @@ already do).
         `g() except (err) { return error(err); }` and requires the
         enclosing return type to carry the **same** `E` (a compile error
         naming both types otherwise; mapping between error types is a
-        handler's job)
+        handler's job). The `??` fallback: `try g() ?? v` discards the
+        error and lazily evaluates the fallback instead of propagating
+        (no requirement on the enclosing return type; the fallback
+        coerces to `T`, so `result<E>`, which has no value to default,
+        rejects). This stage owns the `??` token (a lexer `OP2`
+        alternative) and its production: the right-hand side is
+        restricted to an **atomic** expression, meaning a unary
+        expression (identifier, literal, a call `h()`, a member or
+        index chain, prefix forms like `-1`, `!1`, `~1`), a
+        parenthesized `(expr)`, or an emit-block `{ ...; emit v; }`
+        that may diverge; `??` binds tighter than the ternary and every
+        binary operator and chains left-associatively:
+        `try g() ?? v ? a : b` is `(try g() ?? v) ? a : b`,
+        `try g() ?? v ?? q` is `(try g() ?? v) ?? q`, and
+        `try g() ?? 2 - 1` is `(try g() ?? 2) - 1` (a computed fallback
+        spells `?? (2 - 1)`). A result left of `??` without `try`
+        rejects with the hint that results unwrap through `try`, and a
+        pointer left-hand side rejects with a forward hint until the
+        [pointer-truthiness item](#functions-and-methods) turns on its
+        null-coalescing arm over this same production
   - [ ] stage 4: diagnostics and rendering — `-Wunused-result`, an opt-in
         class over the shipped
         [warning registry](#metaprogramming-and-builtins) for a statement
@@ -2073,6 +2092,28 @@ already do).
         [`-Wextern-nonnull`](#metaprogramming-and-builtins) posture;
         implemented, see [@nonnull-carrying function
         types](docs/language.md#nonnull-carrying-function-types)
+- [ ] Pointer truthiness and `p ?? q` null coalescing — pointers become
+      testable in conditions: `if (p)` means `if (p != null)` and `!p`
+      means `p == null`, so `if (!p) { return; }` is the null guard (a
+      bare `!p` yields a plain `bool`; `and`/`or` stay bool-yielding,
+      pointer operands simply becoming legal condition operands through
+      the truthiness arm). The `??` operator, whose token, precedence,
+      and `try`-fallback arm are owned by stage 3 of the
+      [error-handling epic](#types-and-generics), gains its pointer arm:
+      `p ?? q` yields `p` when non-null, else `q`, lazily (the
+      right-hand side evaluates only on the null path), operands
+      agreeing on one pointer type, with the same restricted atomic
+      right-hand side (a unary expression, a parenthesized `(expr)`, or
+      an emit-block, which may diverge: `p ?? { panic("was null"); }`
+      falls through only on the non-null edge, so the result is provably
+      non-null). Narrowing parity ships in the same set: bare-pointer
+      and `!p` conditions join the `p != null` / `p == null` guard
+      recognizer of the flow-narrowing item above, so `if (!p) return;`
+      narrows `p` for the remainder exactly like the spelled-out guard
+      (the `!` arm covers a single atom; distributing `!(...)` over
+      compound conditions is a follow-up), and a coalesce whose
+      right-hand side is provably non-null or diverges seeds the
+      result's fact (`let q = p ?? default!;`)
 - [ ] C variadics — the C-ABI `...`/`va_list` machinery, beyond forwarding:
   - [x] variadic declarations and `va_list` forwarding — implemented, see
         [Variadic functions](docs/language.md#variadic-functions)
