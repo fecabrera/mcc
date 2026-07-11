@@ -9,6 +9,7 @@
 (number) @constant.numeric.integer
 (float) @constant.numeric.float
 (string) @string
+(f_string) @string
 (char) @constant.character
 (boolean) @constant.builtin.boolean
 (null) @constant.builtin
@@ -147,3 +148,14 @@
   ","
   ":"
 ] @punctuation.delimiter
+
+; ------------------------------------------------------ f-string interiors
+; The (f_string) capture above paints the frame and literal text; hole
+; expressions inside carry their own captures naturally. These overrides
+; come last so the hole delimiters and the inspector `=` win their tokens
+; back from the generic operator/punctuation captures.
+(escape_sequence) @constant.character.escape
+(interpolation ["{" "}"] @punctuation.special)
+(interpolation "=" @punctuation.special)
+(interpolation ":" @punctuation.special)
+(format_spec) @string.special

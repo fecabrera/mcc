@@ -18,6 +18,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Editors: f-string interpolation highlighting** — the tree-sitter
+  grammar (Helix, and Neovim through the shared parser) now parses the
+  interior of an `f"..."` literal structurally: hole expressions are real
+  expression nodes and highlight natively, with dedicated captures for the
+  `{`/`}` hole delimiters, the trailing `=` inspector, the `:modifier`
+  format spec, and `\x`/`{{`/`}}` escapes; plain `"..."` strings stay one
+  opaque token, and the grammar gains its first `tree-sitter test` corpus
+  (`test/corpus/f_strings.txt`). The VS Code TextMate grammar mirrors it:
+  the quotes and literal-text runs carry the plain-string scope
+  (`string.quoted.double`, so every theme colors them like any string),
+  the holes sit outside any string scope and re-enter the full language
+  (`meta.embedded`, so hole expressions render as code in every theme),
+  and the hole braces use the JS-template punctuation scope
+  (`punctuation.definition.template-expression`) that virtually every
+  theme styles. One divergence from the compiler, which unescapes the
+  literal before sub-parsing holes: a nested string literal spelled with
+  escaped quotes (`f"{s == \"x\"}"`) doesn't parse in the tree-sitter
+  grammar (TextMate reads it as escapes).
+
 - **`mut` returns in function types — `fn(...) -> mut T`** — the return
   convention joins the parameter ones, lifting the last function-value
   ban: a [`mut`-returning](docs/language.md#mut-returns) function is now a

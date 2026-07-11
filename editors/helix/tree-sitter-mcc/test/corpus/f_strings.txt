@@ -1,0 +1,395 @@
+================================================================================
+plain string stays an opaque token
+================================================================================
+
+fn main() -> int32 {
+    println("n is {} and that is all", 7);
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (string)
+            (number))))
+      (return_statement
+        (number)))))
+
+================================================================================
+f-string with a simple hole
+================================================================================
+
+fn main() -> int32 {
+    println(f"n is {n}");
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (f_string
+              (string_content)
+              (interpolation
+                (identifier_expression
+                  (identifier)))))))
+      (return_statement
+        (number)))))
+
+================================================================================
+hole-free f-string
+================================================================================
+
+fn main() -> int32 {
+    println(f"abc");
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (f_string
+              (string_content)))))
+      (return_statement
+        (number)))))
+
+================================================================================
+multiple holes with text between and around
+================================================================================
+
+fn main() -> int32 {
+    println(f"a {x} b {y * 2} c");
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (f_string
+              (string_content)
+              (interpolation
+                (identifier_expression
+                  (identifier)))
+              (string_content)
+              (interpolation
+                (binary_expression
+                  (identifier_expression
+                    (identifier))
+                  (number)))
+              (string_content)))))
+      (return_statement
+        (number)))))
+
+================================================================================
+adjacent holes
+================================================================================
+
+fn main() -> int32 {
+    println(f"{x}{y}");
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (f_string
+              (interpolation
+                (identifier_expression
+                  (identifier)))
+              (interpolation
+                (identifier_expression
+                  (identifier)))))))
+      (return_statement
+        (number)))))
+
+================================================================================
+inspector holes, compact and spaced
+================================================================================
+
+fn main() -> int32 {
+    println(f"{n=} {n = }");
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (f_string
+              (interpolation
+                (identifier_expression
+                  (identifier)))
+              (string_content)
+              (interpolation
+                (identifier_expression
+                  (identifier)))))))
+      (return_statement
+        (number)))))
+
+================================================================================
+inspector on a comparison expression
+================================================================================
+
+fn main() -> int32 {
+    println(f"{n == 7=}");
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (f_string
+              (interpolation
+                (binary_expression
+                  (identifier_expression
+                    (identifier))
+                  (number)))))))
+      (return_statement
+        (number)))))
+
+================================================================================
+format spec, and inspector plus format spec
+================================================================================
+
+fn main() -> int32 {
+    println(f"{hx:08x} {hx=:08x}");
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (f_string
+              (interpolation
+                (identifier_expression
+                  (identifier))
+                (format_spec))
+              (string_content)
+              (interpolation
+                (identifier_expression
+                  (identifier))
+                (format_spec))))))
+      (return_statement
+        (number)))))
+
+================================================================================
+ternary hole keeps its own colon; a colon after the expression is the spec
+================================================================================
+
+fn main() -> int32 {
+    println(f"{n > 5 ? hx : n:x}");
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (f_string
+              (interpolation
+                (ternary_expression
+                  condition: (binary_expression
+                    (identifier_expression
+                      (identifier))
+                    (number))
+                  consequence: (identifier_expression
+                    (identifier))
+                  alternative: (identifier_expression
+                    (identifier)))
+                (format_spec))))))
+      (return_statement
+        (number)))))
+
+================================================================================
+literal-brace escapes around a hole
+================================================================================
+
+fn main() -> int32 {
+    println(f"brace: {{{n}}}");
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (f_string
+              (string_content)
+              (escape_sequence)
+              (interpolation
+                (identifier_expression
+                  (identifier)))
+              (escape_sequence)))))
+      (return_statement
+        (number)))))
+
+================================================================================
+backslash escapes in f-string text
+================================================================================
+
+fn main() -> int32 {
+    println(f"tab\there {n}\n");
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (f_string
+              (string_content)
+              (escape_sequence)
+              (string_content)
+              (interpolation
+                (identifier_expression
+                  (identifier)))
+              (escape_sequence)))))
+      (return_statement
+        (number)))))
+
+================================================================================
+nested call and member expressions in a hole
+================================================================================
+
+fn main() -> int32 {
+    println(f"{p.x} {get(p).y:.2f}");
+    return 0;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    name: (identifier)
+    (parameter_list)
+    name: (type_identifier)
+    body: (block
+      (expression_statement
+        (call_expression
+          function: (identifier_expression
+            (identifier))
+          arguments: (argument_list
+            (f_string
+              (interpolation
+                (member_expression
+                  base: (identifier_expression
+                    (identifier))
+                  field: (identifier)))
+              (string_content)
+              (interpolation
+                (member_expression
+                  base: (call_expression
+                    function: (identifier_expression
+                      (identifier))
+                    arguments: (argument_list
+                      (identifier_expression
+                        (identifier))))
+                  field: (identifier))
+                (format_spec))))))
+      (return_statement
+        (number)))))

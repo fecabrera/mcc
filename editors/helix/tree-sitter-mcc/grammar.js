@@ -553,6 +553,7 @@ module.exports = grammar({
         $.number,
         $.float,
         $.string,
+        $.f_string,
         $.char,
         $.boolean,
         $.null,
@@ -607,6 +608,54 @@ module.exports = grammar({
       seq('offsetof', '(', $._type, ',', field('field', $.identifier), ')'),
     typename_expression: ($) => seq('typename', '(', $._type, ')'),
     len_expression: ($) => seq('len', '(', $._expression, ')'),
+
+    // ---------------------------------------------------------------- f-strings
+    // An interpolated string literal, `f"..."` (parser.parse_fstring). Unlike
+    // the opaque `string` token, its interior is structured: literal content,
+    // escapes, `{{`/`}}` literal braces, and `{...}` holes carrying a real
+    // expression, so hole expressions highlight natively. A hole is a full
+    // expression, then an optional Python-style `=` inspector, then an
+    // optional `:modifier` whose text runs raw to the closing brace (the
+    // compiler parses the hole's expression first, so a ternary keeps its
+    // own `:` and only a colon *after* the expression starts the modifier --
+    // the LR automaton reproduces that naturally). f-strings are single-line,
+    // like plain strings. One divergence from the compiler: it unescapes the
+    // literal before sub-parsing holes, so a nested string literal spelled
+    // with escaped quotes (`f"{s == \"x\"}"`) is valid mcc that this grammar
+    // reads as an escape followed by an expression error; unescaped nested
+    // literals (`f"{c == 'x'}"`) parse fine.
+    f_string: ($) =>
+      seq(
+        'f"',
+        repeat(
+          choice(
+            $.string_content,
+            $.escape_sequence,
+            $.interpolation,
+          ),
+        ),
+        token.immediate('"'),
+      ),
+
+    // The runs between holes. token.immediate (no extras) keeps whitespace
+    // inside the literal, and its lexical precedence keeps `//` in string
+    // text from lexing as a comment.
+    string_content: ($) => token.immediate(prec(1, /[^"\\{}\n]+/)),
+    escape_sequence: ($) => token.immediate(choice(/\\./, '{{', '}}')),
+
+    interpolation: ($) =>
+      seq(
+        '{',
+        $._expression,
+        optional('='),
+        optional(
+          seq(
+            ':',
+            optional(alias(token.immediate(/[^}\n]+/), $.format_spec)),
+          ),
+        ),
+        '}',
+      ),
 
     // ----------------------------------------------------------- inline asm
     asm_expression: ($) =>

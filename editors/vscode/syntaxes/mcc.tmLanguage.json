@@ -5,6 +5,7 @@
   "patterns": [
     { "include": "#comments" },
     { "include": "#annotations" },
+    { "include": "#fstrings" },
     { "include": "#strings" },
     { "include": "#characters" },
     { "include": "#numbers" },
@@ -44,6 +45,60 @@
       "patterns": [
         { "include": "#escape" },
         { "include": "#format" }
+      ]
+    },
+    "fstrings": {
+      "comment": "Interpolated string literal: f\"... {expr} ...\" with {{/}} literal braces, an optional trailing = inspector, and an optional :modifier format spec. Holes hold full mcc expressions. The region scope is a marker only; the string color is applied piecewise — quotes and literal-text runs carry string.quoted.double — so no hole token ever sits inside a string scope and hole expressions fall back to plain code coloring in every theme. The hole braces use the JS-template punctuation scope, which virtually every theme styles.",
+      "name": "string.interpolated.mcc",
+      "begin": "\\b(f)(\")",
+      "beginCaptures": {
+        "1": { "name": "storage.type.string.mcc" },
+        "2": { "name": "string.quoted.double.mcc punctuation.definition.string.begin.mcc" }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": { "name": "string.quoted.double.mcc punctuation.definition.string.end.mcc" }
+      },
+      "patterns": [
+        { "include": "#escape" },
+        {
+          "name": "constant.character.escape.mcc",
+          "match": "\\{\\{|\\}\\}"
+        },
+        {
+          "comment": "Literal-text runs between holes — this is what paints the text like a plain string. Ordered after the escape patterns so those win.",
+          "name": "string.quoted.double.mcc",
+          "match": "[^\"\\\\{}]+"
+        },
+        {
+          "name": "meta.interpolation.mcc",
+          "begin": "\\{",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.template-expression.begin.mcc punctuation.section.interpolation.begin.mcc" }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.template-expression.end.mcc punctuation.section.interpolation.end.mcc" }
+          },
+          "contentName": "meta.embedded.line.mcc",
+          "patterns": [
+            { "include": "#escape" },
+            {
+              "comment": "The Python-style inspector: a trailing = (before the } or the :modifier) prints the hole's own text as a label.",
+              "name": "storage.modifier.inspector.mcc",
+              "match": "=(?=\\s*(:[^{}]*)?\\})"
+            },
+            {
+              "comment": "The :modifier format spec, raw text to the closing brace. Requires a non-space right after the colon so a spaced ternary colon is not mistaken for it.",
+              "match": "(:)((?=[^\\s{}:])[^{}:]*)(?=\\})",
+              "captures": {
+                "1": { "name": "punctuation.section.interpolation.mcc" },
+                "2": { "name": "constant.other.placeholder.mcc" }
+              }
+            },
+            { "include": "$self" }
+          ]
+        }
       ]
     },
     "characters": {

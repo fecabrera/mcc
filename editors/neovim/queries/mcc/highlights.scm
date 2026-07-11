@@ -9,6 +9,7 @@
 (number) @number
 (float) @number.float
 (string) @string
+(f_string) @string
 (char) @character
 (boolean) @boolean
 (null) @constant.builtin
@@ -156,3 +157,15 @@
   ","
   ":"
 ] @punctuation.delimiter
+
+; ------------------------------------------------------ f-string interiors
+; The (f_string) capture above paints the frame and literal text; hole
+; expressions inside carry their own captures naturally. These overrides
+; come last (Neovim gives later patterns priority) so the hole delimiters
+; and the inspector `=` win their tokens back from the generic
+; operator/punctuation captures.
+(escape_sequence) @string.escape
+(interpolation ["{" "}"] @punctuation.special)
+(interpolation "=" @punctuation.special)
+(interpolation ":" @punctuation.special)
+(format_spec) @string.special
