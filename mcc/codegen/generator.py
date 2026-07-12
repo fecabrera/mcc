@@ -4077,6 +4077,164 @@ class CodeGen:
                 f for f in self.program.functions if id(f) not in losers
             ]
 
+    def struct_arg_is_param(self, ref: TypeRef, line: int) -> bool:
+        """Whether a method's pre-``::`` struct argument is a fresh parameter.
+
+        A fresh type-parameter *name* (``True``) is a bare identifier that
+        resolves to no known type; anything else -- a builtin, a user struct,
+        a structured ``point<int32>`` / ``int32*``, or any other resolvable
+        spelling -- is a concrete *type* (``False``).
+
+        Args:
+            ref: One argument from a method's ``struct_type_args`` list.
+            line: Source line for diagnostics.
+
+        Returns:
+            ``True`` when the argument is a fresh type-parameter name.
+        """
+        # Any structure -- generic arguments, a pointer, an array dimension, a
+        # const/@nonnull/mut qualifier, or a function-pointer type -- is a
+        # concrete type spelling, never a bare parameter name.
+        if (
+            ref.args
+            or ref.stars
+            or ref.dims
+            or ref.const
+            or ref.nonnull
+            or ref.mut
+            or ref.params is not None
+        ):
+            return False
+        # A bare name is a parameter exactly when it names no known type.
+        try:
+            self.lang_type(ref, line)
+            return False
+        except LangError:
+            return True
+
+    def subst_struct_args(self, ref: TypeRef, binding: dict[str, TypeRef]) -> TypeRef:
+        """Substitute a specialization's struct parameter names in a type.
+
+        The struct's declared parameter names (``T`` in ``struct point<T>``)
+        bind to the specialization's concrete arguments, so a signature written
+        with ``point<T>`` or a bare ``T`` resolves to the concrete
+        instantiation -- mirroring how a generic instance substitutes.
+
+        Args:
+            ref: A parameter or return ``TypeRef`` from the specialization.
+            binding: ``{struct parameter name: concrete TypeRef}``.
+
+        Returns:
+            The type with the bound names replaced.
+        """
+        if ref.params is not None:  # a fn(...) -> ret function-pointer type
+            return dataclasses_replace(
+                ref,
+                params=[self.subst_struct_args(p, binding) for p in ref.params],
+                ret=(
+                    self.subst_struct_args(ref.ret, binding)
+                    if ref.ret is not None
+                    else None
+                ),
+            )
+        if ref.name in binding:
+            # A bare parameter name carries no arguments of its own; keep any
+            # pointer depth, array dimensions, and qualifiers written on it.
+            sub = binding[ref.name]
+            return dataclasses_replace(
+                sub,
+                stars=sub.stars + ref.stars,
+                dims=sub.dims + ref.dims,
+                const=sub.const or ref.const,
+                nonnull=sub.nonnull or ref.nonnull,
+                mut=sub.mut or ref.mut,
+            )
+        return dataclasses_replace(
+            ref, args=[self.subst_struct_args(a, binding) for a in ref.args]
+        )
+
+    def normalize_struct_method_args(self):
+        """Classify each method's pre-``::`` struct type arguments.
+
+        A method written ``fn Type<A, B>::m`` parses with its pre-``::`` list
+        held verbatim as ``struct_type_args`` (see the parser); the choice of
+        generic method vs specialization is made HERE, against the registered
+        type environment (structs, aliases, and enums are all registered by
+        now), so any concrete type may specialize a method:
+
+          * every argument a fresh type-parameter NAME -> a generic method:
+            the struct's parameters prepend the method's own into one uniform
+            template, exactly as a merged ``fn Type<T>::m<U>`` did before.
+          * every argument a concrete TYPE -> a specialization: an ordinary
+            concrete overload of ``Type::m`` whose receiver, parameters, and
+            return resolve with the struct's parameter names bound to those
+            concrete arguments. It outranks the generic template for a matching
+            receiver through the existing concrete-beats-generic ranking.
+          * a MIX of the two -> a partial specialization, not supported.
+
+        Runs before every function-registration loop, so the rest of codegen
+        sees only ordinary generic or concrete functions.
+
+        Raises:
+            LangError: On a partial specialization, a specialization whose
+                argument count does not match the struct's arity, or a struct
+                parameter name shadowed by a method's own type parameter.
+        """
+        for func in self.program.functions:
+            args = func.struct_type_args
+            if args is None:
+                continue
+            self.current_source = func.source
+            qualifier = func.name.split("::", 1)[0]
+            decl = self.lookup_struct_decl(qualifier)
+            # gen_program validated the qualifier names a declared struct
+            # before this pass, so `decl` is never None here.
+            fresh = [self.struct_arg_is_param(a, func.line) for a in args]
+            if all(fresh):
+                # A generic method: the struct arguments are all parameter
+                # names. Prepend them to the method's own parameters (order
+                # matters -- it fixes the instance mangling) after the same
+                # shadow check the decorated path runs at parse time.
+                struct_names = [a.name for a in args]
+                shadowed = set(struct_names) & set(func.type_params)
+                if shadowed:
+                    raise LangError(
+                        f"method type parameter {min(shadowed)!r} shadows a type "
+                        f"parameter of struct {qualifier!r}",
+                        func.line,
+                    )
+                func.type_params = struct_names + func.type_params
+            elif not any(fresh):
+                # A specialization: bind the struct's declared parameter names
+                # to the concrete arguments and resolve the signature against
+                # them. The method keeps only its OWN type parameters (none ->
+                # an ordinary concrete overload).
+                if len(args) != len(decl.type_params):
+                    raise LangError(
+                        f"specialization of struct {qualifier!r} expects "
+                        f"{len(decl.type_params)} type argument(s), got "
+                        f"{len(args)}",
+                        func.line,
+                    )
+                binding = {
+                    pname: arg
+                    for pname, arg in zip(decl.type_params, args)
+                    if pname not in func.type_params
+                }
+                func.params = [
+                    (pname, self.subst_struct_args(ptype, binding))
+                    for pname, ptype in func.params
+                ]
+                func.ret_type = self.subst_struct_args(func.ret_type, binding)
+            else:
+                raise LangError(
+                    "partial specialization is not supported: all of a "
+                    "method's struct type arguments must be concrete types, "
+                    "or all must be type parameters",
+                    func.line,
+                )
+            func.struct_type_args = None
+
     def gen_program(self) -> ir.Module:
         """Emit the whole module from the merged program.
 
@@ -4285,6 +4443,12 @@ class CodeGen:
         # list so the registration and emission loops below see only the
         # winner, under the member's shared mangled symbol. Running here
         # (before the visibility scan) makes replacement order-independent.
+        #
+        # A method's pre-`::` struct type arguments are classified first, so
+        # the loops below see only ordinary generic methods (fresh names) and
+        # concrete specializations (concrete types) -- never the raw,
+        # unclassified `struct_type_args` form the parser produced.
+        self.normalize_struct_method_args()
         self.reconcile_overrides()
         plain_decls: dict[str, list[Func]] = {}
         for func in self.program.functions:

@@ -37,6 +37,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Method specialization — `fn Type<Concrete>::method(...)`** — a method may
+  now provide a **concrete body for one instantiation** of a generic struct,
+  coexisting with the generic method and **outranking** it for a matching
+  receiver. `fn point<float64>::magnitude(...)` runs for a `point<float64>`
+  receiver while `fn point<T>::magnitude(...)` handles every other; the
+  specialization is registered as an ordinary concrete overload of the
+  qualified name, so the existing concrete-beats-generic ranking does the
+  dispatch. Whether a pre-`::` argument is a type-parameter *name* or a
+  concrete *type* is classified at codegen against the type environment, so
+  **any** concrete type may specialize — a builtin, a user struct
+  (`fn holder<widget>::m`), or a structured type (`box<int32>`, `int32*`). The
+  arguments must be **all-concrete or all-parameter**: a partial specialization
+  (`fn pair<int32, U>::m`) is rejected (`partial specialization is not
+  supported: ...`). A generic base is **not** required — a lone
+  `fn box<int32>::only(...)` is just a concrete namespaced overload — and two
+  bodies for one instantiation collide like any duplicate overload. Partial
+  specialization remains future work.
 - **Generic-struct methods — `fn Type<T>::method(...)`** — a method may now be
   namespaced to a *generic* struct, with the struct's type parameters written
   before the `::` (`fn point<T>::magnitude(self: point<T>) -> float64`). The

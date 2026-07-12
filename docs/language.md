@@ -925,6 +925,50 @@ methods on non-struct types, and explicit type arguments at a `::` call are
 **not** part of this slice — every call spells out its qualifier. See
 [examples/types/methods.mc](../examples/types/methods.mc).
 
+##### Specializing a method for one instantiation
+
+A method may name a **concrete** type before the `::` instead of a type
+parameter — `fn point<float64>::method`. That is a **specialization**: a
+concrete body for one instantiation of the struct, coexisting with the generic
+method and **outranking** it for a matching receiver (the existing
+concrete-beats-generic overload ranking does the dispatch — a specialization is
+just an ordinary concrete overload of the qualified name).
+
+```c
+struct point<T> { x: T; y: T; }
+
+// The generic fallback: any point<T>.
+fn point<T>::magnitude(mut self: point<T>) -> float64 {
+    return sqrt(pow(self.x as float64, 2.0) + pow(self.y as float64, 2.0));
+}
+
+// A specialization: point<float64> needs no `as float64` casts.
+fn point<float64>::magnitude(mut self: point<float64>) -> float64 {
+    return sqrt(pow(self.x, 2.0) + pow(self.y, 2.0));
+}
+```
+
+A `point<float64>` receiver runs the specialization; a `point<int64>` receiver
+falls to the generic. Its rules:
+
+- **All-concrete or all-parameter, never a mix.** Whether a pre-`::` argument
+  is a type-parameter *name* or a concrete *type* is decided by resolving it
+  against the type environment, so any concrete type may specialize a method —
+  a builtin (`point<float64>`), a user struct (`holder<widget>`), or a
+  structured type (`box<int32>`, `pair<int32*>`). A **partial** specialization
+  that mixes the two (`fn pair<int32, U>::m`) is rejected: `partial
+  specialization is not supported: all of a method's struct type arguments must
+  be concrete types, or all must be type parameters`.
+- **A generic base is not required.** A lone `fn box<int32>::only(...)` with no
+  generic `box<T>::only` is simply a concrete namespaced overload.
+- **Two bodies for one instantiation collide** — a duplicate specialization
+  spells the same concrete parameter list and is rejected like any duplicate
+  overload.
+
+Partial specialization (a mix of concrete and parameter arguments) is future
+work. See
+[examples/types/method_specialization.mc](../examples/types/method_specialization.mc).
+
 ### @noreturn functions
 
 `@noreturn` marks a function that never returns to its caller — it exits,

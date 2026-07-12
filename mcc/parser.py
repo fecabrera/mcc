@@ -965,6 +965,53 @@ class Parser:
             return
         self.expect(">")
 
+    def try_struct_method_args(self) -> list[TypeRef] | None:
+        """Speculatively read a method's pre-``::`` ``<...>`` as type-REFERENCES.
+
+        A method namespaced to a generic struct writes the struct's type
+        arguments before the ``::`` -- ``fn point<T>::m`` (a generic method) or
+        ``fn point<float64>::m`` (a specialization for one instantiation).
+        Whether an argument is a fresh type-parameter *name* or a concrete
+        *type* is a question for codegen (which resolves names against the type
+        environment, so any concrete type -- a builtin, a user struct, or a
+        structured ``point<int32>`` / ``int32*`` -- may specialize a method),
+        so an UNDECORATED list is captured verbatim here as ``TypeRef``s.
+
+        A DECORATED list (a ``:`` type group, an ``extends`` bound, or a ``=``
+        default) is unambiguously a parameter *declaration* and stays generic:
+        this speculation restores the cursor and returns ``None`` for it, and
+        for a non-method ``<...>`` (no ``::`` after the list), leaving
+        :meth:`parse_type_params` to read the declaration list as before.
+
+        Returns:
+            The struct type-argument references, with the cursor left on the
+            ``::``, or ``None`` with the cursor restored.
+        """
+        if self.cur.kind != "<":
+            return None
+        saved = self.pos
+        self.advance()  # '<'
+        args: list[TypeRef] = []
+        try:
+            while True:
+                args.append(self.parse_type_ref())
+                if self.cur.kind == ">":
+                    self.advance()
+                    break
+                if not self.accept(","):
+                    # A decoration marker (`:`, `extends`, or `=`) -- or any
+                    # other token -- means this is not an undecorated argument
+                    # list: hand it back to parse_type_params.
+                    self.pos = saved
+                    return None
+        except LangError:
+            self.pos = saved
+            return None
+        if self.cur.kind != "::":
+            self.pos = saved
+            return None
+        return args
+
     def parse_type_params(
         self,
     ) -> tuple[
@@ -1411,30 +1458,53 @@ class Parser:
         # -- so the whole existing generic machinery treats a method's struct
         # and method parameters identically. A method parameter may not shadow
         # one of the struct's, so a name that appears in both lists is an error.
-        type_params, type_param_defaults, type_param_groups, type_param_bounds = (
-            self.parse_type_params()
-        )
-        if self.cur.kind == "::":
-            self.advance()
+        # An UNDECORATED pre-`::` `<...>` (`fn point<T>::m`, `fn point<float64>::m`)
+        # is held verbatim as `struct_type_args` for codegen to classify: all
+        # fresh names is a generic method, all concrete types a specialization,
+        # a mix a partial specialization (rejected). A method's OWN type
+        # parameters (after `::method`) still parse as an ordinary declaration
+        # list; the struct-vs-method shadow check waits until codegen knows
+        # which of the struct arguments are parameter names.
+        struct_type_args = self.try_struct_method_args()
+        if struct_type_args is not None:
+            self.expect("::")
             method = self.expect("IDENT").text
             name = f"{name}::{method}"
             (
-                m_params,
-                m_defaults,
-                m_groups,
-                m_bounds,
+                type_params,
+                type_param_defaults,
+                type_param_groups,
+                type_param_bounds,
             ) = self.parse_type_params()
-            shadowed = set(type_params) & set(m_params)
-            if shadowed:
-                raise LangError(
-                    f"method type parameter {min(shadowed)!r} shadows a type "
-                    f"parameter of struct {name.split('::', 1)[0]!r}",
-                    line,
-                )
-            type_params = type_params + m_params
-            type_param_defaults = {**type_param_defaults, **m_defaults}
-            type_param_groups = {**type_param_groups, **m_groups}
-            type_param_bounds = {**type_param_bounds, **m_bounds}
+        else:
+            type_params, type_param_defaults, type_param_groups, type_param_bounds = (
+                self.parse_type_params()
+            )
+            if self.cur.kind == "::":
+                # A DECORATED struct parameter list (`<T: a|b>`, `<T extends S>`,
+                # or `<T = D>`) never reaches the specialization path above --
+                # it is unambiguously generic -- so merge it with the method's
+                # own parameters into one uniform template, exactly as before.
+                self.advance()
+                method = self.expect("IDENT").text
+                name = f"{name}::{method}"
+                (
+                    m_params,
+                    m_defaults,
+                    m_groups,
+                    m_bounds,
+                ) = self.parse_type_params()
+                shadowed = set(type_params) & set(m_params)
+                if shadowed:
+                    raise LangError(
+                        f"method type parameter {min(shadowed)!r} shadows a type "
+                        f"parameter of struct {name.split('::', 1)[0]!r}",
+                        line,
+                    )
+                type_params = type_params + m_params
+                type_param_defaults = {**type_param_defaults, **m_defaults}
+                type_param_groups = {**type_param_groups, **m_groups}
+                type_param_bounds = {**type_param_bounds, **m_bounds}
         if extern and type_params:
             raise LangError("extern functions cannot be generic", line)
         self.expect("(")
@@ -1656,6 +1726,7 @@ class Parser:
                 type_param_defaults=type_param_defaults,
                 type_param_groups=type_param_groups,
                 type_param_bounds=type_param_bounds,
+                struct_type_args=struct_type_args,
             )
         if self.cur.kind == ";":
             # A bodyless prototype: a concrete mcc function defined in another
@@ -1713,6 +1784,7 @@ class Parser:
                 type_param_defaults=type_param_defaults,
                 type_param_groups=type_param_groups,
                 type_param_bounds=type_param_bounds,
+                struct_type_args=struct_type_args,
             )
         return Func(
             name,
@@ -1738,6 +1810,7 @@ class Parser:
             type_param_defaults=type_param_defaults,
             type_param_groups=type_param_groups,
             type_param_bounds=type_param_bounds,
+            struct_type_args=struct_type_args,
         )
 
     def parse_asm(self):

@@ -370,3 +370,157 @@ def test_generic_method_not_naming_struct_round_trips_through_mci(tmp_path):
         "fn main() -> int32 { return point::from_scalar(40); }\n"
     )
     assert run_path(main) == 41
+
+
+# --- method specialization: `fn Type<Concrete>::method` -----------------------
+
+
+def test_specialization_dispatches_a_distinct_body(capfd):
+    # `fn box<float64>::tag` specializes the generic `fn box<T>::tag` for one
+    # instantiation. A box<float64> receiver runs the specialization; any other
+    # receiver falls to the generic. The two bodies return DIFFERENT values, so
+    # the output proves which one ran (not merely that both compiled).
+    assert run(
+        """
+        import "std/io";
+        struct box<T> { v: T; }
+        fn box<T>::tag(self: box<T>) -> int32 { return 1; }
+        fn box<float64>::tag(self: box<float64>) -> int32 { return 2; }
+        fn main() -> int32 {
+            let bi: box<int32> = { v = 7 };
+            let bf: box<float64> = { v = 1.0 };
+            println("{} {}", box::tag(bi), box::tag(bf));
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "1 2\n"  # generic, then specialization
+
+
+def test_specialization_on_a_user_struct_argument(capfd):
+    # Classification happens at codegen against the type environment, so ANY
+    # concrete type -- including a user struct -- may specialize a method.
+    assert run(
+        """
+        import "std/io";
+        struct widget { n: int32; }
+        struct holder<T> { item: T; }
+        fn holder<T>::code(self: holder<T>) -> int32 { return 0; }
+        fn holder<widget>::code(self: holder<widget>) -> int32 { return 42; }
+        fn main() -> int32 {
+            let w: holder<widget> = { item = { n = 5 } };
+            let i: holder<int32> = { item = 9 };
+            println("{} {}", holder::code(w), holder::code(i));
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "42 0\n"  # specialization, then generic
+
+
+def test_lone_specialization_without_a_generic_base(capfd):
+    # A specialization needs no generic base -- it is just a concrete
+    # namespaced overload for one instantiation.
+    assert run(
+        """
+        import "std/io";
+        struct box<T> { v: T; }
+        fn box<int32>::only(self: box<int32>) -> int32 { return self.v + 5; }
+        fn main() -> int32 {
+            let b: box<int32> = { v = 3 };
+            println("{}", box::only(b));
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "8\n"
+
+
+def test_partial_specialization_is_an_error():
+    # Some concrete, some parameter -- a partial specialization -- is rejected:
+    # every struct argument must be all-concrete or all-parameter.
+    with pytest.raises(
+        LangError,
+        match=r"partial specialization is not supported",
+    ):
+        compile_ir(
+            """
+            struct pair<A, B> { a: A; b: B; }
+            fn pair<int32, U>::m(self: pair<int32, U>) -> int32 { return 0; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_duplicate_specialization_collides():
+    # Two bodies for one instantiation spell the same concrete parameter list,
+    # so the existing duplicate check catches them.
+    with pytest.raises(
+        LangError,
+        match=r"function 'box::tag\(box<float64>\)' already defined",
+    ):
+        compile_ir(
+            """
+            struct box<T> { v: T; }
+            fn box<float64>::tag(self: box<float64>) -> int32 { return 1; }
+            fn box<float64>::tag(self: box<float64>) -> int32 { return 2; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_specialization_wrong_arity_is_an_error():
+    # A specialization's argument count must match the struct's arity.
+    with pytest.raises(
+        LangError,
+        match=r"specialization of struct 'box' expects 1 type argument",
+    ):
+        compile_ir(
+            """
+            struct box<T> { v: T; }
+            fn box<int32, int32>::m(self: box<int32>) -> int32 { return 0; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_specialization_round_trips_through_mci(tmp_path):
+    # A specialization exports as the desugared concrete prototype
+    # `fn box::tag(self: box<float64>)`. Re-parsing and re-compiling that stub
+    # yields the same concrete overload (its body lives in the compiled object,
+    # so the stub carries only the prototype -- not JIT-runnable on its own).
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "struct box<T> { v: T; }\n"
+        "fn box<T>::tag(self: box<T>) -> int32 { return 1; }\n"
+        "fn box<float64>::tag(self: box<float64>) -> int32 { return 2; }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    stub = out.read_text()
+    assert "fn box::tag(self: box<float64>) -> int32;" in stub
+    # Re-parsing and re-compiling the stub round-trips: the desugared prototype
+    # is the concrete box<float64> overload (a plain-symbol declaration whose
+    # body lives in the object), so it re-compiles without reintroducing the
+    # generic-vs-specialization collision the pre-`::` `<float64>` once caused.
+    ir = compile_ir(stub)
+    assert 'declare i32 @"box::tag"(%"box<float64>"' in ir
+
+
+def test_specialization_coexists_with_own_type_param_generic(capfd):
+    # REGRESSION: a generic method with its OWN type parameter
+    # (`fn box<T>::labeled<U>`) still parses and runs after the pre-`::` list is
+    # routed through the new classification path.
+    assert run(
+        """
+        import "std/io";
+        struct box<T> { v: T; }
+        fn box<T>::labeled<U>(self: box<T>, label: U) -> U { return label; }
+        fn main() -> int32 {
+            let b: box<int32> = { v = 7 };
+            println("{}", box::labeled(b, 99));
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "99\n"

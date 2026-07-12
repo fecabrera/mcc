@@ -77,6 +77,8 @@ fn main() -> int32 {
 // at a `::` call (`point<float64>::sum(...)`) are all future work; today every
 // call spells out its qualifier and infers its type arguments.
 //
-// See also: methods.mc for the non-generic foundation these build on;
+// See also: method_specialization.mc, which builds on this file to give ONE
+// instantiation (`fn point<float64>::name`) its own concrete body that outranks
+// the generic; methods.mc for the non-generic foundation these build on;
 // structs.mc and generics.mc for generic structs and inference; tuples.mc for
 // the `tuple<U, T>` that `box::labeled` returns and its destructuring.
