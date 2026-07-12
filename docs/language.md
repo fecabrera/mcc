@@ -4375,19 +4375,22 @@ statement-position `except` form handle it without the binding.
 An error carries a *meaning*, and two builtins render it to a `char*` at
 runtime:
 
-- **`error_name(err)`** yields the variant's identifier — `"NOT_FOUND"` — the
-  stable, programmatic name (for logging, for a `{}` you drive yourself).
+- **`error_name(err)`** yields the variant's fully qualified name —
+  `"my_error::NOT_FOUND"` — the stable, programmatic identity (for logging, for
+  a `{}` you drive yourself); the type prefix keeps it unambiguous across
+  declarations.
 - **`error_message(err)`** yields the variant's declared
   [display string](#error-declarations) when it has one, and falls back to the
-  identifier when it does not — so a message is never empty for a real
-  variant. It is the human-facing "this is why it failed".
+  bare variant identifier (`"NOT_FOUND"`) when it does not — so a message is
+  never empty for a real variant. It is the human-facing "this is why it
+  failed".
 
 ```c
 let value, err = find(key);
 if (err) {
     println("{}: {}", error_name(err), error_message(err));
-    // e.g.  NOT_FOUND: Not Found     (PERMISSION, with no display
-    //       string, would print  PERMISSION: PERMISSION)
+    // e.g.  my_error::NOT_FOUND: Not Found     (PERMISSION, with no display
+    //       string, would print  my_error::PERMISSION: PERMISSION)
 }
 ```
 

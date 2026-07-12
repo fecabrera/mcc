@@ -203,6 +203,9 @@ class EnumType:
         displays: ``{variant name: display string}`` for an error declaration's
             ``NAME = "display"`` variants (stored for the planned rendering
             stage); empty otherwise.
+        display_name: The error declaration's user-written name, before any
+            ``@static`` salting -- the qualifier ``error_name`` prefixes each
+            variant with (``my_error::NOT_FOUND``). ``None`` for a plain enum.
     """
 
     underlying: LangType
@@ -210,6 +213,7 @@ class EnumType:
     private: bool
     source: "str | None"
     displays: dict = field(default_factory=dict)
+    display_name: "str | None" = None
 
 
 @dataclass

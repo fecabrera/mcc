@@ -2825,7 +2825,12 @@ class CodeGen:
         )
         err_type = LangType(name, ir.IntType(32), signed=True, template="error")
         enum = EnumType(
-            err_type, {}, decl.private, decl.source, displays=dict(decl.displays)
+            err_type,
+            {},
+            decl.private,
+            decl.source,
+            displays=dict(decl.displays),
+            display_name=decl.name,
         )
         # Keyed by the nominal type name (salted for @static), the reverse map
         # an error value's LangType uses to find its variant/display tables.
@@ -10785,10 +10790,11 @@ class CodeGen:
         The operand must be a declared [error](#error-declarations) value. The
         result is looked up at runtime through a per-declaration synthesized
         function (:meth:`error_accessor_fn`) keyed on the error's ``int32``
-        value: ``error_name`` returns the matched variant's identifier, and
-        ``error_message`` its declared display string, falling back to the
-        identifier when the variant declared none. The reserved zero no-error
-        state and any unreachable value gap render as the empty string.
+        value: ``error_name`` returns the matched variant's fully qualified
+        name (``my_error::NOT_FOUND``), and ``error_message`` its declared
+        display string, falling back to the bare variant identifier when the
+        variant declared none. The reserved zero no-error state and any
+        unreachable value gap render as the empty string.
 
         Args:
             expr: The ``ErrorName`` node.
@@ -10818,8 +10824,9 @@ class CodeGen:
 
         Builds an ``internal`` ``char* (i32)`` function that switches on an
         error value and returns the string for the matching variant -- the
-        identifier for ``error_name``, the declared display string (or the
-        identifier when absent) for ``error_message``. Error values are dense
+        qualified ``Type::VARIANT`` name for ``error_name``, the declared
+        display string (or the bare variant identifier when absent) for
+        ``error_message``. Error values are dense
         ``1..N``; the ``switch`` maps each to its string and its default -- the
         only value the switch does not cover, the reserved zero no-error state
         -- returns the empty string. Cached per ``(type name, display)`` so
@@ -10850,8 +10857,12 @@ class CodeGen:
         builder = ir.IRBuilder(entry)
         switch = builder.switch(fn.args[0], default_bb)
         incoming: list[tuple[ir.Value, ir.Block]] = []
+        qual = enum.display_name or type_name
         for mname, member in enum.members.items():
-            text = enum.displays.get(mname, mname) if display else mname
+            if display:
+                text = enum.displays.get(mname, mname)
+            else:
+                text = f"{qual}::{mname}"
             case_bb = fn.append_basic_block(f"v{member.value.constant}")
             switch.add_case(member.value, case_bb)
             case_builder = ir.IRBuilder(case_bb)

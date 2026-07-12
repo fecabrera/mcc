@@ -126,17 +126,17 @@ fn main() -> int32 {
 
     // STAGE 4, RENDERING: two builtins turn an error value into a char* at
     // runtime, so a describe()-style switch is no longer needed just to name
-    // a cause. error_name yields the variant's IDENTIFIER; error_message
-    // yields its declared display string, FALLING BACK to the identifier
-    // when the variant declared none. Both are claimed only when directly
-    // followed by `(` (like ok(/error(), so the names stay ordinary
-    // identifiers otherwise; the operand must be a declared error value
-    // (error_name(5) is a compile error).
+    // a cause. error_name yields the variant's FULLY QUALIFIED NAME
+    // (Type::VARIANT); error_message yields its declared display string,
+    // FALLING BACK to the bare identifier when the variant declared none.
+    // Both are claimed only when directly followed by `(` (like ok(/error(),
+    // so the names stay ordinary identifiers otherwise; the operand must be a
+    // declared error value (error_name(5) is a compile error).
     println("NOT_FOUND: name = {}, message = {}",
-            error_name(file_error::NOT_FOUND),      // "NOT_FOUND"
+            error_name(file_error::NOT_FOUND),      // "file_error::NOT_FOUND"
             error_message(file_error::NOT_FOUND));  // "Not Found" (has display)
     println("PERMISSION: name = {}, message = {}",
-            error_name(e),       // "PERMISSION"
+            error_name(e),       // "file_error::PERMISSION"
             error_message(e));   // "PERMISSION" (no display, falls back to name)
 
     // ok()/error() are context-typed like a bare struct literal: legal in

@@ -49,10 +49,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `_` binding — `let _ = maybe_fail();` — using the conventional throwaway
   name (mcc has no special blank identifier). **Two rendering builtins**
   turn an error value into a `char*` at runtime: `error_name(err)` yields
-  the variant's identifier (`"NOT_FOUND"`), and `error_message(err)` yields
-  its declared [display string](docs/language.md#error-declarations) when it
-  has one, falling back to the identifier otherwise — the human-facing "why
-  it failed". Both render through a compiler-synthesized per-declaration
+  the variant's fully qualified name (`"my_error::NOT_FOUND"`), and
+  `error_message(err)` yields its declared
+  [display string](docs/language.md#error-declarations) when it has one,
+  falling back to the bare variant identifier (`"NOT_FOUND"`) otherwise —
+  the human-facing "why it failed". Both render through a compiler-synthesized per-declaration
   lookup keyed on the error's value (the reserved zero no-error state
   renders as the empty string),
   and both stay ordinary identifiers unless directly followed by `(`. The

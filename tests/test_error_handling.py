@@ -2401,9 +2401,10 @@ def test_dangling_else_binds_the_inner_try():
 
 # --- stage 4: error_name / error_message accessors -------------------------
 #
-# `error_name(err)` renders a declared error value to its variant identifier
-# (`"NOT_FOUND"`); `error_message(err)` renders its declared display string,
-# falling back to the identifier when the variant declared none. Both funnel
+# `error_name(err)` renders a declared error value to its fully qualified
+# variant name (`"acc_error::NOT_FOUND"`); `error_message(err)` renders its
+# declared display string, falling back to the bare variant identifier
+# (`"NOT_FOUND"`) when the variant declared none. Both funnel
 # through a compiler-synthesized per-declaration switch (one internal function
 # each, cached), keyed on the error's int32 value; the reserved zero no-error
 # state renders as the empty string. The names are claimed only when directly
@@ -2425,9 +2426,9 @@ ACC_FIND = (
 )
 
 
-def test_error_name_returns_the_variant_identifier(capfd):
-    # Every variant renders as its own spelled identifier -- never the
-    # display string.
+def test_error_name_returns_the_qualified_variant_name(capfd):
+    # Every variant renders as its fully qualified `Type::VARIANT` name --
+    # never the display string.
     assert run(
         'import "std/io";\n' + ACC
         + """
@@ -2441,7 +2442,10 @@ def test_error_name_returns_the_variant_identifier(capfd):
         """
     ) == 0
     out, _ = capfd.readouterr()
-    assert out == "NOT_FOUND\nPERMISSION\nEXHAUSTED\nTIMEOUT\n"
+    assert out == (
+        "acc_error::NOT_FOUND\nacc_error::PERMISSION\n"
+        "acc_error::EXHAUSTED\nacc_error::TIMEOUT\n"
+    )
 
 
 def test_error_message_prefers_display_then_identifier(capfd):
@@ -2478,7 +2482,7 @@ def test_error_accessors_run_through_a_destructured_result(capfd):
         """
     ) == 0
     out, _ = capfd.readouterr()
-    assert out == "NOT_FOUND: Not Found\n"
+    assert out == "acc_error::NOT_FOUND: Not Found\n"
 
 
 def test_error_name_of_the_zero_no_error_state_is_empty(capfd):
