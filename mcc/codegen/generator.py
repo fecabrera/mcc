@@ -4125,6 +4125,22 @@ class CodeGen:
             if decl.name not in self.struct_templates:
                 self.struct_templates[decl.name] = decl
                 self.used_symbols.add(decl.name)
+        # A qualified method name `Type::method` namespaces the function to a
+        # struct. Structs are fully registered above, so validate here that the
+        # qualifier names a declared struct type -- the only check this slice
+        # imposes. `Type::` is purely a namespace: no `self` convention is
+        # enforced, and any qualifier that is an enum, alias, builtin, or
+        # undeclared name is the error.
+        for func in self.program.functions:
+            if "::" not in func.name:
+                continue
+            self.current_source = func.source
+            qualifier = func.name.split("::", 1)[0]
+            if self.lookup_struct_decl(qualifier) is None:
+                raise LangError(
+                    f"no struct type {qualifier!r} for method {func.name!r}",
+                    func.line,
+                )
         # Type aliases are registered next (records only; resolved lazily on
         # use), so a const's or signature's type may name one.
         for alias in self.program.aliases:

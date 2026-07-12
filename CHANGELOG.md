@@ -37,6 +37,22 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Methods — `fn Type::method(...)` namespaced to a struct, called as
+  `Type::method(args)`** — the foundational, explicit-call slice of the
+  Methods/OOP work. A function may be namespaced to a declared struct by
+  qualifying its name with `Type::`, and is invoked by that same explicit
+  qualified name. The qualified name is a single identity everywhere —
+  registration, overloading, `@private`/`@override`, and the LLVM symbol all
+  key on the `"Type::method"` string — so two structs may share a method name
+  without colliding and a `Type::method` set overloads by argument like any
+  other. `Type::` is purely a namespace: **no `self` convention is enforced**
+  (no required receiver, name, or first-parameter type); the only rule is that
+  the qualifier is a struct in scope (otherwise `no struct type 'foo' for
+  method 'foo::bar'`). `Enum::Member` still parses as a value — only a `::`
+  member followed by `(` is a qualified call. Call sugar (`p.method()`),
+  constructors, dynamic dispatch, and non-struct/generic-struct receivers are
+  not part of this slice; generic-struct methods (`fn list<T>::m`) do not
+  parse.
 - **`@override` — replace a same-pattern member of an open overload set** —
   adding an overload extends a set; `@override` is the escape valve for the
   one thing it cannot do, *replacing* a member that already covers a shape

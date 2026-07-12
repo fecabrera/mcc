@@ -842,6 +842,52 @@ See [examples/functions/overloading.mc](../examples/functions/overloading.mc),
 [examples/functions/open_overloads.mc](../examples/functions/open_overloads.mc),
 and [examples/functions/override.mc](../examples/functions/override.mc).
 
+### Methods
+
+A function may be **namespaced to a struct** by writing its name as
+`Type::method`, and is called by that same explicit qualified name:
+
+```c
+struct point { x: float64; y: float64; }
+
+fn point::magnitude(self: point) -> float64 {
+    return sqrt(self.x * self.x + self.y * self.y);
+}
+
+fn main() -> int32 {
+    let p: point = { x = 3.0, y = 4.0 };
+    return point::magnitude(p) as int32;   // 5
+}
+```
+
+This is the foundational, **explicit-call** form. Its rules today:
+
+- **The qualifier is purely a namespace.** `point::` names the struct the
+  method belongs to and nothing more. The receiver is an ordinary parameter:
+  mcc enforces **no `self` convention** — no required parameter named `self`,
+  no required first-parameter type, no required receiver at all.
+  `fn point::origin() -> point` and `fn point::of(x: float64, y: float64)`
+  are legal. `self` above is a convention, not a keyword, and `mut self` is
+  just a `mut` parameter whose mutations are visible to the caller.
+- **The qualifier must be a declared struct.** The only check is that the
+  segment before `::` names a struct type in scope; an enum, alias, builtin,
+  or undeclared name is the error
+  `no struct type 'foo' for method 'foo::bar'`. (`Enum::Member` remains a
+  value expression — only a `::` member *followed by* `(` is a qualified
+  call.)
+- **The qualified name is the whole identity.** `point::magnitude` is a
+  single name everywhere — registration, the LLVM symbol, and
+  [overloading](#function-overloading) all key on the string, so two structs
+  may share a method name without colliding (`point::area` vs `rect::area`),
+  a `Type::method` set overloads by argument exactly like a plain name, and
+  `@private`/`@override` work unchanged.
+
+Call sugar (`p.magnitude()`), constructors/destructors, dynamic dispatch, and
+methods on non-struct or generic-struct types are **not** part of this slice —
+every call spells out its qualifier. Generic-struct methods
+(`fn list<T>::m`) do not parse. See
+[examples/types/methods.mc](../examples/types/methods.mc).
+
 ### @noreturn functions
 
 `@noreturn` marks a function that never returns to its caller — it exits,

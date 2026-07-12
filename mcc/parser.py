@@ -1397,6 +1397,16 @@ class Parser:
         """
         line = self.expect("fn").line
         name = self.expect("IDENT").text
+        # `fn Type::method(...)` namespaces the function to a struct: the name
+        # becomes the single string `"Type::method"`, which threads unchanged
+        # through registration, overloading, and symbol emission. Consuming the
+        # qualifier here -- before `parse_type_params` -- means `fn list<T>::m`
+        # cannot parse, which deliberately excludes generic-struct methods from
+        # this slice. Codegen validates that `Type` is a declared struct.
+        if self.cur.kind == "::":
+            self.advance()
+            method = self.expect("IDENT").text
+            name = f"{name}::{method}"
         type_params, type_param_defaults, type_param_groups, type_param_bounds = (
             self.parse_type_params()
         )
@@ -2853,6 +2863,16 @@ class Parser:
             if self.cur.kind == "::":
                 self.advance()
                 member = self.expect("IDENT").text
+                # `Type::method(...)` is a qualified method call, claimed by the
+                # trailing `(` just like the `ok(`/`error(` builtins above. Enum
+                # and error members fold to integer constants (never callable),
+                # so `Enum::Member(...)` never meant anything -- nothing
+                # regresses. A `::` member NOT followed by `(` stays an
+                # `EnumAccess`.
+                if self.cur.kind == "(":
+                    return Call(
+                        f"{tok.text}::{member}", [], self.parse_call_args(), tok.line
+                    )
                 return EnumAccess(tok.text, member, tok.line)
             type_args = self.try_type_args() if self.cur.kind == "<" else []
             if self.cur.kind == "{" and self.struct_lit_ok:
