@@ -125,6 +125,8 @@ from mcc.codegen.types import (
     BlockExprCtx,
     EnumType,
     LangType,
+    PENDING_RESULT,
+    ResultPending,
     TypedValue,
     adaptable_int,
     const_of,
@@ -5921,28 +5923,10 @@ class CodeGen:
                 where it has none, ``error()`` with no value, or a value that
                 does not coerce to its arm.
         """
-        two_arms = len(result_t.args) == 2
+        arm = self.result_arm_type(
+            expr.kind, expr.value is not None, result_t, expr.line
+        )
         tv = None
-        if expr.kind == "ok":
-            if two_arms and expr.value is None:
-                raise LangError(
-                    f"ok() takes the ok value here: a {result_t} carries one "
-                    "(ok() with no value is for the error-only result<E>)",
-                    expr.line,
-                )
-            if not two_arms and expr.value is not None:
-                raise LangError(
-                    f"a {result_t} has no ok value; write ok()", expr.line
-                )
-            arm = result_t.args[0] if two_arms else None
-        else:
-            if expr.value is None:
-                raise LangError(
-                    "error() takes the error value, "
-                    "e.g. error(my_error::NOT_FOUND)",
-                    expr.line,
-                )
-            arm = result_t.args[-1]
         if expr.value is not None:
             label = f"{expr.kind} value"
             if (
@@ -5955,12 +5939,74 @@ class CodeGen:
             else:
                 tv = self.gen_expr(expr.value)
             tv = self.coerce(tv, arm, expr.line, label)
+        return self.emit_result_aggregate(result_t, expr.kind, tv)
+
+    def result_arm_type(
+        self, kind: str, has_value: bool, result_t: LangType, line: int
+    ) -> "LangType | None":
+        """Validate a constructor's arity and return the arm its value fills.
+
+        Shared by the eager sink path (:meth:`gen_result_lit`) and the pending
+        path (:meth:`finalize_pending`): ``ok(v)`` fills the ok arm of a
+        ``result<T, E>``, ``error(e)`` the error arm, and the argument-less
+        ``ok()`` fills nothing (the error-only ``result<E>``).
+
+        Args:
+            kind: ``"ok"`` or ``"error"``.
+            has_value: Whether the constructor carried an argument.
+            result_t: The resolved result type the arm belongs to.
+            line: Source line for diagnostics.
+
+        Returns:
+            The arm's ``LangType``, or ``None`` for the value-less ``ok()``.
+
+        Raises:
+            LangError: On ``ok()`` where the result has an ok arm, ``ok(v)``
+                where it has none, or ``error()`` with no value.
+        """
+        two_arms = len(result_t.args) == 2
+        if kind == "ok":
+            if two_arms and not has_value:
+                raise LangError(
+                    f"ok() takes the ok value here: a {result_t} carries one "
+                    "(ok() with no value is for the error-only result<E>)",
+                    line,
+                )
+            if not two_arms and has_value:
+                raise LangError(f"a {result_t} has no ok value; write ok()", line)
+            return result_t.args[0] if two_arms else None
+        if not has_value:
+            raise LangError(
+                "error() takes the error value, e.g. error(my_error::NOT_FOUND)",
+                line,
+            )
+        return result_t.args[-1]
+
+    def emit_result_aggregate(
+        self, result_t: LangType, kind: str, tv: "TypedValue | None"
+    ) -> TypedValue:
+        """Build the ``{ tag, payload }`` result value from a settled arm value.
+
+        A zeroed temporary, the tag byte (0 ok, 1 error), and the value stored
+        into its union arm through a cast of the payload's address -- exactly a
+        union member store, never a GEP into the other arm. Shared by the eager
+        and pending construction paths.
+
+        Args:
+            result_t: The resolved result type to build.
+            kind: ``"ok"`` or ``"error"`` (fixes the tag).
+            tv: The arm value already coerced to its arm type, or ``None`` for
+                the value-less ``ok()``.
+
+        Returns:
+            The constructed result as a ``TypedValue``.
+        """
         slot = self.builder.alloca(result_t.ir)
         if over_aligned(result_t):
             slot.align = type_align(result_t)
         self.builder.store(ir.Constant(result_t.ir, None), slot)
         indices = result_t.elem_indices
-        if expr.kind == "error":
+        if kind == "error":
             tag_addr = self.builder.gep(
                 slot, [I32_ZERO, ir.Constant(ir.IntType(32), indices[0])],
                 inbounds=True,
@@ -5976,6 +6022,62 @@ class CodeGen:
             )
             self.builder.store(tv.value, arm_addr)
         return TypedValue(self.builder.load(slot), result_t)
+
+    def gen_result_pending(self, expr: ResultLit) -> TypedValue:
+        """Evaluate a bare ``ok(v)`` / ``error(e)`` into a *pending* result.
+
+        Reached only when a constructor is not in a direct result sink (a typed
+        ``let``/return/assignment/field/argument routes the node through
+        :meth:`gen_result_lit` before it hits :meth:`gen_expr`). Realizes the
+        builtin signatures ``ok<T, E>(v: T) -> result<T, E>`` and ``error<T,
+        E>(e: E) -> result<T, E>``: the argument fixes one arm, the other stays
+        a free parameter bound later -- by the sibling of a ternary
+        (:meth:`unify_branches`) or the expected result type at a sink
+        (:meth:`coerce`). The payload is evaluated here, in this block, so a
+        ternary arm's side effects stay on its own path; the aggregate is not
+        built until the result type is fixed.
+
+        Args:
+            expr: The ``ResultLit`` node.
+
+        Returns:
+            A :data:`PENDING_RESULT`-typed, adaptable ``TypedValue`` carrying a
+            :class:`ResultPending`.
+        """
+        payload = None if expr.value is None else self.gen_expr(expr.value)
+        return TypedValue(
+            None,
+            PENDING_RESULT,
+            adaptable=True,
+            result_pending=ResultPending(expr.kind, payload),
+        )
+
+    def finalize_pending(
+        self, pending: ResultPending, result_t: LangType, line: int
+    ) -> TypedValue:
+        """Build a pending ``ok``/``error`` once its result type is known.
+
+        The pending sibling of :meth:`gen_result_lit`: the payload was already
+        evaluated (in its own block, see :meth:`gen_result_pending`), so here it
+        only coerces to the arm the now-known ``result_t`` fixes and the
+        aggregate is emitted. Reached from :meth:`coerce` when a pending meets
+        its expected result type.
+
+        Args:
+            pending: The pending constructor.
+            result_t: The resolved (const-stripped) result type to build.
+            line: Source line for diagnostics.
+
+        Returns:
+            The constructed result as a ``TypedValue``.
+        """
+        arm = self.result_arm_type(
+            pending.kind, pending.payload is not None, result_t, line
+        )
+        tv = pending.payload
+        if tv is not None:
+            tv = self.coerce(tv, arm, line, f"{pending.kind} value")
+        return self.emit_result_aggregate(result_t, pending.kind, tv)
 
     def result_literal_adapts(self, expr, expected: LangType) -> bool:
         """Whether a result constructor ``ok(...)``/``error(...)`` adapts here.
@@ -6249,6 +6351,19 @@ class CodeGen:
             LangError: When the value cannot match ``expected``, or an adaptable
                 constant is out of range.
         """
+        # A pending ok(...)/error(...) settles here: if the position expects a
+        # result, its free arm is bound and the aggregate is built; otherwise
+        # the constructor had no result context at all.
+        if tv.result_pending is not None:
+            stripped = strip_const(expected)
+            if is_result(stripped):
+                return self.finalize_pending(tv.result_pending, stripped, line)
+            raise LangError(
+                f"{tv.result_pending.kind}(...) has no result type here; use it "
+                "where one is expected -- a typed let, assignment, return, "
+                "argument, or field",
+                line,
+            )
         # Range-check adaptable integer constants first, before the
         # same-type early return below. Their type is only a default placeholder
         # (the narrowest of int32/int64/uint64 that fits the value), so a value
@@ -6746,6 +6861,13 @@ class CodeGen:
                         stmt.line,
                     )
                 tv = self.coerce(tv, declared, stmt.line, f"let {stmt.name}")
+            elif tv.result_pending is not None:
+                raise LangError(
+                    f"{tv.result_pending.kind}(...) has no result type here; use "
+                    "it where one is expected -- a typed let, assignment, "
+                    "return, argument, or field",
+                    stmt.line,
+                )
             elif tv.adaptable:
                 raise LangError(
                     f"type of {stmt.name!r} is ambiguous: the value is an untyped "
@@ -7182,6 +7304,14 @@ class CodeGen:
                 self.gen_try_discard(stmt.expr)
             else:
                 value = self.gen_expr(stmt.expr)
+                if value.result_pending is not None:
+                    # A bare `ok(...);`/`error(...);` has no result context.
+                    raise LangError(
+                        f"{value.result_pending.kind}(...) has no result type "
+                        "here; use it where one is expected -- a typed let, "
+                        "assignment, return, argument, or field",
+                        stmt.line,
+                    )
                 # A result produced in statement position and dropped is the
                 # accidental-error-discard hole: warn under -Wunused-result.
                 # try/except/destructure/binding all consume elsewhere; only a
@@ -8508,7 +8638,7 @@ class CodeGen:
         self.builder.position_at_end(else_bb)
         else_tv = self.gen_expr(expr.otherwise)
         else_end = self.builder.block
-        result_type = self.unify_branches(then_tv, else_tv)
+        result_type = self.unify_branches(then_tv, else_tv, expr.line)
         # Coerce each arm to the shared type at the end of its own block, so any
         # adapting (or a pointer-to-rawptr bitcast) lands on the right path.
         self.builder.position_at_end(then_end)
@@ -8523,7 +8653,9 @@ class CodeGen:
         phi.add_incoming(else_val, else_end)
         return TypedValue(phi, result_type)
 
-    def unify_branches(self, then_tv: TypedValue, else_tv: TypedValue) -> LangType:
+    def unify_branches(
+        self, then_tv: TypedValue, else_tv: TypedValue, line: int
+    ) -> LangType:
         """Pick the shared type of a ternary's two arms.
 
         Mirrors :meth:`gen_binary`'s operand unification: equal types are kept,
@@ -8532,13 +8664,21 @@ class CodeGen:
         Otherwise the first arm's type is the target, and :meth:`coerce` either
         bridges it (e.g. a pointer to raw memory) or reports the mismatch.
 
+        A pending ``ok``/``error`` arm (see :meth:`gen_result_pending`) is
+        handled apart in :meth:`unify_result_branches`: the two arms bind each
+        other's free parameter, so ``cond ? ok(v) : error(e)`` yields
+        ``result<T, E>`` with no annotation.
+
         Args:
             then_tv: The ``then`` arm's value.
             else_tv: The ``otherwise`` arm's value.
+            line: Source line for diagnostics.
 
         Returns:
             The concrete type both arms are coerced to before the ``phi``.
         """
+        if then_tv.result_pending is not None or else_tv.result_pending is not None:
+            return self.unify_result_branches(then_tv, else_tv, line)
         if then_tv.type == else_tv.type:
             return then_tv.type
         if (
@@ -8553,6 +8693,73 @@ class CodeGen:
         if then_tv.adaptable and not else_tv.adaptable:
             return else_tv.type
         return then_tv.type
+
+    def unify_result_branches(
+        self, then_tv: TypedValue, else_tv: TypedValue, line: int
+    ) -> LangType:
+        """Bind the free arm of a ternary whose arm(s) are pending results.
+
+        A pending ``ok`` fixes ``T`` and leaves ``E`` free; a pending ``error``
+        fixes ``E`` and leaves ``T`` free (see :meth:`gen_result_pending`). The
+        two branches meet here:
+
+        - a pending against a concrete ``result<T, E>`` takes that whole type
+          (the pending finalizes to it in :meth:`gen_ternary`'s per-arm coerce);
+        - a mixed ``ok``/``error`` pair supplies each other's free arm, giving
+          ``result<T, E>`` (or the error-only ``result<E>`` when the ok arm is
+          the value-less ``ok()``);
+        - two same-kind pendings leave one arm with no source, so the target
+          type must come from an annotation instead -- reported here.
+
+        Args:
+            then_tv: The ``then`` arm's value.
+            else_tv: The ``otherwise`` arm's value.
+            line: Source line for diagnostics.
+
+        Returns:
+            The concrete ``result<...>`` type both arms are coerced to.
+
+        Raises:
+            LangError: When the sibling is not a result, or two same-kind
+                pendings leave an arm undetermined.
+        """
+        tp, ep = then_tv.result_pending, else_tv.result_pending
+        # One pending, one settled: the settled arm must itself be a result,
+        # whose type fixes the pending's free arm.
+        if tp is None or ep is None:
+            pending = tp if ep is None else ep
+            other = else_tv if ep is None else then_tv
+            concrete = strip_const(other.type)
+            if not is_result(concrete):
+                raise LangError(
+                    f"cannot reconcile {pending.kind}(...) with {other.type}: "
+                    "the other ternary arm is not a result",
+                    line,
+                )
+            return concrete
+        # Two pendings: a mixed pair determines both arms; a same-kind pair
+        # cannot, since neither supplies the other's free arm.
+        if tp.kind == ep.kind:
+            missing = "error" if tp.kind == "ok" else "ok"
+            raise LangError(
+                f"cannot infer the {missing} type of this result: both arms are "
+                f"{tp.kind}(...), so neither supplies it -- annotate the target "
+                f"(a result<...> return or let), or lift the value out "
+                f"(e.g. {tp.kind}(cond ? a : b))",
+                line,
+            )
+        ok_p = tp if tp.kind == "ok" else ep
+        err_p = ep if tp.kind == "ok" else tp
+        if err_p.payload is None:
+            raise LangError(
+                "error() takes the error value, e.g. error(my_error::NOT_FOUND)",
+                line,
+            )
+        err_arm = strip_const(err_p.payload.type)
+        if ok_p.payload is None:
+            # ok() (error-only) paired with error(e): result<E>.
+            return self.result_type((err_arm,), line)
+        return self.result_type((strip_const(ok_p.payload.type), err_arm), line)
 
     def gen_equals(self, subject: TypedValue, value: TypedValue, line: int) -> ir.Value:
         """Emit an ``i1`` for ``subject == value`` (to test a ``when`` arm).
@@ -8620,14 +8827,10 @@ class CodeGen:
         if isinstance(expr, StructLit):
             return self.gen_struct_lit(expr)
         if isinstance(expr, ResultLit):
-            # The constructors are context-typed like a bare struct literal:
-            # with no expected result type there is nothing to build.
-            raise LangError(
-                f"{expr.kind}(...) has no result type here; use it where one "
-                "is expected -- a typed let, assignment, return, argument, "
-                "or field",
-                expr.line,
-            )
+            # Outside a direct result sink: build a pending value whose free arm
+            # a ternary sibling or the expected type will bind (a bare use with
+            # no such context is rejected at coerce / the sink guards below).
+            return self.gen_result_pending(expr)
         if isinstance(expr, ErrorName):
             return self.gen_error_name(expr)
         if isinstance(expr, TupleLit):

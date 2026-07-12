@@ -65,6 +65,16 @@ fn find(key: int32) -> result<int32, file_error> {
     return ok(40 + key);
 }
 
+// ok(v) and error(e) behave as the builtins ok<T, E>(v: T) -> result<T, E>
+// and error<T, E>(e: E) -> result<T, E>: the argument fixes one arm, the
+// other is a free parameter. So they compose as ordinary values -- a ternary
+// binds each arm's free parameter against its sibling (the ok arm supplies T,
+// the error arm supplies E), and `cond ? ok(v) : error(e)` is a full
+// result<T, E> with nothing extra written down. Same in either arm order.
+fn checked(key: int32) -> result<int32, file_error> {
+    return key < 0 ? error(file_error::NOT_FOUND) : ok(40 + key);
+}
+
 // A function that can only fail returns the one-argument result<E> and
 // reports success with the bare ok(). (The language has no void type
 // argument, here or anywhere.)
@@ -168,6 +178,13 @@ fn main() -> int32 {
         println("find(0) failed: {}; missing = {} (the zero value of int32)",
                 describe(cause), missing);
     }
+
+    // checked() builds its result with a ternary of constructors: no
+    // annotation is needed, the two arms bind each other's free parameter.
+    let ok_val, ok_err = checked(2);
+    let bad_val, bad_err = checked(-1);
+    println("checked(2) = {} (err [{}]); checked(-1) err = {}",
+            ok_val, error_name(ok_err), describe(bad_err));
 
     // The destructure also opens a stored result, not just a fresh call.
     // (The error-only result<E> rejects here: it has no ok value to bind;

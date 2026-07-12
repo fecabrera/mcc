@@ -37,6 +37,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`ok`/`error` compose as values in ternaries** — the constructors now
+  behave as the builtins `ok<T, E>(v: T) -> result<T, E>` and `error<T, E>(e:
+  E) -> result<T, E>`: the argument fixes one arm and the other is a free
+  parameter bound by context *or by the sibling arm of a ternary*. So
+  `return cond ? ok(v) : error(e);` type-checks with no annotation — the `ok`
+  arm supplies `T`, the `error` arm supplies `E` — and the same holds when one
+  arm is a constructor and the other an already-typed result. A direct result
+  sink (a typed `let`/return/assignment/field/argument) still builds eagerly,
+  so a struct-literal or string ok value keeps adapting to its arm. A ternary
+  whose two arms are the *same* kind leaves one arm undetermined
+  (`cond ? ok(1) : ok(2)` cannot know `E`) and must be annotated or the value
+  lifted out (`ok(cond ? 1 : 2)`); a bare `ok(5);` with no result context is
+  still rejected. See
+  [Construction](docs/language.md#construction-ok-and-error) and
+  [examples/types/error_handling.mc](examples/types/error_handling.mc).
 - **Error handling stage 4: `-Wunused-result` and the `error_name` /
   `error_message` accessors** — the final language stage of the epic. **A
   new opt-in warning class**, `-Wunused-result` (default-off like the rest;

@@ -4165,16 +4165,39 @@ fn find(key: int32) -> result<int64, my_error> {
 }
 ```
 
-Like a [bare struct literal](#structs), a constructor is **context-typed**:
-it is legal where the position fixes a result type — a `return`, a typed
-`let`, an assignment, a function argument, a struct field — and errors
-elsewhere (`let r = ok(5);` needs an annotation). The ok value lowers
-against `T` exactly like a typed position: untyped constants adapt, a bare
-struct literal builds a struct `T`, a string literal borrows into a
-`slice<char>` `T`. `error(e)` takes any expression of the declared error
-type — a member, a parameter, a stored value — and nothing else. `ok` and
-`error` are not keywords: only the call shape `ok(` / `error(` is claimed,
-so both names remain ordinary identifiers.
+The constructors behave as the builtin functions
+
+```c
+fn ok<T, E>(v: T) -> result<T, E>
+fn error<T, E>(e: E) -> result<T, E>
+```
+
+— the argument fixes one arm and the other is a free type parameter, bound
+either by the position that fixes a result type (a `return`, a typed `let`,
+an assignment, a function argument, a struct field) or, when the constructor
+is an arm of a larger expression, by **unifying with its sibling**. So a
+ternary composes with no special handling: the `ok` arm supplies `T`, the
+`error` arm supplies `E`, and neither has to be written down.
+
+```c
+fn checked(key: int32) -> result<int32, my_error> {
+    return key < 0 ? error(my_error::NOT_FOUND) : ok(40 + key);
+}
+```
+
+When the position *does* fix a result type, the ok value lowers against `T`
+exactly like any typed position: untyped constants adapt, a bare struct
+literal builds a struct `T`, a string literal borrows into a `slice<char>`
+`T`. `error(e)` takes any expression of the declared error type — a member,
+a parameter, a stored value — and nothing else.
+
+A constructor that reaches no result type at all is an error (`let r =
+ok(5);` needs an annotation; a bare `ok(5);` statement is rejected). And a
+ternary whose two arms are the *same* constructor kind leaves one arm with no
+source — `cond ? ok(1) : ok(2)` cannot know `E` — so it must be annotated
+(`let r: result<int32, my_error> = ...`) or the value lifted out
+(`ok(cond ? 1 : 2)`). `ok` and `error` are not keywords: only the call shape
+`ok(` / `error(` is claimed, so both names remain ordinary identifiers.
 
 ### Consuming a result: the destructure
 

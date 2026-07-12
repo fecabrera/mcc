@@ -139,6 +139,14 @@ class TypedValue:
             The lvalue surfaces -- assignment, projection, re-lending as a
             ``mut`` argument -- consume it; value contexts use ``value`` and
             the unused load folds away.
+        result_pending: Set when this value is a bare ``ok(...)``/``error(...)``
+            reached outside a direct result sink -- a *pending* result whose
+            free arm is not yet bound (see :class:`ResultPending`). ``value`` is
+            ``None`` and ``type`` is the :data:`PENDING_RESULT` marker until
+            :meth:`CodeGen.coerce` (against the expected result type) or
+            :meth:`CodeGen.unify_branches` (against a sibling ternary arm)
+            fixes the type and builds the aggregate. ``None`` for every ordinary
+            value.
     """
 
     value: ir.Value
@@ -146,6 +154,30 @@ class TypedValue:
     adaptable: bool = False
     decayed: "LangType | None" = None
     lvalue: "ir.Value | None" = None
+    result_pending: "ResultPending | None" = None
+
+
+@dataclass(frozen=True)
+class ResultPending:
+    """A bare ``ok(v)`` / ``error(e)`` awaiting its full result type.
+
+    Models the builtin constructor signatures ``ok<T, E>(v: T) -> result<T,
+    E>`` and ``error<T, E>(e: E) -> result<T, E>``: the argument fixes one arm,
+    the other is a free type parameter. Carried on a :class:`TypedValue` (with
+    :data:`PENDING_RESULT` as its placeholder type) until the free arm is bound
+    -- by the sibling arm of a ternary or by the expected result type at a sink
+    -- at which point the aggregate is built. This lets ``ok``/``error`` compose
+    as ordinary values (``cond ? ok(v) : error(e)``) with no per-position
+    special-casing, while a direct result sink keeps building eagerly.
+
+    Attributes:
+        kind: ``"ok"`` or ``"error"``.
+        payload: The evaluated argument (the bound arm's value), or ``None`` for
+            the argument-less ``ok()`` of an error-only ``result<E>``.
+    """
+
+    kind: str
+    payload: "TypedValue | None"
 
 
 @dataclass
@@ -438,6 +470,11 @@ RAWPTR = pointer_to(TYPES["uint8"])
 CHARPTR = pointer_to(CHAR)
 # The type of a bare `null`: a pointer that adapts to any pointer type.
 NULLT = LangType("null", RAWPTR.ir, signed=False, pointee=TYPES["uint8"])
+
+# Placeholder type of a pending `ok(...)`/`error(...)` value (one arm still
+# free); never emitted -- coerce/unify_branches replace it with the concrete
+# result<T, E> before any use. See TypedValue.result_pending.
+PENDING_RESULT = LangType("result<?>", ir.LiteralStructType([]), signed=False)
 
 # `any` -- the builtin tagged box: `{ tag: uint64; payload: 16 bytes, align 8 }`,
 # 24 bytes total, the payload sized so a slice (2 words) fits by value. Realized

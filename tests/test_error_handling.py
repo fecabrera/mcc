@@ -14,8 +14,13 @@ the directive.
 slice/tuple pattern) laid out as `{ tag: uint8, payload }` -- a union of the
 arms for arity 2, `E` directly for the error-only arity 1. `E` must be a
 declared error type. `ok(v)` / `ok()` / `error(e)` are the only constructors,
-context-typed like a bare struct literal; there is no implicit
-value-to-result coercion in either direction, and a result exposes no fields.
+behaving as the builtins `ok<T, E>(v: T) -> result<T, E>` and `error<T, E>(e:
+E) -> result<T, E>`: the argument fixes one arm, the other is a free parameter
+bound by context (an expected result type) or by the sibling of a ternary --
+so `cond ? ok(v) : error(e)` composes with no per-position handling. A direct
+result sink still builds eagerly (so a struct-literal / string ok value keeps
+adapting to its arm). There is no implicit value-to-result coercion in either
+direction, and a result exposes no fields.
 
 Stage 2 adds the binding forms (their tests in the stage-2 section below):
 form 1, the destructure `let ret, err = f();` (a tag select -- the unselected
@@ -645,6 +650,172 @@ def test_a_result_is_not_a_struct_literal():
             "    return struct result<int32, my_error> { };"
             "}"
         )
+
+
+# ------------------------------------ constructors as values (composite arms)
+#
+# ok/error behave as the builtin functions `ok<T, E>(v: T) -> result<T, E>` and
+# `error<T, E>(e: E) -> result<T, E>`: the argument fixes one arm and the other
+# stays a free parameter. Outside a direct result sink (a typed
+# let/return/assignment/field/argument, which still builds eagerly) a
+# constructor is a *pending* value whose free arm is bound by the branch that
+# meets it -- so a ternary composes with no per-position handling: `ok`'s free
+# error type unifies with the sibling `error`'s, and vice versa. A constructor
+# that reaches no result context at all is rejected, like a bare `ok(5);`.
+
+def test_a_mixed_ternary_needs_no_annotation(capfd):
+    # cond ? ok(v) : error(e): the ok arm supplies T, the error arm supplies E,
+    # so the ternary is a full result<T, E> with nothing written down. Both arm
+    # orders resolve the same way.
+    assert run(
+        'import "std/io";\n' + DECL
+        + """
+        fn pick(flag: bool, v: int32) -> result<int32, my_error> {
+            return flag ? ok(v) : error(my_error::PERMISSION);
+        }
+        fn flip(flag: bool, v: int32) -> result<int32, my_error> {
+            return flag ? error(my_error::EXHAUSTED) : ok(v);
+        }
+        fn main() -> int32 {
+            let a, ea = pick(true, 7);
+            let b, eb = pick(false, 7);
+            let c, ec = flip(false, 9);
+            println("a={} ea=[{}]", a, error_name(ea));
+            println("b={} eb=[{}]", b, error_name(eb));
+            println("c={} ec=[{}]", c, error_name(ec));
+            return 0;
+        }
+        """
+    ) == 0
+    out, _ = capfd.readouterr()
+    assert out == (
+        "a=7 ea=[]\n"
+        "b=0 eb=[my_error::PERMISSION]\n"
+        "c=9 ec=[]\n"
+    )
+
+
+def test_a_pending_arm_binds_against_a_concrete_result(capfd):
+    # One arm a constructor, the other an already-typed result value: the
+    # concrete result<T, E> fixes the pending arm's free parameter.
+    assert run(
+        'import "std/io";\n' + DECL
+        + """
+        fn base() -> result<int32, my_error> { return ok(42); }
+        fn choose(flag: bool) -> result<int32, my_error> {
+            return flag ? error(my_error::NOT_FOUND) : base();
+        }
+        fn main() -> int32 {
+            let v, e = choose(false);
+            println("v={} e=[{}]", v, error_name(e));
+            return 0;
+        }
+        """
+    ) == 0
+    out, _ = capfd.readouterr()
+    assert out == "v=42 e=[]\n"
+
+
+def test_an_error_only_ternary_pairs_ok_with_error(capfd):
+    # ok() (no value) paired with error(e) is a result<E>: the value-less ok
+    # arm keeps the error-only arity the error arm implies.
+    assert run(
+        'import "std/io";\n' + DECL
+        + """
+        fn chk(bad: bool) -> result<my_error> {
+            return bad ? error(my_error::NOT_FOUND) : ok();
+        }
+        fn main() -> int32 {
+            try chk(true) except (er) { println("failed: {}", error_name(er)); };
+            try chk(false) except (er) { println("unreached"); };
+            return 0;
+        }
+        """
+    ) == 0
+    out, _ = capfd.readouterr()
+    assert out == "failed: my_error::NOT_FOUND\n"
+
+
+def test_constructors_compose_in_let_and_argument_positions(capfd):
+    # The pending value settles at any result sink the composite feeds: an
+    # annotated let and a function argument both bind the free arm.
+    assert run(
+        'import "std/io";\n' + DECL
+        + """
+        fn unwrap(r: result<int32, my_error>) -> int32 {
+            let v, e = r;
+            return v;
+        }
+        fn main() -> int32 {
+            let r: result<int32, my_error> = (1 > 0) ? ok(10) : error(my_error::PERMISSION);
+            let got = unwrap((1 > 2) ? error(my_error::NOT_FOUND) : ok(20));
+            let v, e = r;
+            println("r={} arg={}", v, got);
+            return 0;
+        }
+        """
+    ) == 0
+    out, _ = capfd.readouterr()
+    assert out == "r=10 arg=20\n"
+
+
+def test_a_same_kind_ternary_cannot_infer_the_free_arm():
+    # Both arms ok: nothing supplies the error type, so the target must be
+    # annotated (or the value lifted out). The message names the missing arm.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "cannot infer the error type of this result: both arms are ok(...)"
+        ),
+    ):
+        compile_ir(
+            DECL
+            + "fn f(flag: bool) -> result<int32, my_error> {"
+            "    return flag ? ok(1) : ok(2);"
+            "}"
+        )
+    # Both arms error: the ok type is the one with no source.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "cannot infer the ok type of this result: both arms are error(...)"
+        ),
+    ):
+        compile_ir(
+            DECL
+            + "fn f(flag: bool) -> result<int32, my_error> {"
+            "    return flag ? error(my_error::NOT_FOUND) : error(my_error::PERMISSION);"
+            "}"
+        )
+
+
+def test_a_constructor_ternary_arm_needs_a_result_sibling():
+    # The other arm is a plain value, not a result: there is no free arm to
+    # bind, so the two cannot reconcile.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "cannot reconcile ok(...) with int32: the other ternary arm is "
+            "not a result"
+        ),
+    ):
+        compile_ir(
+            DECL
+            + "fn f(flag: bool) -> int32 {"
+            "    return (flag ? ok(1) : 2) as int32;"
+            "}"
+        )
+
+
+def test_a_bare_constructor_statement_is_rejected():
+    # A pending value dropped in statement position never reached a result
+    # context: the same miss as a constructor with no sink.
+    msg = (
+        "ok(...) has no result type here; use it where one is expected -- "
+        "a typed let, assignment, return, argument, or field"
+    )
+    with pytest.raises(LangError, match=re.escape(msg)):
+        compile_ir(DECL + "fn f() -> int32 { ok(5); return 0; }")
 
 
 def test_a_result_destructures_into_two_binders():

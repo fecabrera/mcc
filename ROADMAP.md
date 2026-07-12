@@ -434,8 +434,11 @@ already do).
   template on the `slice`/`tuple`/[`any`](#structs-arrays-and-data-layout)
   pattern, laid out as a tag plus a union of the arms over the shipped
   union layout machinery; `ok(v)` / `ok()` (`result<E>` only) / `error(e)`
-  are the **only** constructors, context-typed like a bare struct literal,
-  with no implicit value-to-result coercion in either direction (and
+  are the **only** constructors, behaving as the builtins
+  `ok<T, E>(v: T) -> result<T, E>` / `error<T, E>(e: E) -> result<T, E>`
+  (one arm fixed by the argument, the other bound by context or a sibling
+  ternary arm), with no implicit value-to-result coercion in either
+  direction (and
   `error(` the builtin, `error name {` the declaration, and the
   `@error(msg)` directive are three spellings that never collide). Staged:
   - [x] stage 1: `error` declarations, the `result` type, and the
@@ -446,6 +449,14 @@ already do).
         `error` declaration), and the `ok()`/`error()` builtins with their
         context-required and wrong-arity diagnostics — implemented, see
         [Error handling](docs/language.md#error-handling). Follow-ups:
+    - [x] constructors compose as values — `ok`/`error` bind their free arm
+          against a sibling ternary arm, so `cond ? ok(v) : error(e)` is a
+          full `result<T, E>` with no annotation (and one arm may be an
+          already-typed result). A direct result sink still builds eagerly,
+          keeping struct-literal/string ok-value adaptation; a same-kind
+          ternary (both `ok`, both `error`) must be annotated or the value
+          lifted out — implemented, see
+          [Construction](docs/language.md#construction-ok-and-error)
     - [ ] variant payloads — `SHORT_READ(uint64)`, a variant carrying
           data: rides the same tag-plus-union machinery `result`
           introduces, and the declaration head is chosen so payload parens
