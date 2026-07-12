@@ -1,11 +1,12 @@
 """Error handling stage 1: `error` declarations, `result<T, E>`, constructors.
 
 An `error` declaration is enum-like but **nominal** and int32-backed: variants
-auto-number from 1 in declaration order (explicit values continue the
-numbering; `= 0` and duplicate values reject), so every variant is non-zero by
-construction and zero is the reserved, unnameable no-error state that makes
-`if (err)` a total check. A variant may carry a display string instead of a
-value (`NOT_FOUND = "Not Found"`), stored for the rendering stage. `error` is
+always auto-number from 1 in declaration order -- error values are automatic,
+so there is no explicit `= n` form (a bare `= <int>` rejects) -- giving dense
+`1..N` values where every variant is non-zero by construction and zero is the
+reserved, unnameable no-error state that makes `if (err)` a total check. The
+`=` slot instead sets an optional display string (`NOT_FOUND = "Not Found"`),
+stored for the rendering stage and never affecting the numbering. `error` is
 a contextual introducer -- `error(` stays the constructor and `@error(msg)`
 the directive.
 
@@ -87,17 +88,19 @@ def test_variants_auto_number_from_one():
     ) == 123
 
 
-def test_explicit_value_continues_the_numbering():
-    # The C convention: after `= n`, auto-numbering resumes from n + 1.
+def test_bare_and_message_variants_number_densely_in_order():
+    # Error values are always automatic: mixing bare variants and display-
+    # string variants does not disturb the dense 1..N numbering -- each takes
+    # its declaration-order position, a display string is data on the side.
     assert run(
         """
-        error e { A, B = 7, C, D = 100, E }
+        error e { A, B = "beta", C, D = "delta", E }
         fn main() -> int32 {
-            if (e::A as int32 != 1)   { return 1; }
-            if (e::B as int32 != 7)   { return 2; }
-            if (e::C as int32 != 8)   { return 3; }
-            if (e::D as int32 != 100) { return 4; }
-            if (e::E as int32 != 101) { return 5; }
+            if (e::A as int32 != 1) { return 1; }
+            if (e::B as int32 != 2) { return 2; }
+            if (e::C as int32 != 3) { return 3; }
+            if (e::D as int32 != 4) { return 4; }
+            if (e::E as int32 != 5) { return 5; }
             return 0;
         }
         """
@@ -197,29 +200,30 @@ def test_error_values_are_ordinary_data():
 
 # ------------------------------------------- error declaration rejections
 
-def test_zero_value_is_rejected():
+def test_explicit_value_is_rejected():
+    # Error values are automatic; the `=` slot sets a display string only, so
+    # a bare integer after `=` is a compile error (there is no way to hit the
+    # zero state or a duplicate value -- values are dense 1..N by construction).
     with pytest.raises(
         LangError,
         match=re.escape(
-            "error 'e' member 'A' cannot be 0; zero is the reserved "
-            "no-error state (values start at 1)"
+            "error 'e' member 'A': error values are automatic; '=' sets a "
+            "display string, not a value"
         ),
     ):
-        compile_ir("error e { A = 0 }")
+        compile_ir("error e { A = 5 }")
 
 
-def test_duplicate_values_are_rejected():
+def test_expression_value_is_rejected():
+    # Not just a literal: anything but a display string after `=` rejects.
     with pytest.raises(
         LangError,
         match=re.escape(
-            "error 'e' members 'A' and 'C' share the value 2; each variant "
-            "is a distinct cause"
+            "error 'e' member 'B': error values are automatic; '=' sets a "
+            "display string, not a value"
         ),
     ):
-        # C auto-numbers to 2, colliding with the explicit B = ... A = 2? no:
-        # A auto-numbers to 1, B takes 2 explicitly? A=2 explicit, B=1, C
-        # auto-continues from B: 2 -- the continuation collides with A.
-        compile_ir("error e { A = 2, B = 1, C }")
+        compile_ir("error e { A, B = 1 + 1 }")
 
 
 def test_duplicate_member_name_is_rejected():
@@ -729,8 +733,8 @@ def test_interface_round_trips_error_and_result():
     src = (
         'error my_error {\n'
         '    NOT_FOUND = "Not Found",\n'
-        '    PERMISSION = 5,\n'
-        '    EXHAUSTED,\n'
+        '    PERMISSION,\n'
+        '    EXHAUSTED = "Exhausted",\n'
         '}\n'
         '\n'
         'fn find(key: int32) -> result<int32, my_error> {\n'
@@ -739,11 +743,11 @@ def test_interface_round_trips_error_and_result():
         '}\n'
     )
     stub = iface(src)
-    # The declaration travels verbatim (display strings and explicit values
-    # included); the concrete function becomes a prototype spelling the
+    # The declaration travels verbatim (display strings included, values
+    # implicit); the concrete function becomes a prototype spelling the
     # result type.
     assert 'NOT_FOUND = "Not Found",' in stub
-    assert "PERMISSION = 5," in stub
+    assert 'EXHAUSTED = "Exhausted",' in stub
     assert "fn find(key: int32) -> result<int32, my_error>;" in stub
     # And the stub is valid source a consumer compiles against.
     consumer = stub + (
@@ -2402,15 +2406,15 @@ def test_dangling_else_binds_the_inner_try():
 # falling back to the identifier when the variant declared none. Both funnel
 # through a compiler-synthesized per-declaration switch (one internal function
 # each, cached), keyed on the error's int32 value; the reserved zero no-error
-# state and any unreachable gap render as the empty string. The names are
-# claimed only when directly followed by `(`, so they stay identifiers.
+# state renders as the empty string. The names are claimed only when directly
+# followed by `(`, so they stay identifiers.
 
 ACC = (
     "error acc_error {\n"
     '    NOT_FOUND = "Not Found",\n'   # 1, display
     "    PERMISSION,\n"                # 2, no display
-    "    EXHAUSTED = 100,\n"           # explicit value (gap 3..99)
-    "    TIMEOUT,\n"                   # 101, resumes from 100 + 1
+    "    EXHAUSTED,\n"                 # 3, no display
+    "    TIMEOUT,\n"                   # 4, no display
     "}\n"
 )
 ACC_FIND = (
@@ -2422,8 +2426,8 @@ ACC_FIND = (
 
 
 def test_error_name_returns_the_variant_identifier(capfd):
-    # Every variant, including the explicit-value and post-gap ones, renders
-    # as its own spelled identifier -- never the display string.
+    # Every variant renders as its own spelled identifier -- never the
+    # display string.
     assert run(
         'import "std/io";\n' + ACC
         + """

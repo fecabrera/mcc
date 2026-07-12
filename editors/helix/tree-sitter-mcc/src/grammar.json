@@ -725,10 +725,10 @@
                 },
                 {
                   "type": "FIELD",
-                  "name": "value",
+                  "name": "display",
                   "content": {
                     "type": "SYMBOL",
-                    "name": "_expression"
+                    "name": "string"
                   }
                 }
               ]

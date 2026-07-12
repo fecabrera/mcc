@@ -4078,19 +4078,19 @@ every axis that matters for errors:
   transparent integer: no arithmetic, no ordering, and no implicit
   conversion to or from integers — `error(5)` and `return 1;` into a
   `my_error` both reject. Two same-shaped declarations do not mix.
-- **Auto-numbered from 1.** Variants take 1, 2, 3, … in declaration order.
-  An explicit `= n` is allowed and numbering continues from `n + 1` (the C
-  convention); `= 0` and duplicate values are compile errors, so **every
-  variant is non-zero by construction**.
+- **Auto-numbered from 1.** Variants take 1, 2, 3, … in declaration order —
+  always. Error values are automatic: there is no explicit `= n` form (a
+  bare `= <int>` is a compile error), so the values are dense `1..N` and
+  **every variant is non-zero by construction**.
 - **Zero is the reserved, unnameable no-error state.** It cannot be
   declared, constructed, or named — a function that has no error to report
   returns `ok(...)`. Its only purpose is to make `if (err)` a total check
   once the binding forms land.
 - **A variant may carry a display string** — `NOT_FOUND = "Not Found"` — the
   human-facing message [`error_message`](#rendering-error_name-and-error_message)
-  renders, stored in the declaration and carried through `.mci` stubs. A
-  variant takes a value *or* a display string, not both; a display string does
-  not affect the numbering.
+  renders, stored in the declaration and carried through `.mci` stubs. The
+  `=` slot only ever sets a display string (never a value); a display string
+  does not affect the numbering.
 
 An error value supports exactly the operations a failure cause needs:
 truthiness (`if (err)` tests against the zero state), `==`/`!=` against

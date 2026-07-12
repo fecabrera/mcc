@@ -44,8 +44,8 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   its declared [display string](docs/language.md#error-declarations) when it
   has one, falling back to the identifier otherwise — the human-facing "why
   it failed". Both render through a compiler-synthesized per-declaration
-  lookup keyed on the error's value (covering explicit-valued and gapped
-  variants; the reserved zero no-error state renders as the empty string),
+  lookup keyed on the error's value (the reserved zero no-error state
+  renders as the empty string),
   and both stay ordinary identifiers unless directly followed by `(`. The
   operand must be a declared error value (`error_name(5)` rejects).
   Automatic `{}` rendering of an error value stays a follow-up (the format
@@ -135,16 +135,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `ok()`/`error()` constructors** — recoverable errors as values, the
   recoverable complement of `panic`/`assert`. An `error` declaration
   (`error my_error { NOT_FOUND = "Not Found", IO_ERROR }`) names the
-  failure causes as a **nominal**, `int32`-backed type: variants
-  auto-number from 1 in declaration order (an explicit `= n` continues
-  from `n + 1`; `= 0` and duplicate values reject), so every variant is
-  non-zero by construction and zero stays the reserved, unnameable
-  no-error state. An error value supports truthiness (`if (err)`),
-  `==`/`!=` against its own declaration, and `case` — but no arithmetic,
-  no ordering, and no implicit integer conversion (`err as int32` reads
-  the value out explicitly; nothing casts *into* an error type). A
-  variant may carry a display string instead of a value, stored for the
-  planned rendering stage. `result<T, E>` / the error-only `result<E>`
+  failure causes as a **nominal**, `int32`-backed type: variants always
+  auto-number from 1 in declaration order — error values are automatic,
+  so there is no explicit `= n` form (a bare `= <int>` rejects) — giving
+  dense `1..N` values where every variant is non-zero by construction and
+  zero stays the reserved, unnameable no-error state. An error value
+  supports truthiness (`if (err)`), `==`/`!=` against its own
+  declaration, and `case` — but no arithmetic, no ordering, and no
+  implicit integer conversion (`err as int32` reads the value out
+  explicitly; nothing casts *into* an error type). A variant's `=` slot
+  sets an optional display string (`NOT_FOUND = "Not Found"`), stored for
+  the rendering stage and never affecting the numbering. `result<T, E>` / the error-only `result<E>`
   (no `void` type arguments, ever) is a builtin template on the
   `slice`/`tuple` pattern — a one-byte tag plus a union of the arms —
   whose `E` must be an `error` declaration; it returns, passes, stores,

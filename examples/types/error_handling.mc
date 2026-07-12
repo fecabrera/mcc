@@ -24,16 +24,17 @@ import "std/io";
 // in either direction (`error(5)` and casting an int32 into `file_error`
 // both reject). Two same-shaped declarations do not mix.
 //
-// Variants auto-number from 1; zero is the reserved, unnameable no-error
-// state (`= 0` is a compile error, as is a duplicate value). An explicit
-// `= n` continues numbering from n + 1, the C convention. A variant may
-// carry a display string instead of a value: stored data for a future
-// rendering stage, it does not affect the numbering.
+// Variants always auto-number from 1 in declaration order, so the values are
+// dense 1..N: every variant is non-zero, and zero is the reserved, unnameable
+// no-error state. Error values are automatic -- there is no explicit `= n`
+// form (a bare `= <int>` is a compile error). The `=` slot instead sets an
+// optional display string: stored data for the rendering stage, it does not
+// affect the numbering.
 error file_error {
     NOT_FOUND = "Not Found",   // 1, and carries display data
     PERMISSION,                // 2
-    EXHAUSTED = 100,           // explicit value
-    TIMEOUT,                   // 101, numbering resumes from 100 + 1
+    EXHAUSTED,                 // 3
+    TIMEOUT,                   // 4
 }
 
 // An error value supports exactly what a failure cause needs: truthiness,

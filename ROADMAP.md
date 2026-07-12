@@ -420,12 +420,12 @@ already do).
   }
   ```
   The `error` declaration is enum-like but **nominal** and `int32`-backed:
-  variants auto-number from 1 in declaration order (explicit values are
-  allowed; `= 0` and duplicate values reject), so every variant is non-zero
-  by construction and zero is the reserved, **unnameable** no-error state
-  that makes `if (err)` a total check. A variant may carry an optional
-  display string, as above (a variant takes a value *or* a display string,
-  not both; a display string does not affect the numbering). Deliberately
+  variants always auto-number from 1 in declaration order — error values are
+  automatic, with no explicit `= n` form (a bare `= <int>` rejects) — so the
+  values are dense `1..N`, every variant is non-zero by construction, and
+  zero is the reserved, **unnameable** no-error state that makes `if (err)` a
+  total check. A variant's `=` slot may instead set an optional display
+  string, as above (it does not affect the numbering). Deliberately
   nominal from birth, front-running the
   [nominal enums](#types-and-generics) migration above inside a new
   declaration kind where no existing code can break; an `error` declaration

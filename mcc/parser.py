@@ -1224,14 +1224,15 @@ class Parser:
     ) -> EnumDecl:
         """Parse an ``error`` declaration.
 
-        ``error name { VARIANT, VARIANT = value, VARIANT = "display", ... }`` --
-        the leading ``error`` is a contextual keyword (an identifier elsewhere),
-        already confirmed by the caller. Variants auto-number from 1 in
-        declaration order; an explicit integer value continues the numbering
-        from it. A variant may instead carry a display string (stored, not a
-        value -- the variant still auto-numbers); it takes one or the other,
-        not both. The type is always ``int32``-backed, so there is no ``:``
-        underlying slot. A trailing comma is allowed, as in an ``enum``.
+        ``error name { VARIANT, VARIANT = "display", ... }`` -- the leading
+        ``error`` is a contextual keyword (an identifier elsewhere), already
+        confirmed by the caller. Variants always auto-number from 1 in
+        declaration order; error values are automatic, so there is no explicit
+        ``= n`` form. The ``=`` slot instead carries an optional display string
+        (stored, not a value -- the variant still auto-numbers), and a bare
+        ``= <int>`` is a compile error. The type is always ``int32``-backed, so
+        there is no ``:`` underlying slot. A trailing comma is allowed, as in an
+        ``enum``.
 
         Args:
             private: Whether ``@private`` was applied.
@@ -1241,7 +1242,8 @@ class Parser:
             The parsed ``EnumDecl`` with ``is_error`` set.
 
         Raises:
-            LangError: When the declaration has no variants.
+            LangError: When the declaration has no variants, or when a variant's
+                ``=`` slot carries anything but a display string.
         """
         line = self.advance().line  # the 'error' identifier
         name = self.expect("IDENT").text
@@ -1250,14 +1252,16 @@ class Parser:
         displays: dict[str, str] = {}
         while self.cur.kind != "}":
             mname = self.expect("IDENT").text
-            value = None
             if self.accept("="):
-                if self.cur.kind == "STRING":
-                    tok = self.advance()
-                    displays[mname] = _unescape(tok.text[1:-1])
-                else:
-                    value = self.parse_expr()
-            members.append((mname, value))
+                if self.cur.kind != "STRING":
+                    raise LangError(
+                        f"error {name!r} member {mname!r}: error values are "
+                        "automatic; '=' sets a display string, not a value",
+                        self.cur.line,
+                    )
+                tok = self.advance()
+                displays[mname] = _unescape(tok.text[1:-1])
+            members.append((mname, None))
             if not self.accept(","):  # a trailing comma is allowed
                 break
         self.expect("}")

@@ -1,11 +1,11 @@
 ================================================================================
-error declaration with auto, explicit, and display-string variants
+error declaration with auto-numbered and display-string variants
 ================================================================================
 
 error my_error {
     NOT_FOUND = "Not Found",
-    PERMISSION = 5,
-    EXHAUSTED,
+    PERMISSION,
+    EXHAUSTED = "Exhausted",
 }
 
 --------------------------------------------------------------------------------
@@ -16,12 +16,12 @@ error my_error {
     (error_body
       (error_member
         name: (identifier)
-        value: (string))
+        display: (string))
+      (error_member
+        name: (identifier))
       (error_member
         name: (identifier)
-        value: (number))
-      (error_member
-        name: (identifier)))))
+        display: (string)))))
 
 ================================================================================
 annotated error declaration

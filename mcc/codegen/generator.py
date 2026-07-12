@@ -2794,22 +2794,21 @@ class CodeGen:
         Unlike an ``enum`` -- transparent, explicit-valued, duplicates legal --
         an error type is nominal (its ``int32``-backed ``LangType`` is a
         distinct type: no arithmetic, no implicit integer conversion) and its
-        variants auto-number from 1 in declaration order. An explicit ``= n``
-        continues the numbering from ``n + 1`` (the C convention); ``= 0`` and
-        duplicate values reject, so every variant is non-zero by construction
-        and zero stays the reserved, unnameable no-error state that makes
-        ``if (err)`` a total check. The record rides the enum registries, so
-        name clashes, ``Enum::Member`` access, ``@private``, and ``@static``
-        shadowing all behave as for an enum; a ``@static`` error's type takes
-        its salted file-scoped name, like a ``@static`` struct.
+        variants always auto-number from 1 in declaration order. Error values
+        are automatic (the parser rejects an explicit ``= n``), so the values
+        are dense ``1..N`` with no gaps and no duplicates -- every variant is
+        non-zero by construction and zero stays the reserved, unnameable
+        no-error state that makes ``if (err)`` a total check. The record rides
+        the enum registries, so name clashes, ``Enum::Member`` access,
+        ``@private``, and ``@static`` shadowing all behave as for an enum; a
+        ``@static`` error's type takes its salted file-scoped name, like a
+        ``@static`` struct.
 
         Args:
             decl: The error declaration to register (``is_error`` set).
 
         Raises:
-            LangError: On a name clash, a duplicate member name, a member
-                value that is 0, is not a constant integer, or collides with
-                another member's value.
+            LangError: On a name clash or a duplicate member name.
         """
         self.current_source = decl.source
         name = (
@@ -2835,45 +2834,12 @@ class CodeGen:
             ):
                 raise LangError(f"type {decl.name!r} already defined", decl.line)
             self.enums[decl.name] = enum
-        taken: dict[int, str] = {}
-        next_value = 1
-        for mname, vexpr in decl.members:
+        for value, (mname, _) in enumerate(decl.members, start=1):
             if mname in enum.members:
                 raise LangError(
                     f"error {decl.name!r} has a duplicate member {mname!r}",
                     decl.line,
                 )
-            if vexpr is None:
-                value = next_value
-                if value >= 1 << 31:
-                    raise LangError(
-                        f"error {decl.name!r} member {mname!r} auto-numbers "
-                        f"past int32 ({value}); give it an explicit value",
-                        decl.line,
-                    )
-            else:
-                folded = self.const_coerce(
-                    self.eval_const(vexpr, decl.line),
-                    INT32,
-                    decl.line,
-                    f"error member {decl.name}::{mname}",
-                )
-                value = folded.value.constant
-            if value == 0:
-                raise LangError(
-                    f"error {decl.name!r} member {mname!r} cannot be 0; "
-                    "zero is the reserved no-error state (values start at 1)",
-                    decl.line,
-                )
-            if value in taken:
-                raise LangError(
-                    f"error {decl.name!r} members {taken[value]!r} and "
-                    f"{mname!r} share the value {value}; each variant is a "
-                    "distinct cause",
-                    decl.line,
-                )
-            taken[value] = mname
-            next_value = value + 1
             enum.members[mname] = TypedValue(
                 ir.Constant(err_type.ir, value), err_type
             )
@@ -10835,11 +10801,11 @@ class CodeGen:
         Builds an ``internal`` ``char* (i32)`` function that switches on an
         error value and returns the string for the matching variant -- the
         identifier for ``error_name``, the declared display string (or the
-        identifier when absent) for ``error_message``. A ``switch`` handles any
-        value distribution -- dense auto-numbering, explicit gaps, negatives --
-        and its default (the reserved zero state or any unreachable gap) returns
-        the empty string. Cached per ``(type name, display)`` so repeated
-        accessor calls share one function.
+        identifier when absent) for ``error_message``. Error values are dense
+        ``1..N``; the ``switch`` maps each to its string and its default -- the
+        only value the switch does not cover, the reserved zero no-error state
+        -- returns the empty string. Cached per ``(type name, display)`` so
+        repeated accessor calls share one function.
 
         Args:
             type_name: The error's nominal (salted for ``@static``) type name.

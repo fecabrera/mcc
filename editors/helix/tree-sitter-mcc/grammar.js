@@ -179,8 +179,9 @@ module.exports = grammar({
     // `error` is a contextual keyword too (an identifier elsewhere -- and
     // `error(...)` in expression position is the result constructor, an
     // ordinary call to this grammar): `error <name> { ... }` declares a
-    // nominal error type. A variant auto-numbers, takes an explicit value,
-    // or carries a display string -- all `= expression` to the grammar.
+    // nominal error type. A variant always auto-numbers; error values are
+    // automatic, so its optional `= ...` slot carries a display string only
+    // (never a value).
     error_declaration: ($) =>
       seq(
         repeat($.annotation),
@@ -194,7 +195,7 @@ module.exports = grammar({
     error_member: ($) =>
       seq(
         field('name', $.identifier),
-        optional(seq('=', field('value', $._expression))),
+        optional(seq('=', field('display', $.string))),
       ),
 
     // `type` is a contextual keyword (an identifier elsewhere); tree-sitter's
