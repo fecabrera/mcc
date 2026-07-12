@@ -1627,7 +1627,11 @@ already do).
         struct-only, an enum, alias, builtin, or undeclared qualifier the
         error; the alias/builtin qualifiers sub-item below has since AMENDED
         that ruling, legalizing aliases and builtins, while enums and
-        undeclared names remain the error), the `self`-conventions
+        undeclared names remain the error — and ADDED a second check: a
+        bare qualifier naming a GENERIC type must annotate its type
+        parameters; this slice's acceptance of bare `fn point::m` on a
+        generic struct was an unvalidated accident, since reversed by
+        USER RULING there), the `self`-conventions
         becoming load-bearing only when the call sugar below lands. Parser:
         `fn Type::method` is claimed in definition position (this slice parsed
         it before type-params; generic-struct methods `fn Type<T>::m` followed
@@ -1709,7 +1713,11 @@ already do).
             nested-generic declarations
     - [ ] bare-`point` receiver sugar — inside `fn point<T>::method(...)` a
           bare `point` (no type args) means `point<T>`, the qualifier struct
-          applied to its own type params. Those struct params are the leading
+          applied to its own type params — a sugar for type USES in the
+          signature and body only; the qualifier itself stays annotated
+          (bare `fn point::method` remains the annotation-required error
+          per the alias/builtin qualifiers item below, which this sugar
+          does not relax). Those struct params are the leading
           entries of the method's merged type-param list, in scope at parse time
           in `parse_function`, so the mechanism is a parse-time rewrite (each
           bare `TypeRef` whose name is the qualifier and which carries no type
@@ -1774,9 +1782,41 @@ already do).
         builtin name; generic builtins take fresh names
         (`fn slice<T>::first` works) but CANNOT be specialized
         (`cannot specialize builtin type 'slice'; spell the receiver type
-        in the method's signature instead`). A bare generic-alias qualifier
-        is a namespace passthrough like bare `fn point::m` (USER RULING:
-        symmetry over a type-use arity error). USER RULING on the diagonal:
+        in the method's signature instead`). A GENERIC type as a BARE
+        qualifier is a compile error (USER RULING, 2026-07-12):
+        `fn pf::magnitude` on a generic alias is invalid just as
+        `fn point::magnitude` on a generic struct is — the qualifier must
+        annotate the type parameter(s), either a fresh param
+        (`fn point<T>::mk`) or a concrete arg (`fn point<float64>::mk`);
+        the method's OWN post-name type params do not satisfy it, a chain
+        through a non-generic alias to a generic struct errors with the
+        struct wording, and a FULLY-defaulted generic counts as complete
+        (defaults fill in, mirroring bare type uses; partially-defaulted
+        stays the error) — while a complete type stays bare: plain
+        structs, builtins, and aliases to complete types (`fn pointf::m`
+        IS `fn point<float64>::m`, per the governing ruling above). Call
+        sites are untouched: bare `point::m(p)` / alias-name calls still
+        chase by name and infer from the receiver — the pure-namespace
+        doctrine still governs WHICH family a method joins and every call
+        site; only the declaration qualifier of a generic type must be
+        annotated. Provenance: as first shipped (unreleased) this slice
+        instead ruled the bare generic-alias qualifier a namespace
+        passthrough symmetric with bare `fn point::m` — a ruling elicited
+        on the false premise that bare struct qualifiers on generic
+        structs were deliberate design, when that was an unvalidated
+        accident of the foundation slice; the user explicitly reversed
+        BOTH in a corrective slice, and the CHANGELOG was amended in
+        place since the passthrough never released. The corrective sweep
+        covered struct templates and generic aliases (builtin
+        `pair`/`iterator` ARE struct templates, so they error); reserved
+        builtin generics (a bare `fn slice::m`) were not swept — a known
+        seam, noted without a committed follow-up. Fallout hardening:
+        `.mci` stubs re-spell a specialization's annotated qualifier
+        (`fn box<float64>::tag(...)`) so stubs remain valid source under
+        the rule, and types named only in the qualifier now travel into
+        the stub (previously a specialization could silently re-classify
+        as generic on re-import; a new `Func.spec_qualifier_args` carries
+        this). USER RULING on the diagonal:
         `type diag<T> = pair<T, T>` with `fn diag<U>::m` dedupes the
         repeated fresh name into a template matching only `pair<X, X>`,
         unification enforcing consistency (a `pair<int32, float64>`
