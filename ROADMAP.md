@@ -1678,10 +1678,29 @@ already do).
           declaration → generic method, still merged at parse time (unchanged). A
           LONE specialization (no generic base of the same name) is legal — just a
           concrete overload
-      - [ ] partial specialization — a MIX of concrete and type-parameter struct
-            args (`fn pair<int32, U>::m`) is today REJECTED at classification;
-            allowing it (bind the concrete positions, leave `U` a free method type
-            param) is future work
+      - [x] partial specialization — a MIX of concrete and type-parameter
+            struct args (`fn pair<int32, U>::m`) now classifies: the concrete
+            positions bind, `U` stays a free method type param, and the
+            template matches only `pair<int32, X>` receivers. Classification
+            stayed in codegen (a mixed arm in `normalize_struct_method_args`);
+            dispatch is the pre-existing overload ranking — full specialization
+            beats partial beats fully generic — and two rank-tied partials are
+            the standard ambiguity error (USER RULING: keep it, no C++-style
+            partial ordering). BOUNDED partials shipped in the same slice
+            (USER RULING): `fn pair<int32, U: int8|int16>::m` works — the
+            parser's speculative pre-`::` capture now carries decorations
+            (`: group`, `extends`, `= default`) into codegen classification,
+            a decoration on a concrete position rejected; this also closed a
+            silent-wrong-code trap where a decorated list took the parse-time
+            generic path and `int32` became a type parameter NAMED "int32".
+            Ranking nuance, now documented: tier beats specificity — a bounded
+            generic (tier 1) outranks an UNBOUNDED partial (tier 0),
+            pre-existing semantics — while a bounded partial (tier 1) beats a
+            bounded generic on specificity. USER RULING on capture: a fresh
+            type-param name colliding with a struct parameter name bound to a
+            concrete arg is a compile error. Bonus fix: a parser speculation
+            bug where backtracking left `>>` token splits applied, corrupting
+            nested-generic declarations
     - [ ] bare-`point` receiver sugar — inside `fn point<T>::method(...)` a
           bare `point` (no type args) means `point<T>`, the qualifier struct
           applied to its own type params. Those struct params are the leading
