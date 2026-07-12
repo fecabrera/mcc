@@ -221,9 +221,11 @@ already do).
     composes with the shipped
     [bare-parameter base](docs/language.md#structs),
     serves as a generic bound, appears inside another generic's body
-    (`entry<U>` with `U` the outer parameter), and a method lookup under
-    [non-struct receivers](#functions-and-methods) sees the underlying
-    instantiation, not a separate namespace. The rules: arity is checked at
+    (`entry<U>` with `U` the outer parameter), and a method lookup through
+    an alias sees the underlying instantiation, not a separate namespace
+    (since shipped: the alias/builtin method qualifiers under
+    [Methods / OOP](#functions-and-methods) canonicalize an alias
+    qualifier to its target's family). The rules: arity is checked at
     the use site (a bare `entry` or a wrong argument count is an error,
     replacing today's blanket "type alias is not generic"); the target
     resolves at the declaration site with **only the alias's own
@@ -1582,8 +1584,9 @@ already do).
       shipped `@nonnull`- and `mut`/`const`-carrying function types
       neither fix nor worsen it, since their assignability checks live
       on the coerce path, not in viability or unification
-- [ ] Methods / OOP — `fn <struct>::<method>(...)` definitions
-      keyed to a struct (the explicit qualified-call foundation has shipped,
+- [ ] Methods / OOP — `fn <type>::<method>(...)` definitions
+      keyed to a type, structs foremost (the explicit qualified-call
+      foundation has shipped,
       see the checked sub-item; the receiver is an ordinary parameter, not the
       raw `self: <struct>*` this line once sketched), including `@private`
       methods and the special
@@ -1620,8 +1623,11 @@ already do).
         parameter, so this slice added no receiver-kind machinery. Deliberate
         scope ruling: `Type::` is purely a namespace, enforcing no `self`
         convention (no required receiver, name, or first-param type); the one
-        check is that the qualifier is a declared struct (an enum, alias,
-        builtin, or undeclared qualifier is the error), the `self`-conventions
+        check is that the qualifier names a declared type (this slice ruled
+        struct-only, an enum, alias, builtin, or undeclared qualifier the
+        error; the alias/builtin qualifiers sub-item below has since AMENDED
+        that ruling, legalizing aliases and builtins, while enums and
+        undeclared names remain the error), the `self`-conventions
         becoming load-bearing only when the call sugar below lands. Parser:
         `fn Type::method` is claimed in definition position (this slice parsed
         it before type-params; generic-struct methods `fn Type<T>::m` followed
@@ -1745,6 +1751,52 @@ already do).
           `point<float64>::map<int32>(...)` (a bigger parser change). No option
           is chosen. Independent of the bare-`point` sugar above (parser-only,
           no shared prerequisite — either can ship first)
+  - [x] methods on type aliases and builtin types — the qualifier left of
+        `::` may be ANY nameable type, not just a struct. USER RULING, the
+        governing principle: methods register to a TYPE; an alias is just an
+        alias, so `fn pointf::magnitude` with `type pointf = point<float64>`
+        is the same declaration as `fn point<float64>::magnitude`, and vice
+        versa. Alias qualifiers canonicalize early (a chase-and-rewrite in
+        `gen_program` before classification, `resolve_method_qualifier`) to
+        the target's family with the struct type args injected, so the alias
+        spelling IS a full specialization: it outranks the generic, collides
+        with a duplicate `fn point<float64>::magnitude`, `@override` matches
+        across spellings, and the `.mci` round-trips. Chains, permuting
+        generic aliases (`type swap<X, Y> = pair<Y, X>` canonicalizes to a
+        partial), and defaulted alias args all compose via substitution;
+        inert alias params (`type always<T> = point<float64>`) vanish per
+        alias transparency. Call sites canonicalize name-only
+        (`pointf::m(p)` is `point::m(p)`; no type-arg injection at the call,
+        which stays with the explicit-type-args refinement above). Builtin
+        qualifiers (USER RULING: any type) are legal the same way:
+        `fn char::lower`, `fn int32::m`, and aliases to builtins
+        (`type myint = int32;` then `fn myint::m`) register one family per
+        builtin name; generic builtins take fresh names
+        (`fn slice<T>::first` works) but CANNOT be specialized
+        (`cannot specialize builtin type 'slice'; spell the receiver type
+        in the method's signature instead`). A bare generic-alias qualifier
+        is a namespace passthrough like bare `fn point::m` (USER RULING:
+        symmetry over a type-use arity error). USER RULING on the diagonal:
+        `type diag<T> = pair<T, T>` with `fn diag<U>::m` dedupes the
+        repeated fresh name into a template matching only `pair<X, X>`,
+        unification enforcing consistency (a `pair<int32, float64>`
+        receiver is the conflicting-types error); a diagonal beside an open
+        generic sibling on an agreeing receiver is the standard ambiguity
+        error, the same no-partial-ordering rule as two tied partials.
+        Bonus: generic-alias spellings in signatures are now transparent to
+        template inference (`dealias_pattern` in unify / shape_matches), a
+        pre-existing gap the diagonal ruling forced closed. This SUBSUMED
+        the epic's deferred non-struct receivers item on the definition
+        side; the `.method()` dot sugar on scalars (`'C'.tolower()`) rides
+        the method-call sugar item below, where its receiver-kind notes now
+        live. Still errors: enums as qualifiers (enum receivers wait for
+        [nominal enums](#types-and-generics), where a method name must not
+        collide with a member name, both spelling `Name::x`), undeclared
+        names, structured alias targets (`type ip = int32*`; pointer,
+        array, and fn types have no `Name::` spelling, future work only if
+        ever wanted), and builtin specialization (above). AMENDS the
+        foundation slice's qualifier ruling: aliases and builtins are now
+        legal qualifiers; enums and undeclared names remain the error
   - [ ] receiver kind — the shipped foundation already lets the receiver be any
         ordinary `const` / `mut` / by-value parameter with no enforced `self`
         convention; this item makes the three receiver flavors a formal, checked
@@ -1799,8 +1851,19 @@ already do).
         (e.g. from `new`) auto-derefs one level first, an instance of the
         pointer-decay rule above that inherits its proven-non-null
         requirement. No ambiguity, since
-        methods key on the struct type, not the pointer type: `ptr.method()` can
-        only mean the method on the pointee. The one honest tradeoff: this splits
+        methods key on the receiver's type, not the pointer type:
+        `ptr.method()` can only mean the method on the pointee. With
+        builtin-typed methods shipped (the alias/builtin qualifiers item
+        above), the same sugar is what makes `'C'.tolower()` and
+        `c.tolower()` work over `fn char::tolower(self: char) -> char`
+        (mcc-native ergonomics over the shipped
+        [libc ctype](docs/language.md#reaching-libc) bindings is the
+        motivating stdlib case); a scalar receiver is by-value `self: char`
+        or `const self: char`, since no lvalue sits behind a literal
+        receiver, and for the same reason a `mut self` method needs the
+        caller's own writable scalar and is never callable on `'C'` (a
+        value-returning `tolower` takes `self` by value; a `mut self`
+        variant is the in-place editor). The one honest tradeoff: this splits
         method calls from field access — the language keeps C's `.`/`->`
         distinction for **fields**, so `p->x` (field) and `p.method()` (method)
         on the same pointer use different operators (the Go/Rust/Swift
@@ -1809,28 +1872,6 @@ already do).
     var->length2();   // pre-receiver-kinds: desugars to point::length2(var)
     var.length2();    // once receiver kinds land
     ```
-  - [ ] non-struct receivers — extend the `fn <type>::<method>` definition
-        form beyond structs to the builtin scalar types, so
-        `fn char::tolower(self: char) -> char` makes `'C'.tolower()` and
-        `c.tolower()` work (mcc-native ergonomics over the shipped
-        [libc ctype](docs/language.md#reaching-libc) bindings is the
-        motivating stdlib case). Dispatch keys on the receiver's static type
-        exactly as struct methods key on the struct, and import merging
-        rejects two files defining the same type/method pair as a duplicate
-        definition. The parser delta is accepting a type keyword (not just
-        an identifier) before `::` in the definition position; the
-        expression grammar is untouched (`Name::MEMBER` stays enum member
-        access). Depends on the receiver kinds above even more than the
-        struct form does: a scalar receiver is by-value `self: char` or
-        `const self: char`, because the `self: <struct>*` starting form has
-        no lvalue behind a literal receiver, and for the same reason a
-        `mut self` method needs the caller's own writable `char` and is
-        never callable on `'C'` (a value-returning `tolower` takes `self`
-        by value; a `mut self` variant is the in-place editor). A
-        transparent `type` alias shares the underlying type's methods
-        rather than opening a separate namespace; enum receivers wait for
-        [nominal enums](#types-and-generics), where a method name must not
-        collide with a member name (both spell `Name::x`)
   - [ ] `new <struct>(...)` sugar — desugars to a block that allocates with
         `new<<struct>>()`, runs the constructor (above), and emits the pointer
         (the constructor counterpart to the
