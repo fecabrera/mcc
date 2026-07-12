@@ -2207,16 +2207,19 @@ class Parser:
                 self.cur.line,
             )
 
-    # Expressions, by descending precedence level. `or` is loosest, then
-    # `and`; both bind looser than comparisons, so `a > 0 or b < 0` needs no
-    # parentheses. They short-circuit, so they are not part of PRECEDENCE.
+    # Expressions, by descending precedence level. `??` is loosest of all --
+    # looser than the ternary and every binary operator (just above
+    # assignment, which is a statement) -- so the coalesce production is the
+    # entry point. Below it: the ternary `?:`, then `or`, then `and` (both
+    # bind looser than comparisons, so `a > 0 or b < 0` needs no parentheses;
+    # they short-circuit, so they are not part of PRECEDENCE).
     def parse_expr(self):
         """Parse a full expression (the lowest-precedence entry point).
 
         Returns:
             The parsed expression node.
         """
-        return self.parse_ternary()
+        return self.parse_coalesce()
 
     def parse_ternary(self):
         """Parse a ``cond ? then : otherwise`` conditional expression.
@@ -2287,7 +2290,7 @@ class Parser:
             expression when no operator at this level appears.
         """
         if level == len(self.PRECEDENCE):
-            return self.parse_coalesce()
+            return self.parse_as()
         lhs = self.parse_binary(level + 1)
         while self.cur.kind in self.PRECEDENCE[level]:
             op = self.advance()
@@ -2296,39 +2299,42 @@ class Parser:
         return lhs
 
     def parse_coalesce(self):
-        """Parse a left-associative general ``??`` coalesce chain.
+        """Parse a right-associative general ``??`` coalesce chain.
 
-        ``??`` binds tighter than the ternary and every binary operator --
-        the whole chain reduces to one operand before the precedence climber
-        sees any operator, so ``p ?? q + 1`` is ``(p ?? q) + 1`` and
-        ``try g() ?? v > p ?? q`` is ``(try g() ?? v) > (p ?? q)``. The
-        right-hand side is atomic (see :meth:`parse_coalesce_rhs`); a
-        computed fallback parenthesizes (``?? (q + 1)``). A ``??`` directly
-        after a bare ``try`` operand is not this production: the try
-        consumes its own fallback clause first (:meth:`parse_unary`), and
-        only subsequent ``??`` chain here -- ``try g() ?? v ?? q`` is
-        ``(try g() ?? v) ?? q``.
+        ``??`` binds **looser** than the ternary and every binary operator --
+        it is the lowest-precedence expression form (just above assignment),
+        so its right-hand side extends greedily to the end of the expression:
+        ``p ?? q + 1`` is ``p ?? (q + 1)`` and ``v > p ?? q`` is
+        ``(v > p) ?? q`` (the comparison binds first). It chains
+        **right**-associatively, so ``p ?? q ?? r`` is ``p ?? (q ?? r)``. To
+        operate on the unwrapped value, parenthesize: ``(try f() ?? 0) + 1``.
+        A ``??`` directly after a bare ``try`` operand is the try's own
+        fallback clause (consumed in :meth:`parse_unary`), whose RHS is this
+        same greedy low-precedence expression -- so ``try g() ?? p ?? q`` is
+        ``try g() ?? (p ?? q)``, the inner ``p ?? q`` being this general
+        production.
 
         Returns:
-            A ``Coalesce`` chain, or the inner expression when no ``??``
+            A ``Coalesce`` node, or the inner expression when no ``??``
             appears.
         """
-        expr = self.parse_as()
-        while self.cur.kind == "??":
+        expr = self.parse_ternary()
+        if self.cur.kind == "??":
             line = self.advance().line
+            # Right-associative and greedy: the RHS re-enters at this same
+            # coalesce level, so a trailing `?? r` nests under this `??`.
             expr = Coalesce(expr, self.parse_coalesce_rhs(), line)
         return expr
 
     def parse_coalesce_rhs(self):
-        """Parse a ``??`` clause's atomic right-hand side.
+        """Parse a ``??`` clause's right-hand side.
 
-        A unary expression -- an identifier, a literal, a call ``h()``, a
-        member or index chain, the prefix forms (``-1``, ``!1``, ``~1``,
-        ``&x``), a postfix ``p!`` -- or a parenthesized ``(expr)``, or an
-        emit-block ``{ ...; emit v; }``, which may instead diverge. A ``{``
-        here is always the emit-block (never a bare struct literal): the
-        fallback runs only on the error path, so it is a block of
-        statements first.
+        A full low-precedence expression (:meth:`parse_coalesce`), greedy to
+        the end of the expression -- unless the RHS opens with ``{``, which
+        is always the emit-block form ``{ ...; emit v; }`` (never a bare
+        struct literal), and which may instead diverge. The fallback runs
+        only on the error path, so a leading brace is a block of statements
+        first.
 
         Returns:
             The parsed fallback expression node.
@@ -2340,7 +2346,7 @@ class Parser:
                 body.append(self.parse_statement())
             self.expect("}")
             return BlockExpr(body, tok.line)
-        return self.parse_unary()
+        return self.parse_coalesce()
 
     def parse_as(self):
         """Parse a chain of ``as`` casts.
@@ -2365,8 +2371,9 @@ class Parser:
         takes exactly one of its three endings -- nothing (propagate the
         error up: the enclosing return type must carry the same error
         type), ``?? fallback`` (discard the error and default -- the try's
-        own clause, consumed here, so it binds tighter than the general
-        coalesce production in :meth:`parse_coalesce`), or
+        own clause, consumed here; its RHS is a greedy low-precedence
+        expression, the same one :meth:`parse_coalesce` parses, so a trailing
+        ``?? q`` nests inside it), or
         ``except (err) { ... }`` (handle it). The endings do not combine.
         Sitting at unary level, a ``try`` expression is an ordinary
         operand: it composes into larger expressions

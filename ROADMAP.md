@@ -496,17 +496,17 @@ already do).
         (no requirement on the enclosing return type; the fallback
         coerces to `T`, so `result<E>`, which has no value to default,
         rejects). This stage owns the `??` token (a lexer `OP2`
-        alternative) and its production: the right-hand side is
-        restricted to an **atomic** expression, meaning a unary
-        expression (identifier, literal, a call `h()`, a member or
-        index chain, prefix forms like `-1`, `!1`, `~1`), a
-        parenthesized `(expr)`, or an emit-block `{ ...; emit v; }`
-        that may diverge; `??` binds tighter than the ternary and every
-        binary operator and chains left-associatively:
-        `try g() ?? v ? a : b` is `(try g() ?? v) ? a : b`,
-        `try g() ?? v ?? q` is `(try g() ?? v) ?? q`, and
-        `try g() ?? 2 - 1` is `(try g() ?? 2) - 1` (a computed fallback
-        spells `?? (2 - 1)`). A result left of `??` without `try`
+        alternative) and its production: the right-hand side is a full
+        greedy expression, or an emit-block `{ ...; emit v; }` that may
+        diverge; `??` binds **looser** than the ternary and every
+        binary operator (the lowest-precedence expression form, just
+        above assignment) and chains **right**-associatively, so the
+        fallback extends greedily to the end of the expression:
+        `try g() ?? 2 + 1` is `try g() ?? (2 + 1)`,
+        `try g() ?? c ? a : b` is `try g() ?? (c ? a : b)`, and
+        `try g() ?? p ?? q + 1` is `try g() ?? (p ?? (q + 1))`
+        (parenthesize to operate on the unwrapped value:
+        `(try g() ?? 0) + base`). A result left of `??` without `try`
         rejects with the hint that results unwrap through `try`, and a
         pointer left-hand side rejects with a forward hint until the
         [pointer-truthiness item](#functions-and-methods) turns on its
@@ -2110,11 +2110,10 @@ already do).
       [error-handling epic](#types-and-generics), gains its pointer arm:
       `p ?? q` yields `p` when non-null, else `q`, lazily (the
       right-hand side evaluates only on the null path), operands
-      agreeing on one pointer type, with the same restricted atomic
-      right-hand side (a unary expression, a parenthesized `(expr)`, or
-      an emit-block, which may diverge: `p ?? { panic("was null"); }`
-      falls through only on the non-null edge, so the result is provably
-      non-null). Narrowing parity ships in the same set: bare-pointer
+      agreeing on one pointer type, with the same greedy low-precedence
+      right-hand side (a full expression, or an emit-block, which may
+      diverge: `p ?? { panic("was null"); }` falls through only on the
+      non-null edge, so the result is provably non-null). Narrowing parity ships in the same set: bare-pointer
       and `!p` conditions join the `p != null` / `p == null` guard
       recognizer of the flow-narrowing item above, so `if (!p) return;`
       narrows `p` for the remainder exactly like the spelled-out guard

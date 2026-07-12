@@ -110,7 +110,7 @@ fn main() -> int32 {
           (identifier))))))
 
 ================================================================================
-?? binds tighter than comparison and chains left
+?? binds looser than comparison and chains right
 ================================================================================
 
 fn f() {
@@ -126,18 +126,18 @@ fn f() {
     (block
       (let_statement
         (identifier)
-        (binary_expression
+        (coalesce_expression
+          (try_expression
+            (call_expression
+              (identifier_expression
+                (identifier))
+              (argument_list)))
           (coalesce_expression
-            (try_expression
-              (call_expression
-                (identifier_expression
-                  (identifier))
-                (argument_list)))
-            (identifier_expression
-              (identifier)))
-          (coalesce_expression
-            (identifier_expression
-              (identifier))
+            (binary_expression
+              (identifier_expression
+                (identifier))
+              (identifier_expression
+                (identifier)))
             (identifier_expression
               (identifier))))))))
 

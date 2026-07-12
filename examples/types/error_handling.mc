@@ -237,21 +237,30 @@ fn main() -> int32 {
     let dflt = try find(0) ?? slow_default();
     println("error path: dflt = {}, defaults_used = {}", dflt, defaults_used);
 
-    // The right-hand side is atomic: a unary expression (identifier,
-    // literal, call, member/index chain, prefix -/!/~), a parenthesized
-    // (expr), or an emit-block that may do work before emitting the
-    // default (or diverge instead of emitting).
+    // The right-hand side is a full expression (an identifier, a literal,
+    // a call, an arithmetic or ternary expression), or an emit-block that
+    // may do work before emitting the default (or diverge instead of
+    // emitting).
     let logged = try find(0) ?? {
         println("emit-block fallback: logging, then defaulting");
         emit -2;
     };
     println("logged = {}", logged);
 
-    // Precedence: ?? binds tighter than the ternary and every binary
-    // operator, so the fallback reduces to a single operand before the
-    // subtraction applies: this is (try find(0) ?? 2) - 1, never ?? (2 - 1).
+    // Precedence: ?? binds LOOSER than the ternary and every binary
+    // operator (it is the lowest-precedence expression form, just above
+    // assignment) and chains right-associatively, so the fallback extends
+    // greedily to the end of the expression: this is
+    // try find(0) ?? (2 - 1), never (try find(0) ?? 2) - 1. The whole
+    // `2 - 1` is the fallback (find(0) errors, so it evaluates to 1).
     let tight = try find(0) ?? 2 - 1;
     println("try find(0) ?? 2 - 1 = {}", tight);
+
+    // To operate on the UNWRAPPED value you parenthesize the fallback so it
+    // stops before the operator. Here find(2) is ok, so the fallback is
+    // skipped and the subtraction applies to the payload 42.
+    let unwrapped = (try find(2) ?? 0) - 1;
+    println("(try find(2) ?? 0) - 1 = {}", unwrapped);
 
     // FORM B, THE TRY STATEMENT: `try (r = f()) { B } except (err) { H }`
     // keeps the binding inside a block. The head binds a fresh r with no

@@ -8,6 +8,9 @@
  */
 
 const PREC = {
+  // `??` is the loosest expression form -- looser than the ternary (just
+  // above assignment, which is a statement) -- so it sits below `ternary`.
+  coalesce: -1,
   ternary: 0,
   or: 1,
   and: 2,
@@ -20,10 +23,9 @@ const PREC = {
   add: 9,
   mul: 10,
   as: 11,
-  coalesce: 12,
-  unary: 13,
-  postfix: 14,
-  call: 15,
+  unary: 12,
+  postfix: 13,
+  call: 14,
 };
 
 const commaSep = (rule) => optional(commaSep1(rule));
@@ -44,11 +46,9 @@ module.exports = grammar({
     [$.binary_expression, $.unary_expression, $.call_expression],
     // A bare `try f` followed by `<` is the same comparison-or-generic-call
     // fork with the try's operand extent at stake; let GLR explore both.
-    // The `??` right-hand side hits the identical fork (its RHS is atomic
-    // in the compiler, so `<` after it is a comparison unless a generic
-    // call proves otherwise).
+    // The `??` right-hand side hits the identical fork (a `<` starting its
+    // RHS is a comparison unless a generic call proves otherwise).
     [$.try_expression, $.binary_expression, $.call_expression],
-    [$.coalesce_expression, $.binary_expression, $.call_expression],
     // `{ ... }` opening a statement is a block, not a block-expression used as
     // an expression statement; the dynamic precedence below settles it.
     [$.block, $.block_expression],
@@ -546,13 +546,14 @@ module.exports = grammar({
         field('handler', $.block),
       ),
 
-    // The `??` coalesce: left-associative, tighter than the ternary and
-    // every binary operator (each chain reduces to one operand first).
-    // Covers both the try fallback (`try g() ?? v` -- the whole try is the
-    // left operand, matching the compiler's grouping) and the reserved
-    // general coalesce.
+    // The `??` coalesce: right-associative and the loosest expression form
+    // (looser than the ternary and every binary operator), so its fallback
+    // extends greedily to the end of the expression and `p ?? q ?? r` is
+    // `p ?? (q ?? r)`. Covers both the try fallback (`try g() ?? v` -- the
+    // whole try is the left operand, matching the compiler's grouping) and
+    // the reserved general coalesce.
     coalesce_expression: ($) =>
-      prec.left(
+      prec.right(
         PREC.coalesce,
         seq($._expression, '??', field('fallback', $._expression)),
       ),

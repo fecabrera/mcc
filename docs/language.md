@@ -2401,8 +2401,9 @@ when promoted. Unary `-` is not allowed on unsigned values. See
 
 By descending precedence: unary `-` `~` `!` `*` `&`, `as` casts, then `*` `/`
 `%`, `+` `-`, shifts `<<` `>>`, bitwise `&`, `^`, `|`, comparisons
-`<` `<=` `>` `>=`, `==` `!=`, then `and`, then `or`, and loosest of all the
-`?:` conditional.
+`<` `<=` `>` `>=`, `==` `!=`, then `and`, then `or`, the `?:` conditional, and
+loosest of all `??` (the [`try` fallback](#defaulting-the--fallback) / null
+coalesce), which is right-associative.
 Comparisons yield `bool`; `%` and the bitwise/shift operators are
 integer-only. `>>` is an arithmetic shift for signed types and logical for
 unsigned. Unary `~` is bitwise complement (integer-only); `!` is logical
@@ -2423,8 +2424,9 @@ if (p != null and p->ready) { ... }     // p->ready read only when p != null
 
 `cond ? a : b` is the conditional expression: it tests `cond` (a `bool` or
 integer, as in an `if`) and yields one arm or the other — never both, so the
-untaken arm's side effects do not happen. It is the loosest operator and
-right-associative, so it reads as an `if`/`else` ladder without parentheses:
+untaken arm's side effects do not happen. It binds looser than every binary
+operator (only `??` is looser) and is right-associative, so it reads as an
+`if`/`else` ladder without parentheses:
 
 ```c
 let m = a > b ? a : b;                          // the larger of the two
@@ -4271,37 +4273,40 @@ Nothing escapes the expression, so the enclosing return type is never
 consulted: legal in `main`, in a void function, anywhere. (A `result<E>`
 has no ok value to default, so it rejects.)
 
-The right-hand side is **atomic**: a unary expression — an identifier, a
-literal, a call `h()`, a member or index chain, the prefix forms (`-1`,
-`!flag`, `~mask`) — or a parenthesized `(expr)`, or an emit-block, which
+The right-hand side is a full expression — an identifier, a literal, a
+call `h()`, an arithmetic expression, a ternary — or an emit-block, which
 may instead diverge:
 
 ```c
 let v = try find(k) ?? 0;                     // scalar default
-let w = try find(k) ?? (base * 2);            // computed: parenthesize
+let w = try find(k) ?? base * 2;              // computed (see precedence)
 let x = try find(k) ?? { warn(); emit 0; };   // do things, then default
 let y = try find(k) ?? { return -1; };        // or diverge instead
 ```
 
-**Precedence.** `??` binds tighter than the ternary and every binary
-operator and chains left-associatively, so a `??` chain reduces to a
-single operand before any other operator applies:
+**Precedence.** `??` binds **looser** than the ternary and every binary
+operator — it is the lowest-precedence expression form (just above
+assignment) — and chains **right**-associatively. So the fallback extends
+greedily to the end of the expression, and to operate on the *unwrapped*
+value you **parenthesize**:
 
 ```c
-try g() ?? v ? a : b     // (try g() ?? v) ? a : b
-try g() ?? 2 - 1         // (try g() ?? 2) - 1
-try g() ?? v ?? q        // (try g() ?? v) ?? q
-try g() ?? v > p ?? q    // (try g() ?? v) > (p ?? q)
+try g() ?? 2 + 1         // try g() ?? (2 + 1)
+try g() ?? c ? a : b     // try g() ?? (c ? a : b)
+try g() ?? p ?? q + 1    // try g() ?? (p ?? (q + 1))     -- right-assoc
+try g() ?? v > p ?? q    // try g() ?? ((v > p) ?? q)     -- `>` binds first
+(try g() ?? 0) + base    // parenthesize to add to the unwrapped value
 ```
 
 The `??` directly after a bare try operand is always the try's own
-fallback clause — structural, by production, binding tighter than the
-general operator — and only subsequent `??`s are the general coalesce,
-whose arms are reserved today: a result left of `??` unwraps through `try`
-(`try f() ?? v`), and the pointer arm (`p ?? q` null coalescing) arrives
-with the [pointer-truthiness roadmap item](../ROADMAP.md#planned). A try
-takes one ending only: `try g() ?? v except (err) { ... }` is a parse
-error.
+fallback clause — structural, by production — and its right-hand side is
+that same greedy low-precedence expression, so a trailing `?? q` nests
+inside it (`try g() ?? p ?? q` is `try g() ?? (p ?? q)`); the inner `??` is
+then the general coalesce, whose arms are reserved today: a result left of
+`??` unwraps through `try` (`try f() ?? v`), and the pointer arm (`p ?? q`
+null coalescing) arrives with the
+[pointer-truthiness roadmap item](../ROADMAP.md#planned). A try takes one
+ending only: `try g() ?? v except (err) { ... }` is a parse error.
 
 ### The try statement
 

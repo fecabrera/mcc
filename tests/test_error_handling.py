@@ -29,14 +29,18 @@ Stage 3 completes the `try` production (its tests in the stage-3 sections
 below): a try takes exactly ONE of three endings. Bare `try g()` propagates
 -- on error the enclosing function returns `error(err)`, so its return type
 must be a result carrying the SAME declared error type; `try g() ?? fallback`
-discards the error and lazily evaluates an atomic fallback (a unary
-expression, a parenthesized `(expr)`, or an emit-block that may diverge) with
-no requirement on the enclosing return type; `except (err) { ... }` handles
-(stage 2). `??` binds tighter than the ternary and every binary operator and
-chains left; the try's own fallback clause binds tighter still (structural,
-by production). The general coalesce production exists with every arm
-rejected: a result unwraps through try, and the pointer null-coalescing arm
-waits on the pointer-truthiness roadmap item. The statement form
+discards the error and lazily evaluates the fallback (a greedy expression, or
+an emit-block that may diverge) with no requirement on the enclosing return
+type; `except (err) { ... }` handles (stage 2). `??` binds LOOSER than the
+ternary and every binary operator (the lowest-precedence expression form,
+just above assignment) and chains RIGHT-associatively, so its fallback
+extends greedily to the end of the expression -- `try g() ?? 2 + 1` is
+`try g() ?? (2 + 1)`; parenthesize to operate on the unwrapped value. The try
+owns its first `??` clause, whose RHS is that same greedy expression, so
+`try g() ?? p ?? q` is `try g() ?? (p ?? q)`. The general coalesce production
+exists with every arm rejected: a result unwraps through try, and the pointer
+null-coalescing arm waits on the pointer-truthiness roadmap item. The
+statement form
 `try (ret = f()) { B } except (err) { H }` binds a fresh `ret` scoped to `B`
 with an obligation-free handler and no `else` arm.
 """
@@ -1875,8 +1879,10 @@ def test_fallback_coerces_to_the_ok_type():
 
 
 def test_fallback_takes_atomic_forms():
-    # The ruled atomic right-hand sides: a call, prefix forms, a member
-    # chain, a parenthesized expression.
+    # A sample of fallback right-hand sides: a call, prefix forms, a member
+    # chain, a parenthesized expression. (Each is parenthesized here so the
+    # trailing `as int32` casts the unwrapped value, not the fallback -- see
+    # test_operating_on_the_unwrapped_value_requires_parens.)
     assert run(
         DECL + FIND
         + """
@@ -1941,62 +1947,109 @@ def test_fallback_inside_a_defer_is_legal():
 
 # ------------------------------------ stage 3: ?? precedence (pinned rulings)
 
-def test_fallback_binds_tighter_than_the_ternary():
-    # Pinned: `try g() ?? v ? a : b` is `(try g() ?? v) ? a : b`.
-    assert run(
-        DECL
-        + """
-        error flag_error { BAD }
-        fn flag(fail: int32) -> result<bool, flag_error> {
-            if (fail) { return error(flag_error::BAD); }
-            return ok(true);
-        }
-        fn main() -> int32 {
-            let a = try flag(0) ?? false ? 40 : 1;   // ok(true) -> 40
-            let b = try flag(1) ?? false ? 1 : 2;    // fallback false -> 2
-            return a + b;
-        }
-        """
-    ) == 42
+def test_fallback_precedence_groupings():
+    # `??` is the lowest-precedence expression form: looser than the ternary
+    # and every binary operator, and right-associative, so its fallback
+    # extends greedily to the end of the expression. Pinned structurally
+    # (the exact groupings the parser builds -- runnable value proofs follow
+    # in the tests below):
+    from mcc.nodes import Binary, Coalesce, Ternary, TryFallback
+
+    def init(expr):
+        src = "fn f() { let x = " + expr + "; }"
+        return Parser(tokenize(src)).parse_program().functions[0].body[0].value
+
+    # `try f() ?? 2 + 1` is `try f() ?? (2 + 1)`.
+    n = init("try find(1) ?? 2 + 1")
+    assert isinstance(n, TryFallback) and isinstance(n.fallback, Binary)
+    assert n.fallback.op == "+"
+
+    # `try f() ?? c ? a : b` is `try f() ?? (c ? a : b)`.
+    n = init("try find(1) ?? c ? a : b")
+    assert isinstance(n, TryFallback) and isinstance(n.fallback, Ternary)
+
+    # `try f() ?? p ?? q + 1` is `try f() ?? (p ?? (q + 1))` -- right-assoc,
+    # and `q + 1` binds tighter than the inner `??`.
+    n = init("try find(1) ?? p ?? q + 1")
+    assert isinstance(n, TryFallback) and isinstance(n.fallback, Coalesce)
+    inner = n.fallback
+    assert isinstance(inner.rhs, Binary) and inner.rhs.op == "+"
+
+    # `try f() ?? v > p ?? q` is `try f() ?? ((v > p) ?? q)` -- the
+    # comparison binds tighter than `??`, then the `?? q` chains right over
+    # it. (This is the grouping "?? looser than binary" forces; it is NOT
+    # `v > (p ?? q)`.)
+    n = init("try find(1) ?? v > p ?? q")
+    assert isinstance(n, TryFallback) and isinstance(n.fallback, Coalesce)
+    assert isinstance(n.fallback.lhs, Binary) and n.fallback.lhs.op == ">"
+
+    # Bare (unparenthesized) general coalesce also chains right:
+    # `p ?? q ?? r` is `p ?? (q ?? r)`.
+    n = init("p ?? q ?? r")
+    assert isinstance(n, Coalesce) and isinstance(n.rhs, Coalesce)
 
 
-def test_fallback_binds_tighter_than_binary_operators():
-    # Pinned: `try g() ?? 2 - 1` is `(try g() ?? 2) - 1`; a computed
-    # fallback spells `?? (2 - 1)`.
+def test_fallback_binds_looser_than_the_ternary():
+    # Runnable proof: `try find(1) ?? 0 ? 40 : 2` is
+    # `try find(1) ?? (0 ? 40 : 2)`. find(1) is ok(2), so the ternary
+    # fallback is skipped -> 2. (Under the old tighter rule this was
+    # `(try find(1) ?? 0) ? 40 : 2` = 40, so the value distinguishes the
+    # groupings.) On the error path the ternary IS the fallback.
     assert run(
         DECL + FIND
         + """
         fn main() -> int32 {
-            let a = try find(0) ?? 2 - 1;      // (2) - 1 = 1
-            let b = try find(0) ?? (2 - 1);    // 1
-            let c = try find(20) ?? 2 - 1;     // (40) - 1 = 39
-            return (a + b + c + 1) as int32;
+            let hi: int64 = 40;
+            let lo: int64 = 2;
+            let a = try find(1) ?? 0 ? hi : lo;   // ok(2), ternary skipped -> 2
+            let b = try find(0) ?? 1 ? hi : lo;   // error -> (1 ? 40 : 2) = 40
+            return (a + b) as int32;              // 2 + 40 = 42
+        }
+        """                                       # old rule made a = 40 too
+    ) == 42
+
+
+def test_fallback_binds_looser_than_binary_operators():
+    # Runnable proof: `try find(...) ?? 2 - 1` is `try find(...) ?? (2 - 1)`.
+    assert run(
+        DECL + FIND
+        + """
+        fn main() -> int32 {
+            let a = try find(0) ?? 2 - 1;      // error -> (2 - 1) = 1
+            let b = try find(0) ?? (2 - 1);    // 1 (explicit)
+            let c = try find(20) ?? 2 - 1;     // ok(40), fallback skipped -> 40
+            return (a + b + c) as int32;       // 1 + 1 + 40 = 42
+        }
+        """                                    # old rule made c = (40) - 1 = 39
+    ) == 42
+
+
+def test_operating_on_the_unwrapped_value_requires_parens():
+    # The fallback extends greedily, so `try f() ?? 0 + base` is
+    # `try f() ?? (0 + base)`. To add to the UNWRAPPED value, parenthesize:
+    # `(try f() ?? 0) + base`.
+    assert run(
+        DECL + FIND
+        + """
+        fn main() -> int32 {
+            let base: int64 = 10;
+            let bare = try find(20) ?? 0 + base;      // ok(40), skipped -> 40
+            let wrapped = (try find(20) ?? 0) + base; // 40 + 10 = 50
+            let err = try find(0) ?? 0 + base;        // error -> (0 + 10) = 10
+            if (bare == 40 and wrapped == 50 and err == 10) { return 42; }
+            return 0;
         }
         """
     ) == 42
 
 
-def test_fallback_chains_left_into_the_general_coalesce():
-    # Pinned: `try g() ?? v ?? q` is `(try g() ?? v) ?? q` -- the second
-    # `??` is the general coalesce, whose non-pointer arm rejects until the
-    # pointer item ships.
-    with pytest.raises(
-        LangError,
-        match=re.escape(
-            "'??' coalesces pointers or supplies a try fallback; got int64"
-        ),
-    ):
-        compile_ir(
-            DECL + FIND
-            + "fn f() { let x = try find(1) ?? 1 ?? 2; }"
-        )
-
-
-def test_coalesce_chains_group_as_comparison_operands():
-    # Pinned verbatim: `try g() ?? v > p ?? q` is
-    # `(try g() ?? v) > (p ?? q)` -- each ?? chain reduces to an operand
-    # before the comparison; the error firing on `p ?? q`'s pointer arm
-    # proves the right-hand chain grouped under the `>`.
+def test_fallback_chains_right_into_the_general_coalesce():
+    # Pinned: `try g() ?? p ?? q` is `try g() ?? (p ?? q)` (right-assoc).
+    # The try owns its first `??`; the inner `p ?? q` is the general
+    # coalesce, whose pointer arm rejects until the pointer item ships. The
+    # pointer message (not a fallback-type error) proves the RHS grouped as
+    # `(p ?? q)`: under the old left-assoc rule the try's `??` would have
+    # tried a pointer as an int64 fallback instead.
     with pytest.raises(
         LangError,
         match=re.escape(
@@ -2010,15 +2063,37 @@ def test_coalesce_chains_group_as_comparison_operands():
             + "fn f() {\n"
             "    let p: int64* = null;\n"
             "    let q: int64* = null;\n"
-            "    let x = try find(1) ?? 0 > p ?? q;\n"
+            "    let x = try find(1) ?? p ?? q;\n"
             "}\n"
         )
-    # And the runnable twin: two try chains on either side of the `>`.
+
+
+def test_coalesce_chains_group_as_comparison_operands():
+    # Pinned: `try g() ?? v > w ?? q` is `try g() ?? ((v > w) ?? q)` -- the
+    # comparison binds tighter than the looser `??`, then the trailing
+    # `?? q` chains right over it. So the inner `??`'s LEFT operand is the
+    # comparison result (a bool), and its reject arm reports `got bool` --
+    # proving the fallback grouped as the whole `(v > w) ?? q`, not as an
+    # operand of an outer `>`. (Under the old tighter rule the right-hand
+    # `w ?? q` would have grouped first, a distinct grouping.)
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'??' coalesces pointers or supplies a try fallback; got bool"
+        ),
+    ):
+        compile_ir(
+            DECL + FIND
+            + "fn f() {\n"
+            "    let x = try find(1) ?? 5 > 3 ?? 9;\n"
+            "}\n"
+        )
+    # And the runnable twin: parenthesized try chains as comparison operands.
     assert run(
         DECL + FIND
         + """
         fn main() -> int32 {
-            let big = try find(5) ?? 0 > try find(1) ?? 100;   // 10 > 2
+            let big = (try find(5) ?? 0) > (try find(1) ?? 100);   // 10 > 2
             if (big) { return 42; }
             return 0;
         }

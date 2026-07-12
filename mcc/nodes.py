@@ -1249,11 +1249,14 @@ class TryFallback:
     lazily, only on that path -- and coerced to ``T``; on ok the fallback
     never runs. Nothing escapes the expression, so the enclosing return type
     is never consulted (legal in ``main``). The fallback is the try's own
-    clause, consumed by the try production itself -- it binds tighter than
-    the general :class:`Coalesce` operator -- and is restricted to an atomic
-    right-hand side: a unary expression, a parenthesized ``(expr)``, or an
-    emit-block ``{ ...; emit v; }`` that may instead diverge. An error-only
-    ``result<E>`` has no ok value to default, so it rejects.
+    clause, consumed by the try production itself, and its right-hand side is
+    a greedy low-precedence expression -- ``??`` binds looser than the
+    ternary and every binary operator, so ``try f() ?? 2 + 1`` is
+    ``try f() ?? (2 + 1)`` and ``try f() ?? p ?? q`` is ``try f() ?? (p ?? q)``
+    (the inner ``p ?? q`` a general :class:`Coalesce`); parenthesize to
+    operate on the unwrapped value (``(try f() ?? 0) + 1``). A leading ``{``
+    is instead an emit-block ``{ ...; emit v; }`` that may diverge. An
+    error-only ``result<E>`` has no ok value to default, so it rejects.
 
     Attributes:
         value: The tested operand (must evaluate to a ``result``).
@@ -1270,18 +1273,19 @@ class TryFallback:
 class Coalesce:
     """A general ``lhs ?? rhs`` coalesce chain link.
 
-    The ``??`` production outside a ``try``'s own fallback clause: it chains
-    left-associatively over atomic right-hand sides and binds tighter than
-    the ternary and every binary operator, so ``p ?? q + 1`` is
-    ``(p ?? q) + 1`` and ``try g() ?? v ?? q`` is ``(try g() ?? v) ?? q``.
-    Today every arm rejects at codegen: a ``result`` left of ``??`` unwraps
-    through ``try``, and the pointer null-coalescing arm is reserved for the
-    pointer-truthiness roadmap item; the production exists so the grammar is
-    settled once.
+    The ``??`` production outside a ``try``'s own fallback clause: it binds
+    **looser** than the ternary and every binary operator (the
+    lowest-precedence expression form, just above assignment) and chains
+    **right**-associatively, so ``p ?? q + 1`` is ``p ?? (q + 1)`` and
+    ``p ?? q ?? r`` is ``p ?? (q ?? r)``. Today every arm rejects at codegen:
+    a ``result`` left of ``??`` unwraps through ``try``, and the pointer
+    null-coalescing arm is reserved for the pointer-truthiness roadmap item;
+    the production exists so the grammar is settled once.
 
     Attributes:
         lhs: The tested left operand.
-        rhs: The atomic fallback (see :class:`TryFallback` for the forms).
+        rhs: The fallback (a greedy low-precedence expression, or a
+            ``BlockExpr`` for the emit-block form).
         line: Source line for diagnostics.
     """
 

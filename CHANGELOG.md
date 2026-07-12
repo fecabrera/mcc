@@ -43,19 +43,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   fallback**, `try g() ?? v`, discards the error and lazily evaluates a
   default instead (side effects never run on the ok path), coercing it to
   `T` with no requirement on the enclosing return type; the right-hand
-  side is atomic — a unary expression, a parenthesized `(expr)`, or an
-  emit-block `{ ...; emit v; }` that may instead diverge. `??` (a new
-  two-character token) binds tighter than the ternary and every binary
-  operator and chains left: `try g() ?? v ? a : b` is
-  `(try g() ?? v) ? a : b`, `try g() ?? 2 - 1` is `(try g() ?? 2) - 1`,
-  and `try g() ?? v > p ?? q` is `(try g() ?? v) > (p ?? q)` — the `??`
-  directly after a bare try operand is always the try's own clause
-  (structural, by production), and the general coalesce production ships
-  with every arm reserved: a result left of `??` unwraps through `try`,
-  and the pointer arm waits on the pointer-truthiness roadmap item. A try
-  takes one ending only (`try g() ?? v except (err) { }` is a parse
-  error), and with bare try legal, `try g() + 1 except ...` now reads
-  `(try g()) + 1` with a displaced handler — a parse error at `except`.
+  side is a full greedy expression, or an emit-block `{ ...; emit v; }`
+  that may instead diverge. `??` (a new two-character token) is the
+  loosest expression form — it binds **looser** than the ternary and every
+  binary operator (just above assignment) and chains **right**, so the
+  fallback extends greedily to the end of the expression:
+  `try g() ?? 2 + 1` is `try g() ?? (2 + 1)`, `try g() ?? c ? a : b` is
+  `try g() ?? (c ? a : b)`, and `try g() ?? p ?? q + 1` is
+  `try g() ?? (p ?? (q + 1))`; parenthesize to operate on the unwrapped
+  value (`(try g() ?? 0) + base`). The `??` directly after a bare try
+  operand is always the try's own clause (structural, by production), its
+  RHS that same greedy expression, so a trailing `?? q` nests inside it;
+  the general coalesce production ships with every arm reserved: a result
+  left of `??` unwraps through `try`, and the pointer arm waits on the
+  pointer-truthiness roadmap item. A try takes one ending only
+  (`try g() ?? v except (err) { }` is a parse error), and with bare try
+  legal, `try g() + 1 except ...` now reads `(try g()) + 1` with a
+  displaced handler — a parse error at `except`.
   **The `try` statement**, `try (ret = f()) { B } except (err) { H }`,
   binds a fresh `ret` scoped to `B` only (the `with`-head spelling and its
   `try ( IDENT =` statement probe), with an obligation-free handler and
