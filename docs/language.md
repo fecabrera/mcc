@@ -869,9 +869,13 @@ This is the foundational, **explicit-call** form. Its rules today:
   `fn point::origin() -> point` and `fn point::of(x: float64, y: float64)`
   are legal. `self` above is a convention, not a keyword, and `mut self` is
   just a `mut` parameter whose mutations are visible to the caller.
-- **The qualifier must be a declared struct.** The only check is that the
-  segment before `::` names a struct type in scope; an enum, alias, builtin,
-  or undeclared name is the error
+- **The qualifier must be a declared type.** The only check is that the
+  segment before `::` names a type in scope: a struct, a builtin type
+  (`fn int32::m` — see [methods on type
+  aliases and builtin types](#methods-on-type-aliases-and-builtin-types)), or
+  a `type` alias of either, which canonicalizes to the type it names. An
+  enum, an undeclared name, or an alias of a type with no bare-name spelling
+  (a pointer, array, or function type) is the error
   `no struct type 'foo' for method 'foo::bar'`. (`Enum::Member` remains a
   value expression — only a `::` member *followed by* `(` is a qualified
   call.)
@@ -921,8 +925,8 @@ monomorphized per element type, so `point::magnitude` over `point<int32>` and
   `method type parameter 'T' shadows a type parameter of struct 'point'`.
 
 Call sugar (`p.magnitude()`), constructors/destructors, dynamic dispatch,
-methods on non-struct types, and explicit type arguments at a `::` call are
-**not** part of this slice — every call spells out its qualifier. See
+and explicit type arguments at a `::` call are **not** part of this slice —
+every call spells out its qualifier. See
 [examples/types/methods.mc](../examples/types/methods.mc).
 
 ##### Specializing a method for one instantiation
@@ -1018,6 +1022,86 @@ there is no C++-style partial ordering between them. The rules:
 
 See
 [examples/types/method_partial_specialization.mc](../examples/types/method_partial_specialization.mc).
+
+#### Methods on type aliases and builtin types
+
+Methods register to a **type**, and a [`type` alias](#type-aliases) is just an
+alias: declaring a method for the alias *is* declaring it for the type it
+names, and vice versa — both spellings register to, and call, one family.
+
+```c
+struct point<T> { x: T; y: T; }
+type pointf = point<float64>;
+
+// Declared through the alias: exactly `fn point<float64>::magnitude` — a
+// specialization, outranking the generic for a point<float64> receiver.
+fn pointf::magnitude(mut self: pointf) -> float64 {
+    return sqrt(pow(self.x, 2.0) + pow(self.y, 2.0));
+}
+
+fn point<T>::magnitude(mut self: point<T>) -> float64 {   // the generic
+    return sqrt(pow(self.x as float64, 2.0) + pow(self.y as float64, 2.0));
+}
+
+fn main() -> int32 {
+    let p: pointf;
+    p.x = 1.0; p.y = 1.0;
+    point::magnitude(p);    // the specialization -- and
+    pointf::magnitude(p);   // the alias spelling calls the same family
+    return 0;
+}
+```
+
+The qualifier is chased through the alias (chains included) to the type it
+names, and the method registers under the **canonical** name. The same holds
+at a call: `pointf::magnitude(p)` canonicalizes *by name* to
+`point::magnitude(p)` — a pure namespace hop, no type arguments are injected;
+dispatch still infers from the arguments. Each hop is access-checked, so a
+cross-file `@private` alias qualifier errors like any other use of it. The
+rules:
+
+- **A plain alias contributes its target's type arguments.**
+  `fn pointf::m` is `fn point<float64>::m` — a
+  [specialization](#specializing-a-method-for-one-instantiation). The two
+  spellings of one signature collide as ordinary duplicates. Writing type
+  arguments on a plain alias (`fn pointf<float64>::m`) is the error
+  `type alias 'pointf' is not generic`.
+- **A generic alias applied to written arguments substitutes them through
+  its target** — the argument count checks against the *alias* (trailing
+  defaults fill as usual). The substitution composes: with
+  `type swap<X, Y> = pair<Y, X>`, `fn swap<int32, U>::pick` is the
+  [partial specialization](#partial-specialization) `fn pair<U, int32>::pick`.
+  A **duplicate-position** alias is a *diagonal constraint*: with
+  `type diag<T> = pair<T, T>`, `fn diag<U>::m` declares **one** parameter
+  `U` that must unify consistently — a `pair<int32, int32>` receiver binds
+  it, a `pair<int32, float64>` receiver is rejected (or falls through to a
+  generic sibling). The diagonal does **not** outrank an open
+  `fn pair<A, B>::m` for an agreeing receiver — repeated names score no
+  extra pattern specificity (the same no-partial-ordering rule as two
+  rank-tied partials), so that call is the standard ambiguity error.
+- **A bare generic-alias qualifier is a namespace passthrough.** With
+  `type pf<T> = point<T>`, `fn pf::m` behaves exactly like the bare
+  `fn point::m` — only the name is chased, no arity error — and `pf::m(p)`
+  calls `point::m(p)`. An alias parameter its target never uses is *inert*:
+  written arguments for it vanish with the substitution, so a signature
+  naming that parameter fails as an unknown type — alias transparency, not a
+  special case.
+- **Generic alias spellings are transparent to inference.** A parameter
+  pattern written through a generic alias unifies as the type it names:
+  `fn pair::grab<V>(self: diag<V>)` binds `V` from a `pair<int32, int32>`
+  argument (and enforces the diagonal).
+- **Builtin types are qualifiers too.** `fn int32::clamp(...)` (or any
+  builtin name — with `type myint = int32`, `fn myint::clamp` is the same
+  family) namespaces to the name string; `int32::clamp(x)` and
+  `myint::clamp(x)` call it. Fresh names before the `::` still declare type
+  parameters (`fn slice<T>::first(s: slice<T>) -> T`), but a builtin cannot
+  be *specialized* — it has no declared parameter names for a concrete
+  argument to bind — so `fn slice<int32>::first` is the error
+  `cannot specialize builtin type 'slice'; spell the receiver type in the
+  method's signature instead` (the signature alone already drives dispatch:
+  a concrete receiver type outranks a generic pattern).
+
+See [examples/types/method_alias.mc](../examples/types/method_alias.mc).
 
 ### @noreturn functions
 
@@ -4679,6 +4763,11 @@ An error inside an alias's target — say the generic struct it names fails to
 instantiate — reports the alias by name in its
 [instantiation backtrace](#instantiation-backtraces), so a chain through
 `string` says `string`.
+
+Transparency extends to [methods](#methods): declaring or calling
+`pointf::magnitude` with `type pointf = point<float64>;` is declaring or
+calling `point<float64>::magnitude` — see [methods on type aliases and
+builtin types](#methods-on-type-aliases-and-builtin-types).
 
 ### Generic aliases
 

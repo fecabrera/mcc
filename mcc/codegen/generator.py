@@ -4184,7 +4184,9 @@ class CodeGen:
         if not (groups or bounds or defaults):
             return
         decorated = set(groups) | set(bounds) | set(defaults)
-        fresh_names = [a.name for a, f in zip(args, fresh) if f]
+        # A repeated fresh name (a duplicate-position alias's diagonal
+        # expansion) declares one parameter; check it once, in first position.
+        fresh_names = list(dict.fromkeys(a.name for a, f in zip(args, fresh) if f))
         for a, f in zip(args, fresh):
             # The parser only decorates a bare name, so a concrete argument
             # whose bare spelling carries a decoration is the decorated entry
@@ -4278,6 +4280,120 @@ class CodeGen:
             **func.type_param_bounds,
         }
 
+    def resolve_method_qualifier(self, func: Func):
+        """Resolve a method's ``Type::`` qualifier, canonicalizing aliases.
+
+        Methods register to a TYPE, and a type alias is just an alias:
+        ``fn pointf::m`` with ``type pointf = point<float64>`` registers to
+        the family ``point::m`` exactly as ``fn point<float64>::m`` would --
+        the alias qualifier is chased (access-checked per hop, file-scoped
+        ``@static`` aliases included) until it lands on a struct or a builtin
+        type name, and the method's name and pre-``::`` type arguments are
+        rewritten to the canonical spelling:
+
+          * a plain alias contributes its target's type arguments
+            (``pointf::m`` becomes ``point<float64>::m`` -- a specialization);
+          * a generic alias applied to written pre-``::`` arguments
+            substitutes them through its target, defaults honored
+            (``fn swap<int32, U>::m`` with ``type swap<X, Y> = pair<Y, X>``
+            becomes the partial ``fn pair<U, int32>::m``; a repeated
+            parameter, as in ``type diag<T> = pair<T, T>``, repeats the fresh
+            name -- the diagonal constraint);
+          * a bare generic alias qualifier is a namespace passthrough: only
+            the NAME is chased (``fn pf::m`` with ``type pf<T> = point<T>``
+            behaves exactly like ``fn point::m`` -- no arity error, the
+            target's own parameter references are ignored).
+
+        A builtin type name (``fn int32::m``) is accepted as-is: the family
+        is the name string, with nothing more to resolve. Anything else --
+        an enum, an undeclared name, an alias cycle, or an alias of a type
+        with no bare-name spelling (a pointer, array, or function type) --
+        keeps the ``no struct type`` error, reported against the qualifier
+        as written.
+
+        Args:
+            func: A method (its name contains ``::``); ``current_source``
+                must already be its file.
+
+        Raises:
+            LangError: On an unresolvable qualifier, a cross-file ``@private``
+                alias, written type arguments on a non-generic alias, or a
+                generic-alias arity mismatch.
+        """
+        qualifier, method = func.name.split("::", 1)
+        name = qualifier
+        args = func.struct_type_args
+        seen: set[str] = set()
+        while (
+            self.lookup_struct_decl(name) is None
+            and name not in TYPES
+            and name not in RESERVED_TYPE_NAMES
+        ):
+            alias = self.lookup_alias(name)
+            if alias is None or name in seen:
+                raise LangError(
+                    f"no struct type {qualifier!r} for method {func.name!r}",
+                    func.line,
+                )
+            seen.add(name)
+            self.check_access(
+                alias.private, alias.source, f"type alias {name!r}", func.line
+            )
+            target = alias.target
+            if (
+                target.stars
+                or target.dims
+                or target.const
+                or target.nonnull
+                or target.mut
+                or target.params is not None
+            ):
+                # The target has no bare-name spelling to namespace on.
+                raise LangError(
+                    f"no struct type {qualifier!r} for method {func.name!r}",
+                    func.line,
+                )
+            if alias.type_params:
+                if args is not None:
+                    # Written arguments bind the alias's parameters and
+                    # substitute through its target; a shorter list fills
+                    # from trailing defaults, exactly as a type use does.
+                    total = len(alias.type_params)
+                    required = total - len(alias.type_param_defaults)
+                    if not required <= len(args) <= total:
+                        expected = (
+                            f"between {required} and {total}"
+                            if alias.type_param_defaults
+                            else f"{total}"
+                        )
+                        raise LangError(
+                            f"type alias {name!r} expects {expected} "
+                            f"type argument(s), got {len(args)}",
+                            func.line,
+                        )
+                    binding = dict(zip(alias.type_params, args))
+                    for pname in alias.type_params[len(args):]:
+                        binding[pname] = self.subst_struct_args(
+                            alias.type_param_defaults[pname], binding
+                        )
+                    target = self.subst_struct_args(target, binding)
+                    args = list(target.args) if target.args else None
+                # A bare generic-alias qualifier chases the name only: the
+                # target's argument list spells the alias's own parameters,
+                # which nothing binds -- the passthrough ignores it.
+            else:
+                if args is not None:
+                    raise LangError(
+                        f"type alias {name!r} is not generic", func.line
+                    )
+                if target.args:
+                    args = list(target.args)
+            name = target.name
+        if name != qualifier:
+            func.name = f"{name}::{method}"
+            func.alias_qualifier = qualifier
+            func.struct_type_args = args
+
     def normalize_struct_method_args(self):
         """Classify each method's pre-``::`` struct type arguments.
 
@@ -4337,8 +4453,11 @@ class CodeGen:
             self.current_source = func.source
             qualifier = func.name.split("::", 1)[0]
             decl = self.lookup_struct_decl(qualifier)
-            # gen_program validated the qualifier names a declared struct
-            # before this pass, so `decl` is never None here.
+            # gen_program resolved the qualifier before this pass, so `decl`
+            # is only None for a BUILTIN type qualifier (`fn slice<T>::m`):
+            # the family is the name string, with no declared parameters to
+            # bind -- fresh names ride the generic path below unchanged, and
+            # a concrete argument (nothing to specialize) is rejected.
             fresh = [self.struct_arg_is_param(a, func.line) for a in args]
             self.check_struct_arg_decorations(func, args, fresh)
             if all(fresh):
@@ -4347,7 +4466,12 @@ class CodeGen:
                 # matters -- it fixes the instance mangling) after the same
                 # shadow check the merged parse-time path ran, and merge any
                 # decorations struct-parameters-first, as that merge did.
-                struct_names = [a.name for a in args]
+                # A REPEATED name -- the diagonal constraint a duplicate-
+                # position alias expands to (`type diag<T> = pair<T, T>`
+                # makes `fn diag<U>::m` the target `pair<U, U>`) -- declares
+                # one parameter: unification binds the first occurrence and
+                # rejects a receiver whose later occurrences disagree.
+                struct_names = list(dict.fromkeys(a.name for a in args))
                 shadowed = set(struct_names) & set(func.type_params)
                 if shadowed:
                     raise LangError(
@@ -4357,6 +4481,17 @@ class CodeGen:
                     )
                 func.type_params = struct_names + func.type_params
                 self.merge_struct_arg_decorations(func)
+            elif decl is None:
+                # A builtin type has no declared parameter names for a
+                # concrete argument to bind: there is nothing a
+                # specialization could substitute. (The signature alone
+                # drives dispatch -- a concrete receiver type there already
+                # outranks a generic pattern.)
+                raise LangError(
+                    f"cannot specialize builtin type {qualifier!r}; spell "
+                    "the receiver type in the method's signature instead",
+                    func.line,
+                )
             elif not any(fresh):
                 # A specialization: bind the struct's declared parameter names
                 # to the concrete arguments and resolve the signature against
@@ -4393,7 +4528,9 @@ class CodeGen:
                         f"{len(args)}",
                         func.line,
                     )
-                fresh_names = [a.name for a, f in zip(args, fresh) if f]
+                fresh_names = list(
+                    dict.fromkeys(a.name for a, f in zip(args, fresh) if f)
+                )
                 shadowed = set(fresh_names) & set(func.type_params)
                 if shadowed:
                     raise LangError(
@@ -4482,26 +4619,25 @@ class CodeGen:
             if decl.name not in self.struct_templates:
                 self.struct_templates[decl.name] = decl
                 self.used_symbols.add(decl.name)
+        # Type aliases are registered next (records only; resolved lazily on
+        # use), so a const's or signature's type -- or a method qualifier
+        # below -- may name one.
+        for alias in self.program.aliases:
+            self.register_alias(alias)
         # A qualified method name `Type::method` namespaces the function to a
-        # struct. Structs are fully registered above, so validate here that the
-        # qualifier names a declared struct type -- the only check this slice
-        # imposes. `Type::` is purely a namespace: no `self` convention is
-        # enforced, and any qualifier that is an enum, alias, builtin, or
-        # undeclared name is the error.
+        # TYPE -- a struct or a builtin alike. Structs and aliases are fully
+        # registered above, so resolve each qualifier here: an alias qualifier
+        # canonicalizes to the type it names (registering a method for
+        # `pointf` IS registering it for `point<float64>`, and vice versa),
+        # and any qualifier that is an enum, an undeclared name, or an alias
+        # of an unnameable type (a pointer, array, or function type) is the
+        # error. `Type::` is purely a namespace: no `self` convention is
+        # enforced.
         for func in self.program.functions:
             if "::" not in func.name:
                 continue
             self.current_source = func.source
-            qualifier = func.name.split("::", 1)[0]
-            if self.lookup_struct_decl(qualifier) is None:
-                raise LangError(
-                    f"no struct type {qualifier!r} for method {func.name!r}",
-                    func.line,
-                )
-        # Type aliases are registered next (records only; resolved lazily on
-        # use), so a const's or signature's type may name one.
-        for alias in self.program.aliases:
-            self.register_alias(alias)
+            self.resolve_method_qualifier(func)
         # Constants are folded before globals, so a global's type (or a later
         # const) may use one as an array size. They are evaluated in source
         # order, so a const may reference any declared earlier (as in C). The
@@ -12400,13 +12536,63 @@ class CodeGen:
             expr.line,
         )
 
+    def chase_alias_qualifier(self, name: str, line: int) -> str | None:
+        """Chase a call-site method qualifier through type aliases, by name.
+
+        ``pointf::magnitude(p)`` is ``point::magnitude(p)``: an alias
+        qualifier is purely a namespace hop, so only the NAME canonicalizes
+        -- no type arguments are injected (dispatch still infers from the
+        arguments), mirroring how a bare generic alias declares a method as
+        a passthrough. Each hop is access-checked, so a cross-file
+        ``@private`` alias qualifier errors like any other use.
+
+        Args:
+            name: The qualifier as written at the call.
+            line: The call's line, for diagnostics.
+
+        Returns:
+            The canonical type name (a struct or builtin), or ``None`` when
+            the qualifier is not alias-rooted -- an undeclared name, an enum,
+            a cycle, or an alias of an unnameable type -- leaving the call to
+            resolve (and report) under its written name.
+
+        Raises:
+            LangError: When a chased alias is ``@private`` to another file.
+        """
+        seen: set[str] = set()
+        while (
+            self.lookup_struct_decl(name) is None
+            and name not in TYPES
+            and name not in RESERVED_TYPE_NAMES
+        ):
+            alias = self.lookup_alias(name)
+            if alias is None or name in seen:
+                return None
+            seen.add(name)
+            self.check_access(
+                alias.private, alias.source, f"type alias {name!r}", line
+            )
+            target = alias.target
+            if (
+                target.stars
+                or target.dims
+                or target.const
+                or target.nonnull
+                or target.mut
+                or target.params is not None
+            ):
+                return None
+            name = target.name
+        return name
+
     def gen_call(self, expr: Call) -> TypedValue:
         """Emit a call to a named function.
 
-        Resolves the name in order: the ``va_start``/``va_end`` builtins, a
-        same-named variable holding a function pointer (called indirectly), a
-        file-scoped ``@static`` function or generic, then a global function or
-        generic overload set.
+        Resolves the name in order: an alias-qualified method name (rewritten
+        to its canonical family and re-dispatched), the
+        ``va_start``/``va_end`` builtins, a same-named variable holding a
+        function pointer (called indirectly), a file-scoped ``@static``
+        function or generic, then a global function or generic overload set.
 
         Args:
             expr: The ``Call`` node.
@@ -12418,6 +12604,16 @@ class CodeGen:
             LangError: When the name is not callable, is undefined, or misuses
                 generic type arguments.
         """
+        # A method call through an alias qualifier canonicalizes by name --
+        # `pointf::magnitude(p)` is `point::magnitude(p)` -- and re-enters
+        # under the family every spelling registered to.
+        if "::" in expr.name:
+            qualifier, method = expr.name.split("::", 1)
+            canonical = self.chase_alias_qualifier(qualifier, expr.line)
+            if canonical is not None and canonical != qualifier:
+                return self.gen_call(
+                    dataclasses_replace(expr, name=f"{canonical}::{method}")
+                )
         # va_start/va_end are builtins, not real functions: they lower to LLVM
         # intrinsics over the va_list's address.
         if expr.name in ("va_start", "va_end") and not expr.type_args:
@@ -14105,6 +14301,59 @@ class CodeGen:
             isinstance(expr, Unary) and expr.op == "*"
         )
 
+    def dealias_pattern(self, pattern: TypeRef, type_params: list[str]) -> TypeRef:
+        """Expand a generic-alias application at a parameter pattern's head.
+
+        A pattern spelled through a generic alias -- ``diag<U>`` with
+        ``type diag<T> = pair<T, T>`` -- unifies and shape-checks as the type
+        it names: the written arguments bind the alias's parameters (a
+        shorter list fills from trailing defaults) and substitute through its
+        target, so ``diag<U>`` matches ``pair<int32, int32>`` binding
+        ``U = int32`` -- and the repeated position rejects a
+        ``pair<int32, float64>`` receiver, the diagonal constraint. Pointer
+        depth, array dimensions, and ``const`` written on the alias spelling
+        carry onto the expansion; chasing stops at a name that is a type
+        parameter, a non-alias, a plain (non-generic) alias, an arity
+        mismatch (the declaration's own resolution reports those), or a
+        cycle.
+
+        Args:
+            pattern: The parameter's ``TypeRef`` pattern.
+            type_params: The function's type-parameter names.
+
+        Returns:
+            The expanded pattern, or ``pattern`` unchanged when its head is
+            not a generic-alias application.
+        """
+        seen: set[str] = set()
+        while (
+            pattern.args
+            and pattern.params is None
+            and pattern.name not in type_params
+            and pattern.name not in seen
+            and (alias := self.lookup_alias(pattern.name)) is not None
+            and alias.type_params
+            and (
+                len(alias.type_params) - len(alias.type_param_defaults)
+                <= len(pattern.args)
+                <= len(alias.type_params)
+            )
+        ):
+            seen.add(pattern.name)
+            binding = dict(zip(alias.type_params, pattern.args))
+            for pname in alias.type_params[len(pattern.args):]:
+                binding[pname] = self.subst_struct_args(
+                    alias.type_param_defaults[pname], binding
+                )
+            target = self.subst_struct_args(alias.target, binding)
+            pattern = dataclasses_replace(
+                target,
+                stars=target.stars + pattern.stars,
+                dims=target.dims + pattern.dims,
+                const=target.const or pattern.const,
+            )
+        return pattern
+
     def unify(
         self,
         pattern: TypeRef,
@@ -14135,6 +14384,9 @@ class CodeGen:
         Raises:
             LangError: On a strict conflict for a type parameter.
         """
+        # A generic-alias spelling unifies as the type it names:
+        # `self: diag<U>` binds U from a pair<int32, int32> receiver.
+        pattern = self.dealias_pattern(pattern, type_params)
         peeled = actual
         for _ in range(pattern.stars):
             if not is_pointer(peeled):
@@ -15111,6 +15363,9 @@ class CodeGen:
         Returns:
             ``True`` when ``actual`` can match ``pattern``.
         """
+        # A generic-alias spelling shape-checks as the type it names, in
+        # step with unify's expansion.
+        pattern = self.dealias_pattern(pattern, type_params)
         peeled = actual
         for _ in range(pattern.stars):
             if not is_pointer(peeled):

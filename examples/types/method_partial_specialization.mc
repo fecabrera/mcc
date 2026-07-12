@@ -107,4 +107,6 @@ fn main() -> int32 {
 // this extends; generic_methods.mc for the `fn point<T>::name` form and
 // method type parameters; functions/mixed_overloads.mc for the
 // (is-concrete, specificity) rank; type_groups.mc for the closed group
-// bounding the `width` partial.
+// bounding the `width` partial; method_alias.mc for a generic `type` alias
+// substituting its written arguments into this partial form
+// (`fn swap<int32, U>::pick` with `type swap<X, Y> = pair<Y, X>`).

@@ -20,6 +20,9 @@ import "libc/math";
 //     is a PARTIAL specialization: see method_partial_specialization.mc.
 //   - A generic base is not required. A lone `fn box<int32>::only(...)` with no
 //     `fn box<T>::only(...)` beside it is simply a concrete namespaced overload.
+//   - A plain `type` alias qualifier is another spelling of this same form:
+//     with `type pointf = point<float64>`, `fn pointf::magnitude` IS
+//     `fn point<float64>::magnitude`. See method_alias.mc.
 //
 // Prerequisites: generic_methods.mc for methods on a generic struct (the
 // `fn point<T>::name` form and monomorphization), and functions/overloading.mc
@@ -97,4 +100,5 @@ fn main() -> int32 {
 // this specializes; methods.mc for the non-generic method foundation;
 // functions/overloading.mc for the concrete-beats-generic ranking that
 // selects the specialization; structs.mc / generics.mc for generic structs
-// and inference.
+// and inference; method_alias.mc for declaring this same form through a
+// `type` alias qualifier and for builtin-type qualifiers.

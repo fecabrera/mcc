@@ -67,3 +67,7 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// See also: method_alias.mc -- a generic alias also works as a method
+// qualifier, substituting its written arguments through the target
+// (`fn swap<int32, U>::pick` with `type swap<X, Y> = pair<Y, X>`).

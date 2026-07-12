@@ -214,6 +214,13 @@ class InterfaceWriter:
             # after the type-parameter subtraction so it is never stripped.
             if "::" in decl.name:
                 names.add(decl.name.split("::", 1)[0])
+            # A method declared through an alias qualifier was canonicalized
+            # (`fn pointf::m` registers as `point::m`), but a generic method
+            # travels verbatim from its source span -- which still spells the
+            # alias -- so the alias declaration must travel too, even when no
+            # parameter or return type names it.
+            if decl.alias_qualifier is not None:
+                names.add(decl.alias_qualifier)
         elif isinstance(decl, (StructDecl, UnionDecl)):
             for _, t in decl.fields:
                 _collect_refs(t, names)

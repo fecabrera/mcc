@@ -37,6 +37,34 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Methods on type aliases and builtin types — `fn Alias::method(...)`,
+  `fn int32::method(...)`** — methods register to a TYPE, and a `type` alias
+  is just an alias: declaring `fn pointf::magnitude` with
+  `type pointf = point<float64>;` **is** declaring
+  `fn point<float64>::magnitude` (a specialization, outranking the generic
+  for a `point<float64>` receiver), and both spellings call **one family** —
+  `pointf::magnitude(p)` canonicalizes by name to `point::magnitude(p)`, a
+  pure namespace hop that injects no type arguments. The chase follows alias
+  chains, is access-checked per hop (`@private`/`@static` aliases behave as
+  everywhere else), and composes through a generic alias's substitution:
+  written pre-`::` arguments check arity against the *alias* (trailing
+  defaults fill), so `fn swap<int32, U>::pick` with
+  `type swap<X, Y> = pair<Y, X>` is the partial `fn pair<U, int32>::pick`,
+  and a duplicate-position alias (`type diag<T> = pair<T, T>`) becomes a
+  **diagonal constraint** — one parameter that must unify consistently, so a
+  `pair<int32, float64>` receiver is rejected. A *bare* generic-alias
+  qualifier is a namespace passthrough (`fn pf::m` ≡ `fn point::m`, no arity
+  error). Generic-alias spellings are now **transparent to inference**
+  everywhere: a parameter pattern written `self: diag<U>` unifies and
+  shape-checks as `pair<U, U>`. The same one-principle change admits
+  **builtin-type qualifiers**: `fn int32::clamp` (or via `type myint =
+  int32;`, `fn myint::clamp` — the same family) and
+  `fn slice<T>::first(s: slice<T>) -> T` all work; specializing a builtin
+  (`fn slice<int32>::first`) is rejected — `cannot specialize builtin type
+  'slice'; spell the receiver type in the method's signature instead`. The
+  two spellings of one signature collide as ordinary duplicates, `@override`
+  pairs across them, and an alias-declared generic method's `.mci` stub
+  pulls the alias declaration along even when the signature never names it.
 - **Partial specialization of generic-struct methods —
   `fn Type<Concrete, U>::method(...)`** — a method's pre-`::` arguments may
   now **mix** concrete types and fresh type parameters: the concrete

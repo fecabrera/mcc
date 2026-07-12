@@ -8,7 +8,10 @@ name, the call name, the registration key, and the LLVM symbol -- so
 overloading, ``@private``, and direct-call resolution all work unchanged.
 
 ``Type::`` is purely a namespace in this slice: no ``self`` convention is
-enforced. The only validation is that the qualifier names a declared struct.
+enforced. The only validation is that the qualifier names a declared TYPE --
+a struct, a builtin type, or a type alias of either (an alias qualifier
+canonicalizes to the type it names: registering a method for ``pointf`` IS
+registering it for ``point<float64>``, and both spellings call one family).
 Call sugar (``.method()``), constructors, and dynamic dispatch are future work.
 """
 
@@ -151,7 +154,7 @@ def test_private_qualified_method(capfd, tmp_path):
     assert capfd.readouterr().out == "9\n"
 
 
-# --- validation: the qualifier must be a declared struct ----------------------
+# --- validation: the qualifier must be a declared type ------------------------
 
 def test_undeclared_qualifier_is_an_error():
     with pytest.raises(
@@ -1041,3 +1044,491 @@ def test_specialization_coexists_with_own_type_param_generic(capfd):
         """
     ) == 0
     assert capfd.readouterr().out == "99\n"
+
+
+# --- methods on type aliases + any-type qualifiers -----------------------------
+#
+# Methods register to a TYPE, and a type alias is just an alias: declaring
+# `fn pointf::m` with `type pointf = point<float64>` registers to the family
+# `point::m` exactly as `fn point<float64>::m` would -- and vice versa. The
+# same principle admits builtin-type qualifiers (`fn int32::m`): `Type::`
+# stays a pure namespace, so the family is simply the canonical name string.
+
+
+def test_alias_declared_specialization_outranks_generic(capfd):
+    # The acceptance shape (main.mc): a specialization declared through a
+    # plain alias (`fn pointf::tag`) coexists with the generic
+    # `fn point<T>::tag` and wins for a point<float64> receiver. Distinct
+    # return values prove which body ran.
+    assert run(
+        """
+        import "std/io";
+        struct point<T> { x: T; y: T; }
+        type pointf = point<float64>;
+        fn pointf::tag(self: pointf) -> int32 { return 2; }
+        fn point<T>::tag(self: point<T>) -> int32 { return 1; }
+        fn main() -> int32 {
+            let pi: point<int64>;
+            let pf: pointf;
+            println("{} {}", point::tag(pi), point::tag(pf));
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "1 2\n"  # generic, then alias-declared
+
+
+def test_plain_struct_alias_qualifier_and_both_call_spellings(capfd):
+    # An alias of a NON-generic struct: `fn c::bump` registers to
+    # `counter::bump`, and both the alias and the canonical spelling call
+    # the one family.
+    assert run(
+        """
+        import "std/io";
+        struct counter { n: int32; }
+        type c = counter;
+        fn c::bump(mut self: counter) { self.n = self.n + 1; }
+        fn main() -> int32 {
+            let x: counter = { n = 0 };
+            counter::bump(x);
+            c::bump(x);
+            println("{}", x.n);
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "2\n"
+
+
+def test_alias_of_alias_chain_canonicalizes():
+    # The chase follows a chain: pf2 -> pf1 -> point<float64>. The declared
+    # method is a point<float64> specialization; the deepest and shallowest
+    # spellings both reach it.
+    assert (
+        run(
+            """
+            struct point<T> { x: T; y: T; }
+            type pf1 = point<float64>;
+            type pf2 = pf1;
+            fn pf2::code(self: pf2) -> int32 { return 42; }
+            fn main() -> int32 {
+                let p: pf1;
+                return point::code(p) + pf2::code(p) - 42 * 2;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_permuting_generic_alias_becomes_a_partial_specialization():
+    # `type swap<X, Y> = pair2<Y, X>` with `fn swap<int32, U>::pick`
+    # substitutes to the partial `fn pair2<U, int32>::pick`: it matches only
+    # receivers whose SECOND position is int32, and U binds through the
+    # permutation.
+    assert (
+        run(
+            """
+            struct pair2<A, B> { a: A; b: B; }
+            type swap<X, Y> = pair2<Y, X>;
+            fn swap<int32, U>::pick(self: swap<int32, U>) -> U {
+                return self.a;
+            }
+            fn main() -> int32 {
+                let p: pair2<int64, int32>;
+                p.a = 42;
+                p.b = 7;
+                return pair2::pick(p) as int32 - 42;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_bare_generic_alias_qualifier_is_a_namespace_passthrough():
+    # A bare generic-alias qualifier chases the NAME only: `fn pf::mk`
+    # behaves exactly like `fn point::mk` -- no arity error for the omitted
+    # argument list -- and `pf::mk()` calls the same family.
+    assert (
+        run(
+            """
+            struct point<T> { x: T; y: T; }
+            type pf<T> = point<T>;
+            fn pf::mk() -> int32 { return 7; }
+            fn main() -> int32 { return pf::mk() + point::mk() - 14; }
+            """
+        )
+        == 0
+    )
+
+
+def test_builtin_qualifier_direct_and_via_alias_share_one_family():
+    # Ruling: methods register to a TYPE, struct or builtin alike. A direct
+    # `fn int32::double` and an alias-declared `fn myint::triple` both live
+    # in the int32 family, and every spelling calls either.
+    assert (
+        run(
+            """
+            type myint = int32;
+            fn int32::double(x: int32) -> int32 { return x * 2; }
+            fn myint::triple(x: int32) -> int32 { return x * 3; }
+            fn main() -> int32 {
+                return int32::triple(2) + myint::double(4) - 14;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_builtin_generic_qualifier_with_fresh_names():
+    # `fn slice<T>::first` rides the generic path: a builtin family has no
+    # declared parameter names, but fresh names simply prepend the method's
+    # own type parameters, exactly as they do for a struct.
+    assert (
+        run(
+            """
+            fn slice<T>::first(s: slice<T>) -> T { return s[0]; }
+            fn main() -> int32 {
+                let a: int32[3] = [5, 6, 7];
+                return slice::first(a as slice<int32>) - 5;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_builtin_specialization_is_an_error():
+    # A builtin type has no declared parameter names for a concrete argument
+    # to bind, so specializing one is rejected -- the signature alone already
+    # drives dispatch.
+    with pytest.raises(
+        LangError,
+        match=r"cannot specialize builtin type 'slice'; spell the receiver "
+        r"type in the method's signature instead",
+    ):
+        compile_ir(
+            """
+            fn slice<int32>::first(s: slice<int32>) -> int32 { return s[0]; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_duplicate_position_alias_is_a_diagonal_constraint(capfd):
+    # `type diag<T> = pair2<T, T>` expands `fn diag<U>::first` to the target
+    # pair2<U, U> with ONE parameter U: a pair2<int32, int32> receiver binds
+    # it (and the alias-spelled signature infers through the alias)...
+    assert run(
+        """
+        import "std/io";
+        struct pair2<A, B> { a: A; b: B; }
+        type diag<T> = pair2<T, T>;
+        fn diag<U>::first(self: diag<U>) -> U { return self.a; }
+        fn main() -> int32 {
+            let p: pair2<int32, int32>;
+            p.a = 41;
+            p.b = 1;
+            println("{}", pair2::first(p) + 1);
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "42\n"
+    # ...and a receiver whose positions DISAGREE is rejected: unification
+    # binds U at the first position and reports the conflict at the second.
+    with pytest.raises(
+        LangError,
+        match=r"conflicting types for type parameter U in call to "
+        r"'pair2::first': int32 vs float64",
+    ):
+        compile_ir(
+            """
+            struct pair2<A, B> { a: A; b: B; }
+            type diag<T> = pair2<T, T>;
+            fn diag<U>::first(self: diag<U>) -> U { return self.a; }
+            fn main() -> int32 {
+                let p: pair2<int32, float64>;
+                return pair2::first(p) as int32;
+            }
+            """
+        )
+
+
+def test_diagonal_alias_beside_a_generic_sibling():
+    # Alongside a fully generic sibling, a MISMATCHED receiver is non-viable
+    # for the diagonal (the repeated position conflicts) and falls through to
+    # the generic...
+    assert (
+        run(
+            """
+            struct pair2<A, B> { a: A; b: B; }
+            type diag<T> = pair2<T, T>;
+            fn diag<U>::which(self: diag<U>) -> int32 { return 1; }
+            fn pair2<A, B>::which(self: pair2<A, B>) -> int32 { return 0; }
+            fn main() -> int32 {
+                let mixed: pair2<int32, float64>;
+                return pair2::which(mixed);
+            }
+            """
+        )
+        == 0
+    )
+    # ...but an AGREEING receiver stays the standard ambiguity error: the
+    # diagonal pattern pair2<U, U> and the open pair2<A, B> score the same
+    # pattern specificity (repeated names do not rank higher -- there is no
+    # C++-style partial ordering, the same rule as two rank-tied partial
+    # specializations).
+    with pytest.raises(
+        LangError, match=r"call to 'pair2::which' is ambiguous between overloads"
+    ):
+        compile_ir(
+            """
+            struct pair2<A, B> { a: A; b: B; }
+            type diag<T> = pair2<T, T>;
+            fn diag<U>::which(self: diag<U>) -> int32 { return 1; }
+            fn pair2<A, B>::which(self: pair2<A, B>) -> int32 { return 0; }
+            fn main() -> int32 {
+                let same: pair2<int32, int32>;
+                return pair2::which(same);
+            }
+            """
+        )
+
+
+def test_alias_and_canonical_spellings_collide_as_duplicates():
+    # Registering for the alias IS registering for the type: the two
+    # spellings of one signature are the existing duplicate error.
+    with pytest.raises(
+        LangError,
+        match=r"function 'point::m\(point<float64>\)' already defined; "
+        r"overloads must differ in parameter types",
+    ):
+        compile_ir(
+            """
+            struct point<T> { x: T; y: T; }
+            type pointf = point<float64>;
+            fn pointf::m(self: pointf) -> int32 { return 1; }
+            fn point<float64>::m(self: point<float64>) -> int32 { return 2; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_generic_alias_qualifier_arity_error():
+    # Written pre-`::` arguments bind the ALIAS's parameters, so their count
+    # is checked against the alias, not the underlying struct.
+    with pytest.raises(
+        LangError, match=r"type alias 'pf' expects 1 type argument\(s\), got 2"
+    ):
+        compile_ir(
+            """
+            struct point<T> { x: T; y: T; }
+            type pf<T> = point<T>;
+            fn pf<A, B>::m(self: point<A>) -> int32 { return 0; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_plain_alias_qualifier_with_args_is_not_generic():
+    with pytest.raises(
+        LangError, match=r"type alias 'pointf' is not generic"
+    ):
+        compile_ir(
+            """
+            struct point<T> { x: T; y: T; }
+            type pointf = point<float64>;
+            fn pointf<float64>::m(self: pointf) -> int32 { return 0; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_alias_of_an_unnameable_type_is_an_error():
+    # A pointer (or array, or function) type has no bare-name spelling to
+    # namespace on, so an alias of one keeps the family error -- reported
+    # against the qualifier as written.
+    with pytest.raises(
+        LangError, match=r"no struct type 'ip' for method 'ip::m'"
+    ):
+        compile_ir(
+            """
+            type ip = int32*;
+            fn ip::m(x: int32*) -> int32 { return 0; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+    with pytest.raises(
+        LangError, match=r"no struct type 'cb' for method 'cb::m'"
+    ):
+        compile_ir(
+            """
+            type cb = fn(int32) -> int32;
+            fn cb::m(f: cb) -> int32 { return 0; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_private_alias_qualifier_is_access_checked(tmp_path):
+    # The chase access-checks each hop: a cross-file @private alias qualifier
+    # errors at the declaration...
+    (tmp_path / "geo.mc").write_text(
+        "struct point<T> { x: T; y: T; }\n"
+        "@private type pointf = point<float64>;\n"
+    )
+    decl = tmp_path / "decl.mc"
+    decl.write_text(
+        'import "geo";\n'
+        "fn pointf::m(self: point<float64>) -> int32 { return 0; }\n"
+        "fn main() -> int32 { return 0; }\n"
+    )
+    with pytest.raises(
+        LangError, match=r"type alias 'pointf' is private to geo.mc"
+    ):
+        run_path(decl)
+    # ...and at a call.
+    (tmp_path / "geo2.mc").write_text(
+        "struct point<T> { x: T; y: T; }\n"
+        "@private type pointf = point<float64>;\n"
+        "fn point::mk() -> int32 { return 7; }\n"
+    )
+    call = tmp_path / "call.mc"
+    call.write_text(
+        'import "geo2";\n'
+        "fn main() -> int32 { return pointf::mk(); }\n"
+    )
+    with pytest.raises(
+        LangError, match=r"type alias 'pointf' is private to geo2.mc"
+    ):
+        run_path(call)
+
+
+def test_alias_declared_generic_method_round_trips_through_mci(tmp_path):
+    # A generic method travels VERBATIM in the stub -- still spelling the
+    # alias -- so the recorded original qualifier must pull the (@private)
+    # alias declaration in even when no parameter or return type names it.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "struct point<T> { x: T; y: T; }\n"
+        "@private type pf<T> = point<T>;\n"
+        "fn pf<T>::same(x: T) -> T { return x; }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    stub = out.read_text()
+    assert "@private type pf<T> = point<T>;" in stub  # the alias travels
+    assert "fn pf<T>::same(x: T) -> T" in stub  # the method, verbatim
+    lib.unlink()  # force the import to resolve through the stub
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\n'
+        "fn main() -> int32 { return point::same(42) - 42; }\n"
+    )
+    assert run_path(main) == 0
+
+
+def test_alias_specialization_prototype_round_trips_through_mci(tmp_path):
+    # A CONCRETE alias-declared method emits as a desugared prototype under
+    # its canonical family name; the alias-spelled signature pulls the alias
+    # along, so the stub compiles on re-import. (compile_ir, not run: a
+    # bodyless prototype's body lives in the unlinked object.)
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "struct point<T> { x: T; y: T; }\n"
+        "type pointf = point<float64>;\n"
+        "fn pointf::mag(self: pointf) -> float64 { return self.x; }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    stub = out.read_text()
+    assert "fn point::mag(self: pointf) -> float64;" in stub  # canonical name
+    assert "type pointf = point<float64>;" in stub
+    compile_ir(stub)  # the stub is self-contained and compiles
+
+
+def test_override_pairs_across_alias_and_canonical_spellings(tmp_path):
+    # @override reconciles AFTER canonicalization over resolved parameter
+    # types, so an alias-spelled override replaces the canonical definition.
+    (tmp_path / "base.mc").write_text(
+        "struct point<T> { x: T; y: T; }\n"
+        "type pointf = point<float64>;\n"
+        "fn point<float64>::m(self: point<float64>) -> int32 { return 1; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "base";\n'
+        "@override fn pointf::m(self: pointf) -> int32 { return 2; }\n"
+        "fn main() -> int32 {\n"
+        "    let p: pointf;\n"
+        "    return point::m(p) - 2;\n"
+        "}\n"
+    )
+    assert run_path(main) == 0
+
+
+def test_undeclared_call_qualifier_keeps_its_written_name():
+    # A call qualifier that chases nowhere resolves (and reports) under its
+    # written name, unchanged.
+    with pytest.raises(LangError, match=r"undefined function 'ghost::m'"):
+        compile_ir(
+            """
+            fn main() -> int32 { return ghost::m(1); }
+            """
+        )
+
+
+def test_defaulted_generic_alias_qualifier_fills_the_tail():
+    # A shorter pre-`::` list fills from the alias's trailing defaults,
+    # exactly as a type use does: `fn box2<float64>::code` with
+    # `type box2<T, U = int32> = pair2<U, T>` specializes
+    # pair2<int32, float64>...
+    assert (
+        run(
+            """
+            struct pair2<A, B> { a: A; b: B; }
+            type box2<T, U = int32> = pair2<U, T>;
+            fn box2<float64>::code(self: pair2<int32, float64>) -> int32 {
+                return 42;
+            }
+            fn main() -> int32 {
+                let p: pair2<int32, float64>;
+                return pair2::code(p) - 42;
+            }
+            """
+        )
+        == 0
+    )
+    # ...and a defaulted alias SPELLING in a generic signature dealiases the
+    # same way for inference: `self: box2<V>` binds V through the expansion.
+    assert (
+        run(
+            """
+            struct pair2<A, B> { a: A; b: B; }
+            type box2<T, U = int32> = pair2<U, T>;
+            fn pair2::grab<V>(self: box2<V>) -> V { return self.b; }
+            fn main() -> int32 {
+                let p: pair2<int32, int64>;
+                p.b = 42;
+                return pair2::grab(p) as int32 - 42;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_call_through_an_unnameable_alias_stays_undefined():
+    # A call qualifier chasing into an alias of a pointer type has no
+    # canonical family; the call resolves (and reports) under its written
+    # name.
+    with pytest.raises(LangError, match=r"undefined function 'ip::m'"):
+        compile_ir(
+            """
+            type ip = int32*;
+            fn main() -> int32 { return ip::m(1); }
+            """
+        )

@@ -56,3 +56,7 @@ fn main() -> int32 {
 
     return 0;
 }
+
+// See also: generic_alias.mc for aliases carrying a type-parameter list;
+// method_alias.mc -- because an alias is transparent, it also works as a
+// method qualifier, declaring for (and calling) the type it names.

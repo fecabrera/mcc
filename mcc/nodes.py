@@ -477,6 +477,14 @@ class Func:
         struct_arg_defaults: ``{argument name: TypeRef}`` for pre-``::``
             arguments decorated with a ``=`` default; same rules as
             ``struct_arg_groups``.
+        alias_qualifier: For a method declared through a type-alias qualifier
+            (``fn pointf::m`` with ``type pointf = point<float64>``), the
+            alias name as written. Codegen canonicalizes ``name`` to the
+            aliased type's family (``point::m``), so the original spelling is
+            kept here for the interface writer: a generic method travels
+            verbatim from its source span, which still spells the alias, so
+            the ``.mci`` dependency scan must pull the alias declaration in.
+            ``None`` when the qualifier was written canonically.
     """
 
     name: str
@@ -510,6 +518,7 @@ class Func:
     struct_arg_groups: dict[str, list[TypeRef]] = field(default_factory=dict)
     struct_arg_bounds: dict[str, TypeRef] = field(default_factory=dict)
     struct_arg_defaults: dict[str, TypeRef] = field(default_factory=dict)
+    alias_qualifier: str | None = None
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 
