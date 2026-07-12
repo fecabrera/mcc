@@ -786,8 +786,43 @@ or printable (the stdlib [formatting protocol](#formatting)), and, once the
 planned iteration protocol lands, iterable, by writing one overload for it
 in your own module.
 Only *same-pattern* replacement (swapping out a library's concrete `bool`
-member, say) still collides; a planned `@override` annotation covers that
+member, say) still collides; the `@override` annotation below covers that
 last case.
+
+**`@override` replaces a same-pattern member.** Adding an overload can only
+*extend* a set; the one thing it cannot do is replace a member that already
+covers a shape, because a second same-pattern definition collides as a
+duplicate. `@override` is the escape valve for exactly that case — the
+stdlib's own concrete `bool` formatter, or its unbounded `<typename>`
+fallback, replaced by one of the same pattern. It suppresses the
+duplicate-pattern collision and **drops the overridden (unannotated)
+definition** before code generation, so only the `@override` body is emitted,
+under the member's shared mangled symbol. The replacement is therefore
+**global** — in effect everywhere the original was, including `println`'s own
+dispatch, which resolves inside the stdlib module — and **order-independent**:
+the winner is chosen over the whole merged program, not the import prefix seen
+so far.
+An `@override` needs exactly **one source-visible, body-bearing, cross-module
+target of the same pattern** (a concrete member's parameter list, or a
+template's [order-independent base](#template-symbols)). Each of these is a
+compile error: no matching target (typo protection, the C++
+override-specifier rationale); a same-pattern target **in the same file**
+(`@override` replaces *another* module's member, never a local one); a target
+visible only as a [prototype](#bodyless-fn-prototypes) (its body lives in an
+object that already defines the symbol, so it cannot be replaced by
+re-emission); and a second `@override` of one pattern (they collide like any
+duplicate). `@override` does not combine with `@extern` (no mcc body to
+replace with), `@static` (file-local, never joins a cross-module set),
+`@removed` (a definition cannot both replace and be a tombstone), a bodyless
+prototype (no body to emit), or — for now — `@private` (a private symbol is
+salted and file-local, so it cannot take over the target's public symbol; the
+file-local variant would need distinct shadowing semantics). Because
+replacement works by reusing the target's symbol and dropping the original,
+the target must be **compiled from source** in the same build; a
+separately-compiled original (a future ABI-pinned `.mci` object) already
+defines the symbol in its own object and cannot be overridden — which is why a
+prototype-only target is rejected rather than silently mislinked. See
+[examples/functions/override.mc](../examples/functions/override.mc).
 
 **Interfaces.** `--emit-interface` renders an overload set's members from
 the emitting file as same-name prototypes, and the file's whole
@@ -803,8 +838,9 @@ pinned symbols with the consumer's), and two stubs that each pin the same
 plain symbol collide at compile time — correct, since the two objects they
 describe could never link together.
 
-See [examples/functions/overloading.mc](../examples/functions/overloading.mc)
-and [examples/functions/open_overloads.mc](../examples/functions/open_overloads.mc).
+See [examples/functions/overloading.mc](../examples/functions/overloading.mc),
+[examples/functions/open_overloads.mc](../examples/functions/open_overloads.mc),
+and [examples/functions/override.mc](../examples/functions/override.mc).
 
 ### @noreturn functions
 

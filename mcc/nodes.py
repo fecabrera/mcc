@@ -426,6 +426,14 @@ class Func:
             function-value use) is a hard compile error carrying it. The
             signature is never resolved and a body, if any, is never
             generated.
+        override: ``@override`` -- this definition replaces a same-pattern
+            member of an open overload set declared in *another* module.
+            The overridden (unannotated) definition is dropped before
+            registration, so only this body is emitted under the shared
+            mangled symbol. Requires exactly one source-visible, body-bearing,
+            cross-module target of the same pattern; no target, a same-file
+            target, or a second ``@override`` of one pattern is a compile
+            error.
         type_param_defaults: ``{type parameter: TypeRef}`` for parameters
             declared ``<T = type>``. The default fills a parameter that is
             neither given explicitly nor inferred from a *typed* argument.
@@ -471,6 +479,7 @@ class Func:
     mut_return: bool = False
     deprecated_msg: str | None = None
     removed_msg: str | None = None
+    override: bool = False
     type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
     type_param_groups: dict[str, list[TypeRef]] = field(default_factory=dict)
     type_param_bounds: dict[str, TypeRef] = field(default_factory=dict)

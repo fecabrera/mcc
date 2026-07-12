@@ -445,6 +445,7 @@ class Parser:
         symbol = None
         deprecated = None
         removed = None
+        override = False
         clobbers = []
         while self.cur.kind == "ANNOT":
             annot = self.advance()
@@ -505,6 +506,8 @@ class Parser:
                     raise LangError(
                         "@removed needs a non-empty message", annot.line
                     )
+            elif annot.text == "@override":
+                override = True
             else:
                 raise LangError(f"unknown annotation {annot.text!r}", annot.line)
         if extern and static:
@@ -558,6 +561,43 @@ class Parser:
                 raise LangError(
                     "@removed and @static cannot be combined (a file-local "
                     "tombstone serves no caller in another file)",
+                    self.cur.line,
+                )
+        if override:
+            if self.cur.kind != "fn":
+                # A value-supplier promise on a function -- like @deprecated.
+                raise LangError("@override only applies to functions", self.cur.line)
+            if extern:
+                raise LangError(
+                    "@override and @extern cannot be combined (an @extern has "
+                    "no mcc body to replace another with)",
+                    self.cur.line,
+                )
+            if static:
+                raise LangError(
+                    "@override and @static cannot be combined (@override "
+                    "replaces a member of another module's set, but a @static "
+                    "function is file-local and never joins one)",
+                    self.cur.line,
+                )
+            if removed is not None:
+                raise LangError(
+                    "@override and @removed cannot be combined (a definition "
+                    "cannot both replace an existing overload and be a "
+                    "tombstone)",
+                    self.cur.line,
+                )
+            if private:
+                # An @override reuses the target's public symbol and drops the
+                # original wholesale (a global replacement); a @private symbol
+                # is salted and file-local, so it cannot take over the public
+                # one. The file-local variant would need distinct shadowing
+                # semantics (keep the target, prefer the local member in its
+                # own module) -- deferred.
+                raise LangError(
+                    "@override and @private cannot yet be combined (a private "
+                    "override would need file-local shadowing semantics, not "
+                    "the global replacement @override performs)",
                     self.cur.line,
                 )
         if self.cur.kind in ("struct", "union"):
@@ -674,7 +714,7 @@ class Parser:
             )
         return self.parse_function(
             private, static, extern, symbol, inline, asm, clobbers, deprecated,
-            removed, noreturn,
+            removed, noreturn, override,
         )
 
     # Tokens that can begin an expression; used to settle the `as T * x`
@@ -1319,6 +1359,7 @@ class Parser:
         deprecated: str | None = None,
         removed: str | None = None,
         noreturn: bool = False,
+        override: bool = False,
     ) -> Func:
         """Parse a function definition, an ``@extern`` declaration, or a proto.
 
@@ -1341,6 +1382,8 @@ class Parser:
             deprecated: The ``@deprecated("...")`` message, or ``None``.
             removed: The ``@removed("...")`` tombstone message, or ``None``.
             noreturn: Whether ``@noreturn`` was applied (never returns).
+            override: Whether ``@override`` was applied (replaces a
+                same-pattern member of another module's overload set).
 
         Returns:
             The parsed ``Func``.
@@ -1574,6 +1617,7 @@ class Parser:
                 inline=inline,
                 noreturn=noreturn,
                 deprecated_msg=deprecated,
+                override=override,
                 type_param_defaults=type_param_defaults,
                 type_param_groups=type_param_groups,
                 type_param_bounds=type_param_bounds,
@@ -1604,6 +1648,12 @@ class Parser:
                     "a @static function cannot be a bodyless prototype "
                     "(its symbol is file-local, so no other object can "
                     "define it)",
+                    line,
+                )
+            if override:
+                raise LangError(
+                    "an @override function cannot be a bodyless prototype "
+                    "(there is no body to replace the existing overload with)",
                     line,
                 )
             return Func(
@@ -1649,6 +1699,7 @@ class Parser:
             mut_return=mut_return,
             deprecated_msg=deprecated,
             removed_msg=removed,
+            override=override,
             type_param_defaults=type_param_defaults,
             type_param_groups=type_param_groups,
             type_param_bounds=type_param_bounds,

@@ -1424,7 +1424,7 @@ already do).
       and the Methods / OOP item below is checked against it rather
       than the reverse: methods must not become the privileged
       mechanism for protocols
-  - [ ] `@override` — replace a same-pattern member of an open set.
+  - [x] `@override` — replace a same-pattern member of an open set.
         With open sets, replacing group-covered or generic-covered
         behavior already falls out of the shipped ranking with no
         annotation (a user's concrete
@@ -1454,13 +1454,29 @@ already do).
         cannot be overridden without a link collision — fine today
         since the stdlib is source-merged into the `Program`,
         documented rather than left to surface at link time.
-        Combinability: `@override @removed` rejected (a contradiction
-        — cannot replace-with and remove at once), `@override` on a
-        prototype rejected (no body to emit), `@override @deprecated`
-        allowed, `@override @private` allowed (overrides yet keeps
-        the result file-local); a `@private` original in another
-        module is invisible, so an override never targets it and
-        simply falls through to ordinary resolution. Implementation
+        Combinability: `@override` does not combine with `@extern`,
+        `@static`, `@removed` (a contradiction — cannot replace-with
+        and remove at once), or a bodyless prototype (no body to
+        emit), each rejected; `@override @deprecated` stays allowed
+        (the parser permits it, though it is not separately tested).
+        `@override @private` was deferred, not shipped: public
+        `@override` works by *symbol replacement* — it reuses the
+        target's public mangled symbol and drops the original, so
+        exactly one body is emitted under that symbol (a global
+        replacement) — but a `@private` function's symbol is *salted
+        and file-local*, so a private override cannot take over the
+        target's public symbol. A coherent `@override @private` would
+        need a different mechanism, *file-local shadowing*: keep the
+        target, register the private member alongside it (its salted
+        symbol already coexists), and have in-module resolution prefer
+        the local private member over the same-pattern public sibling
+        — a targeted resolution tie-break, where today that pairing is
+        an ambiguity — a distinct, larger piece of work. So the
+        shipped compiler rejects `@override @private` with a "cannot
+        yet be combined" error; a `@private` original in another
+        module is invisible regardless, so an override never targets
+        it and simply falls through to ordinary resolution.
+        Implementation
         shape: because replacement is order-independent and a
         no-match `@override` can only be judged once the whole set is
         merged, the collision is reconciled not inline in the
@@ -1474,6 +1490,16 @@ already do).
         `@deprecated`/`@removed` family. The driving use case is the
         same protocol story: a programmer setting their own formatters
         for stdlib-covered types
+    - [ ] `@override @private` via file-local shadowing — the deferred
+          combination. Unlike public `@override`'s symbol replacement,
+          this keeps the target and registers the private member
+          alongside it (its salted, file-local symbol already
+          coexists), then teaches in-module resolution to prefer the
+          local private member over the same-pattern public sibling —
+          a targeted resolution tie-break that today is an ambiguity.
+          A distinct mechanism from the shipped global replacement,
+          which is why the shipped compiler rejects the combination
+          rather than approximating it
   - [ ] indexing and slicing protocol — the family's third member: `c[i]`
         and `c[a:b]` on a user-defined struct desugar to overloadable
         free-function calls resolved through ordinary whole-program

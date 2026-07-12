@@ -3975,6 +3975,108 @@ class CodeGen:
                 err.source = self.current_source
             raise
 
+    def reconcile_overrides(self):
+        """Resolve ``@override`` before signature registration.
+
+        An ``@override`` replaces a same-pattern member of an open overload
+        set declared in *another* module: the overridden (unannotated)
+        definition is dropped from ``self.program.functions`` so only the
+        override's body is emitted, under the member's shared mangled symbol
+        (an override is public, so its symbol is unsalted and equals the
+        target's). Runs before the registration loop -- and the emission
+        pass, which both iterate ``self.program.functions`` -- so replacement
+        is order-independent: the winner is chosen over the whole merged
+        program, not the import prefix seen so far, and a no-match override
+        is judged once the whole set is known.
+
+        Each override needs exactly one source-visible, body-bearing,
+        cross-module target of the same pattern. A second ``@override`` of one
+        pattern, no target (typo), a same-file target, or a target that is
+        only a prototype (its body lives in another object that already
+        defines the symbol) is a compile error.
+
+        Raises:
+            LangError: On any of the above.
+        """
+        if not any(func.override for func in self.program.functions):
+            return
+
+        def pattern(func: Func):
+            # Concrete -> the mangle's parameter list; template -> the
+            # order-independent base (the same identities the duplicate
+            # checks compare). @static/@extern/@removed never join a
+            # cross-module set, so they are excluded before this is called.
+            if func.type_params:
+                return ("t", self.template_base(func))
+            self.current_source = func.source
+            return ("c", ", ".join(
+                str(self.lang_type(t, func.line)) for _, t in func.params
+            ))
+
+        losers: set[int] = set()
+        for func in self.program.functions:
+            if not func.override:
+                continue
+            pat = pattern(func)
+            others = [
+                f
+                for f in self.program.functions
+                if f is not func
+                and f.name == func.name
+                and not f.extern
+                and not f.static
+                and f.removed_msg is None
+                and pattern(f) == pat
+            ]
+            twin = next((f for f in others if f.override), None)
+            if twin is not None:
+                # Two @override of one pattern collide like any duplicate.
+                err = LangError(
+                    f"function {func.name!r} has two @override definitions of "
+                    "one overload pattern; at most one may replace it",
+                    func.line,
+                )
+                err.notes.append(
+                    Note(
+                        f"the other @override of {func.name!r} is here",
+                        twin.line,
+                        twin.source,
+                    )
+                )
+                raise err
+            targets = [
+                f
+                for f in others
+                if not f.private and f.source != func.source and not f.proto
+            ]
+            if not targets:
+                if any(f.source == func.source and not f.proto for f in others):
+                    raise LangError(
+                        f"@override function {func.name!r} matches a "
+                        "same-pattern definition in its own file; @override "
+                        "replaces a member declared in another module, not a "
+                        "local one",
+                        func.line,
+                    )
+                if any(f.proto and f.source != func.source for f in others):
+                    raise LangError(
+                        f"cannot @override {func.name!r}: its definition is "
+                        "not source-visible (only a prototype is in scope, so "
+                        "the body lives in another object that already "
+                        "defines the symbol)",
+                        func.line,
+                    )
+                raise LangError(
+                    f"@override function {func.name!r} matches no existing "
+                    "overload to replace",
+                    func.line,
+                )
+            losers.update(id(f) for f in targets)
+        if losers:
+            self.program.functions = [
+                f for f in self.program.functions if id(f) not in losers
+            ]
+
     def gen_program(self) -> ir.Module:
         """Emit the whole module from the merged program.
 
@@ -4161,6 +4263,13 @@ class CodeGen:
         # A file whose visible set has a single signature keeps its plain,
         # C-linkable symbol; sets of two or more mangle. @extern, @static,
         # generics, and tombstones never join the concrete grouping.
+        #
+        # @override is reconciled first, over the whole merged program: it
+        # drops each overridden (unannotated) definition from the function
+        # list so the registration and emission loops below see only the
+        # winner, under the member's shared mangled symbol. Running here
+        # (before the visibility scan) makes replacement order-independent.
+        self.reconcile_overrides()
         plain_decls: dict[str, list[Func]] = {}
         for func in self.program.functions:
             if (

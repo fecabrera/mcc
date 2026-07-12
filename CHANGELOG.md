@@ -37,6 +37,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`@override` — replace a same-pattern member of an open overload set** —
+  adding an overload extends a set; `@override` is the escape valve for the
+  one thing it cannot do, *replacing* a member that already covers a shape
+  (the case that otherwise collides as a duplicate). It suppresses the
+  duplicate-pattern collision and drops the overridden (unannotated)
+  definition before code generation, so only the `@override` body is emitted
+  under the member's shared symbol — a **global, order-independent**
+  replacement, in effect everywhere the original was, including `println`'s
+  own dispatch. The driving use case is replacing a stdlib formatter: a
+  concrete `format(mut str, value: bool, ...)` or the unbounded `<typename>`
+  fallback, swapped for your own. An `@override` needs exactly one
+  source-visible, body-bearing, cross-module target of the same pattern; a
+  missing target (typo protection), a same-file target, a prototype-only
+  target, and two `@override` of one pattern are all compile errors, and it
+  does not combine with `@extern`, `@static`, `@removed`, a bodyless
+  prototype, or (for now) `@private`. See
+  [Function overloading](docs/language.md#function-overloading) and
+  [examples/functions/override.mc](examples/functions/override.mc).
 - **`ok`/`error` compose as values in ternaries** — the constructors now
   behave as the builtins `ok<T, E>(v: T) -> result<T, E>` and `error<T, E>(e:
   E) -> result<T, E>`: the argument fixes one arm and the other is a free
