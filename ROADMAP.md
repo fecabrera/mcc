@@ -1653,6 +1653,35 @@ already do).
         list before `::`, the method's own after) and an `interface.py` fix so a
         method whose signature never names its struct still pulls it into the
         `.mci` stub
+    - [x] method specialization — `fn Type<Concrete>::method(...)`, a concrete
+          method body for ONE instantiation of a generic struct, coexisting with
+          the generic `fn Type<T>::method(...)` and OUTRANKING it for a matching
+          receiver (a `point<float64>` receiver binds `fn point<float64>::magnitude`;
+          every other instantiation falls to the generic `fn point<T>::magnitude`).
+          Dispatch is free: the specialization registers as an ordinary CONCRETE
+          overload of the qualified name `point::magnitude` (empty type_params), and
+          the shipped concrete-beats-generic overload ranking picks it — no new
+          dispatch machinery. The work was CLASSIFICATION: a pre-`::` `<...>` can
+          DECLARE type params (`<T>`, generic method) or SUPPLY concrete args
+          (`<float64>`, specialization), and since primitive type names are plain
+          identifiers this cannot be decided at parse time. The parser holds the
+          undecorated pre-`::` list verbatim (a new `Func.struct_type_args`) and
+          codegen classifies it against the registered type environment (a new
+          `normalize_struct_method_args` pass): all fresh type-param names → a
+          generic method (struct params prepend the method's own into one template);
+          all concrete types → a specialization (bind the struct's param names to the
+          concrete args, substitute through the signature, register as a concrete
+          overload). USER RULING (option B) — because classification runs at codegen,
+          ANY concrete type specializes: builtins, USER STRUCTS, and structured
+          `point<int32>` / `int32*` alike, not just primitives. A DECORATED pre-`::`
+          list (`<T: a|b>`, `<T extends S>`, `<T = D>`) is unambiguously a parameter
+          declaration → generic method, still merged at parse time (unchanged). A
+          LONE specialization (no generic base of the same name) is legal — just a
+          concrete overload
+      - [ ] partial specialization — a MIX of concrete and type-parameter struct
+            args (`fn pair<int32, U>::m`) is today REJECTED at classification;
+            allowing it (bind the concrete positions, leave `U` a free method type
+            param) is future work
     - [ ] bare-`point` receiver sugar — inside `fn point<T>::method(...)` a
           bare `point` (no type args) means `point<T>`, the qualifier struct
           applied to its own type params. Those struct params are the leading
