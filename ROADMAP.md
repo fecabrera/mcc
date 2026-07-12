@@ -1623,8 +1623,9 @@ already do).
         check is that the qualifier is a declared struct (an enum, alias,
         builtin, or undeclared qualifier is the error), the `self`-conventions
         becoming load-bearing only when the call sugar below lands. Parser:
-        `fn Type::method` is claimed in definition position before type-params
-        (deliberately excluding generic-struct methods `fn list<T>::m`, below);
+        `fn Type::method` is claimed in definition position (this slice parsed
+        it before type-params; generic-struct methods `fn Type<T>::m` followed
+        as the next slice below, since shipped, which reordered the parse);
         in expression position `Type::member(` is claimed as a qualified call
         (the same shape-claim as the `ok(` / `error(` builtins), while
         `Enum::Member` not followed by `(` stays enum member access, no
@@ -1632,6 +1633,30 @@ already do).
         with the separate
         [namespaced exported symbols](#tooling-and-c-interop) item; the shipped
         `@"point::method"` symbol suits the source-merged / JIT model
+  - [x] generic-struct methods — `fn Type<T>::method(...)`, a method on a
+        generic struct. The struct's type params (written `<T>` before the
+        `::`) are in scope in the method signature and body; a method may also
+        declare its own type params after `::method`
+        (`fn box<T>::map<U>(const self: box<T>, ...) -> box<U>`), the two lists
+        merging into one uniform generic template — a method type param
+        shadowing a struct type param (same name in both lists) is a declare-time
+        error. The receiver names its type args explicitly
+        (`mut self: point<T>`); there is deliberately no
+        bare-`point`-means-`point<T>` sugar (a bare `self: point` keeps the
+        existing missing-type-argument error), and qualified calls infer the
+        type args from the receiver and value args (`point::magnitude(p)` with
+        `p: point<float64>`), no explicit type args at the call. The qualified
+        name stays a single string registered as an ordinary generic template,
+        so monomorphization, argument-driven inference, overloading, `@private`,
+        and `@override` all ride the existing generic machinery — codegen needed
+        no change; the only edits were a parser reorder (the struct's type-param
+        list before `::`, the method's own after) and an `interface.py` fix so a
+        method whose signature never names its struct still pulls it into the
+        `.mci` stub
+    - [ ] generic-method call/receiver refinements deferred from the slice
+          above: bare-`point` receiver sugar (a bare `point` inside a
+          `point<T>::` method meaning `point<T>`), and explicit type args at a
+          `::` call (`point<float64>::method(...)`, which does not parse today)
   - [ ] receiver kind — the shipped foundation already lets the receiver be any
         ordinary `const` / `mut` / by-value parameter with no enforced `self`
         convention; this item makes the three receiver flavors a formal, checked
