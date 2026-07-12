@@ -225,4 +225,5 @@ fn main() -> int32 {
 // alias qualifier spells; method_partial_specialization.mc for the partial
 // form a generic alias substitutes into; type_aliases.mc / generic_alias.mc
 // for alias transparency itself; memory/slices.mc for the `as slice<T>`
-// borrow feeding slice::first.
+// borrow feeding slice::first; systems/char_methods.mc for the stdlib
+// module (std/char) built on the builtin-qualifier form shown here.

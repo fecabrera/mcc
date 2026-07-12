@@ -37,6 +37,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`std/char` — character classification and case conversion** — a new
+  stdlib module (`import "std/char";`) registering the ctype family as
+  methods on the builtin `char` type: `char::is_alpha`, `is_alnum`,
+  `is_digit`, `is_hex`, `is_space`, `is_upper`, `is_lower` (predicates,
+  `-> bool`) and `char::upper` / `char::lower` (conversions; a character
+  with no counterpart in the target case is returned unchanged). All are
+  `@inline` wrappers over `libc/ctype`, and the module is the standard
+  library's first use of the builtin-qualifier method form. See
+  `examples/systems/char_methods.mc`.
 - **Methods on type aliases and builtin types — `fn Alias::method(...)`,
   `fn int32::method(...)`** — methods register to a TYPE, and a `type` alias
   is just an alias: declaring `fn pointf::magnitude` with

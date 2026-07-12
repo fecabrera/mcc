@@ -1122,7 +1122,16 @@ rules:
   method's signature instead` (the signature alone already drives dispatch:
   a concrete receiver type outranks a generic pattern).
 
-See [examples/types/method_alias.mc](../examples/types/method_alias.mc).
+The standard library uses the builtin-qualifier form:
+[lib/std/char.mc](../lib/std/char.mc) (`import "std/char";`) registers the
+ctype classification and case-conversion methods on `char` —
+`char::is_alpha`, `is_alnum`, `is_digit`, `is_hex`, `is_space`, `is_upper`,
+`is_lower`, and `char::upper` / `char::lower` (non-letters unchanged).
+
+See [examples/types/method_alias.mc](../examples/types/method_alias.mc) for
+the feature and
+[examples/systems/char_methods.mc](../examples/systems/char_methods.mc) for
+the `std/char` module.
 
 ### @noreturn functions
 

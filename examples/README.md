@@ -158,7 +158,8 @@ Pointers and the builtin container/view types built on them.
 
 Interfacing with the outside world: libc, the graded `@nonnull` promise on a
 foreign declaration, formatted I/O (raw printf and the stdlib's native
-`format` protocol), shipping compiled libraries, and inline assembly.
+`format` protocol), the std/char classification methods over libc's ctype,
+shipping compiled libraries, and inline assembly.
 
 | Example | Shows |
 |---------|-------|
@@ -168,6 +169,7 @@ foreign declaration, formatted I/O (raw printf and the stdlib's native
 | [byte_scan.mc](systems/byte_scan.mc) | pointer arithmetic, C's element-scaled semantics under the shipped operators: `p + n` / `p - n` (exactly `&p[n]`) and the compound `p += n`, `p - q` as the signed element distance, the `while (p < end)` ordering scan-loop idiom, and `uint8*` byte arithmetic in a memchr-style byte scanner |
 | [io.mc](systems/io.mc) | printf format specifiers, `puts`, `putchar`, string escapes |
 | [formatting.mc](systems/formatting.mc) | the stdlib `format` overload set: direct calls appending each value's rendering into a `string`, the modifier grammars (integer `[0][width][x|X|b|p]`, float `[[N].M]f`, string `[N][s][N]`, bool `"yes"`), per-element slice rendering (nesting recurses), the `<typename>` fallback, one user overload making a struct printable, and `println`'s `{}` placeholders with their positional `{n}` sugar (duplicating, reordering, `{0:x}` colon modifiers, the `{:N}` width escape) and f-string interpolation (`{expr}` holes, `{expr:modifier}`, the `{n=}` inspector) |
+| [char_methods.mc](systems/char_methods.mc) | the std/char module, methods on the builtin `char` wrapping libc's ctype: the seven `char::is_*` classification predicates, `char::upper` / `char::lower` (non-letters unchanged), case-insensitive comparison and hex-token validation built from them, a classifying scan over a borrowed char slice, and in-place shouting through slice writes; the LIBRARY side of the builtin-qualifier feature [types/method_alias.mc](types/method_alias.mc) demonstrates |
 | [interfaces.mc](systems/interfaces.mc) | bodyless `fn` prototypes (the mcc-convention counterpart to `@extern`) and the `--emit-interface` / `.mci` flow for shipping a compiled library: `mut`/`const`-struct exports, what ships as a prototype vs in full, the compile-then-link consumer side |
 | [inline_asm.mc](systems/inline_asm.mc) | `@asm fn` and the `@asm(...)` expression, `$out`/`$N` operands and `:w` register modifiers, gated by `@if` on `TARGET_ARCH` |
 
