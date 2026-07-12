@@ -1431,21 +1431,49 @@ already do).
         `format(mut str: string, value: int32, const modifier: string)`
         outranks the stdlib's closed-group template), which scopes
         the annotation to the one remaining case: replacing a
-        same-pattern member of the set, e.g. the stdlib's concrete
-        bool formatter, or its unbounded `<typename>` fallback
-        replaced by the user's own unbounded template. Marking an
-        overload `@override` suppresses the declare-time
-        duplicate-pattern collision; the annotated definition
-        replaces the unannotated one regardless of import order, and
-        the replaced body is never emitted. Defaults settled: an
+        same-pattern member of the set — the stdlib's concrete bool
+        formatter (same `params_key`), or its unbounded `<typename>`
+        fallback replaced by the user's own unbounded template (same
+        template base). Both targets ship together in one change, not
+        concrete-first. Marking an overload `@override` suppresses
+        the declare-time duplicate-pattern collision; the annotated
+        definition replaces the unannotated one regardless of import
+        order, and the replaced body is never emitted. Settled: an
         `@override` whose pattern matches no existing overload is a
         declare-time error (typo protection, the C++
-        override-specifier rationale), and two `@override`s of one
-        pattern collide like any duplicate. Taxonomy: an `@X`
-        value-supplier promise, "this definition replaces an existing
-        one", the `@deprecated`/`@removed` family. The driving use
-        case is the same protocol story: a programmer setting their
-        own formatters for stdlib-covered types
+        override-specifier rationale); two `@override`s of one
+        pattern are a hard compile error like any duplicate; and the
+        target must be cross-module — an `@override` of a same-pattern
+        member declared in its own file is a declare-time error
+        (overriding your own definition is pointless; the use case is
+        replacing another module's member). The original must be
+        source-visible in this compilation: replacement reuses the
+        original's mangled symbol and emits only the winner's body,
+        so a separately-compiled original (a future ABI-pinned `.mci`
+        object whose symbol is already defined in that other object)
+        cannot be overridden without a link collision — fine today
+        since the stdlib is source-merged into the `Program`,
+        documented rather than left to surface at link time.
+        Combinability: `@override @removed` rejected (a contradiction
+        — cannot replace-with and remove at once), `@override` on a
+        prototype rejected (no body to emit), `@override @deprecated`
+        allowed, `@override @private` allowed (overrides yet keeps
+        the result file-local); a `@private` original in another
+        module is invisible, so an override never targets it and
+        simply falls through to ordinary resolution. Implementation
+        shape: because replacement is order-independent and a
+        no-match `@override` can only be judged once the whole set is
+        merged, the collision is reconciled not inline in the
+        single-pass registration loop but in a post-merge sweep
+        (beside the group-overlap / bound-overlap checks) that picks
+        the winner per symbol, marks the loser for skip-emission (the
+        emission pass iterates the raw AST, and both `Func`s share one
+        symbol slot), and errors on any override with no matching
+        target or a same-file target. Taxonomy: an `@X` value-supplier
+        promise, "this definition replaces an existing one", the
+        `@deprecated`/`@removed` family. The driving use case is the
+        same protocol story: a programmer setting their own formatters
+        for stdlib-covered types
   - [ ] indexing and slicing protocol — the family's third member: `c[i]`
         and `c[a:b]` on a user-defined struct desugar to overloadable
         free-function calls resolved through ordinary whole-program
