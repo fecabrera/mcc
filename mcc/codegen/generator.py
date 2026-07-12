@@ -23,6 +23,7 @@ from dataclasses import replace as dataclasses_replace
 from llvmlite import ir
 
 from mcc.errors import WARNING_CLASSES, LangError, Note
+from mcc.parser import type_ref_names
 from mcc.nodes import (
     AlignOf,
     ArrayLit,
@@ -4153,6 +4154,130 @@ class CodeGen:
             ref, args=[self.subst_struct_args(a, binding) for a in ref.args]
         )
 
+    def check_struct_arg_decorations(
+        self, func: Func, args: list[TypeRef], fresh: list[bool]
+    ):
+        """Validate the decorations on a method's pre-``::`` struct arguments.
+
+        The parser captures a ``:`` type group, an ``extends`` bound, or a
+        ``=`` default written on a bare pre-``::`` name, but cannot judge them:
+        which names are fresh type parameters is only known here, against the
+        registered type environment. A decoration is legal only on a fresh
+        name, and the decorated list must satisfy the same declaration shape
+        :meth:`Parser.parse_type_params` enforces at parse time -- trailing
+        defaults, defaults referencing only earlier parameters (and, for a
+        grouped parameter, no parameter at all), and group members and bound
+        targets referencing no parameter -- reported with the same messages.
+
+        Args:
+            func: The method whose ``struct_arg_*`` decorations to validate.
+            args: Its ``struct_type_args`` list.
+            fresh: Per-argument classification from :meth:`struct_arg_is_param`.
+
+        Raises:
+            LangError: On a decorated concrete argument or any failed
+                declaration-shape check.
+        """
+        groups = func.struct_arg_groups
+        bounds = func.struct_arg_bounds
+        defaults = func.struct_arg_defaults
+        if not (groups or bounds or defaults):
+            return
+        decorated = set(groups) | set(bounds) | set(defaults)
+        fresh_names = [a.name for a, f in zip(args, fresh) if f]
+        for a, f in zip(args, fresh):
+            # The parser only decorates a bare name, so a concrete argument
+            # whose bare spelling carries a decoration is the decorated entry
+            # itself (`fn pair<int32: int8 | int16, U>::m`).
+            if not f and not (a.args or a.stars) and a.name in decorated:
+                raise LangError(
+                    f"struct type argument {a.name!r} names a concrete type; "
+                    "a type group, 'extends' bound, or default may only "
+                    "decorate a fresh type parameter",
+                    func.line,
+                )
+        # The declaration-shape checks parse_type_params runs, over the fresh
+        # names only (concrete arguments are not parameters: a default may
+        # precede one, and members may spell one).
+        last_default = None
+        for name in fresh_names:
+            if name in defaults:
+                last_default = name
+            elif last_default is not None:
+                raise LangError(
+                    f"type parameter {name!r} without a default cannot "
+                    "follow a defaulted one",
+                    func.line,
+                )
+        for i, pname in enumerate(fresh_names):
+            ref = defaults.get(pname)
+            if ref is None:
+                continue
+            bad = type_ref_names(ref) & set(fresh_names[i:])
+            if bad:
+                raise LangError(
+                    f"default for type parameter {pname!r} references "
+                    f"{min(bad)!r}, which is not declared before it",
+                    func.line,
+                )
+        for pname, members in groups.items():
+            for member in members:
+                bad = type_ref_names(member) & set(fresh_names)
+                if bad:
+                    raise LangError(
+                        f"type group member {member} for parameter "
+                        f"{pname!r} references type parameter "
+                        f"{min(bad)!r}; group members must be concrete "
+                        "types",
+                        func.line,
+                    )
+            ref = defaults.get(pname)
+            if ref is not None:
+                bad = type_ref_names(ref) & set(fresh_names)
+                if bad:
+                    raise LangError(
+                        f"default for type parameter {pname!r} references "
+                        f"{min(bad)!r}; a grouped parameter's default "
+                        "must name a group member",
+                        func.line,
+                    )
+        for pname, ref in bounds.items():
+            bad = type_ref_names(ref) & set(fresh_names)
+            if bad:
+                raise LangError(
+                    f"bound {ref} for type parameter {pname!r} references "
+                    f"type parameter {min(bad)!r}; a bound must be a "
+                    "concrete struct",
+                    func.line,
+                )
+
+    def merge_struct_arg_decorations(self, func: Func):
+        """Fold validated pre-``::`` decorations into the method's own maps.
+
+        Struct-parameter decorations merge before the method's own, mirroring
+        the ``{**struct, **method}`` order of the old parse-time merge (the
+        shadow checks already guarantee the key sets are disjoint). After
+        this, a bounded/grouped/defaulted struct parameter is
+        indistinguishable from one declared on the method itself -- ranking
+        (a group or bound lifts the template to the bounded tier), overlap
+        checks, and ``.mci`` dependency scans all see it in the usual fields.
+
+        Args:
+            func: The method whose ``struct_arg_*`` maps to merge.
+        """
+        func.type_param_defaults = {
+            **func.struct_arg_defaults,
+            **func.type_param_defaults,
+        }
+        func.type_param_groups = {
+            **func.struct_arg_groups,
+            **func.type_param_groups,
+        }
+        func.type_param_bounds = {
+            **func.struct_arg_bounds,
+            **func.type_param_bounds,
+        }
+
     def normalize_struct_method_args(self):
         """Classify each method's pre-``::`` struct type arguments.
 
@@ -4170,15 +4295,40 @@ class CodeGen:
             return resolve with the struct's parameter names bound to those
             concrete arguments. It outranks the generic template for a matching
             receiver through the existing concrete-beats-generic ranking.
-          * a MIX of the two -> a partial specialization, not supported.
+          * a MIX of the two -> a PARTIAL specialization
+            (``fn pair<int32, U>::m``): the concrete positions bind their
+            struct parameter names exactly like a full specialization, and the
+            fresh names prepend the method's own type parameters exactly like
+            a generic method -- yielding a template that matches only
+            receivers whose concrete positions agree (``pair<int32, X>``).
+            The existing rank tiers order the family with no new dispatch
+            code: a full specialization (concrete, tier 2) beats a partial,
+            and a partial's concrete positions score higher pattern
+            specificity than the fully generic template's bare names, so it
+            wins within tier 0. A *bounded* fresh name (a ``:`` group or
+            ``extends`` bound rides in from the parser) lifts the partial to
+            tier 1 -- and, symmetrically, a bounded fully-generic method
+            outranks an UNbounded partial: a written commitment to a type set
+            beats the open pattern, per the tier rule. Two rank-tied partials
+            stay the standard ambiguity error.
+
+        Decorations captured by the parser (``struct_arg_groups`` /
+        ``struct_arg_bounds`` / ``struct_arg_defaults``) are validated here --
+        only a fresh name may carry one -- with the same declaration-shape
+        checks (trailing defaults, no parameter references in members, bounds,
+        or defaults) and messages ``parse_type_params`` applies at parse time,
+        then merge into the method's own ``type_param_*`` maps.
 
         Runs before every function-registration loop, so the rest of codegen
         sees only ordinary generic or concrete functions.
 
         Raises:
-            LangError: On a partial specialization, a specialization whose
-                argument count does not match the struct's arity, or a struct
-                parameter name shadowed by a method's own type parameter.
+            LangError: On a specialization whose argument count does not match
+                the struct's arity, a struct parameter name shadowed by a
+                method's own type parameter, a partial's fresh name shadowing
+                a concretely-bound struct parameter, a decoration on a
+                concrete argument, or a decoration failing the declaration
+                checks above.
         """
         for func in self.program.functions:
             args = func.struct_type_args
@@ -4190,11 +4340,13 @@ class CodeGen:
             # gen_program validated the qualifier names a declared struct
             # before this pass, so `decl` is never None here.
             fresh = [self.struct_arg_is_param(a, func.line) for a in args]
+            self.check_struct_arg_decorations(func, args, fresh)
             if all(fresh):
                 # A generic method: the struct arguments are all parameter
                 # names. Prepend them to the method's own parameters (order
                 # matters -- it fixes the instance mangling) after the same
-                # shadow check the decorated path runs at parse time.
+                # shadow check the merged parse-time path ran, and merge any
+                # decorations struct-parameters-first, as that merge did.
                 struct_names = [a.name for a in args]
                 shadowed = set(struct_names) & set(func.type_params)
                 if shadowed:
@@ -4204,6 +4356,7 @@ class CodeGen:
                         func.line,
                     )
                 func.type_params = struct_names + func.type_params
+                self.merge_struct_arg_decorations(func)
             elif not any(fresh):
                 # A specialization: bind the struct's declared parameter names
                 # to the concrete arguments and resolve the signature against
@@ -4227,13 +4380,59 @@ class CodeGen:
                 ]
                 func.ret_type = self.subst_struct_args(func.ret_type, binding)
             else:
-                raise LangError(
-                    "partial specialization is not supported: all of a "
-                    "method's struct type arguments must be concrete types, "
-                    "or all must be type parameters",
-                    func.line,
-                )
+                # A PARTIAL specialization: both of the above at once. The
+                # concrete positions bind their struct parameter names (a full
+                # specialization, restricted to those positions) and the fresh
+                # names stay free, prepended to the method's own parameters (a
+                # generic method, restricted to the rest) -- one template that
+                # matches only receivers agreeing on the concrete positions.
+                if len(args) != len(decl.type_params):
+                    raise LangError(
+                        f"specialization of struct {qualifier!r} expects "
+                        f"{len(decl.type_params)} type argument(s), got "
+                        f"{len(args)}",
+                        func.line,
+                    )
+                fresh_names = [a.name for a, f in zip(args, fresh) if f]
+                shadowed = set(fresh_names) & set(func.type_params)
+                if shadowed:
+                    raise LangError(
+                        f"method type parameter {min(shadowed)!r} shadows a type "
+                        f"parameter of struct {qualifier!r}",
+                        func.line,
+                    )
+                # A fresh name may not reuse a struct parameter name that a
+                # concrete position binds: in `struct pair<A, B>` with
+                # `fn pair<int32, A>::m`, the signature's `A` must substitute
+                # to int32 AND stand for the free parameter -- unsatisfiable,
+                # so it is rejected like any other shadow.
+                bound_names = {
+                    pname for pname, f in zip(decl.type_params, fresh) if not f
+                }
+                captured = set(fresh_names) & bound_names
+                if captured:
+                    raise LangError(
+                        f"type parameter {min(captured)!r} shadows a type "
+                        f"parameter of struct {qualifier!r} bound to a "
+                        "concrete type by the partial specialization",
+                        func.line,
+                    )
+                binding = {
+                    pname: arg
+                    for pname, arg, f in zip(decl.type_params, args, fresh)
+                    if not f and pname not in func.type_params
+                }
+                func.params = [
+                    (pname, self.subst_struct_args(ptype, binding))
+                    for pname, ptype in func.params
+                ]
+                func.ret_type = self.subst_struct_args(func.ret_type, binding)
+                func.type_params = fresh_names + func.type_params
+                self.merge_struct_arg_decorations(func)
             func.struct_type_args = None
+            func.struct_arg_groups = {}
+            func.struct_arg_bounds = {}
+            func.struct_arg_defaults = {}
 
     def gen_program(self) -> ir.Module:
         """Emit the whole module from the merged program.
@@ -4445,9 +4644,11 @@ class CodeGen:
         # (before the visibility scan) makes replacement order-independent.
         #
         # A method's pre-`::` struct type arguments are classified first, so
-        # the loops below see only ordinary generic methods (fresh names) and
-        # concrete specializations (concrete types) -- never the raw,
-        # unclassified `struct_type_args` form the parser produced.
+        # the loops below see only ordinary generic methods (fresh names),
+        # concrete specializations (concrete types), and partial
+        # specializations (a mix, normalized to a generic template with the
+        # concrete positions bound) -- never the raw, unclassified
+        # `struct_type_args` form the parser produced.
         self.normalize_struct_method_args()
         self.reconcile_overrides()
         plain_decls: dict[str, list[Func]] = {}

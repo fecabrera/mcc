@@ -13,14 +13,13 @@ import "libc/math";
 //   - A `point<float64>` receiver runs the specialization; a `point<int64>`
 //     (or any other) receiver falls through to the generic. Concrete outranks
 //     generic by that same existing ranking.
-//   - The pre-`::` arguments must be ALL concrete types or ALL type-parameter
-//     names, never a mix. So ANY concrete type may specialize: a builtin
-//     (`point<float64>`), a user struct (`holder<widget>` below), or a
-//     structured type (`box<int32>`). A partial specialization that mixes them,
-//     like `fn pair<int32, U>::m`, is rejected at compile time.
+//   - This file keeps the pre-`::` arguments ALL concrete, and ANY concrete
+//     type may specialize: a builtin (`point<float64>`), a user struct
+//     (`holder<widget>` below), or a structured type (`box<int32>`). Mixing
+//     concrete types with fresh type parameters, like `fn pair<int32, U>::m`,
+//     is a PARTIAL specialization: see method_partial_specialization.mc.
 //   - A generic base is not required. A lone `fn box<int32>::only(...)` with no
 //     `fn box<T>::only(...)` beside it is simply a concrete namespaced overload.
-//   - Partial specialization is future work.
 //
 // Prerequisites: generic_methods.mc for methods on a generic struct (the
 // `fn point<T>::name` form and monomorphization), and functions/overloading.mc
@@ -92,7 +91,10 @@ fn main() -> int32 {
     return 0;
 }
 
-// See also: generic_methods.mc for the generic-method form this specializes;
-// methods.mc for the non-generic method foundation; functions/overloading.mc
-// for the concrete-beats-generic ranking that selects the specialization;
-// structs.mc / generics.mc for generic structs and inference.
+// See also: method_partial_specialization.mc, which builds on this file to
+// mix concrete types and fresh type parameters before the `::`
+// (`fn pair<int32, U>::m`); generic_methods.mc for the generic-method form
+// this specializes; methods.mc for the non-generic method foundation;
+// functions/overloading.mc for the concrete-beats-generic ranking that
+// selects the specialization; structs.mc / generics.mc for generic structs
+// and inference.

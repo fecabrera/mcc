@@ -454,18 +454,29 @@ class Func:
             time), a parameter cannot carry both a bound and a group, and a
             bounded parameter's default must satisfy the bound (checked at
             declaration).
-        struct_type_args: For a method ``fn Type<...>::m`` whose pre-``::``
-            ``<...>`` was UNDECORATED (no type group, ``extends`` bound, or
-            ``=`` default), the raw type-reference list held verbatim for
-            codegen to classify -- every argument a fresh type-parameter name
-            is a generic method (the struct's parameters prepend the method's
-            own into one template), every argument a concrete type is a
-            specialization (a concrete overload of ``Type::m`` outranking the
-            generic for a matching receiver), and a mix is a partial
-            specialization (unsupported). ``None`` for a non-method, or for a
-            method whose struct parameters were decorated (unambiguously
-            generic, already merged into ``type_params`` at parse time).
-            Cleared to ``None`` once codegen classifies it.
+        struct_type_args: For a method ``fn Type<...>::m``, the raw pre-``::``
+            type-reference list held verbatim for codegen to classify -- every
+            argument a fresh type-parameter name is a generic method (the
+            struct's parameters prepend the method's own into one template),
+            every argument a concrete type is a specialization (a concrete
+            overload of ``Type::m`` outranking the generic for a matching
+            receiver), and a mix is a partial specialization (a template
+            matching only receivers whose concrete positions agree). ``None``
+            for a non-method; cleared to ``None`` once codegen classifies it.
+        struct_arg_groups: ``{argument name: [TypeRef, ...]}`` for pre-``::``
+            arguments decorated with a closed type group
+            (``fn pair<int32, U: int8 | int16>::m``). Decorations may only
+            sit on a bare name; whether that name is a fresh type parameter
+            (required -- decorating a concrete type is an error) is decided by
+            codegen alongside the ``struct_type_args`` classification, as are
+            the declaration-shape checks ``parse_type_params`` runs at parse
+            time. Cleared with ``struct_type_args``.
+        struct_arg_bounds: ``{argument name: TypeRef}`` for pre-``::``
+            arguments decorated with an ``extends`` bound; same rules as
+            ``struct_arg_groups``.
+        struct_arg_defaults: ``{argument name: TypeRef}`` for pre-``::``
+            arguments decorated with a ``=`` default; same rules as
+            ``struct_arg_groups``.
     """
 
     name: str
@@ -496,6 +507,9 @@ class Func:
     type_param_groups: dict[str, list[TypeRef]] = field(default_factory=dict)
     type_param_bounds: dict[str, TypeRef] = field(default_factory=dict)
     struct_type_args: list[TypeRef] | None = None
+    struct_arg_groups: dict[str, list[TypeRef]] = field(default_factory=dict)
+    struct_arg_bounds: dict[str, TypeRef] = field(default_factory=dict)
+    struct_arg_defaults: dict[str, TypeRef] = field(default_factory=dict)
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 

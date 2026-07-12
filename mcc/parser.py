@@ -209,6 +209,11 @@ class Parser:
         # trailing `{` would otherwise be ambiguous with the loop body; any
         # bracket/paren-delimited sub-expression turns it back on.
         self.struct_lit_ok = True
+        # Undo log for `>>` splits (expect_close_angle rewrites the token
+        # list in place). Non-None only while try_struct_method_args
+        # speculates: restoring the cursor alone would otherwise leave a
+        # nested list's `>>` half-consumed for the re-parse.
+        self.angle_splits: list[tuple[int, Token]] | None = None
 
     @contextmanager
     def _struct_literals(self, ok: bool):
@@ -961,56 +966,117 @@ class Parser:
             LangError: When the current token is neither ``>`` nor ``>>``.
         """
         if self.cur.kind == ">>":
+            if self.angle_splits is not None:
+                self.angle_splits.append((self.pos, self.cur))
             self.tokens[self.pos] = Token(">", ">", self.cur.line)
             return
         self.expect(">")
 
-    def try_struct_method_args(self) -> list[TypeRef] | None:
+    def try_struct_method_args(
+        self,
+    ) -> (
+        tuple[
+            list[TypeRef],
+            dict[str, list[TypeRef]],
+            dict[str, TypeRef],
+            dict[str, TypeRef],
+        ]
+        | None
+    ):
         """Speculatively read a method's pre-``::`` ``<...>`` as type-REFERENCES.
 
         A method namespaced to a generic struct writes the struct's type
-        arguments before the ``::`` -- ``fn point<T>::m`` (a generic method) or
-        ``fn point<float64>::m`` (a specialization for one instantiation).
-        Whether an argument is a fresh type-parameter *name* or a concrete
-        *type* is a question for codegen (which resolves names against the type
+        arguments before the ``::`` -- ``fn point<T>::m`` (a generic method),
+        ``fn point<float64>::m`` (a specialization for one instantiation), or
+        ``fn pair<int32, U>::m`` (a partial specialization). Whether an
+        argument is a fresh type-parameter *name* or a concrete *type* is a
+        question for codegen (which resolves names against the type
         environment, so any concrete type -- a builtin, a user struct, or a
         structured ``point<int32>`` / ``int32*`` -- may specialize a method),
-        so an UNDECORATED list is captured verbatim here as ``TypeRef``s.
+        so the list is captured verbatim here as ``TypeRef``s.
 
-        A DECORATED list (a ``:`` type group, an ``extends`` bound, or a ``=``
-        default) is unambiguously a parameter *declaration* and stays generic:
-        this speculation restores the cursor and returns ``None`` for it, and
-        for a non-method ``<...>`` (no ``::`` after the list), leaving
-        :meth:`parse_type_params` to read the declaration list as before.
+        A DECORATION on a bare name -- a ``:`` type group, an ``extends``
+        bound, or a ``=`` default, as in ``fn pair<int32, U: int8 | int16>::m``
+        -- is captured alongside the argument; codegen requires the decorated
+        name to be a fresh type parameter and runs the declaration-shape checks
+        :meth:`parse_type_params` performs at parse time (it cannot run here:
+        which bare names are parameters is unknown until the type environment
+        exists). A decoration on a structured type, a parameter carrying both
+        a group and a bound, or any other malformed list restores the cursor
+        and returns ``None`` -- as does a non-method ``<...>`` (no ``::`` after
+        the list) -- leaving :meth:`parse_type_params` to read the declaration
+        list (and report its errors) as before.
 
         Returns:
-            The struct type-argument references, with the cursor left on the
-            ``::``, or ``None`` with the cursor restored.
+            The struct type-argument references plus their ``{name: ...}``
+            group, bound, and default decorations, with the cursor left on the
+            ``::``; or ``None`` with the cursor restored.
         """
         if self.cur.kind != "<":
             return None
         saved = self.pos
+        splits = self.angle_splits = []
+
+        def backtrack() -> None:
+            # Undo the in-place `>>` splits this speculation performed (a
+            # nested `slice<char>>` would otherwise re-parse one `>` short),
+            # then restore the cursor.
+            for pos, tok in splits:
+                self.tokens[pos] = tok
+            self.pos = saved
+            return None
+
         self.advance()  # '<'
         args: list[TypeRef] = []
+        groups: dict[str, list[TypeRef]] = {}
+        bounds: dict[str, TypeRef] = {}
+        defaults: dict[str, TypeRef] = {}
         try:
             while True:
-                args.append(self.parse_type_ref())
+                ref = self.parse_type_ref()
+                args.append(ref)
+                # Only a bare name (a would-be fresh type parameter) may carry
+                # a decoration; a marker after anything structured falls
+                # through to the backtrack below.
+                bare = not (
+                    ref.args
+                    or ref.stars
+                    or ref.dims
+                    or ref.const
+                    or ref.nonnull
+                    or ref.mut
+                    or ref.params is not None
+                )
+                if bare and self.cur.kind == ":":
+                    self.advance()
+                    members = [self.parse_type_ref()]
+                    while self.accept("|"):
+                        members.append(self.parse_type_ref())
+                    groups[ref.name] = members
+                if bare and self.cur.kind == "extends":
+                    if ref.name in groups:
+                        # Both a group and a bound: parse_type_params owns
+                        # that error, with its exact message.
+                        return backtrack()
+                    self.advance()
+                    bounds[ref.name] = self.parse_type_ref()
+                if bare and self.cur.kind == "=":
+                    self.advance()
+                    defaults[ref.name] = self.parse_type_ref()
                 if self.cur.kind == ">":
                     self.advance()
                     break
                 if not self.accept(","):
-                    # A decoration marker (`:`, `extends`, or `=`) -- or any
-                    # other token -- means this is not an undecorated argument
-                    # list: hand it back to parse_type_params.
-                    self.pos = saved
-                    return None
+                    # Any unexpected token means this is not a struct
+                    # type-argument list: hand it back to parse_type_params.
+                    return backtrack()
         except LangError:
-            self.pos = saved
-            return None
+            return backtrack()
+        finally:
+            self.angle_splits = None
         if self.cur.kind != "::":
-            self.pos = saved
-            return None
-        return args
+            return backtrack()
+        return args, groups, bounds, defaults
 
     def parse_type_params(
         self,
@@ -1458,15 +1524,28 @@ class Parser:
         # -- so the whole existing generic machinery treats a method's struct
         # and method parameters identically. A method parameter may not shadow
         # one of the struct's, so a name that appears in both lists is an error.
-        # An UNDECORATED pre-`::` `<...>` (`fn point<T>::m`, `fn point<float64>::m`)
-        # is held verbatim as `struct_type_args` for codegen to classify: all
-        # fresh names is a generic method, all concrete types a specialization,
-        # a mix a partial specialization (rejected). A method's OWN type
-        # parameters (after `::method`) still parse as an ordinary declaration
-        # list; the struct-vs-method shadow check waits until codegen knows
-        # which of the struct arguments are parameter names.
-        struct_type_args = self.try_struct_method_args()
-        if struct_type_args is not None:
+        # A pre-`::` `<...>` (`fn point<T>::m`, `fn point<float64>::m`,
+        # `fn pair<int32, U>::m`) is held verbatim as `struct_type_args` for
+        # codegen to classify: all fresh names is a generic method, all
+        # concrete types a specialization, and a mix a PARTIAL specialization
+        # (the concrete positions bind, the fresh names stay type parameters).
+        # A decorated bare name (`fn pair<int32, U: int8 | int16>::m`) rides
+        # along with its group/bound/default -- codegen checks the decorated
+        # name is fresh. A method's OWN type parameters (after `::method`)
+        # still parse as an ordinary declaration list; the struct-vs-method
+        # shadow check waits until codegen knows which of the struct arguments
+        # are parameter names.
+        struct_args = self.try_struct_method_args()
+        struct_arg_groups: dict[str, list[TypeRef]] = {}
+        struct_arg_bounds: dict[str, TypeRef] = {}
+        struct_arg_defaults: dict[str, TypeRef] = {}
+        if struct_args is not None:
+            (
+                struct_type_args,
+                struct_arg_groups,
+                struct_arg_bounds,
+                struct_arg_defaults,
+            ) = struct_args
             self.expect("::")
             method = self.expect("IDENT").text
             name = f"{name}::{method}"
@@ -1477,14 +1556,15 @@ class Parser:
                 type_param_bounds,
             ) = self.parse_type_params()
         else:
+            struct_type_args = None
             type_params, type_param_defaults, type_param_groups, type_param_bounds = (
                 self.parse_type_params()
             )
             if self.cur.kind == "::":
-                # A DECORATED struct parameter list (`<T: a|b>`, `<T extends S>`,
-                # or `<T = D>`) never reaches the specialization path above --
-                # it is unambiguously generic -- so merge it with the method's
-                # own parameters into one uniform template, exactly as before.
+                # A method with no pre-`::` list at all (`fn point::m` -- the
+                # non-generic-struct form: the empty parse_type_params above
+                # consumed nothing). Read the method name and merge its own
+                # parameter list, exactly as before.
                 self.advance()
                 method = self.expect("IDENT").text
                 name = f"{name}::{method}"
@@ -1727,6 +1807,9 @@ class Parser:
                 type_param_groups=type_param_groups,
                 type_param_bounds=type_param_bounds,
                 struct_type_args=struct_type_args,
+                struct_arg_groups=struct_arg_groups,
+                struct_arg_bounds=struct_arg_bounds,
+                struct_arg_defaults=struct_arg_defaults,
             )
         if self.cur.kind == ";":
             # A bodyless prototype: a concrete mcc function defined in another
@@ -1785,6 +1868,9 @@ class Parser:
                 type_param_groups=type_param_groups,
                 type_param_bounds=type_param_bounds,
                 struct_type_args=struct_type_args,
+                struct_arg_groups=struct_arg_groups,
+                struct_arg_bounds=struct_arg_bounds,
+                struct_arg_defaults=struct_arg_defaults,
             )
         return Func(
             name,
@@ -1811,6 +1897,9 @@ class Parser:
             type_param_groups=type_param_groups,
             type_param_bounds=type_param_bounds,
             struct_type_args=struct_type_args,
+            struct_arg_groups=struct_arg_groups,
+            struct_arg_bounds=struct_arg_bounds,
+            struct_arg_defaults=struct_arg_defaults,
         )
 
     def parse_asm(self):

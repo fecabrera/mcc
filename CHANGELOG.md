@@ -37,6 +37,26 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Partial specialization of generic-struct methods —
+  `fn Type<Concrete, U>::method(...)`** — a method's pre-`::` arguments may
+  now **mix** concrete types and fresh type parameters: the concrete
+  positions bind, the fresh names stay free, and the method becomes a
+  template matching only receivers that agree on the concrete positions
+  (`fn pair<int32, U>::m` matches every `pair<int32, X>`). Dispatch is the
+  **existing overload ranking** — full specialization (concrete tier) beats
+  a partial, whose concrete positions in turn out-score the fully generic
+  method's bare names on pattern specificity; two rank-tied partials stay
+  the standard ambiguity error (no C++-style partial ordering). A fresh
+  position may carry a **closed type group, `extends` bound, or default**
+  (`fn pair<int32, U: int8 | int16>::m`) exactly as in a declaration list —
+  note the tier rule: a bounded *generic* method outranks an *unbounded*
+  partial (a written commitment to a type set beats the open pattern), while
+  a bounded partial reclaims the win on specificity. Fresh names prepend the
+  method's own type parameters (`fn pair<int32, U>::pick<W>`), may not
+  shadow them, and may not reuse a struct parameter name that a concrete
+  position binds; decorating a concrete argument is rejected rather than
+  silently declaring a parameter named `int32`. Partials travel verbatim
+  through `.mci` interface stubs, bounds included.
 - **Method specialization — `fn Type<Concrete>::method(...)`** — a method may
   now provide a **concrete body for one instantiation** of a generic struct,
   coexisting with the generic method and **outranking** it for a matching
@@ -48,12 +68,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   concrete *type* is classified at codegen against the type environment, so
   **any** concrete type may specialize — a builtin, a user struct
   (`fn holder<widget>::m`), or a structured type (`box<int32>`, `int32*`). The
-  arguments must be **all-concrete or all-parameter**: a partial specialization
-  (`fn pair<int32, U>::m`) is rejected (`partial specialization is not
-  supported: ...`). A generic base is **not** required — a lone
+  arguments may be all-concrete (this specialization), all-parameter (a
+  generic method), or — per the entry above — a mix (a partial
+  specialization). A generic base is **not** required — a lone
   `fn box<int32>::only(...)` is just a concrete namespaced overload — and two
-  bodies for one instantiation collide like any duplicate overload. Partial
-  specialization remains future work.
+  bodies for one instantiation collide like any duplicate overload.
 - **Generic-struct methods — `fn Type<T>::method(...)`** — a method may now be
   namespaced to a *generic* struct, with the struct's type parameters written
   before the `::` (`fn point<T>::magnitude(self: point<T>) -> float64`). The

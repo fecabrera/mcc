@@ -951,23 +951,73 @@ fn point<float64>::magnitude(mut self: point<float64>) -> float64 {
 A `point<float64>` receiver runs the specialization; a `point<int64>` receiver
 falls to the generic. Its rules:
 
-- **All-concrete or all-parameter, never a mix.** Whether a pre-`::` argument
-  is a type-parameter *name* or a concrete *type* is decided by resolving it
+- **Concrete is decided by resolution.** Whether a pre-`::` argument is a
+  type-parameter *name* or a concrete *type* is decided by resolving it
   against the type environment, so any concrete type may specialize a method —
   a builtin (`point<float64>`), a user struct (`holder<widget>`), or a
-  structured type (`box<int32>`, `pair<int32*>`). A **partial** specialization
-  that mixes the two (`fn pair<int32, U>::m`) is rejected: `partial
-  specialization is not supported: all of a method's struct type arguments must
-  be concrete types, or all must be type parameters`.
+  structured type (`box<int32>`, `pair<int32*>`).
 - **A generic base is not required.** A lone `fn box<int32>::only(...)` with no
   generic `box<T>::only` is simply a concrete namespaced overload.
 - **Two bodies for one instantiation collide** — a duplicate specialization
   spells the same concrete parameter list and is rejected like any duplicate
   overload.
 
-Partial specialization (a mix of concrete and parameter arguments) is future
-work. See
+See
 [examples/types/method_specialization.mc](../examples/types/method_specialization.mc).
+
+##### Partial specialization
+
+A method may also **mix** concrete types and fresh type parameters before the
+`::` — a **partial specialization**: the concrete positions bind, the fresh
+names stay free, and the method becomes a template matching only receivers
+that agree on the concrete positions:
+
+```c
+struct pair<A, B> { a: A; b: B; }
+
+fn pair<T, U>::describe(self: pair<T, U>) -> int32 { return 0; }        // any pair
+fn pair<int32, U>::describe(self: pair<int32, U>) -> int32 { return 1; } // pair<int32, X>
+fn pair<int32, int8>::describe(self: pair<int32, int8>) -> int32 { return 2; }
+```
+
+A `pair<int32, int8>` receiver runs the full specialization, a
+`pair<int32, int64>` the partial, and anything else the generic. The ordering
+is the **existing overload ranking**, no special dispatch: a full
+specialization is a concrete overload (the top tier); a partial and the fully
+generic method share the open-template tier, where the partial's concrete
+positions score higher *pattern specificity* than bare parameter names. Two
+partials that tie on rank for one receiver (`pair<int32, U>` and
+`pair<T, int8>` for `pair<int32, int8>`) are the standard ambiguity error —
+there is no C++-style partial ordering between them. The rules:
+
+- **Fresh names are real type parameters.** They are inferred at the call,
+  prepend the method's own `<...>` list (`fn pair<int32, U>::pick<W>` works),
+  and may not shadow it. A fresh name may not reuse a struct parameter name
+  that a concrete position binds: in `struct pair<A, B>`,
+  `fn pair<int32, A>::m` is `type parameter 'A' shadows a type parameter of
+  struct 'pair' bound to a concrete type by the partial specialization`
+  (reusing the name of the position the parameter itself occupies —
+  `fn pair<int32, B>::m` — is fine).
+- **A fresh position may be bounded.** A closed [type group](#closed-type-groups)
+  (`fn pair<int32, U: int8 | int16>::m`), an [`extends`
+  bound](#bounds), or a [default](#type-parameter-defaults)
+  decorates a fresh name exactly as in an ordinary declaration list; a
+  decoration on a concrete type is rejected (`struct type argument 'int32'
+  names a concrete type; ...`). **Bounding interacts with the ranking**: a
+  group or bound lifts a template one tier, and the tier rule is
+  tier-over-specificity — so a *bounded generic* method
+  (`fn pair<K: int8 | int32, V>::m`) beats an *unbounded partial*
+  (`fn pair<int32, U>::m`), a written commitment to a type set beating the
+  open pattern. Bounding the partial too levels the tiers, and its concrete
+  positions win on specificity again.
+- **A mismatched receiver simply doesn't match.** A partial whose concrete
+  positions disagree with the receiver is filtered out like any non-viable
+  overload: the call falls to the generic method, or — with no generic to
+  fall to — reports the pattern the partial demands (`argument 1 of
+  'pair::m': expected pair<int32, int8>, got pair<int64, int8>`).
+
+See
+[examples/types/method_partial_specialization.mc](../examples/types/method_partial_specialization.mc).
 
 ### @noreturn functions
 
