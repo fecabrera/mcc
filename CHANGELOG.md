@@ -37,6 +37,22 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Generic-struct methods — `fn Type<T>::method(...)`** — a method may now be
+  namespaced to a *generic* struct, with the struct's type parameters written
+  before the `::` (`fn point<T>::magnitude(self: point<T>) -> float64`). The
+  existing generic machinery applies unchanged, so one instance is
+  monomorphized per element type and type arguments are inferred from the call
+  (`point::magnitude(p)` binds `T` from `p`). The receiver is **explicit**:
+  there is no `point`-means-`point<T>` sugar, so the receiver and every
+  parameter and return type must name their type arguments; a bare
+  `self: point` keeps the ordinary arity error. A method may also declare its
+  **own** type parameters after `::method`
+  (`fn box<T>::combine<U>(const self: box<T>, extra: U) -> U`); the struct's and
+  the method's parameters merge into one template, and a method type parameter
+  may not shadow one of the struct's (`method type parameter 'T' shadows a type
+  parameter of struct 'point'`). Explicit type arguments at a `::` call
+  (`point<float64>::magnitude(...)`), call sugar, and constructors remain
+  future work.
 - **Methods — `fn Type::method(...)` namespaced to a struct, called as
   `Type::method(args)`** — the foundational, explicit-call slice of the
   Methods/OOP work. A function may be namespaced to a declared struct by

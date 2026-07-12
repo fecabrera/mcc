@@ -207,6 +207,13 @@ class InterfaceWriter:
             for t in decl.type_param_bounds.values():
                 _collect_refs(t, names)
             names -= set(decl.type_params)
+            # A qualified method `fn Type::m` depends on its struct `Type` even
+            # when no parameter or return type names it (`fn point<T>::origin()
+            # -> int32`): the stub emits the method verbatim, so `Type` must be
+            # pulled in or the stub references an undeclared struct. Add it
+            # after the type-parameter subtraction so it is never stripped.
+            if "::" in decl.name:
+                names.add(decl.name.split("::", 1)[0])
         elif isinstance(decl, (StructDecl, UnionDecl)):
             for _, t in decl.fields:
                 _collect_refs(t, names)

@@ -882,10 +882,47 @@ This is the foundational, **explicit-call** form. Its rules today:
   a `Type::method` set overloads by argument exactly like a plain name, and
   `@private`/`@override` work unchanged.
 
-Call sugar (`p.magnitude()`), constructors/destructors, dynamic dispatch, and
-methods on non-struct or generic-struct types are **not** part of this slice —
-every call spells out its qualifier. Generic-struct methods
-(`fn list<T>::m`) do not parse. See
+#### Methods on a generic struct
+
+A **generic** struct namespaces methods the same way, with the struct's type
+parameters written *before* the `::`:
+
+```c
+struct point<T> { x: T; y: T; }
+
+fn point<T>::magnitude(self: point<T>) -> float64 {
+    return sqrt((self.x * self.x + self.y * self.y) as float64);
+}
+
+fn main() -> int32 {
+    let p: point<float64> = { x = 3.0, y = 4.0 };
+    return point::magnitude(p) as int32;   // 5
+}
+```
+
+The whole existing generic machinery applies unchanged — one instance is
+monomorphized per element type, so `point::magnitude` over `point<int32>` and
+`point<float64>` are distinct functions. Its extra rules:
+
+- **The receiver is explicit.** There is no `point`-means-`point<T>` sugar:
+  inside a `point<T>::` method the receiver (and every parameter and the return
+  type) must name its type arguments — `self: point<T>`. A bare `self: point`
+  keeps the ordinary generic arity error
+  (`struct 'point' expects 1 type argument(s), got 0`). Type arguments are
+  **inferred** from the call arguments as usual (`point::magnitude(p)` binds
+  `T` from `p`); explicit type arguments at a `::` call
+  (`point<float64>::magnitude(...)`) are not part of this slice.
+- **A method may declare its own type parameters**, written *after* `::method`:
+  `fn box<T>::combine<U>(const self: box<T>, extra: U) -> U`. The struct's
+  parameters and the method's own parameters merge into one uniform template
+  (concatenated names, merged defaults, groups, and bounds), so both are
+  inferred at the call. A method type parameter may **not shadow** one of the
+  struct's — a name that appears in both lists is the error
+  `method type parameter 'T' shadows a type parameter of struct 'point'`.
+
+Call sugar (`p.magnitude()`), constructors/destructors, dynamic dispatch,
+methods on non-struct types, and explicit type arguments at a `::` call are
+**not** part of this slice — every call spells out its qualifier. See
 [examples/types/methods.mc](../examples/types/methods.mc).
 
 ### @noreturn functions

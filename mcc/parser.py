@@ -1399,17 +1399,42 @@ class Parser:
         name = self.expect("IDENT").text
         # `fn Type::method(...)` namespaces the function to a struct: the name
         # becomes the single string `"Type::method"`, which threads unchanged
-        # through registration, overloading, and symbol emission. Consuming the
-        # qualifier here -- before `parse_type_params` -- means `fn list<T>::m`
-        # cannot parse, which deliberately excludes generic-struct methods from
-        # this slice. Codegen validates that `Type` is a declared struct.
+        # through registration, overloading, and symbol emission. Codegen
+        # validates that `Type` is a declared struct.
+        #
+        # For a generic struct the type parameters sit *before* the `::`
+        # (`fn point<T>::method`), so parse a type-parameter list first and,
+        # only when a `::` follows, treat it as the struct's parameters: read
+        # the method name, then parse the method's *own* parameter list after
+        # it (`fn box<T>::map<U>`). The two lists merge into one uniform
+        # generic template -- concatenated names, merged defaults/groups/bounds
+        # -- so the whole existing generic machinery treats a method's struct
+        # and method parameters identically. A method parameter may not shadow
+        # one of the struct's, so a name that appears in both lists is an error.
+        type_params, type_param_defaults, type_param_groups, type_param_bounds = (
+            self.parse_type_params()
+        )
         if self.cur.kind == "::":
             self.advance()
             method = self.expect("IDENT").text
             name = f"{name}::{method}"
-        type_params, type_param_defaults, type_param_groups, type_param_bounds = (
-            self.parse_type_params()
-        )
+            (
+                m_params,
+                m_defaults,
+                m_groups,
+                m_bounds,
+            ) = self.parse_type_params()
+            shadowed = set(type_params) & set(m_params)
+            if shadowed:
+                raise LangError(
+                    f"method type parameter {min(shadowed)!r} shadows a type "
+                    f"parameter of struct {name.split('::', 1)[0]!r}",
+                    line,
+                )
+            type_params = type_params + m_params
+            type_param_defaults = {**type_param_defaults, **m_defaults}
+            type_param_groups = {**type_param_groups, **m_groups}
+            type_param_bounds = {**type_param_bounds, **m_bounds}
         if extern and type_params:
             raise LangError("extern functions cannot be generic", line)
         self.expect("(")

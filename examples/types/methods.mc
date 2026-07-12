@@ -70,8 +70,8 @@ fn main() -> int32 {
     return 0;
 }
 
-// See also: structs.mc for structs, pointers, and generics; overloading.mc
-// (under functions/) for the overload resolution these methods reuse. The
-// qualified
-// call form here is the foundation for the `.method()` call sugar still on the
-// roadmap.
+// See also: generic_methods.mc for methods on a GENERIC struct
+// (`fn point<T>::name`), the next slice built directly on this one; structs.mc
+// for structs, pointers, and generics; overloading.mc (under functions/) for
+// the overload resolution these methods reuse. The qualified call form here is
+// the foundation for the `.method()` call sugar still on the roadmap.

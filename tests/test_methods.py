@@ -14,6 +14,7 @@ Call sugar (``.method()``), constructors, and dynamic dispatch are future work.
 
 import pytest
 
+from mcc.driver import emit_interface
 from mcc.errors import LangError
 from helpers import compile_ir, run, run_path
 
@@ -196,3 +197,176 @@ def test_enum_member_value_still_works(capfd):
         """
     ) == 0
     assert capfd.readouterr().out == "2\n"
+
+
+# --- generic-struct methods: `fn Type<T>::method` -----------------------------
+
+def test_generic_method_def_and_inference_call_returns_a_value(capfd):
+    # `fn point<T>::sum` namespaces a generic method to `point<T>`; the explicit
+    # receiver names its type args, and the call infers `T` from the argument.
+    assert run(
+        """
+        import "std/io";
+        struct point<T> { x: T; y: T; }
+        fn point<T>::sum(self: point<T>) -> T {
+            return self.x + self.y;
+        }
+        fn main() -> int32 {
+            let p: point<int32> = { x = 3, y = 4 };
+            println("{}", point::sum(p));
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "7\n"
+
+
+def test_generic_mut_self_mutation_visible_to_caller(capfd):
+    # `mut self: point<T>` is an ordinary mut parameter of the instantiated
+    # struct, so a mutation through it is visible to the caller.
+    assert run(
+        """
+        import "std/io";
+        struct point<T> { x: T; y: T; }
+        fn point<T>::scale(mut self: point<T>, k: T) {
+            self.x = self.x * k;
+            self.y = self.y * k;
+        }
+        fn main() -> int32 {
+            let p: point<int32> = { x = 2, y = 3 };
+            point::scale(p, 10);
+            println("{} {}", p.x, p.y);
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "20 30\n"
+
+
+def test_generic_method_monomorphizes_across_two_instantiations(capfd):
+    # One generic method template instantiates once per element type; the two
+    # instances are distinct functions over distinct instances.
+    assert run(
+        """
+        import "std/io";
+        struct point<T> { x: T; y: T; }
+        fn point<T>::sum(self: point<T>) -> T {
+            return self.x + self.y;
+        }
+        fn main() -> int32 {
+            let pi: point<int32> = { x = 3, y = 4 };
+            let pf: point<float64> = { x = 1.5, y = 2.0 };
+            println("{} {}", point::sum(pi), point::sum(pf));
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "7 3.500000\n"
+
+
+def test_generic_method_with_own_type_param(capfd):
+    # A generic method may declare its OWN type parameter after `::method`; the
+    # struct's `<T>` and the method's `<U>` merge into one template, and both
+    # are inferred from the call arguments (`T` from the receiver, `U` from the
+    # extra argument).
+    assert run(
+        """
+        import "std/io";
+        struct box<T> { v: T; }
+        fn box<T>::combine<U>(const self: box<T>, extra: U) -> U {
+            return self.v as U + extra;
+        }
+        fn main() -> int32 {
+            let b: box<int32> = { v = 10 };
+            println("{}", box::combine(b, 5));
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "15\n"
+
+
+def test_method_type_param_shadowing_struct_param_is_an_error():
+    # A method type parameter may not reuse the name of one of the struct's
+    # type parameters -- the two lists merge, so a shared name is ambiguous.
+    with pytest.raises(
+        LangError,
+        match=r"method type parameter 'T' shadows a type parameter of struct 'point'",
+    ):
+        compile_ir(
+            """
+            struct point<T> { x: T; y: T; }
+            fn point<T>::m<T>(self: point<T>) -> int32 { return 0; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_generic_const_self_and_private_method(capfd, tmp_path):
+    # `const self` and `@private` compose with a generic method exactly as with
+    # a plain one: the private generic method is callable within its module.
+    (tmp_path / "geo.mc").write_text(
+        'import "std/io";\n'
+        "struct point<T> { x: T; y: T; }\n"
+        "@private fn point<T>::first(const self: point<T>) -> T { return self.x; }\n"
+        "fn point<T>::show(const self: point<T>) -> T { return point::first(self); }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "std/io";\n'
+        'import "geo";\n'
+        "fn main() -> int32 {\n"
+        "    let p: point<int32> = { x = 9, y = 0 };\n"
+        '    println("{}", point::show(p));\n'
+        "    return 0;\n"
+        "}\n"
+    )
+    assert run_path(main) == 0
+    assert capfd.readouterr().out == "9\n"
+
+
+def test_bare_generic_receiver_still_requires_type_args():
+    # RULING: no `point`-means-`point<T>` sugar. A receiver that spells the bare
+    # `point` keeps the ordinary generic arity error. `T` is inferred here from
+    # the plain `x: T` parameter, so instantiation proceeds and then fails
+    # resolving the bare `point` receiver type -- the same error any un-argued
+    # generic struct use raises.
+    with pytest.raises(
+        LangError,
+        match=r"struct 'point' expects 1 type argument\(s\), got 0",
+    ):
+        run(
+            """
+            struct point<T> { x: T; y: T; }
+            fn point<T>::sum(self: point, x: T) -> int32 { return x; }
+            fn main() -> int32 {
+                let p: point<int32> = { x = 1, y = 2 };
+                return point::sum(p, 5);
+            }
+            """
+        )
+
+
+def test_generic_method_not_naming_struct_round_trips_through_mci(tmp_path):
+    # `_decl_refs` force-adds the qualifier struct to a method's dependencies,
+    # so a generic method whose signature never names its struct
+    # (`fn point<T>::from_scalar(x: T) -> int32`) still pulls `point` into the
+    # stub -- without it the re-imported stub would reference an undeclared
+    # struct and fail codegen's `::`-qualifier validation.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "struct point<T> { x: T; y: T; }\n"
+        "fn point<T>::from_scalar(x: T) -> int32 { return x as int32 + 1; }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    stub = out.read_text()
+    assert "struct point<T>" in stub  # the struct travels despite no reference
+    assert "fn point<T>::from_scalar(x: T) -> int32" in stub
+    lib.unlink()  # force the import to resolve through the stub
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\n'
+        "fn main() -> int32 { return point::from_scalar(40); }\n"
+    )
+    assert run_path(main) == 41
