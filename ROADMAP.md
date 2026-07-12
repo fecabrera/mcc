@@ -2598,9 +2598,20 @@ already do).
       every other sink is a compile error, never a silently dropped hole;
       implemented, see
       [Formatted print/println](docs/language.md#formatted-print--println)
-  - [ ] string-valued f-strings — `let s = f"{x}"` rendering into a
-        runtime buffer (a `string`), so an f-string can go anywhere a
-        string can, not only into an `@format` argument position
+  - [ ] string-valued f-strings — an f-string used outside an `@format`
+        argument, as a standalone value (`let s = f"{x}";`), rendering into a
+        runtime `string` so it can go anywhere a string can, not only into an
+        `@format` argument position. Deferred until the
+        constructor/destructor lifecycle in
+        [Methods / OOP](#functions-and-methods) lands, which is the machinery
+        it needs: `let s = f"..."` desugars to `let s = format("...", args...)`
+        over a renderer `fn format(str, args...) -> string` whose returned
+        `string` is constructed in the callee, owned by the caller's scope, and
+        destructed at the end of that scope (RAII over
+        [`defer`](docs/language.md#defer), the same discipline the constructor
+        item establishes). The shipped `@format`-only rule above (an f-string
+        anywhere but a format-string argument is a compile error) is exactly
+        this deferral, and lifts to the desugar once the lifecycle exists
 
 ### Tooling and C interop
 
