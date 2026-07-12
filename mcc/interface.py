@@ -221,6 +221,13 @@ class InterfaceWriter:
             # parameter or return type names it.
             if decl.alias_qualifier is not None:
                 names.add(decl.alias_qualifier)
+            # A specialization's stub prototype re-spells its qualifier
+            # annotation (`fn holder<widget>::m`), so a type named only
+            # there must travel too -- left out, the bare `widget` would
+            # re-classify as a FRESH type parameter on re-parse.
+            if decl.spec_qualifier_args is not None:
+                for t in decl.spec_qualifier_args:
+                    _collect_refs(t, names)
         elif isinstance(decl, (StructDecl, UnionDecl)):
             for _, t in decl.fields:
                 _collect_refs(t, names)
@@ -361,7 +368,17 @@ class InterfaceWriter:
         # rejects combining it with @deprecated, so at most one prefix applies.
         if func.removed_msg is not None:
             head = f'@removed("{_escape(func.removed_msg)}") {head}'
-        return f"{head} {func.name}({', '.join(params)}){ret};"
+        # A specialization's canonical name is bare (`box::tag`), but a
+        # method declaration must annotate a generic qualifier's type
+        # parameters, so the stub re-spells the resolved pre-`::` arguments
+        # (`fn box<float64>::tag(...)`) -- re-parsing classifies it straight
+        # back to the same concrete overload.
+        name = func.name
+        if func.spec_qualifier_args is not None:
+            qual, method = name.split("::", 1)
+            written = ", ".join(str(a) for a in func.spec_qualifier_args)
+            name = f"{qual}<{written}>::{method}"
+        return f"{head} {name}({', '.join(params)}){ret};"
 
     def _render(self, decl) -> str:
         """Render one declaration for the interface.

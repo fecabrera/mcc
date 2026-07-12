@@ -11,7 +11,12 @@ overloading, ``@private``, and direct-call resolution all work unchanged.
 enforced. The only validation is that the qualifier names a declared TYPE --
 a struct, a builtin type, or a type alias of either (an alias qualifier
 canonicalizes to the type it names: registering a method for ``pointf`` IS
-registering it for ``point<float64>``, and both spellings call one family).
+registering it for ``point<float64>``, and both spellings call one family) --
+and that a GENERIC qualifier annotates its type parameters: a declaration's
+bare ``fn point::m`` / ``fn pf::m`` over a generic struct or generic alias is
+an error (only a complete type -- non-generic, or fully defaulted so the bare
+name is a complete type use -- may be named bare). Calls are unchanged: a bare
+``point::m(p)`` looks the family up and infers from the arguments.
 Call sugar (``.method()``), constructors, and dynamic dispatch are future work.
 """
 
@@ -499,10 +504,13 @@ def test_specialization_wrong_arity_is_an_error():
 
 
 def test_specialization_round_trips_through_mci(tmp_path):
-    # A specialization exports as the desugared concrete prototype
-    # `fn box::tag(self: box<float64>)`. Re-parsing and re-compiling that stub
-    # yields the same concrete overload (its body lives in the compiled object,
-    # so the stub carries only the prototype -- not JIT-runnable on its own).
+    # A specialization exports as a concrete prototype that re-spells the
+    # qualifier's annotation, `fn box<float64>::tag(self: box<float64>)` -- a
+    # bare `fn box::tag` would not re-parse (a generic qualifier must be
+    # annotated). Re-parsing and re-compiling that stub classifies it straight
+    # back to the same concrete overload (its body lives in the compiled
+    # object, so the stub carries only the prototype -- not JIT-runnable on
+    # its own).
     lib = tmp_path / "lib.mc"
     lib.write_text(
         "struct box<T> { v: T; }\n"
@@ -512,11 +520,11 @@ def test_specialization_round_trips_through_mci(tmp_path):
     out = tmp_path / "lib.mci"
     assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
     stub = out.read_text()
-    assert "fn box::tag(self: box<float64>) -> int32;" in stub
-    # Re-parsing and re-compiling the stub round-trips: the desugared prototype
-    # is the concrete box<float64> overload (a plain-symbol declaration whose
-    # body lives in the object), so it re-compiles without reintroducing the
-    # generic-vs-specialization collision the pre-`::` `<float64>` once caused.
+    assert "fn box<float64>::tag(self: box<float64>) -> int32;" in stub
+    # Re-parsing and re-compiling the stub round-trips: the annotated
+    # prototype classifies as the same concrete box<float64> overload (a
+    # plain-symbol declaration whose body lives in the object) -- the binding
+    # substitution is a no-op on the already-concrete signature.
     ir = compile_ir(stub)
     assert 'declare i32 @"box::tag"(%"box<float64>"' in ir
 
@@ -1146,21 +1154,138 @@ def test_permuting_generic_alias_becomes_a_partial_specialization():
     )
 
 
-def test_bare_generic_alias_qualifier_is_a_namespace_passthrough():
-    # A bare generic-alias qualifier chases the NAME only: `fn pf::mk`
-    # behaves exactly like `fn point::mk` -- no arity error for the omitted
-    # argument list -- and `pf::mk()` calls the same family.
-    assert (
-        run(
+def test_bare_generic_alias_qualifier_is_an_error():
+    # RULING: a method declaration must annotate a generic qualifier's type
+    # parameters. A bare generic-alias qualifier (`fn pf::mk` with
+    # `type pf<T> = point<T>`) is invalid exactly as bare `fn point::mk` is --
+    # there is no namespace-passthrough form.
+    with pytest.raises(
+        LangError,
+        match=r"type alias 'pf' is generic; the method qualifier must "
+        r"annotate its type parameter\(s\), e.g. 'fn pf<T>::mk' or "
+        r"'fn pf<float64>::mk'",
+    ):
+        compile_ir(
             """
             struct point<T> { x: T; y: T; }
             type pf<T> = point<T>;
             fn pf::mk() -> int32 { return 7; }
-            fn main() -> int32 { return pf::mk() + point::mk() - 14; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_bare_generic_struct_qualifier_is_an_error():
+    # The same ruling for the struct spelled directly: bare `fn point::mk`
+    # over a generic struct must annotate -- `fn point<T>::mk` (generic) or
+    # `fn point<float64>::mk` (a specialization).
+    with pytest.raises(
+        LangError,
+        match=r"struct 'point' is generic; the method qualifier must "
+        r"annotate its type parameter\(s\), e.g. 'fn point<T>::mk' or "
+        r"'fn point<float64>::mk'",
+    ):
+        compile_ir(
+            """
+            struct point<T> { x: T; y: T; }
+            fn point::mk() -> int32 { return 7; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_alias_chain_landing_on_a_bare_generic_is_an_error():
+    # A plain alias of a bare generic NAME supplies no arguments along the
+    # chase, so the chain lands on the generic struct unannotated -- the same
+    # error, reported for the struct (the alias itself is not generic, so
+    # annotating `pf` is not the fix; naming the struct's parameters is).
+    with pytest.raises(
+        LangError,
+        match=r"struct 'point' is generic; the method qualifier must "
+        r"annotate its type parameter\(s\)",
+    ):
+        compile_ir(
+            """
+            struct point<T> { x: T; y: T; }
+            type pf = point;
+            fn pf::mk() -> int32 { return 7; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_method_own_type_params_do_not_satisfy_the_qualifier():
+    # The method's own `<...>` list sits AFTER the name; it never annotates
+    # the qualifier. `fn point::mk<W>` is still a bare generic qualifier.
+    with pytest.raises(
+        LangError,
+        match=r"struct 'point' is generic; the method qualifier must "
+        r"annotate its type parameter\(s\)",
+    ):
+        compile_ir(
+            """
+            struct point<T> { x: T; y: T; }
+            fn point::mk<W>(x: W) -> int32 { return 0; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_fully_defaulted_struct_qualifier_may_be_bare():
+    # PINNED: a fully-defaulted generic struct's bare name is a complete type
+    # use (`box` IS `box<int32>`, the tail fills), so a bare qualifier is
+    # complete here too -- `fn box::tag` is the specialization at the
+    # defaults, outranking the generic for a box<int32> receiver.
+    assert (
+        run(
+            """
+            struct box<T = int32> { v: T; }
+            fn box<T>::tag(self: box<T>) -> int32 { return 1; }
+            fn box::tag(self: box<int32>) -> int32 { return 2; }
+            fn main() -> int32 {
+                let a: box<int64>;
+                let b: box<int32>;
+                return box::tag(a) * 10 + box::tag(b) - 12;
+            }
             """
         )
         == 0
     )
+
+
+def test_fully_defaulted_alias_qualifier_may_be_bare():
+    # ...and the same for a fully-defaulted generic ALIAS: `fn pf::m` with
+    # `type pf<T = float64> = point<T>` is `fn point<float64>::m`, exactly as
+    # the bare type use resolves. A partially-defaulted alias stays the error.
+    assert (
+        run(
+            """
+            struct point<T> { x: T; y: T; }
+            type pf<T = float64> = point<T>;
+            fn point<T>::m(self: point<T>) -> int32 { return 1; }
+            fn pf::m(self: point<float64>) -> int32 { return 2; }
+            fn main() -> int32 {
+                let a: point<int32>;
+                let b: point<float64>;
+                return point::m(a) * 10 + point::m(b) - 12;
+            }
+            """
+        )
+        == 0
+    )
+    with pytest.raises(
+        LangError,
+        match=r"type alias 'two' is generic; the method qualifier must "
+        r"annotate its type parameter\(s\)",
+    ):
+        compile_ir(
+            """
+            struct pair2<A, B> { a: A; b: B; }
+            type two<A, B = int32> = pair2<A, B>;
+            fn two::m() -> int32 { return 0; }
+            fn main() -> int32 { return 0; }
+            """
+        )
 
 
 def test_builtin_qualifier_direct_and_via_alias_share_one_family():
@@ -1394,7 +1519,7 @@ def test_private_alias_qualifier_is_access_checked(tmp_path):
     (tmp_path / "geo2.mc").write_text(
         "struct point<T> { x: T; y: T; }\n"
         "@private type pointf = point<float64>;\n"
-        "fn point::mk() -> int32 { return 7; }\n"
+        "fn point<float64>::mk() -> int32 { return 7; }\n"
     )
     call = tmp_path / "call.mc"
     call.write_text(
@@ -1432,10 +1557,12 @@ def test_alias_declared_generic_method_round_trips_through_mci(tmp_path):
 
 
 def test_alias_specialization_prototype_round_trips_through_mci(tmp_path):
-    # A CONCRETE alias-declared method emits as a desugared prototype under
-    # its canonical family name; the alias-spelled signature pulls the alias
-    # along, so the stub compiles on re-import. (compile_ir, not run: a
-    # bodyless prototype's body lives in the unlinked object.)
+    # A CONCRETE alias-declared method emits as a prototype under its
+    # canonical family name with the qualifier annotation re-spelled
+    # (`fn point<float64>::mag` -- bare `fn point::mag` would not re-parse);
+    # the alias-spelled signature pulls the alias along, so the stub compiles
+    # on re-import. (compile_ir, not run: a bodyless prototype's body lives
+    # in the unlinked object.)
     lib = tmp_path / "lib.mc"
     lib.write_text(
         "struct point<T> { x: T; y: T; }\n"
@@ -1445,9 +1572,30 @@ def test_alias_specialization_prototype_round_trips_through_mci(tmp_path):
     out = tmp_path / "lib.mci"
     assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
     stub = out.read_text()
-    assert "fn point::mag(self: pointf) -> float64;" in stub  # canonical name
+    assert "fn point<float64>::mag(self: pointf) -> float64;" in stub  # canonical, annotated
     assert "type pointf = point<float64>;" in stub
     compile_ir(stub)  # the stub is self-contained and compiles
+
+
+def test_spec_qualifier_only_type_travels_through_mci(tmp_path):
+    # The stub prototype re-spells the qualifier annotation, so a type named
+    # ONLY there (`fn holder<widget>::code(x: int32)` -- no parameter or
+    # return names widget) must still travel: left out, the bare `widget`
+    # would re-classify as a FRESH type parameter on re-parse, silently
+    # turning the specialization generic.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "struct widget { id: int32; }\n"
+        "struct holder<T> { v: T; }\n"
+        "fn holder<widget>::code(x: int32) -> int32 { return x + 1; }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    stub = out.read_text()
+    assert "fn holder<widget>::code(x: int32) -> int32;" in stub
+    assert "struct widget" in stub  # pulled in by the qualifier annotation
+    ir = compile_ir(stub)  # ...so the stub re-classifies concrete and compiles
+    assert 'declare i32 @"holder::code"(i32' in ir
 
 
 def test_override_pairs_across_alias_and_canonical_spellings(tmp_path):
@@ -1503,13 +1651,15 @@ def test_defaulted_generic_alias_qualifier_fills_the_tail():
         == 0
     )
     # ...and a defaulted alias SPELLING in a generic signature dealiases the
-    # same way for inference: `self: box2<V>` binds V through the expansion.
+    # same way for inference: `self: box2<V>` is pair2<int32, V>, binding V
+    # through the expansion (the qualifier annotates as the partial the
+    # pattern implies -- its first position is pinned to the default int32).
     assert (
         run(
             """
             struct pair2<A, B> { a: A; b: B; }
             type box2<T, U = int32> = pair2<U, T>;
-            fn pair2::grab<V>(self: box2<V>) -> V { return self.b; }
+            fn pair2<int32, V>::grab(self: box2<V>) -> V { return self.b; }
             fn main() -> int32 {
                 let p: pair2<int32, int64>;
                 p.b = 42;

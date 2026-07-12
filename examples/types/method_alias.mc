@@ -16,8 +16,14 @@ import "libc/math";
 //     its target: with `type swap<X, Y> = pair<Y, X>`, `fn swap<int32, U>::m`
 //     IS the partial specialization `fn pair<U, int32>::m`
 //     (method_partial_specialization.mc).
-//   - a BARE generic-alias qualifier is a pure namespace hop: `fn pt::m` is
-//     `fn point::m`, and `pt::m(...)` calls `point::m(...)`.
+//   - a BARE generic-alias qualifier cannot DECLARE: like a bare generic
+//     struct, `fn pt::m` with `type pt<T> = point<T>` is the error "type
+//     alias 'pt' is generic; the method qualifier must annotate its type
+//     parameter(s), e.g. 'fn pt<T>::m' or 'fn pt<float64>::m'". The one
+//     exception is a FULLY-DEFAULTED alias, whose bare name is already a
+//     complete type use: with `type pt<T = float64> = point<T>`, `fn pt::m`
+//     IS `fn point<float64>::m`. CALLS may stay bare either way; `pt::m(...)`
+//     chases the name and calls the `point::m` family.
 //   - BUILTIN types are qualifiers too: `fn int32::clamp`, or with fresh type
 //     parameters `fn slice<T>::first`. A builtin cannot be SPECIALIZED,
 //     though; `fn slice<int32>::first` is the error "cannot specialize
@@ -53,15 +59,30 @@ fn pointf::magnitude(const self: pointf) -> float64 {
     return sqrt(pow(self.x, 2.0) + pow(self.y, 2.0));
 }
 
-// ---- A bare generic-alias qualifier is a namespace passthrough ----
+// ---- A generic-alias qualifier must annotate; defaults are the exception ----
 
 type pt<T> = point<T>;
 
-// No type arguments written before the `::`, so only the NAME is chased:
-// `fn pt::mk` behaves exactly like the bare `fn point::mk`. The signature
-// alone drives dispatch, as always.
-fn pt::mk(x: int32, y: int32) -> point<int32> {
-    println("  [one body]  pt::mk registers as point::mk");
+// A DECLARATION may not name a generic alias bare: `fn pt::mk` is the error
+// "type alias 'pt' is generic; the method qualifier must annotate its type
+// parameter(s), e.g. 'fn pt<T>::mk' or 'fn pt<float64>::mk'", the same rule
+// as a bare `fn point::mk`. Annotated, the written arguments substitute
+// through: this IS `fn point<T>::mk`, one generic family under the canonical
+// name.
+fn pt<T>::mk(x: T, y: T) -> point<T> {
+    println("  [generic]   pt<T>::mk IS point<T>::mk");
+    return { x = x, y = y };
+}
+
+// The one bare-generic qualifier that still declares: a FULLY-DEFAULTED
+// alias. Its bare name is already a complete type use (the defaults fill,
+// exactly as in a bare type use), so `fn ptd::mk` IS the specialization
+// `fn point<float64>::mk`, outranking the generic above for float64
+// arguments.
+type ptd<T = float64> = point<T>;
+
+fn ptd::mk(x: float64, y: float64) -> point<float64> {
+    println("  [defaulted] ptd::mk IS point<float64>::mk");
     return { x = x, y = y };
 }
 
@@ -149,11 +170,19 @@ fn main() -> int32 {
     println("pointf magnitude, alias call spelling:");
     println(f"  |pf| = {pointf::magnitude(pf):.2f}");   // same body again
 
-    // The namespace passthrough: both call spellings reach the one mk body.
+    // Declarations had to annotate, calls do not: both bare call spellings
+    // chase the name to the one mk family, T inferred from the arguments.
     println("pt::mk / point::mk:");
     let m1 = pt::mk(1, 2);
     let m2 = point::mk(3, 4);
     println("  m1 = ({}, {}), m2 = ({}, {})", m1.x, m1.y, m2.x, m2.y);
+
+    // float64 arguments select the specialization the fully-defaulted alias
+    // declared; the canonical and alias spellings call the same body.
+    println("point::mk / ptd::mk, float64:");
+    let m3 = point::mk(0.5, 1.5);
+    let m4 = ptd::mk(2.5, 3.5);
+    println(f"  m3 = ({m3.x:.2f}, {m3.y:.2f}), m4 = ({m4.x:.2f}, {m4.y:.2f})");
 
     // The second position is int32, so the alias-declared partial wins and
     // returns the first field with U = float64.
@@ -167,8 +196,8 @@ fn main() -> int32 {
     println("  a = {}", pair::pick(ge));                // 7, via [generic]
 
     // The diagonal: a pair<int32, int32> receiver binds U = int32 through the
-    // alias spelling in the signature. The bare `diag::` call spelling is the
-    // same namespace passthrough as pt:: above.
+    // alias spelling in the signature. The bare `diag::` spelling is fine at
+    // a CALL: call qualifiers chase by name; only declarations must annotate.
     let dd: pair<int32, int32> = { a = 21, b = 21 };
     println("pair<int32, int32> same:");
     println("  a + b = {}", pair::same(dd));            // 42, via [diagonal]

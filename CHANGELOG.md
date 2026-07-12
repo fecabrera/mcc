@@ -53,8 +53,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and a duplicate-position alias (`type diag<T> = pair<T, T>`) becomes a
   **diagonal constraint** — one parameter that must unify consistently, so a
   `pair<int32, float64>` receiver is rejected. A *bare* generic-alias
-  qualifier is a namespace passthrough (`fn pf::m` ≡ `fn point::m`, no arity
-  error). Generic-alias spellings are now **transparent to inference**
+  qualifier is an error like any bare generic qualifier (`type alias 'pf' is
+  generic; the method qualifier must annotate its type parameter(s), e.g.
+  'fn pf<T>::m' or 'fn pf<float64>::m'`) — with the fully-defaulted
+  exception: `fn pf::m` with `type pf<T = float64> = point<T>` is a complete
+  bare type use and **is** `fn point<float64>::m`. Generic-alias spellings
+  are now **transparent to inference**
   everywhere: a parameter pattern written `self: diag<U>` unifies and
   shape-checks as `pair<U, U>`. The same one-principle change admits
   **builtin-type qualifiers**: `fn int32::clamp` (or via `type myint =
@@ -100,13 +104,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   generic method), or — per the entry above — a mix (a partial
   specialization). A generic base is **not** required — a lone
   `fn box<int32>::only(...)` is just a concrete namespaced overload — and two
-  bodies for one instantiation collide like any duplicate overload.
+  bodies for one instantiation collide like any duplicate overload. A
+  specialization's `.mci` stub prototype re-spells the annotated qualifier
+  (`fn box<float64>::tag(self: box<float64>) -> int32;`), pulling in a type
+  named only there, so the stub re-parses under the same annotation rule.
 - **Generic-struct methods — `fn Type<T>::method(...)`** — a method may now be
   namespaced to a *generic* struct, with the struct's type parameters written
   before the `::` (`fn point<T>::magnitude(self: point<T>) -> float64`). The
   existing generic machinery applies unchanged, so one instance is
   monomorphized per element type and type arguments are inferred from the call
-  (`point::magnitude(p)` binds `T` from `p`). The receiver is **explicit**:
+  (`point::magnitude(p)` binds `T` from `p`). **The qualifier must annotate
+  its type parameters**: a declaration's bare `fn point::m` over a generic
+  struct is the error `struct 'point' is generic; the method qualifier must
+  annotate its type parameter(s), e.g. 'fn point<T>::m' or
+  'fn point<float64>::m'` — only a complete type (non-generic, or fully
+  defaulted so the bare name is a complete type use, the defaults filling)
+  may be named bare, while *calls* stay bare (`point::magnitude(p)` looks
+  the family up). The receiver is likewise **explicit**:
   there is no `point`-means-`point<T>` sugar, so the receiver and every
   parameter and return type must name their type arguments; a bare
   `self: point` keeps the ordinary arity error. A method may also declare its

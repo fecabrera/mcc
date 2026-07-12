@@ -869,16 +869,18 @@ This is the foundational, **explicit-call** form. Its rules today:
   `fn point::origin() -> point` and `fn point::of(x: float64, y: float64)`
   are legal. `self` above is a convention, not a keyword, and `mut self` is
   just a `mut` parameter whose mutations are visible to the caller.
-- **The qualifier must be a declared type.** The only check is that the
-  segment before `::` names a type in scope: a struct, a builtin type
+- **The qualifier must be a declared, complete type.** The segment before
+  `::` must name a type in scope: a struct, a builtin type
   (`fn int32::m` — see [methods on type
   aliases and builtin types](#methods-on-type-aliases-and-builtin-types)), or
   a `type` alias of either, which canonicalizes to the type it names. An
   enum, an undeclared name, or an alias of a type with no bare-name spelling
   (a pointer, array, or function type) is the error
-  `no struct type 'foo' for method 'foo::bar'`. (`Enum::Member` remains a
-  value expression — only a `::` member *followed by* `(` is a qualified
-  call.)
+  `no struct type 'foo' for method 'foo::bar'`; a *generic* struct or alias
+  may be named only with its type parameters annotated — see
+  [methods on a generic struct](#methods-on-a-generic-struct).
+  (`Enum::Member` remains a value expression — only a `::` member *followed
+  by* `(` is a qualified call.)
 - **The qualified name is the whole identity.** `point::magnitude` is a
   single name everywhere — registration, the LLVM symbol, and
   [overloading](#function-overloading) all key on the string, so two structs
@@ -908,6 +910,19 @@ The whole existing generic machinery applies unchanged — one instance is
 monomorphized per element type, so `point::magnitude` over `point<int32>` and
 `point<float64>` are distinct functions. Its extra rules:
 
+- **The qualifier must annotate its type parameters.** A declaration may not
+  name a generic struct bare: `fn point::magnitude` is the error
+  `struct 'point' is generic; the method qualifier must annotate its type
+  parameter(s), e.g. 'fn point<T>::magnitude' or 'fn point<float64>::magnitude'`.
+  Only a **complete** type may be named bare — a non-generic struct, a builtin,
+  an alias of a complete type, or a **fully-defaulted** generic (where the bare
+  name is already a complete type use: with `struct box<T = int32>`,
+  `fn box::tag` *is* the specialization `fn box<int32>::tag`, the tail filling
+  from the defaults exactly as in a type use). The method's own type parameters
+  (`fn point::m<W>`) sit after the name and never satisfy the requirement.
+  **Calls are different**: a call qualifier is a pure namespace — bare
+  `point::magnitude(p)` looks the registered family up and infers from the
+  arguments.
 - **The receiver is explicit.** There is no `point`-means-`point<T>` sugar:
   inside a `point<T>::` method the receiver (and every parameter and the return
   type) must name its type arguments — `self: point<T>`. A bare `self: point`
@@ -1079,17 +1094,23 @@ rules:
   `fn pair<A, B>::m` for an agreeing receiver — repeated names score no
   extra pattern specificity (the same no-partial-ordering rule as two
   rank-tied partials), so that call is the standard ambiguity error.
-- **A bare generic-alias qualifier is a namespace passthrough.** With
-  `type pf<T> = point<T>`, `fn pf::m` behaves exactly like the bare
-  `fn point::m` — only the name is chased, no arity error — and `pf::m(p)`
-  calls `point::m(p)`. An alias parameter its target never uses is *inert*:
+- **A bare generic-alias qualifier is an error, like a bare generic
+  struct.** A declaration must [annotate a generic qualifier's type
+  parameters](#methods-on-a-generic-struct): with `type pf<T> = point<T>`,
+  `fn pf::m` is `type alias 'pf' is generic; the method qualifier must
+  annotate its type parameter(s), e.g. 'fn pf<T>::m' or 'fn pf<float64>::m'`.
+  A **fully-defaulted** alias is complete, so its bare name works: with
+  `type pf<T = float64> = point<T>`, `fn pf::m` *is* `fn point<float64>::m`.
+  Calls stay bare-friendly either way — `pf::m(p)` chases the name and calls
+  the `point::m` family. An alias parameter its target never uses is *inert*:
   written arguments for it vanish with the substitution, so a signature
   naming that parameter fails as an unknown type — alias transparency, not a
   special case.
 - **Generic alias spellings are transparent to inference.** A parameter
   pattern written through a generic alias unifies as the type it names:
-  `fn pair::grab<V>(self: diag<V>)` binds `V` from a `pair<int32, int32>`
-  argument (and enforces the diagonal).
+  `fn diag<V>::grab(const self: diag<V>) -> V` unifies and shape-checks as
+  `pair<V, V>`, binding `V` from a `pair<int32, int32>` argument (and
+  enforcing the diagonal).
 - **Builtin types are qualifiers too.** `fn int32::clamp(...)` (or any
   builtin name — with `type myint = int32`, `fn myint::clamp` is the same
   family) namespaces to the name string; `int32::clamp(x)` and

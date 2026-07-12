@@ -4299,10 +4299,21 @@ class CodeGen:
             becomes the partial ``fn pair<U, int32>::m``; a repeated
             parameter, as in ``type diag<T> = pair<T, T>``, repeats the fresh
             name -- the diagonal constraint);
-          * a bare generic alias qualifier is a namespace passthrough: only
-            the NAME is chased (``fn pf::m`` with ``type pf<T> = point<T>``
-            behaves exactly like ``fn point::m`` -- no arity error, the
-            target's own parameter references are ignored).
+          * a BARE generic alias qualifier is an error: a method declaration
+            must annotate a generic qualifier's type parameters (``fn pf::m``
+            with ``type pf<T> = point<T>`` demands ``fn pf<T>::m`` or
+            ``fn pf<float64>::m``). A fully-DEFAULTED generic alias is the
+            exception, exactly as in a type use: the bare name is a complete
+            type (the tail fills from the defaults), so ``fn pf::m`` with
+            ``type pf<T = float64> = point<T>`` is ``fn point<float64>::m``.
+
+        The same annotation rule holds when the chase lands on a generic
+        STRUCT with no arguments supplied along the way: bare ``fn point::m``
+        (or ``fn pf::m`` through ``type pf = point``) is the error unless
+        every struct parameter defaults, in which case the defaults fill and
+        the method is the specialization at them. The method's own type
+        parameters (``fn point::m<W>``) never satisfy the requirement -- the
+        qualifier itself must be annotated.
 
         A builtin type name (``fn int32::m``) is accepted as-is: the family
         is the name string, with nothing more to resolve. Anything else --
@@ -4317,8 +4328,9 @@ class CodeGen:
 
         Raises:
             LangError: On an unresolvable qualifier, a cross-file ``@private``
-                alias, written type arguments on a non-generic alias, or a
-                generic-alias arity mismatch.
+                alias, written type arguments on a non-generic alias, a
+                generic-alias arity mismatch, or a bare generic qualifier
+                whose parameters do not all default.
         """
         qualifier, method = func.name.split("::", 1)
         name = qualifier
@@ -4354,33 +4366,43 @@ class CodeGen:
                     func.line,
                 )
             if alias.type_params:
-                if args is not None:
-                    # Written arguments bind the alias's parameters and
-                    # substitute through its target; a shorter list fills
-                    # from trailing defaults, exactly as a type use does.
-                    total = len(alias.type_params)
-                    required = total - len(alias.type_param_defaults)
-                    if not required <= len(args) <= total:
-                        expected = (
-                            f"between {required} and {total}"
-                            if alias.type_param_defaults
-                            else f"{total}"
-                        )
+                total = len(alias.type_params)
+                required = total - len(alias.type_param_defaults)
+                if args is None:
+                    # A bare generic-alias qualifier must annotate its type
+                    # parameters -- unless every parameter defaults, in which
+                    # case the bare name is a complete type (the tail fills),
+                    # exactly as a bare type use resolves.
+                    if required:
                         raise LangError(
-                            f"type alias {name!r} expects {expected} "
-                            f"type argument(s), got {len(args)}",
+                            f"type alias {name!r} is generic; the method "
+                            "qualifier must annotate its type parameter(s), "
+                            f"e.g. 'fn {name}<T>::{method}' or "
+                            f"'fn {name}<float64>::{method}'",
                             func.line,
                         )
-                    binding = dict(zip(alias.type_params, args))
-                    for pname in alias.type_params[len(args):]:
-                        binding[pname] = self.subst_struct_args(
-                            alias.type_param_defaults[pname], binding
-                        )
-                    target = self.subst_struct_args(target, binding)
-                    args = list(target.args) if target.args else None
-                # A bare generic-alias qualifier chases the name only: the
-                # target's argument list spells the alias's own parameters,
-                # which nothing binds -- the passthrough ignores it.
+                    args = []
+                # Written arguments bind the alias's parameters and
+                # substitute through its target; a shorter list fills
+                # from trailing defaults, exactly as a type use does.
+                if not required <= len(args) <= total:
+                    expected = (
+                        f"between {required} and {total}"
+                        if alias.type_param_defaults
+                        else f"{total}"
+                    )
+                    raise LangError(
+                        f"type alias {name!r} expects {expected} "
+                        f"type argument(s), got {len(args)}",
+                        func.line,
+                    )
+                binding = dict(zip(alias.type_params, args))
+                for pname in alias.type_params[len(args):]:
+                    binding[pname] = self.subst_struct_args(
+                        alias.type_param_defaults[pname], binding
+                    )
+                target = self.subst_struct_args(target, binding)
+                args = list(target.args) if target.args else None
             else:
                 if args is not None:
                     raise LangError(
@@ -4389,10 +4411,34 @@ class CodeGen:
                 if target.args:
                     args = list(target.args)
             name = target.name
+        if args is None and (decl := self.lookup_struct_decl(name)) is not None:
+            if decl.type_params:
+                # A bare generic-struct qualifier must annotate its type
+                # parameters (the method's own `<...>` list never satisfies
+                # this -- the qualifier itself is what's bare). A fully
+                # DEFAULTED struct is the exception, exactly as in a type
+                # use: the bare name is a complete type, so the defaults
+                # fill and the method is the specialization at them.
+                if len(decl.type_params) > len(decl.type_param_defaults):
+                    raise LangError(
+                        f"struct {name!r} is generic; the method qualifier "
+                        "must annotate its type parameter(s), e.g. "
+                        f"'fn {name}<T>::{method}' or "
+                        f"'fn {name}<float64>::{method}'",
+                        func.line,
+                    )
+                binding: dict[str, TypeRef] = {}
+                args = []
+                for pname in decl.type_params:
+                    arg = self.subst_struct_args(
+                        decl.type_param_defaults[pname], binding
+                    )
+                    binding[pname] = arg
+                    args.append(arg)
         if name != qualifier:
             func.name = f"{name}::{method}"
             func.alias_qualifier = qualifier
-            func.struct_type_args = args
+        func.struct_type_args = args
 
     def normalize_struct_method_args(self):
         """Classify each method's pre-``::`` struct type arguments.
@@ -4504,6 +4550,11 @@ class CodeGen:
                         f"{len(args)}",
                         func.line,
                     )
+                # The interface writer re-spells a concrete specialization's
+                # qualifier annotation in its stub prototype (a bare generic
+                # qualifier would not re-parse), so keep the resolved list
+                # past the clearing below.
+                func.spec_qualifier_args = list(args)
                 binding = {
                     pname: arg
                     for pname, arg in zip(decl.type_params, args)
@@ -12539,12 +12590,13 @@ class CodeGen:
     def chase_alias_qualifier(self, name: str, line: int) -> str | None:
         """Chase a call-site method qualifier through type aliases, by name.
 
-        ``pointf::magnitude(p)`` is ``point::magnitude(p)``: an alias
+        ``pointf::magnitude(p)`` is ``point::magnitude(p)``: a CALL
         qualifier is purely a namespace hop, so only the NAME canonicalizes
         -- no type arguments are injected (dispatch still infers from the
-        arguments), mirroring how a bare generic alias declares a method as
-        a passthrough. Each hop is access-checked, so a cross-file
-        ``@private`` alias qualifier errors like any other use.
+        arguments). Unlike a declaration, a bare generic name is fine here:
+        declarations register annotated, calls merely look the family up.
+        Each hop is access-checked, so a cross-file ``@private`` alias
+        qualifier errors like any other use.
 
         Args:
             name: The qualifier as written at the call.

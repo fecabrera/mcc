@@ -485,6 +485,14 @@ class Func:
             verbatim from its source span, which still spells the alias, so
             the ``.mci`` dependency scan must pull the alias declaration in.
             ``None`` when the qualifier was written canonically.
+        spec_qualifier_args: For a method codegen classified as a full
+            specialization (``fn box<int32>::m`` -- every pre-``::`` argument
+            a concrete type), the resolved argument list, kept after
+            ``struct_type_args`` clears. The interface writer re-spells the
+            qualifier's annotation in the stub prototype
+            (``fn box<int32>::m(...)``): a method declaration must annotate a
+            generic qualifier's type parameters, so a bare-qualifier
+            prototype would not re-parse. ``None`` otherwise.
     """
 
     name: str
@@ -519,6 +527,7 @@ class Func:
     struct_arg_bounds: dict[str, TypeRef] = field(default_factory=dict)
     struct_arg_defaults: dict[str, TypeRef] = field(default_factory=dict)
     alias_qualifier: str | None = None
+    spec_qualifier_args: list[TypeRef] | None = None
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 
