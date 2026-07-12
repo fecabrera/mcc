@@ -1582,8 +1582,11 @@ already do).
       shipped `@nonnull`- and `mut`/`const`-carrying function types
       neither fix nor worsen it, since their assignability checks live
       on the coerce path, not in viability or unification
-- [ ] Methods / OOP — `fn <struct>::<method>(self: <struct>*, ...)` definitions
-      keyed to a struct, including `@private` methods and the special
+- [ ] Methods / OOP — `fn <struct>::<method>(...)` definitions
+      keyed to a struct (the explicit qualified-call foundation has shipped,
+      see the checked sub-item; the receiver is an ordinary parameter, not the
+      raw `self: <struct>*` this line once sketched), including `@private`
+      methods and the special
       constructor/destructor below (the `for … in` protocol already dispatches
       by struct name to pave the way, though iteration itself is slated to
       move to the overload-set protocol family of the open overload sets item
@@ -1601,14 +1604,38 @@ already do).
       rather than the reverse:
   ```c
   struct point { x: int32; y: int32; }
-  fn point::constructor(self: struct point*, x: int32, y: int32) { ... }
-  fn point::length2(self: struct point*) -> int32 { ... }
-  @private fn point::helper(self: struct point*) { ... }
+  fn point::length2(const self: point) -> int32 { ... }   // shipped: explicit Type::method(...) call
+  @private fn point::helper(mut self: point) { ... }        // shipped: @private on the qualified name
+  fn point::constructor(mut self: point, x: int32, y: int32) { ... }   // constructor sugar still below
   ```
 
-  - [ ] receiver kind — the `self: struct point*` above is the starting form,
-        but once the `const` / `mut` / by-value parameters above exist the three
-        receiver flavors fall out of them with no OOP-specific mechanism:
+  - [x] qualified `fn Type::method` definitions + explicit `Type::method(...)`
+        calls — the explicit-call foundation. The qualified name is a single
+        string (`"point::magnitude"`) threaded through Func/Call, the
+        registration key, and the LLVM symbol (`@"point::magnitude"`), so
+        registration, overloading (`point::area` and `circle::area` are distinct
+        names; a `Type::method` set overloads by argument like any name),
+        `@private`, and `@override` all work unchanged on the string. The
+        receiver is an ordinary already-shipped `mut` / `const` / by-value
+        parameter, so this slice added no receiver-kind machinery. Deliberate
+        scope ruling: `Type::` is purely a namespace, enforcing no `self`
+        convention (no required receiver, name, or first-param type); the one
+        check is that the qualifier is a declared struct (an enum, alias,
+        builtin, or undeclared qualifier is the error), the `self`-conventions
+        becoming load-bearing only when the call sugar below lands. Parser:
+        `fn Type::method` is claimed in definition position before type-params
+        (deliberately excluding generic-struct methods `fn list<T>::m`, below);
+        in expression position `Type::member(` is claimed as a qualified call
+        (the same shape-claim as the `ok(` / `error(` builtins), while
+        `Enum::Member` not followed by `(` stays enum member access, no
+        regression. Object-file symbol mangling for a precompiled stdlib stays
+        with the separate
+        [namespaced exported symbols](#tooling-and-c-interop) item; the shipped
+        `@"point::method"` symbol suits the source-merged / JIT model
+  - [ ] receiver kind — the shipped foundation already lets the receiver be any
+        ordinary `const` / `mut` / by-value parameter with no enforced `self`
+        convention; this item makes the three receiver flavors a formal, checked
+        receiver concept, still with no OOP-specific mechanism:
         `const self: point` (read-only method), `mut self: point` (mutating
         method — `&self` cannot escape, the memory-safe replacement for today's
         raw `self: point*`), and `self: point` (consuming/copying method). None
