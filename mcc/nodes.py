@@ -1188,6 +1188,30 @@ class ResultLit:
 
 
 @dataclass
+class ErrorName:
+    """An error accessor: ``error_name(err)`` or ``error_message(err)``.
+
+    Renders a declared ``error`` value to a ``char*`` string at runtime.
+    ``error_name`` yields the variant's identifier (e.g. ``"NOT_FOUND"``);
+    ``error_message`` yields the variant's declared display string when it has
+    one, else falls back to the identifier -- so a message is never empty for a
+    real variant. Both funnel through a compiler-synthesized per-declaration
+    lookup function. Like ``ok``/``error``, the names are claimed only when
+    directly followed by ``(``, so they stay ordinary identifiers elsewhere.
+
+    Attributes:
+        operand: The error-typed expression to render.
+        display: ``True`` for ``error_message`` (display-or-identifier),
+            ``False`` for ``error_name`` (the identifier).
+        line: Source line for diagnostics.
+    """
+
+    operand: object
+    display: bool
+    line: int
+
+
+@dataclass
 class Except:
     """A ``try`` expression: ``try expr except (err) { H } [else { S }]``.
 

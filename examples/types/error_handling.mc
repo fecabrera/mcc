@@ -12,10 +12,12 @@ import "std/io";
 // Prerequisites: enums.mc (case/when, `Name::Member` reading) and
 // block_expressions.mc (`emit`, which the except handler reuses).
 //
-// This covers stages 1 through 3 of the roadmap epic (declarations, the
-// type, the constructors, every consuming form). Still staged: stage 4,
-// diagnostics and rendering (an error value boxing into `{}`, a warning
-// for a silently dropped result).
+// This covers all four stages of the roadmap epic: declarations, the type,
+// the constructors, every consuming form, and stage 4, rendering an error
+// to text with error_name/error_message plus the -Wunused-result warning
+// for a silently dropped result. One follow-up remains: an error value
+// still does not box into `any`/`{}`, so `println("{}", err)` cannot print
+// its name directly; use error_name/error_message to render one.
 
 // An `error` declaration is enum-like but NOMINAL: a distinct int32-backed
 // type with no arithmetic, no ordering, and no implicit integer conversion
@@ -38,6 +40,11 @@ error file_error {
 // ==/!= against members of its own declaration, and `case`. Nothing else:
 // `e + 1`, `e < f`, `!e`, and `return 1;` into a file_error all reject;
 // `e as int32` is the explicit numeric read-out.
+//
+// This function exists to show `case` over an error value. For turning an
+// error into its name or message you no longer need a hand-rolled switch:
+// stage 4's error_name/error_message builtins (used in main) do exactly
+// that. describe() maps to a bespoke phrasing, which a `case` still earns.
 fn describe(e: file_error) -> char* {
     case (e) {
         when file_error::NOT_FOUND:  return "not found";
@@ -102,9 +109,8 @@ fn slow_default() -> int32 {
 
 fn main() -> int32 {
     // Reading the numeric value out is an explicit escape, `as int32`; no
-    // cast goes the other way. (An error value does not box into `{}`
-    // either, until the rendering stage: print the read-out or a
-    // describe()-style string.)
+    // cast goes the other way. (An error value still does not box into `{}`;
+    // to render one to text use error_name/error_message, shown just below.)
     println("NOT_FOUND = {}, PERMISSION = {}",
             file_error::NOT_FOUND as int32, file_error::PERMISSION as int32);
     println("EXHAUSTED = {}, TIMEOUT = {}",
@@ -116,6 +122,21 @@ fn main() -> int32 {
     if (e) { println("e holds a cause: {}", describe(e)); }
     if (e == file_error::PERMISSION) { println("e == PERMISSION"); }
     if (e != file_error::NOT_FOUND)  { println("e != NOT_FOUND"); }
+
+    // STAGE 4, RENDERING: two builtins turn an error value into a char* at
+    // runtime, so a describe()-style switch is no longer needed just to name
+    // a cause. error_name yields the variant's IDENTIFIER; error_message
+    // yields its declared display string, FALLING BACK to the identifier
+    // when the variant declared none. Both are claimed only when directly
+    // followed by `(` (like ok(/error(), so the names stay ordinary
+    // identifiers otherwise; the operand must be a declared error value
+    // (error_name(5) is a compile error).
+    println("NOT_FOUND: name = {}, message = {}",
+            error_name(file_error::NOT_FOUND),      // "NOT_FOUND"
+            error_message(file_error::NOT_FOUND));  // "Not Found" (has display)
+    println("PERMISSION: name = {}, message = {}",
+            error_name(e),       // "PERMISSION"
+            error_message(e));   // "PERMISSION" (no display, falls back to name)
 
     // ok()/error() are context-typed like a bare struct literal: legal in
     // a return, a typed let, an assignment, an argument, or a struct
@@ -133,7 +154,11 @@ fn main() -> int32 {
     // check for any error type.
     let found, err = find(2);
     if (err) { println("never printed: find(2) is ok"); }
-    println("find(2): found = {}, err reads out as {}", found, err as int32);
+    // On ok, err is the reserved zero no-error state: it reads out as 0, and
+    // error_name/error_message of a non-cause render as the empty string
+    // (bracketed here to make the emptiness visible).
+    println("find(2): found = {}, err reads out as {}, error_name is [{}]",
+            found, err as int32, error_name(err));
 
     // On error, err is the cause and ret is the ZERO VALUE of T: zero
     // filled, never the union's other-arm bytes reinterpreted.
@@ -198,6 +223,14 @@ fn main() -> int32 {
     try flush(false) except (err) {
         println("never printed: flush(false) is ok");
     };
+
+    // DELIBERATE DISCARD, THE -Wunused-result SUPPRESSOR: producing a result
+    // in statement position and dropping it (a bare `flush(false);`) drops
+    // the error it may carry, so under -Wall that warns. Every consuming form
+    // above (bind, destructure, any `try`) silences it; when you genuinely
+    // mean to ignore the outcome, bind it to `_`, the conventional throwaway
+    // name (mcc has no special blank identifier, `_` is just an ordinary one).
+    let _ = flush(false);   // outcome intentionally ignored, no warning
 
     // Bare-try propagation observed from outside: wrap() forwards find's
     // error unchanged, and adds 1000 on the ok path. (main itself returns

@@ -512,16 +512,22 @@ already do).
         [pointer-truthiness item](#functions-and-methods) turns on its
         null-coalescing arm over this same production — implemented, see
         [Propagation: bare try](docs/language.md#propagation-bare-try)
-  - [ ] stage 4: diagnostics and rendering — `-Wunused-result`, an opt-in
+  - [x] stage 4: diagnostics and rendering — `-Wunused-result`, an opt-in
         class over the shipped
         [warning registry](#metaprogramming-and-builtins) for a statement
         that discards a `result` (the accidental-ignore hole the design
-        exists to close); per-declaration variant name/display tables and
-        an `error_name(err)` builtin rendering a variant's name or its
-        declared display string; automatic `{}` rendering of an error
-        value through [formatted print](#strings-and-formatting) is the
-        follow-up, once formatting user-declared types has a general
-        answer
+        exists to close; every consuming form is silent, and `let _ = f();`
+        is the deliberate-discard suppressor); and per-declaration variant
+        name tables behind two builtins — `error_name(err)` (the variant
+        identifier) and `error_message(err)` (its declared display string,
+        falling back to the identifier) — implemented, see
+        [Rendering](docs/language.md#rendering-error_name-and-error_message).
+        Follow-up:
+    - [ ] automatic `{}` rendering of an error value through
+          [formatted print](#strings-and-formatting) — `println("{}", err)`
+          printing the variant name directly, once formatting
+          user-declared types has a general answer (the format machinery is
+          a closed set that cannot yet enumerate user error declarations)
   - [ ] stdlib adoption wave — migrate the mcc-native out-param surface
         (the `dict_get`/`list_get`/`set_get`/`string_get` family and
         future file/parse APIs) to `result` returns, explicitly **after**

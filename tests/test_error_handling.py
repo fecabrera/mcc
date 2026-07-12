@@ -2393,3 +2393,183 @@ def test_dangling_else_binds_the_inner_try():
         }
         """
     ) == 42
+
+
+# --- stage 4: error_name / error_message accessors -------------------------
+#
+# `error_name(err)` renders a declared error value to its variant identifier
+# (`"NOT_FOUND"`); `error_message(err)` renders its declared display string,
+# falling back to the identifier when the variant declared none. Both funnel
+# through a compiler-synthesized per-declaration switch (one internal function
+# each, cached), keyed on the error's int32 value; the reserved zero no-error
+# state and any unreachable gap render as the empty string. The names are
+# claimed only when directly followed by `(`, so they stay identifiers.
+
+ACC = (
+    "error acc_error {\n"
+    '    NOT_FOUND = "Not Found",\n'   # 1, display
+    "    PERMISSION,\n"                # 2, no display
+    "    EXHAUSTED = 100,\n"           # explicit value (gap 3..99)
+    "    TIMEOUT,\n"                   # 101, resumes from 100 + 1
+    "}\n"
+)
+ACC_FIND = (
+    "fn afind(key: int32) -> result<int32, acc_error> {\n"
+    "    if (key == 0) { return error(acc_error::NOT_FOUND); }\n"
+    "    return ok(key);\n"
+    "}\n"
+)
+
+
+def test_error_name_returns_the_variant_identifier(capfd):
+    # Every variant, including the explicit-value and post-gap ones, renders
+    # as its own spelled identifier -- never the display string.
+    assert run(
+        'import "std/io";\n' + ACC
+        + """
+        fn main() -> int32 {
+            println("{}", error_name(acc_error::NOT_FOUND));
+            println("{}", error_name(acc_error::PERMISSION));
+            println("{}", error_name(acc_error::EXHAUSTED));
+            println("{}", error_name(acc_error::TIMEOUT));
+            return 0;
+        }
+        """
+    ) == 0
+    out, _ = capfd.readouterr()
+    assert out == "NOT_FOUND\nPERMISSION\nEXHAUSTED\nTIMEOUT\n"
+
+
+def test_error_message_prefers_display_then_identifier(capfd):
+    # A declared display string wins; a variant without one falls back to its
+    # identifier, so a message is never empty for a real variant.
+    assert run(
+        'import "std/io";\n' + ACC
+        + """
+        fn main() -> int32 {
+            println("{}", error_message(acc_error::NOT_FOUND));
+            println("{}", error_message(acc_error::PERMISSION));
+            println("{}", error_message(acc_error::EXHAUSTED));
+            println("{}", error_message(acc_error::TIMEOUT));
+            return 0;
+        }
+        """
+    ) == 0
+    out, _ = capfd.readouterr()
+    assert out == "Not Found\nPERMISSION\nEXHAUSTED\nTIMEOUT\n"
+
+
+def test_error_accessors_run_through_a_destructured_result(capfd):
+    # The realistic path: name/message a value pulled out of a real result.
+    assert run(
+        'import "std/io";\n' + ACC + ACC_FIND
+        + """
+        fn main() -> int32 {
+            let value, err = afind(0);
+            if (err) {
+                println("{}: {}", error_name(err), error_message(err));
+            }
+            return 0;
+        }
+        """
+    ) == 0
+    out, _ = capfd.readouterr()
+    assert out == "NOT_FOUND: Not Found\n"
+
+
+def test_error_name_of_the_zero_no_error_state_is_empty(capfd):
+    # A successful destructure binds `err` to the reserved zero state, which
+    # names no variant: the accessors render the empty string (the sentinel
+    # brackets show it is genuinely empty, not a missing line).
+    assert run(
+        'import "std/io";\n' + ACC + ACC_FIND
+        + """
+        fn main() -> int32 {
+            let value, err = afind(7);
+            println("[{}][{}]", error_name(err), error_message(err));
+            return 0;
+        }
+        """
+    ) == 0
+    out, _ = capfd.readouterr()
+    assert out == "[][]\n"
+
+
+def test_error_name_rejects_a_non_error():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "error_name() takes a declared error value, got int32"
+        ),
+    ):
+        compile_ir(
+            "fn f() -> int32 { let n = error_name(5); return 0; }"
+        )
+
+
+def test_error_message_rejects_a_non_error():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "error_message() takes a declared error value, got bool"
+        ),
+    ):
+        compile_ir(
+            "fn f() -> int32 { let n = error_message(true); return 0; }"
+        )
+
+
+def test_error_name_in_a_const_initializer_is_not_constant():
+    # The accessors are runtime lookups; a const global initializer rejects
+    # one through the ordinary not-a-constant path.
+    with pytest.raises(
+        LangError, match="const initializer must be a compile-time constant"
+    ):
+        compile_ir(
+            ACC
+            + 'const g: char* = error_name(acc_error::NOT_FOUND);\n'
+            + "fn main() -> int32 { return 0; }\n"
+        )
+
+
+def test_error_name_stays_an_ordinary_identifier():
+    # Only the call shape `error_name(` / `error_message(` is claimed; the
+    # bare names remain usable as ordinary variables.
+    assert run(
+        """
+        fn main() -> int32 {
+            let error_name: int32 = 40;
+            let error_message: int32 = 2;
+            return error_name + error_message;
+        }
+        """
+    ) == 42
+
+
+def test_error_accessor_lowers_to_one_cached_function_each():
+    # Repeated calls share a single synthesized internal function per accessor
+    # (cached), and each call site is a plain call to it.
+    ir = compile_ir(
+        ACC
+        + """
+        fn f(e: acc_error) -> char* {
+            let a = error_name(e);
+            let b = error_name(e);
+            let c = error_message(e);
+            return a;
+        }
+        """
+    )
+    assert ir.count('define internal i8* @"error.name.acc_error"') == 1
+    assert ir.count('define internal i8* @"error.message.acc_error"') == 1
+    assert ir.count('call i8* @"error.name.acc_error"') == 2
+    assert ir.count('call i8* @"error.message.acc_error"') == 1
+
+
+def test_error_accessor_does_not_leak_into_the_interface():
+    # `error_name` lives only in a function body; a public result-returning
+    # prototype renders normally, with no accessor symbol in the stub.
+    stub = iface(ACC + ACC_FIND)
+    assert "afind" in stub
+    assert "error_name" not in stub
+    assert "error.name" not in stub

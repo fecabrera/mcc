@@ -53,11 +53,16 @@ areas:
 
 ### 1. Error handling model — the single biggest gap
 
-> **Update (2026-07-11):** designed and promoted to the
+> **Update (2026-07-11):** **implemented** and on the
 > [roadmap](../ROADMAP.md#types-and-generics) as `result<T, E>` /
-> `result<E>` over dedicated `error` declarations, with `try`
-> propagation and `errdefer` as staged items — the error-union
-> recommendation below, satisfied in spirit under a different surface.
+> `result<E>` over dedicated `error` declarations. All four language stages
+> shipped: the error declaration and result type with `ok()`/`error()`
+> construction, the `let ret, err =` destructure and `try … except …
+> [else]` handler, bare `try` propagation, the `??` fallback and the `try`
+> statement, and `-Wunused-result` plus the `error_name`/`error_message`
+> accessors — the error-union recommendation below, satisfied in spirit
+> under a different surface (`errdefer` and automatic `{}` rendering remain
+> nested follow-ups). See [Error handling](language.md#error-handling).
 
 Today errors are libc-style: sentinel returns and `errno`. Nothing on the
 roadmap addresses this, yet it shapes every API the stdlib will ever grow.

@@ -1117,3 +1117,138 @@ def test_report_error_class_leaves_other_classes_as_warnings(capsys):
     assert capsys.readouterr().err == (
         "w.mc: error: line 1: m [-Werror=unchecked-dereference]\n"
         "w.mc: warning: line 2: d [-Wdead-code]\n")
+
+
+# --- -Wunused-result: a result produced and silently dropped ---------------
+#
+# A result carries an error; dropping one in statement position drops the
+# error on the floor -- the accidental-ignore hole the error-handling design
+# exists to close. Every consuming form (a `let` binding, the destructure,
+# `try`/`except`, an argument, a return) counts as handled; only a truly-
+# dropped result warns. The deliberate suppressor is a `_` binding.
+
+UNUSED = "unused-result"
+UNUSED_MSG = ("discarded result may carry an error (bind it, destructure it "
+              "with 'let v, err =', handle it with 'try', or explicitly "
+              "discard it with 'let _ = ...')")
+
+# error decl + a result<T,E> function, a result<E> function, and a taker.
+RESULT_PRELUDE = (
+    "error e { OOPS }\n"
+    "fn f(k: int32) -> result<int32, e> {\n"
+    "    if (k == 0) { return error(e::OOPS); }\n"
+    "    return ok(k);\n"
+    "}\n"
+    "fn g(bad: int32) -> result<e> {\n"
+    "    if (bad) { return error(e::OOPS); }\n"
+    "    return ok();\n"
+    "}\n"
+    "fn take(r: result<int32, e>) -> int32 { let a, b = r; return a; }\n"
+)
+
+
+def unused_result_warnings(source: str) -> list[tuple[str, int]]:
+    """The unused-result emissions of a source, as (message, line)."""
+    return [(w.message, w.line)
+            for w in generate(source).warnings if w.wclass == UNUSED]
+
+
+def caller(body: str) -> str:
+    """Wrap a statement body in a caller after the shared result prelude.
+
+    The body's first line is line 12 (the prelude is ten lines, then the
+    caller signature).
+    """
+    return RESULT_PRELUDE + "fn caller() {\n" + body + "\n}\n"
+
+
+def test_dropped_result_warns():
+    # A bare call whose value is a result and is discarded.
+    assert unused_result_warnings(caller("    f(1);")) == [(UNUSED_MSG, 12)]
+
+
+def test_dropped_result_e_warns():
+    # The error-only result<E> discarded in statement position warns too --
+    # it is nothing but an error. (Its handled forms are `try`/`except`.)
+    assert unused_result_warnings(caller("    g(1);")) == [(UNUSED_MSG, 12)]
+
+
+def test_dropping_a_stored_result_variable_warns():
+    # Not only calls: a result-typed variable evaluated and dropped as a
+    # statement also loses its error.
+    assert unused_result_warnings(
+        caller("    let r = f(1);\n    r;")
+    ) == [(UNUSED_MSG, 13)]
+
+
+def test_binding_a_result_does_not_warn():
+    assert unused_result_warnings(caller("    let r = f(1);")) == []
+
+
+def test_destructuring_a_result_does_not_warn():
+    assert unused_result_warnings(caller("    let v, err = f(1);")) == []
+
+
+def test_underscore_binding_suppresses_the_warning():
+    # The documented deliberate-discard escape hatch: bind to `_`.
+    assert unused_result_warnings(caller("    let _ = f(1);")) == []
+
+
+def test_try_propagate_statement_does_not_warn():
+    # `try f();` consumes the result (propagate-or-continue). The caller must
+    # be able to absorb the error, so it returns a matching result.
+    src = (
+        RESULT_PRELUDE
+        + "fn caller() -> result<e> {\n"
+        "    try f(1);\n"
+        "    return ok();\n"
+        "}\n"
+    )
+    assert unused_result_warnings(src) == []
+
+
+def test_try_except_statement_does_not_warn():
+    assert unused_result_warnings(
+        caller("    try f(0) except (err) { };")
+    ) == []
+
+
+def test_try_fallback_binding_does_not_warn():
+    assert unused_result_warnings(caller("    let d = try f(0) ?? 0;")) == []
+
+
+def test_passing_a_result_as_an_argument_does_not_warn():
+    # The result flows into `take` -- consumed, not dropped.
+    assert unused_result_warnings(caller("    let n = take(f(1));")) == []
+
+
+def test_returning_a_result_does_not_warn():
+    src = (
+        RESULT_PRELUDE
+        + "fn passthru(k: int32) -> result<int32, e> { return f(k); }\n"
+    )
+    assert unused_result_warnings(src) == []
+
+
+def test_a_dropped_non_result_never_warns():
+    # An ordinary discarded expression statement is not the class's business.
+    assert unused_result_warnings(caller("    let n = take(f(1));\n    n;")) == []
+
+
+def test_unused_result_is_off_without_the_flag():
+    # Collection is unconditional but the driver gates it: a bare -Werror
+    # build (this repo's CI) never fails on a class it did not enable.
+    from mcc.driver import _report_warnings
+    note = Note(UNUSED_MSG, 11, "w.mc", UNUSED)
+    assert _report_warnings([note], Path("w.mc"), True) is False
+
+
+def test_unused_result_promotes_under_its_selective_werror(capsys):
+    from mcc.driver import _report_warnings
+    note = Note(UNUSED_MSG, 11, "w.mc", UNUSED)
+    enabled = frozenset({UNUSED})
+    error_classes = frozenset({UNUSED})
+    assert _report_warnings(
+        [note], Path("w.mc"), False, enabled, error_classes) is True
+    assert capsys.readouterr().err == (
+        f"w.mc: error: line 11: {UNUSED_MSG} [-Werror=unused-result]\n")

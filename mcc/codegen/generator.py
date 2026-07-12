@@ -49,6 +49,7 @@ from mcc.nodes import (
     EnumAccess,
     EnumDecl,
     ErrorDirective,
+    ErrorName,
     Except,
     ExprStmt,
     FloatLit,
@@ -598,6 +599,13 @@ class CodeGen:
         # (source, name) so other files may reuse the name (like @static structs).
         self.enums: dict[str, EnumType] = {}
         self.static_enums: dict[tuple[str | None, str], EnumType] = {}
+        # Declared error types keyed by their (possibly salted) nominal type
+        # name, so an error value's `LangType` maps back to its `EnumType` --
+        # the source for the `error_name`/`error_message` accessor tables.
+        self.error_types: dict[str, EnumType] = {}
+        # Cache of synthesized `(type name, display) -> ir.Function` accessors,
+        # so each error declaration's name/message switch is built at most once.
+        self.error_accessors: dict[tuple[str, bool], ir.Function] = {}
         # Type aliases: name -> Alias (transparent; resolved lazily). @static
         # aliases are file-scoped, like @static structs/enums.
         self.type_aliases: dict[str, Alias] = {}
@@ -852,6 +860,27 @@ class CodeGen:
             # block -- every generated path of which diverged.
             what = "every path through the statement above diverges"
         self.warn(f"unreachable code: {what}", stmt.line, wclass="dead-code")
+
+    def warn_unused_result(self, line: int) -> None:
+        """Warn under ``-Wunused-result`` that a discarded value carries an error.
+
+        The single formatter for the class: a bare expression statement whose
+        value is a ``result<...>`` funnels through here. A dropped result drops
+        the error it may carry on the floor -- the accidental-ignore hole the
+        error-handling design exists to close -- so it warns unless the value
+        was consumed by one of the result forms (``let`` binding, destructure,
+        ``try``/``except``) or explicitly discarded (``let _ = f();``). Like
+        every opt-in class it never changes the code generated.
+
+        Args:
+            line: The discarding statement's 1-based source line.
+        """
+        self.warn(
+            "discarded result may carry an error (bind it, destructure it "
+            "with 'let v, err =', handle it with 'try', or explicitly "
+            "discard it with 'let _ = ...')",
+            line, wclass="unused-result",
+        )
 
     def warn_deprecated(self, name: str, msg: str | None, line: int) -> None:
         """Warn that a ``@deprecated`` function was resolved, when ``msg`` is set.
@@ -2790,6 +2819,9 @@ class CodeGen:
         enum = EnumType(
             err_type, {}, decl.private, decl.source, displays=dict(decl.displays)
         )
+        # Keyed by the nominal type name (salted for @static), the reverse map
+        # an error value's LangType uses to find its variant/display tables.
+        self.error_types[name] = enum
         if decl.static:
             key = (decl.source, decl.name)
             if key in self.static_enums or key in self.static_structs:
@@ -7160,7 +7192,13 @@ class CodeGen:
                 # statement's.
                 self.gen_try_discard(stmt.expr)
             else:
-                self.gen_expr(stmt.expr)
+                value = self.gen_expr(stmt.expr)
+                # A result produced in statement position and dropped is the
+                # accidental-error-discard hole: warn under -Wunused-result.
+                # try/except/destructure/binding all consume elsewhere; only a
+                # truly-dropped result (`f();`) reaches here.
+                if is_result(strip_const(value.type)):
+                    self.warn_unused_result(stmt.line)
         else:
             raise LangError(f"cannot compile statement {stmt!r}", stmt.line)
 
@@ -8601,6 +8639,8 @@ class CodeGen:
                 "or field",
                 expr.line,
             )
+        if isinstance(expr, ErrorName):
+            return self.gen_error_name(expr)
         if isinstance(expr, TupleLit):
             return self.gen_tuple_lit(expr)
         if isinstance(expr, BlockExpr):
@@ -10754,6 +10794,97 @@ class CodeGen:
         return TypedValue(
             self.builder.bitcast(self.string_global(text), CHARPTR.ir), CHARPTR
         )
+
+    def gen_error_name(self, expr: ErrorName) -> TypedValue:
+        """Lower ``error_name(err)`` / ``error_message(err)`` to a ``char*``.
+
+        The operand must be a declared [error](#error-declarations) value. The
+        result is looked up at runtime through a per-declaration synthesized
+        function (:meth:`error_accessor_fn`) keyed on the error's ``int32``
+        value: ``error_name`` returns the matched variant's identifier, and
+        ``error_message`` its declared display string, falling back to the
+        identifier when the variant declared none. The reserved zero no-error
+        state and any unreachable value gap render as the empty string.
+
+        Args:
+            expr: The ``ErrorName`` node.
+
+        Returns:
+            The rendered name as a ``char*`` ``TypedValue``.
+
+        Raises:
+            LangError: When the operand is not a declared error value.
+        """
+        tv = self.gen_expr(expr.operand)
+        err_t = strip_const(tv.type)
+        if not is_error_decl(err_t):
+            what = "error_message" if expr.display else "error_name"
+            raise LangError(
+                f"{what}() takes a declared error value, got {tv.type}",
+                expr.line,
+            )
+        enum = self.error_types[err_t.name]
+        fn = self.error_accessor_fn(err_t.name, enum, expr.display)
+        return TypedValue(self.emit_call(fn, [tv.value]), CHARPTR)
+
+    def error_accessor_fn(
+        self, type_name: str, enum: "EnumType", display: bool
+    ) -> ir.Function:
+        """Synthesize (once) the name/message lookup for an error declaration.
+
+        Builds an ``internal`` ``char* (i32)`` function that switches on an
+        error value and returns the string for the matching variant -- the
+        identifier for ``error_name``, the declared display string (or the
+        identifier when absent) for ``error_message``. A ``switch`` handles any
+        value distribution -- dense auto-numbering, explicit gaps, negatives --
+        and its default (the reserved zero state or any unreachable gap) returns
+        the empty string. Cached per ``(type name, display)`` so repeated
+        accessor calls share one function.
+
+        Args:
+            type_name: The error's nominal (salted for ``@static``) type name.
+            enum: The error declaration's ``EnumType`` (its variant table and
+                display strings).
+            display: ``True`` for ``error_message``, ``False`` for
+                ``error_name``.
+
+        Returns:
+            The synthesized accessor function.
+        """
+        key = (type_name, display)
+        cached = self.error_accessors.get(key)
+        if cached is not None:
+            return cached
+        err_ir = enum.underlying.ir
+        fnty = ir.FunctionType(CHARPTR.ir, [err_ir])
+        kind = "message" if display else "name"
+        fn = ir.Function(self.module, fnty, name=f"error.{kind}.{type_name}")
+        fn.linkage = "internal"
+        entry = fn.append_basic_block("entry")
+        merge = fn.append_basic_block("merge")
+        default_bb = fn.append_basic_block("unknown")
+        builder = ir.IRBuilder(entry)
+        switch = builder.switch(fn.args[0], default_bb)
+        incoming: list[tuple[ir.Value, ir.Block]] = []
+        for mname, member in enum.members.items():
+            text = enum.displays.get(mname, mname) if display else mname
+            case_bb = fn.append_basic_block(f"v{member.value.constant}")
+            switch.add_case(member.value, case_bb)
+            case_builder = ir.IRBuilder(case_bb)
+            ptr = case_builder.bitcast(self.string_global(text), CHARPTR.ir)
+            case_builder.branch(merge)
+            incoming.append((ptr, case_bb))
+        default_builder = ir.IRBuilder(default_bb)
+        empty = default_builder.bitcast(self.string_global(""), CHARPTR.ir)
+        default_builder.branch(merge)
+        incoming.append((empty, default_bb))
+        merge_builder = ir.IRBuilder(merge)
+        phi = merge_builder.phi(CHARPTR.ir)
+        for value, block in incoming:
+            phi.add_incoming(value, block)
+        merge_builder.ret(phi)
+        self.error_accessors[key] = fn
+        return fn
 
     def const_string(self, text: str) -> ir.Constant:
         """Build a constant ``uint8*`` to a string's first byte.

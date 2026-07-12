@@ -33,6 +33,7 @@ from mcc.nodes import (
     EnumAccess,
     EnumDecl,
     ErrorDirective,
+    ErrorName,
     Except,
     ExprStmt,
     Import,
@@ -2781,6 +2782,16 @@ class Parser:
                         )
                 self.expect(")")
                 return ResultLit(tok.text, value, tok.line)
+            # `error_name(` / `error_message(` are the error accessors, claimed
+            # by the same call shape so the names stay ordinary identifiers.
+            if (
+                tok.text in ("error_name", "error_message")
+                and self.cur.kind == "("
+            ):
+                self.advance()
+                operand = self.parse_expr()
+                self.expect(")")
+                return ErrorName(operand, tok.text == "error_message", tok.line)
             if self.cur.kind == "::":
                 self.advance()
                 member = self.expect("IDENT").text

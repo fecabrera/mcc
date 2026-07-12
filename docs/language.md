@@ -1798,6 +1798,36 @@ the output render that already spoke `[-Werror=<name>]`.
 See [examples/systems/extern_nonnull.mc](../examples/systems/extern_nonnull.mc)
 for the three postures on a foreign declaration.
 
+#### -Wunused-result
+
+A [`result`](#error-handling) carries either an ok value **or** an error, so
+producing one in statement position and silently dropping it drops the error
+on the floor — the accidental-ignore hole the error-handling design exists to
+close. The class warns on exactly that: a bare expression statement whose
+value is a `result<T, E>` / `result<E>`, discarded.
+
+```
+example.mc: warning: line 7: discarded result may carry an error (bind it, destructure it with 'let v, err =', handle it with 'try', or explicitly discard it with 'let _ = ...') [-Wunused-result]
+```
+
+Only a truly-dropped result warns. Every way of *consuming* one counts as
+handled and stays silent: binding it (`let r = f();`), destructuring it
+(`let v, err = f();`), a `try` in any ending (`try f();`,
+`try f() except (err) { }`, `try f() ?? v`), passing it as an argument, or
+returning it. When you mean to ignore the error deliberately, bind it to `_` —
+the conventional throwaway name (mcc has no special blank identifier; `_` is
+an ordinary identifier used by convention):
+
+```c
+let _ = maybe_fail();     // deliberate discard: silenced
+```
+
+Like the other opt-in classes it is default-off — `-Wunused-result` (or
+`-Wall`) enables it, and under `-Werror` it promotes as
+`[-Werror=unused-result]`, a bare `-Werror` build unaffected. See
+[examples/types/error_handling.mc](../examples/types/error_handling.mc) for
+the discard and its suppressor.
+
 ### Deprecated functions
 
 `@deprecated("message")` is a declaration attribute on a function: the
@@ -4056,11 +4086,11 @@ every axis that matters for errors:
   declared, constructed, or named — a function that has no error to report
   returns `ok(...)`. Its only purpose is to make `if (err)` a total check
   once the binding forms land.
-- **A variant may carry a display string** — `NOT_FOUND = "Not Found"` —
-  data for the planned rendering stage (`error_name(err)` and `{}`
-  formatting), stored in the declaration and carried through `.mci` stubs.
-  A variant takes a value *or* a display string, not both; a display string
-  does not affect the numbering.
+- **A variant may carry a display string** — `NOT_FOUND = "Not Found"` — the
+  human-facing message [`error_message`](#rendering-error_name-and-error_message)
+  renders, stored in the declaration and carried through `.mci` stubs. A
+  variant takes a value *or* a display string, not both; a display string does
+  not affect the numbering.
 
 An error value supports exactly the operations a failure cause needs:
 truthiness (`if (err)` tests against the zero state), `==`/`!=` against
@@ -4333,6 +4363,43 @@ anything else after a statement-position `try` is an expression statement
 — `try (r);` propagates a parenthesized operand. Arity 2 only: an
 error-only `result<E>` has nothing to bind, so `try f();` or the
 statement-position `except` form handle it without the binding.
+
+### Rendering: error_name and error_message
+
+An error carries a *meaning*, and two builtins render it to a `char*` at
+runtime:
+
+- **`error_name(err)`** yields the variant's identifier — `"NOT_FOUND"` — the
+  stable, programmatic name (for logging, for a `{}` you drive yourself).
+- **`error_message(err)`** yields the variant's declared
+  [display string](#error-declarations) when it has one, and falls back to the
+  identifier when it does not — so a message is never empty for a real
+  variant. It is the human-facing "this is why it failed".
+
+```c
+let value, err = find(key);
+if (err) {
+    println("{}: {}", error_name(err), error_message(err));
+    // e.g.  NOT_FOUND: Not Found     (PERMISSION, with no display
+    //       string, would print  PERMISSION: PERMISSION)
+}
+```
+
+The operand must be a declared error value (`error_name(5)` rejects). Both
+render through a compiler-synthesized per-declaration lookup keyed on the
+error's value, so they cover explicit-valued and gapped variants alike; the
+reserved zero no-error state (a destructured `err` on the success path) and
+any unreachable value render as the empty string. `error_name` and
+`error_message` are not keywords — only the call shape is claimed, so the
+names stay ordinary identifiers elsewhere.
+
+Automatic `{}` formatting of an error value — `println("{}", err)` printing
+its name directly — is a separate follow-up: the
+[formatted-print](#strings-and-formatting) machinery is a closed set that
+cannot yet enumerate user-declared error types, so `error_name` /
+`error_message` are the shipped rendering surface (an error value still does
+not box into `any`/`{}`). See
+[the roadmap](../ROADMAP.md#types-and-generics).
 
 See [examples/types/error_handling.mc](../examples/types/error_handling.mc)
 for the full tour.

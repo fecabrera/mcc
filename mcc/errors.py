@@ -9,7 +9,9 @@ from dataclasses import dataclass
 # being registered: "error" (`-Werror` is its own flag) and "all" (`-Wall`
 # expands here). A class name may not start with "no-", keeping the
 # `-Wno-<name>` spelling claimable for per-class disabling later.
-WARNING_CLASSES = frozenset({"unchecked-dereference", "dead-code", "extern-nonnull"})
+WARNING_CLASSES = frozenset(
+    {"unchecked-dereference", "dead-code", "extern-nonnull", "unused-result"}
+)
 
 
 @dataclass

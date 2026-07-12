@@ -28,6 +28,32 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Error handling stage 4: `-Wunused-result` and the `error_name` /
+  `error_message` accessors** — the final language stage of the epic. **A
+  new opt-in warning class**, `-Wunused-result` (default-off like the rest;
+  `-Wall` enables it, `-Werror=unused-result` promotes it), reports a
+  `result` produced in statement position and silently dropped — the
+  accidental-error-discard hole the design exists to close. Every consuming
+  form stays silent (a `let` binding, the `let v, err =` destructure, a
+  `try` in any ending, passing the result as an argument, returning it);
+  only a truly-dropped `f();` warns. The deliberate-discard suppressor is a
+  `_` binding — `let _ = maybe_fail();` — using the conventional throwaway
+  name (mcc has no special blank identifier). **Two rendering builtins**
+  turn an error value into a `char*` at runtime: `error_name(err)` yields
+  the variant's identifier (`"NOT_FOUND"`), and `error_message(err)` yields
+  its declared [display string](docs/language.md#error-declarations) when it
+  has one, falling back to the identifier otherwise — the human-facing "why
+  it failed". Both render through a compiler-synthesized per-declaration
+  lookup keyed on the error's value (covering explicit-valued and gapped
+  variants; the reserved zero no-error state renders as the empty string),
+  and both stay ordinary identifiers unless directly followed by `(`. The
+  operand must be a declared error value (`error_name(5)` rejects).
+  Automatic `{}` rendering of an error value stays a follow-up (the format
+  machinery cannot yet enumerate user-declared types). See
+  [Rendering](docs/language.md#rendering-error_name-and-error_message),
+  [-Wunused-result](docs/language.md#-wunused-result), and
+  [examples/types/error_handling.mc](examples/types/error_handling.mc).
+
 - **Error handling stage 3: the rest of the `try` production — bare
   propagation, the `??` fallback, and the `try` statement** — a `try` now
   takes exactly one of three endings. **Bare `try g()`** propagates: on
