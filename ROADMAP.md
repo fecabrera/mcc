@@ -1653,10 +1653,50 @@ already do).
         list before `::`, the method's own after) and an `interface.py` fix so a
         method whose signature never names its struct still pulls it into the
         `.mci` stub
-    - [ ] generic-method call/receiver refinements deferred from the slice
-          above: bare-`point` receiver sugar (a bare `point` inside a
-          `point<T>::` method meaning `point<T>`), and explicit type args at a
-          `::` call (`point<float64>::method(...)`, which does not parse today)
+    - [ ] bare-`point` receiver sugar — inside `fn point<T>::method(...)` a
+          bare `point` (no type args) means `point<T>`, the qualifier struct
+          applied to its own type params. Those struct params are the leading
+          entries of the method's merged type-param list, in scope at parse time
+          in `parse_function`, so the mechanism is a parse-time rewrite (each
+          bare `TypeRef` whose name is the qualifier and which carries no type
+          args gets the struct's params attached) with no codegen change:
+          `lang_type` then resolves it through the existing `type_bindings` path
+          exactly as the explicit `self: point<T>` form does today. USER RULING
+          on scope — the target is the WHOLE METHOD BODY, not just the
+          signature: bare `point` expands across all params and the return type
+          AND in body type expressions (`let q: point`, `sizeof(point)`, a cast
+          `x as point`). This is broader than the signature-only spike (which
+          leaves a `self: point` works / `let r: point` errors seam); whole-body
+          needs either a body `TypeRef` walk or a resolution-time rewrite that
+          carries the current-method context. Explicit `self: point<T>` stays
+          valid alongside the sugar (additive — existing code depends on it).
+          Shipping note: this FLIPS a shipped ruling — `tests/test_methods.py`
+          has `test_bare_generic_receiver_still_requires_type_args` asserting the
+          arity error, and `docs/language.md` (the "#### Methods on a generic
+          struct" area) states there is no such sugar; both must be updated when
+          it lands. Independent of the explicit-type-args refinement below
+          (parser-only, no shared prerequisite — either can ship first)
+    - [ ] explicit type args at a `::` call — allow
+          `point<float64>::method(args)` (today errors `unexpected token '::'`,
+          because `try_type_args` only commits a `<...>` when it is followed by
+          `(` or `{`, not `::`). Minimal approach is parser-only: let
+          `try_type_args` also commit a list before `::` and thread the parsed
+          args into the `Call(f"{Type}::{method}", type_args, ...)`; because a
+          method's struct type params are the LEADING entries of its merged
+          type-param list, the existing explicit-type-args binding path then
+          binds the struct params for free. This works cleanly for a method with
+          NO own type params. USER RULING — the binding semantics WHEN THE METHOD
+          ALSO HAS ITS OWN TYPE PARAMS (e.g. `fn box<T>::wrap<U>`) is an OPEN
+          decision, deliberately deferred; the implementer must choose among:
+          (a) the `<...>` binds only the struct params and the method's own
+          params still infer (intuitive, but needs a small `Func` field
+          remembering the struct/method type-param split plus relaxing the arity
+          check for `::` calls); (b) minimal — allow explicit args only when the
+          method has no own type params and keep erroring otherwise (pure parser,
+          zero codegen); (c) a second type-arg list
+          `point<float64>::map<int32>(...)` (a bigger parser change). No option
+          is chosen. Independent of the bare-`point` sugar above (parser-only,
+          no shared prerequisite — either can ship first)
   - [ ] receiver kind — the shipped foundation already lets the receiver be any
         ordinary `const` / `mut` / by-value parameter with no enforced `self`
         convention; this item makes the three receiver flavors a formal, checked
