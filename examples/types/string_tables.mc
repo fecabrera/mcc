@@ -22,18 +22,18 @@ fn main() -> int32 {
     // A local table: each literal adapts to its slice<char> element.
     let dirs: slice<char>[2] = ["bin", "usr/bin"];
 
-    // Index it at runtime like any array. writestr takes a slice, so entries
+    // Index it at runtime like any array. print takes a slice, so entries
     // pass straight through; .length is the NUL-free text length.
     let i: uint64 = 0;
     while (i < len(dirs)) {
-        writestr(dirs[i]);
+        print(dirs[i]);
         println(": {} chars", dirs[i].length);   // 3, then 7
         i += 1;
     }
 
     // The @static table indexes the same way.
-    writestr(prompt);
-    writeln(levels[1]);                            // "> warn"
+    print(prompt);
+    println(levels[1]);                            // "> warn"
     println("levels[2] is {} chars", levels[2].length);   // 5
     return 0;
 }

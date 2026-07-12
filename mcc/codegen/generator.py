@@ -685,6 +685,12 @@ class CodeGen:
         # (Generic templates carry the message on the Func node instead and
         # are checked when overload resolution picks them.)
         self.deprecated_syms: dict[str, str] = {}
+        # True while emitting the body of a function that is itself
+        # @deprecated: a deprecated function may delegate to other deprecated
+        # functions (a deprecation shim among the deprecated cluster) without
+        # each such call re-warning. Only the enclosing-function-is-deprecated
+        # case is exempt; a live function calling a deprecated one still warns.
+        self.in_deprecated_body = False
         # Per-function transitive write-effect bits, keyed by id(Func) for
         # every function with a body (a generic template takes ONE bit for
         # all its instances -- the candidate union); True means the function
@@ -888,9 +894,12 @@ class CodeGen:
         The single formatter for deprecation warnings: every resolution point
         (direct call, generic overload pick, function value, for-in protocol)
         funnels through here, so the ``'name' is deprecated: msg`` wording is
-        emitted uniformly. There is no suppression -- a call from another
-        deprecated function warns too; the driver deduplicates repeats of one
-        call site (e.g. per-instantiation re-emissions) at print time.
+        emitted uniformly. One suppression applies: a call made from within the
+        body of a function that is itself ``@deprecated`` does not warn (see
+        ``in_deprecated_body``), so a deprecation shim delegating among the
+        deprecated cluster stays quiet; a live function calling a deprecated
+        one still warns. The driver deduplicates repeats of one call site
+        (e.g. per-instantiation re-emissions) at print time.
 
         Args:
             name: The name the caller used, reported repr-quoted.
@@ -898,7 +907,7 @@ class CodeGen:
                 (a no-op, so lookups can be passed straight in).
             line: The call site's 1-based source line.
         """
-        if msg is not None:
+        if msg is not None and not self.in_deprecated_body:
             self.warn(f"{name!r} is deprecated: {msg}", line)
 
     def check_removed(self, name: str, line: int) -> None:
@@ -4923,7 +4932,16 @@ class CodeGen:
                 slot.align = type_align(ptype)
             self.builder.store(arg, slot)
             self.locals[pname] = (slot, ptype)
-        self.gen_block(func.body)
+        # A @deprecated function's own body may call other deprecated
+        # functions (a shim delegating within the deprecated cluster) without
+        # re-warning. Save/restore so nested instantiations emitted mid-walk
+        # and the ordinary (live) case both restore correctly.
+        prev_in_deprecated = self.in_deprecated_body
+        self.in_deprecated_body = func.deprecated_msg is not None
+        try:
+            self.gen_block(func.body)
+        finally:
+            self.in_deprecated_body = prev_in_deprecated
         if not self.builder.block.is_terminated:
             if func.noreturn:
                 # C11 _Noreturn semantics: the promise is the author's, so
@@ -13917,6 +13935,16 @@ class CodeGen:
                 extras = []
                 for j in range(n_fixed, len(arg_tvs)):
                     raw_arg = expr.args[j]
+                    if isinstance(raw_arg, FStrLit):
+                        # An f-string may only ever be the @format format
+                        # string, never a trailing collected argument. With a
+                        # plain literal in the format slot (fstr is None here)
+                        # the pre-evaluation lowered this f-string to its
+                        # char* for ranking, so it slipped past the viability
+                        # filter's fixed-prefix guard; reject it now against
+                        # the resolved callee, in parity with the direct
+                        # path's gen_expr(FStrLit) rejection.
+                        raise LangError(FSTRING_MISPLACED, raw_arg.line)
                     if self.defers_array_literal(
                         raw_arg
                     ) or self.defers_struct_literal(raw_arg):

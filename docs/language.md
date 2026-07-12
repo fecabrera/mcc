@@ -1864,8 +1864,14 @@ Deprecation is per overload: in an
 [overload set](#function-overloading) — open across modules — only a call
 that *resolves to* the deprecated member warns; siblings stay quiet.
 
-There is no suppression: every call site warns, even one inside another
-deprecated function — a migration cannot hide behind a second alias. What *is*
+There is one suppression: a call made from *inside the body of a function that
+is itself `@deprecated`* does not warn. A deprecation shim may delegate among
+the deprecated cluster — a deprecated `writeln` forwarding to a deprecated
+`writestr` — without each internal hop re-warning; only a *live* caller of a
+deprecated function is warned. This holds for monomorphized deprecated generic
+bodies and for function values formed inside a deprecated body too. A live
+function still cannot hide a deprecated call behind a non-deprecated alias:
+the exemption is exactly the enclosing-function-is-deprecated case. What *is*
 folded is repetition of a single site: warnings are deduplicated at print time
 on their (file, line, message), so one offending call inside a generic body
 reports once, not once per instantiation. (The deduplication is print-time
@@ -5083,18 +5089,24 @@ passing extra arguments after one is a compile error — `println(f"{x}", y)`
 has no placeholder left for `y`. `{{` and `}}` still escape literal braces
 (braces inside a hole's nested string/char literals need no escape), an
 empty hole `{}`, a bare `{:mods}`, and a stray or unclosed brace are
-compile errors, and a hole-free `f"..."` degrades to a plain string
-literal at parse time. An f-string is legal *only* as the format string of
-an `@format` call (`println(f"...")`, `format_args(str, f"...")`); every
-other sink — a `let` initializer, a plain parameter, an ordinary
-expression — is a compile error (a string-*valued* f-string would need a
-runtime rendering buffer, a possible later extension). In an
-[overload set](#function-overloading) the sink rule filters **before**
-ranking: a candidate that would receive the f-string anywhere but its
-`@format` format-string slot is non-viable, and the usual plain-literal
-rank runs among the survivors — so `panic(f"x = {x}")` resolves to the
-formatting collector even though the equivalent plain literal would pick
-the verbatim `panic(msg)` member (below).
+compile errors. A hole-free `f"..."` (only plain text or escaped braces,
+e.g. `f"{{}}"`) keeps its f-string identity rather than degrading to a
+plain literal, so the same `@format`-only rule governs it — bound to
+`println` it renders through the sequential runtime (`println(f"{{}}")`
+prints `{}`), and a verbatim overload never steals it; the plain literal
+`println("{{}}")` is the way to print `{{}}` unchanged. An f-string is
+legal *only* as the format string of an `@format` call
+(`println(f"...")`, `format_args(str, f"...")`); every other sink — a
+`let` initializer, a plain parameter, an ordinary expression, or a
+trailing collected argument (`println("{}", f"...")`) — is a compile
+error (a string-*valued* f-string would need a runtime rendering buffer, a
+possible later extension). In an [overload set](#function-overloading) the
+sink rule filters **before** ranking: a candidate that would receive the
+f-string anywhere but its `@format` format-string slot is non-viable, and
+the usual plain-literal rank runs among the survivors — so
+`panic(f"x = {x}")` resolves to the formatting collector even though the
+equivalent plain literal would pick the verbatim `panic(msg)` member
+(below).
 
 See [examples/systems/formatting.mc](../examples/systems/formatting.mc) —
 the positional and f-string demos are its finale.

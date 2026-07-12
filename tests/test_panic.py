@@ -1,6 +1,6 @@
 """stdlib panic/assert: report to stderr and abort.
 
-`panic(msg)` writes `panic: msg` verbatim to standard error and aborts;
+`panic(msg)` writes `msg` verbatim to standard error and aborts;
 `panic(fmt, args...)` renders `{}` placeholders (f-strings included) first.
 `assert(cond, ...)` panics with `assertion failed: ...` when cond is false
 and does nothing otherwise -- always enabled. Both panic members are
@@ -151,7 +151,7 @@ def test_panic_msg_writes_stderr_and_aborts(tmp_path):
         IO + 'fn main() -> int32 { panic("hello {} braces stay literal"); }',
     )
     assert out.returncode == -signal.SIGABRT
-    assert out.stderr == "panic: hello {} braces stay literal\n"
+    assert out.stderr == "hello {} braces stay literal\n"
 
 
 def test_panic_renders_format_and_fstring_arguments(tmp_path):
@@ -166,7 +166,7 @@ def test_panic_renders_format_and_fstring_arguments(tmp_path):
         """,
     )
     assert out.returncode == -signal.SIGABRT
-    assert out.stderr == "panic: x = 41, giving up\n"
+    assert out.stderr == "x = 41, giving up\n"
 
 
 def test_assert_failure_message_is_not_double_prefixed(tmp_path):
@@ -210,7 +210,7 @@ def test_stdout_is_flushed_before_the_panic(tmp_path):
     )
     assert out.returncode == -signal.SIGABRT
     assert out.stdout == "pending output"
-    assert out.stderr == "panic: down we go\n"
+    assert out.stderr == "down we go\n"
 
 
 def test_defers_do_not_run_on_the_panic_path(tmp_path):
@@ -229,4 +229,4 @@ def test_defers_do_not_run_on_the_panic_path(tmp_path):
     )
     assert out.returncode == -signal.SIGABRT
     assert out.stdout == "before\n"  # the deferred cleanup never printed
-    assert out.stderr == "panic: no unwinding\n"
+    assert out.stderr == "no unwinding\n"

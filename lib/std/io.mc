@@ -70,8 +70,39 @@ fn format_args(mut str: string, @format const fmt: slice<const char>, args...) {
 }
 
 /**
- * Formats according to fmt and writes the result to standard output (no
- * trailing newline).
+ * Writes a string's bytes verbatim -- no `{}` formatting, the content
+ * goes out as-is. The one-argument forms target standard output; pass a
+ * FILE* (such as `stderr!`) to write to another stream. `T` is bounded to
+ * `slice<char>`, so a `string`, `list<char>`, or `slice<char>` binds
+ * without an explicit `as` at the call site. Reach for the @format `print`
+ * below when you want `{}` placeholders instead.
+ *
+ * @param f:   destination stream; the forms without it write to stdout
+ * @param str: the bytes to write, unchanged
+ */
+@inline
+fn print(const str: const slice<const char>) {
+    print(stdout!, str);
+}
+
+@inline
+fn print<T extends slice<char>>(const str: T) {
+    print(stdout!, str as slice<const char>);
+}
+
+@inline
+fn print(@nonnull f: FILE*, const str: const slice<const char>) {
+    fwrite(str.data as byte*, sizeof(char), str.length, f);
+}
+
+@inline
+fn print<T extends slice<char>>(@nonnull f: FILE*, const str: T) {
+    print(f, str as slice<const char>);
+}
+
+/**
+ * Formats according to fmt and writes the result to standard output, or
+ * to the given FILE* with the two-argument form (no trailing newline).
  *
  * Each `{}` placeholder renders the next argument through the
  * std/format overload set (type-driven), and `{modifiers}` passes the
@@ -94,26 +125,66 @@ fn format_args(mut str: string, @format const fmt: slice<const char>, args...) {
  * @param args: values rendered in sequence, one per placeholder
  */
 fn print(@format const fmt: slice<const char>, args...) {
+    print(stdout!, fmt, args);
+}
+
+fn print(@nonnull f: FILE*, @format const fmt: slice<const char>, args...) {
     let str: string;
     string_init(str);
     defer string_destroy(str);
     format_args(str, fmt, args);
-    writestr(str);   // the generic writestr takes the string directly
+    print(f, str);   // hand the finished string to the verbatim printer
 }
 
 /**
- * Like print, but appends a newline after the formatted output.
+ * Verbatim print followed by a newline: writes str's bytes as-is and then
+ * a '\n', to standard output or the given FILE*. This is the replacement
+ * for the deprecated `writeln`. As with verbatim `print`, `T` binds any
+ * `slice<char>`-extending type, and the @format `println` below is the
+ * one to use for `{}` placeholders.
+ *
+ * @param f:   destination stream; the forms without it write to stdout
+ * @param str: the bytes to write, unchanged
+ */
+@inline
+fn println(const str: const slice<const char>) {
+    println(stdout!, str);
+}
+
+@inline
+fn println<T extends slice<char>>(const str: T) {
+    println(stdout!, str as slice<const char>);
+}
+
+@inline
+fn println(@nonnull f: FILE*, const str: const slice<const char>) {
+    print(f, str);
+    fputc('\n' as int32, f);
+}
+
+@inline
+fn println<T extends slice<char>>(@nonnull f: FILE*, const str: T) {
+    println(f, str as slice<const char>);
+}
+
+/**
+ * Like the @format print, but appends a newline after the formatted
+ * output; the two-argument form targets a given FILE* instead of stdout.
  *
  * @param fmt:  format string with `{[modifiers]}` placeholders
  * @param args: values rendered in sequence, one per placeholder
  */
 fn println(@format const fmt: slice<const char>, args...) {
+    println(stdout!, fmt, args);
+}
+
+fn println(@nonnull f: FILE*, @format const fmt: slice<const char>, args...) {
     let str: string;
     string_init(str);
     defer string_destroy(str);
     format_args(str, fmt, args);
     string_push(str, '\n');
-    writestr(str);
+    print(f, str);
 }
 
 /**
@@ -135,6 +206,7 @@ fn writechar(const c: char) {
  *
  * @param str: any value whose type extends `slice<char>` to write
  */
+@deprecated("use print() instead")
 @inline
 fn writestr<T extends slice<char>>(const str: T) {
     writestr(str as slice<const char>);
@@ -146,6 +218,7 @@ fn writestr<T extends slice<char>>(const str: T) {
  *
  * @param str: slice to write
  */
+@deprecated("use print() instead")
 @inline
 fn writestr(const str: const slice<const char>) {
     fwrite(str.data as byte*, sizeof(char), str.length, stdout);
@@ -158,6 +231,7 @@ fn writestr(const str: const slice<const char>) {
  *
  * @param str: any value whose type extends `slice<char>` to write
  */
+@deprecated("use println() instead")
 @inline
 fn writeln<T extends slice<char>>(const str: T) {
     writestr(str);
@@ -170,6 +244,7 @@ fn writeln<T extends slice<char>>(const str: T) {
  *
  * @param str: slice to write
  */
+@deprecated("use println() instead")
 @inline
 fn writeln(const str: slice<const char>) {
     writestr(str);
@@ -185,16 +260,22 @@ fn writeln(const str: slice<const char>) {
  * @param msg:    rendered message text
  */
 @private @noreturn
+fn fail(const msg: slice<const char>) {
+    fflush(stdout);
+    println(stderr!, msg);
+    abort();
+}
+
+@private @noreturn
 fn fail(const prefix: slice<const char>, const msg: slice<const char>) {
     fflush(stdout);
-    fwrite(prefix.data as byte*, sizeof(char), prefix.length, stderr);
-    fwrite(msg.data as byte*, sizeof(char), msg.length, stderr);
-    fputc('\n' as int32, stderr);
+    print(stderr!, prefix);
+    println(stderr!, msg);
     abort();
 }
 
 /**
- * Writes `panic: msg` to standard error and aborts (SIGABRT, exit status
+ * Writes `msg` to standard error and aborts (SIGABRT, exit status
  * 134 under a shell). The message is written verbatim -- braces are not
  * placeholders here, so runtime text is always safe. A panic call
  * diverges like a `return` (@noreturn), so an
@@ -205,13 +286,13 @@ fn fail(const prefix: slice<const char>, const msg: slice<const char>) {
  */
 @noreturn
 fn panic(const msg: slice<const char>) {
-    fail("panic: ", msg);
+    fail(msg);
 }
 
 /**
  * Formats according to fmt -- `{}` placeholders through the std/format
  * overload set, positional `{n}` and f-string literals included -- then
- * writes `panic: ` and the rendering to standard error and aborts
+ * writes the rendering to standard error and aborts
  * (SIGABRT), like the verbatim member above.
  *
  * @param fmt:  format string with `{[modifiers]}` placeholders
@@ -222,7 +303,7 @@ fn panic(@format const fmt: slice<const char>, args...) {
     let str: string;
     string_init(str);   // never destroyed: the process is about to abort
     format_args(str, fmt, args);
-    fail("panic: ", str as slice<char>);
+    fail(str as slice<char>);
 }
 
 /**

@@ -177,9 +177,12 @@ def test_uncalled_deprecated_function_does_not_warn():
     assert generate(src).warnings == []
 
 
-def test_call_from_another_deprecated_function_still_warns():
-    # No suppression: a deprecated function calling a deprecated function
-    # warns too, so a migration cannot hide behind another alias.
+def test_call_from_another_deprecated_function_is_exempt():
+    # A deprecated function may delegate to other deprecated functions (a
+    # deprecation shim among the deprecated cluster) without re-warning: the
+    # call to 'f' from inside deprecated 'wrapper' is silent. The live call
+    # to 'wrapper' from main still warns -- the exemption is only for the
+    # enclosing-function-is-deprecated case.
     src = """
     @deprecated("use g instead")
     fn f() -> int32 { return 1; }
@@ -188,8 +191,43 @@ def test_call_from_another_deprecated_function_still_warns():
     fn main() -> int32 { return wrapper(); }
     """
     assert [(w.message, w.line) for w in generate(src).warnings] == [
-        ("'f' is deprecated: use g instead", 5),
         ("'wrapper' is deprecated: use h instead", 6),
+    ]
+
+
+def test_generic_deprecated_function_calling_deprecated_is_exempt():
+    # The exemption holds for a monomorphized deprecated generic body too:
+    # instantiating deprecated 'shim<T>' emits its body with the flag set, so
+    # its inner call to deprecated 'base' does not warn. The live call to
+    # 'shim' from main still warns.
+    src = """
+    @deprecated("use base directly")
+    fn base(x: int32) -> int32 { return x; }
+    @deprecated("use base directly")
+    fn shim<T>(x: T) -> int32 { return base(x); }
+    fn main() -> int32 { return shim(7 as int32); }
+    """
+    assert [(w.message, w.line) for w in generate(src).warnings] == [
+        ("'shim' is deprecated: use base directly", 6),
+    ]
+
+
+def test_deprecated_function_value_of_deprecated_is_exempt():
+    # Forming a function value of a deprecated function is a warn site too,
+    # but taken from inside a deprecated body it is exempt like a direct call.
+    # The live call to 'holder' from main still warns.
+    src = """
+    @deprecated("use g instead")
+    fn f() -> int32 { return 1; }
+    @deprecated("use h instead")
+    fn holder() -> int32 {
+        let p: fn() -> int32 = f;
+        return p();
+    }
+    fn main() -> int32 { return holder(); }
+    """
+    assert [(w.message, w.line) for w in generate(src).warnings] == [
+        ("'holder' is deprecated: use h instead", 9),
     ]
 
 

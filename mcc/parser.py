@@ -2496,14 +2496,19 @@ class Parser:
         ``{modifier}`` placeholder. The pieces concatenate into the
         sequential runtime's format text (escapes and inspector labels kept
         ``{{``-escaped), carried with the hole expressions as an
-        :class:`FStrLit` -- or, with no holes at all, a plain
-        :class:`StrLit` of that text.
+        :class:`FStrLit`. A literal with no holes (only escaped braces or
+        plain text, e.g. ``f"{{}}"``) still builds an :class:`FStrLit`, with
+        an empty ``holes`` list -- it keeps its f-string identity so the
+        ``@format``-only rule governs it exactly as a hole-bearing one, never
+        degrading to a plain :class:`StrLit` that a verbatim overload could
+        bind.
 
         Args:
             tok: The FSTRING token.
 
         Returns:
-            The ``FStrLit`` (or hole-free ``StrLit``) node.
+            The ``FStrLit`` node (with an empty ``holes`` list when the
+            literal interpolates nothing).
 
         Raises:
             LangError: On a stray ``}``, an unclosed ``{``, or a malformed
@@ -2538,8 +2543,6 @@ class Parser:
                 pieces.append(c)
                 i += 1
         value = "".join(pieces)
-        if not holes:
-            return StrLit(value, tok.line)
         return FStrLit(value, tok.line, holes)
 
     @staticmethod

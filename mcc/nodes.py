@@ -1086,11 +1086,14 @@ class FStrLit(StrLit):
     and ``holes`` the interpolated expressions, in order. Legal only as the
     format string of an ``@format`` call, where the holes splice in as the
     collected arguments; every other sink rejects it (the ``StrLit`` funnels
-    guard). A literal with no holes never builds this node -- it degrades to
-    a plain ``StrLit`` at parse time.
+    guard). A literal with no holes (``f"{{}}"``, ``f"no holes"``) still
+    builds this node with an empty ``holes`` list, keeping its f-string
+    identity so the ``@format``-only rule governs it too -- it never degrades
+    to a plain ``StrLit`` that a verbatim overload could bind.
 
     Attributes:
-        holes: The ``FStrHole`` records, one per placeholder, in source order.
+        holes: The ``FStrHole`` records, one per placeholder, in source order
+            (empty when the literal interpolates nothing).
     """
 
     holes: list

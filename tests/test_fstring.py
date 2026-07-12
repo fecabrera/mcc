@@ -101,21 +101,22 @@ def test_each_hole_evaluates_exactly_once(capfd):
     assert capfd.readouterr().out == "side!\nside!\n7 7\n"
 
 
-def test_a_hole_free_fstring_degrades_to_a_plain_literal(capfd):
-    # No holes, no FStrLit: the text (in runtime format syntax, escapes
-    # kept) is an ordinary string literal, legal at any sink.
+def test_a_hole_free_fstring_keeps_format_only_semantics(capfd):
+    # A hole-free f-string (only plain text or escaped braces) keeps its
+    # f-string identity: bound to an @format call it renders through the
+    # sequential runtime -- escapes collapse, and a verbatim overload never
+    # steals it. (The misplaced case is covered below.)
     run(
         IO
         + """
         fn main() -> int32 {
-            let s: slice<const char> = f"plain";
-            println("{}", s);
             println(f"no holes");
+            println(f"{{}}");
             return 0;
         }
         """
     )
-    assert capfd.readouterr().out == "plain\nno holes\n"
+    assert capfd.readouterr().out == "no holes\n{}\n"
 
 
 # -------------------------------------------------------------- inspector
@@ -418,13 +419,37 @@ def test_an_fstring_cannot_pass_to_a_plain_parameter():
         )
 
 
+def test_a_hole_free_fstring_cannot_pass_to_a_plain_parameter():
+    # A hole-free f-string keeps its f-string identity, so it is @format-only
+    # exactly like a hole-bearing one -- a plain slice parameter rejects it
+    # instead of a verbatim overload silently binding it.
+    with pytest.raises(LangError, match=MISPLACED):
+        compile_ir(
+            "fn f(s: slice<const char>) {}\n"
+            'fn main() -> int32 { f(f"{{}}"); return 0; }'
+        )
+
+
 def test_an_fstring_cannot_be_a_collected_extra():
     # Past the format string, an f-string is an ordinary argument -- and
-    # ordinary sinks reject it.
+    # ordinary sinks reject it. `println` has several @format overloads
+    # (stdout and FILE*), yet the rejection still fires against the resolved
+    # stdout collector rather than the extra being swallowed.
     with pytest.raises(LangError, match=MISPLACED):
         compile_ir(
             IO
             + 'fn main() -> int32 { println("{}", f"{1 as int32}"); return 0; }'
+        )
+
+
+def test_an_fstring_cannot_be_a_collected_extra_of_the_file_overload():
+    # The same rejection holds for the FILE* @format overload: the f-string
+    # is a trailing collected argument, not the format string.
+    with pytest.raises(LangError, match=MISPLACED):
+        compile_ir(
+            IO
+            + "fn main() -> int32 { "
+            'println(stdout!, "{}", f"{1 as int32}"); return 0; }'
         )
 
 

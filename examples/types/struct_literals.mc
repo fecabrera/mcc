@@ -93,7 +93,7 @@ fn main() -> int32 {
     // the text length (2 for "ls"); the array literal views a hidden backing
     // array, so its `.length` is the exact element count.
     let cmd = command { name = "ls", args = [1, 2, 3] };
-    writestr(cmd.name);
+    print(cmd.name);
     println(": {} args", cmd.args.length);   // "ls: 3 args"
 
     // In a generic struct a literal field never drives type inference: it sits
@@ -101,7 +101,7 @@ fn main() -> int32 {
     // the *typed* fields. Here A = int32 comes from `n`; the string adapts to
     // the concrete slice<const char> field.
     let row = pair<int32, slice<const char>> { a = n, b = "row" };
-    writestr(row.b);
+    print(row.b);
     println(" #{}", row.a);                    // "row #7"
 
     // The type-inferred form: drop the type name where the position already

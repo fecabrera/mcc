@@ -2258,7 +2258,10 @@ already do).
         storage landed on the `Func` node; the warning fires at each name
         resolution point (direct call, generic overload pick — a mixed set
         warns only when a deprecated overload wins — function values, and the
-        `for ... in` `_it`/`_next` protocol), with no suppression, and the
+        `for ... in` `_it`/`_next` protocol), with one suppression — a call
+        made from inside the body of a function that is itself `@deprecated`
+        does not warn, so a deprecation shim delegating among the deprecated
+        cluster stays quiet while a live caller still warns — and the
         driver deduplicates repeats of one (file, line, message) at print
         time so a call site inside a generic body reports once, not once per
         instantiation. It round-trips through `.mci`: for free for generic

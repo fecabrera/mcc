@@ -20,6 +20,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **A `@deprecated` function may call other deprecated functions without
+  warning** — a deprecation warning is now suppressed when the call is made
+  from inside the body of a function that is itself `@deprecated`. A
+  deprecation shim delegating among the deprecated cluster (a deprecated
+  `writeln` forwarding to a deprecated `writestr`) is not a misuse and no
+  longer emits a warning on every program that imports the module. A *live*
+  function calling a deprecated one still warns — the exemption is exactly
+  the enclosing-function-is-deprecated case, and it holds for monomorphized
+  deprecated generic bodies and for function values formed inside them too.
 - **`swap` and `replace` moved to `std/utils`** — the generic in-place
   helpers now live in their own module, `import "std/utils";`, instead
   of riding along with `std/io`. Programs that reached them through
@@ -317,6 +326,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A hole-free f-string lost its `@format`-only semantics** — a hole-free
+  `f"..."` (only plain text or escaped braces, `f"{{}}"`, `f"no holes"`)
+  was collapsed to a plain string literal at parse time, so it slipped past
+  the f-string sink rule: a verbatim overload could bind it (with the
+  enlarged `print`/`println` families, `println(f"{{}}")` printed `{{}}`
+  instead of `{}`) and a plain parameter accepted it silently. A hole-free
+  f-string now keeps its f-string identity — it renders through the
+  `@format` runtime like any other (`println(f"{{}}")` prints `{}`), and a
+  non-`@format` sink rejects it with the usual *an f-string is only allowed
+  as the format string of an @format call* error. The plain literal
+  `println("{{}}")` is still the verbatim path (prints `{{}}`, unchanged).
+- **An f-string passed as a collected extra was not always rejected** —
+  with an `@format` callee carrying several overloads (`println`'s stdout
+  and `FILE*` collectors), an f-string in a trailing collected-argument
+  position (`println("{}", f"...")`) slipped through and compiled instead
+  of raising *an f-string is only allowed as the format string of an
+  @format call*. The rejection now fires against the resolved collector
+  regardless of how many `@format` overloads the name has.
 - **`void` as a generic type argument crashed the compiler** —
   `box<void>` (any generic struct instantiated with `void`) surfaced as
   a raw LLVM verifier error instead of a compile error. It is now
