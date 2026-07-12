@@ -154,6 +154,13 @@ its reference section in the [language reference](docs/language.md).
 - [x] Hashing — `splitmix64`, `fnv1a`, `murmur3`, `crc32`, `md5`
 - [x] [libc bindings](docs/language.md#reaching-libc) — `stdio`, `stdlib`, `string`, `ctype`,
       `math`, `limits`, `float`, `time`, `errno`
+- [x] [Char methods](docs/language.md#methods-on-type-aliases-and-builtin-types) — `char`
+      (`import "std/char";` registers the ctype family as methods on the
+      builtin `char` type: `char::is_alpha`, `is_alnum`, `is_digit`,
+      `is_hex`, `is_space`, `is_upper`, `is_lower`, and
+      `char::upper`/`char::lower` with non-letters unchanged, all taking
+      `const self: char`; `@inline` over the libc `ctype` bindings, and
+      the stdlib's first use of the builtin-qualifier method form)
 
 ## Tooling
 
@@ -1827,7 +1834,8 @@ already do).
         template inference (`dealias_pattern` in unify / shape_matches), a
         pre-existing gap the diagonal ruling forced closed. This SUBSUMED
         the epic's deferred non-struct receivers item on the definition
-        side; the `.method()` dot sugar on scalars (`'C'.tolower()`) rides
+        side; the `.method()` dot sugar on scalars (`'C'.lower()` over
+        the since-shipped `std/char`) rides
         the method-call sugar item below, where its receiver-kind notes now
         live. Still errors: enums as qualifiers (enum receivers wait for
         [nominal enums](#types-and-generics), where a method name must not
@@ -1894,16 +1902,19 @@ already do).
         methods key on the receiver's type, not the pointer type:
         `ptr.method()` can only mean the method on the pointee. With
         builtin-typed methods shipped (the alias/builtin qualifiers item
-        above), the same sugar is what makes `'C'.tolower()` and
-        `c.tolower()` work over `fn char::tolower(self: char) -> char`
-        (mcc-native ergonomics over the shipped
-        [libc ctype](docs/language.md#reaching-libc) bindings is the
+        above), the same sugar is what makes `'C'.lower()` and
+        `c.lower()` work over the shipped
+        [`std/char`](docs/language.md#methods-on-type-aliases-and-builtin-types)
+        module's `fn char::lower(const self: char) -> char` (the ctype
+        family as `char` methods, today called as explicit
+        `char::lower(c)`: shortening exactly those calls is the
         motivating stdlib case); a scalar receiver is by-value `self: char`
-        or `const self: char`, since no lvalue sits behind a literal
-        receiver, and for the same reason a `mut self` method needs the
-        caller's own writable scalar and is never callable on `'C'` (a
-        value-returning `tolower` takes `self` by value; a `mut self`
-        variant is the in-place editor). The one honest tradeoff: this splits
+        or `const self: char` (as `std/char` declares throughout), since
+        no lvalue sits behind a literal receiver, and for the same reason
+        a `mut self` method needs the caller's own writable scalar and is
+        never callable on `'C'` (the value-returning `char::lower` takes
+        a `const self`; a `mut self` variant would be the in-place
+        editor). The one honest tradeoff: this splits
         method calls from field access — the language keeps C's `.`/`->`
         distinction for **fields**, so `p->x` (field) and `p.method()` (method)
         on the same pointer use different operators (the Go/Rust/Swift
