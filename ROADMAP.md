@@ -86,7 +86,23 @@ its reference section in the [language reference](docs/language.md).
       the family of positions: argument, `let`, `return`, array element,
       `@static`, struct field, and assignment. Array-literal assignment is the
       one documented non-goal (a frame-local backing would dangle past a
-      longer-lived target)
+      longer-lived target). A string literal at a
+      [dot-call](#functions-and-methods) receiver is the last position wired
+      up: `"{}{}".format(a, b)` and `"hello".first()` borrow into
+      `slice<const char>` so a `slice::<method>` family reaches them, matching
+      the explicit `("{}{}" as slice<const char>).format(a, b)` (same borrow
+      path, byte-identical IR). It is a pure fallback, firing only when the
+      literal's own `char[N]` resolves no method or field of that name and a
+      matching `slice::<method>` exists, so a genuine array/char method is
+      never shadowed; the literal keeps its default `char[N]`-decaying-to-`char*`
+      type, so `@extern char*` bindings (`strlen("hi")`, printf) still receive a
+      pointer, not a fat slice (the broader "string literals are `slice<char>`
+      by default" was rejected for breaking that decay and the owned-array
+      `let`). v1 is the string-literal receiver only: a named `char[N]` array or
+      a `char*` value still does not reach slice methods by dot
+      (`arr.format(...)` stays the char-array call-shape error), a possible
+      later generalization; `constructor`/`destructor` stay qualified-only
+      through the adaptation
 - [x] [Structs](docs/language.md#structs) — `.`/`->` access, generics, struct
       literals (`point { x = 6, y = 4 }`, the `struct` keyword optional, omitted
       fields zeroed or set to a field's `= default`, generic type arguments

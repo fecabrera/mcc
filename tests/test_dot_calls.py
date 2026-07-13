@@ -749,3 +749,144 @@ def test_qualified_chaining_spellings_stay_legal(capfd):
         """
     ) == 0
     assert capfd.readouterr().out == "drop tag 9\n"
+
+
+# --- string-literal receiver adapts to slice<const char> --------------------------
+
+
+def test_string_literal_receiver_reaches_a_slice_format(capfd):
+    # The headline: a bare string-literal receiver borrows into
+    # slice<const char> so the stdlib slice::format family reaches it, exactly
+    # as ("{}{}" as slice<const char>).format(...) already did.
+    assert run(
+        """
+        import "std/io";
+        import "std/slice";
+        import "std/string";
+        fn main() -> int32 {
+            let s = "{}{}".format("hello", "world");
+            println(s);
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "helloworld\n"
+
+
+def test_string_literal_receiver_matches_the_explicit_borrow():
+    # The adaptation is exactly the explicit `as slice<const char>` borrow: the
+    # two spellings produce identical IR for the same call.
+    borrow = compile_ir(
+        """
+        import "std/slice";
+        import "std/string";
+        fn use() -> void {
+            let s = ("{}" as slice<const char>).format("x");
+        }
+        """
+    )
+    bare = compile_ir(
+        """
+        import "std/slice";
+        import "std/string";
+        fn use() -> void {
+            let s = "{}".format("x");
+        }
+        """
+    )
+    assert bare == borrow
+
+
+def test_string_literal_receiver_dispatches_a_user_slice_family(capfd):
+    # A non-format, user-declared slice::method family is reached the same way;
+    # the const-char borrow drops the NUL, so length is the text length.
+    assert run(
+        """
+        import "std/io";
+        import "std/slice";
+        fn slice::first_byte(const self: slice<const char>) -> char {
+            return self[0];
+        }
+        fn slice::size(const self: slice<const char>) -> uint64 {
+            return self.length;
+        }
+        fn main() -> int32 {
+            println("{}", "Zebra".first_byte());
+            println("{}", "Zebra".size());
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "Z\n5\n"
+
+
+def test_string_literal_c_interop_decay_is_unaffected(capfd):
+    # The adaptation is a fallback only: a string literal handed to a C
+    # `char*` binding still decays to a pointer, never a fat slice.
+    assert run(
+        """
+        import "std/io";
+        import "libc/string";
+        fn main() -> int32 {
+            printf("%d\\n", strlen("hello") as int32);
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "5\n"
+
+
+def test_named_char_array_receiver_is_not_adapted():
+    # v1 scope: only a string *literal* receiver adapts. A named char[N]
+    # variable keeps today's call-shape error -- it is not a struct.
+    with pytest.raises(LangError, match=re.escape("char[3] is not a struct")):
+        compile_ir(
+            """
+            import "std/slice";
+            fn slice::size(const self: slice<const char>) -> uint64 {
+                return self.length;
+            }
+            fn main() -> int32 {
+                let arr = "hi";
+                let n = arr.size();
+                return 0;
+            }
+            """
+        )
+
+
+def test_string_literal_receiver_without_a_slice_family_keeps_the_old_error():
+    # No matching slice::method: the adaptation never fires, so the receiver
+    # falls back to the pre-existing decay and its char* diagnostic.
+    with pytest.raises(LangError, match=re.escape("char* is not a struct")):
+        compile_ir(
+            """
+            import "std/slice";
+            fn main() -> int32 {
+                "hi".no_such_method();
+                return 0;
+            }
+            """
+        )
+
+
+def test_string_literal_receiver_preserves_the_two_name_guard():
+    # constructor/destructor stay qualified-only even through the string-literal
+    # adaptation.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'constructor' cannot be called with method syntax; "
+            "use slice::constructor(value, ...)"
+        ),
+    ):
+        compile_ir(
+            """
+            import "std/slice";
+            fn slice::constructor(mut self: slice<const char>) { }
+            fn main() -> int32 {
+                "hi".constructor();
+                return 0;
+            }
+            """
+        )

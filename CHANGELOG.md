@@ -84,6 +84,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **String-literal dot-call receivers adapt to `slice<const char>`** — a bare
+  string literal as a dot-call receiver now borrows into `slice<const char>` so
+  a `slice::<method>` family reaches it: `"{}{}".format(a, b)` and
+  `"hello".first()` resolve exactly as the explicit
+  `("{}{}" as slice<const char>).format(a, b)` already did. This is the one
+  string-literal adaptation position that was never wired up (a `let`, an
+  argument, a struct field, and the explicit `as` borrow already adapted). It
+  is a pure fallback — it fires only when the literal's own `char[N]` type
+  resolves no method or field of that name *and* a matching `slice::<method>`
+  exists, so a genuine array/char method is never shadowed — and it leaves the
+  literal's default `char[N]`-decaying-to-`char*` type untouched, so C bindings
+  (`strlen("hi")`, every `@extern char*`) still receive a pointer, not a fat
+  slice. Scope is the string-literal receiver only: a named `char[N]` array or a
+  `char*` value still does not reach slice methods by dot (`arr.format(...)`
+  stays the char-array call-shape error). The two reserved method names
+  `constructor`/`destructor` remain qualified-only through the adaptation.
+
 - **Move-out returns: `-> own T` and `move(v)`** — a function declared
   `-> own T` hands its caller an owned value, lifting the whole-value
   return hard error for destructor-carrying types exactly there:

@@ -194,6 +194,16 @@ fn main() -> int32 {
     let arr: int32[4] = [11, 22, 33, 44];
     println("first = {}", (arr as slice<int32>).first());  // 11
 
+    // A STRING LITERAL receiver adapts to slice<const char> so the slice
+    // family reaches it: "hello".first() is slice<char>::first("hello" as
+    // slice<const char>), the same borrow types.strings.mc documents at a
+    // let, an argument, or a struct field -- now at a dot-call receiver too.
+    // The adaptation is a pure fallback (only when the literal's own char[N]
+    // resolves no method of the name) and literal-only: it never shadows the
+    // char* decay a C binding needs (strlen("hi") still passes a pointer),
+    // and a NAMED char[N] receiver does not adapt.
+    println("\"hello\".first() = '{}'", "hello".first());  // h
+
     // f-string holes take dot calls like any expression.
     println(f"{p.sum() = }");                           // p.sum() = 7
 

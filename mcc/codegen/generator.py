@@ -10890,6 +10890,27 @@ class CodeGen:
                 method, owner.template or owner.name, recv, expr.line
             )
             return Call(family, [], [recv, *expr.args], expr.line)
+        # A string-literal receiver adapts to `slice<const char>` so the
+        # slice method family reaches it -- the one adaptation position never
+        # extended before (`str_literal_adapts` already covers lets, argument
+        # passing, struct fields, and the explicit `as` borrow). Only when the
+        # literal's own char-array path resolved nothing above (so a genuine
+        # array/char method is never shadowed) and a `slice::<method>` family
+        # exists (so the adaptation always resolves something). The receiver is
+        # passed as an explicit `as slice<const char>` borrow -- identical to
+        # the working `("..." as slice<const char>).m(...)` case -- keeping the
+        # literal's default `char[N]`-decaying-to-`char*` type untouched for C
+        # interop. Named `char[N]`/`char*` receivers stay out of scope (v1).
+        if isinstance(recv, StrLit) and not isinstance(recv, FStrLit):
+            slice_family = f"slice::{method}"
+            if self.method_family_exists(slice_family):
+                self.reject_semantic_dot_call(method, "slice", recv, expr.line)
+                borrow = Cast(
+                    recv,
+                    TypeRef("slice", [TypeRef("char", const=True)]),
+                    expr.callee.line,
+                )
+                return Call(slice_family, [], [borrow, *expr.args], expr.line)
         return None
 
     def reject_semantic_dot_call(

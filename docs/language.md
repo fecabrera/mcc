@@ -4287,7 +4287,7 @@ strictly left to right, so both are order-safe. A `@static` struct or union
 literal folds a string- or array-literal field to a constant `{pointer, length}`
 view the same way its scalar counterpart does.
 
-**Assignment** to an existing char-slice lvalue is the last adapting position,
+**Assignment** to an existing char-slice lvalue is another adapting position,
 for string literals only. `s = "hi";` reborrows: it repoints `s` at the
 literal's global string constant (dropping the NUL, so the length is the new
 literal's), the same borrow a `let` or argument does. Because a string constant
@@ -4303,6 +4303,21 @@ outer-scope variable), so the borrowed view would dangle — the same lifetime
 hazard that rejects `return [..] as slice<T>;`. The `let`/argument positions
 stay safe only because the binding and its backing share a frame. See
 [examples/memory/slice_assignment.mc](../examples/memory/slice_assignment.mc).
+
+The last adapting position, again for string literals only, is a **dot-call
+receiver**: `"{}{}".format(a, b)` borrows the literal into a `slice<const char>`
+so a `slice::<method>` family reaches it, exactly as the explicit
+`("{}{}" as slice<const char>).format(a, b)` does. The adaptation is a pure
+fallback — it fires only when the literal's own `char[N]` type resolves no
+method or field of that name *and* a matching `slice::<method>` exists, so a
+genuine array method is never shadowed and the literal keeps its default
+`char[N]`-decaying-to-`char*` type for C interop (`strlen("hi")` still passes a
+`char*`). The receiver is passed as an `as slice<const char>` borrow, so the
+method sees the text without its NUL. This is a string-literal receiver only: a
+named `char[N]` array or a `char*` value does *not* reach slice methods by dot
+(`arr.format(...)` on a named array is still the char-array call-shape error).
+The two reserved method names `constructor` and `destructor` stay rejected in
+dot spelling here as everywhere.
 
 One position still does not take the shortcut. `return [1, 2] as slice<int32>;`
 is a compile error — the view would point into the returning call's hidden
