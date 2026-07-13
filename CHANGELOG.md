@@ -37,6 +37,28 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Destructors: automatic cleanup of stack-constructed values** — a method
+  named `destructor` completes the constructor pair: when a type declares
+  (or inherits) a `T::destructor` family, the constructor-sugar let
+  schedules the cleanup call on the enclosing block's defers, so
+  `let p = point<float64>();` is `let p: point<float64>;` plus the
+  constructor call plus `defer point<float64>::destructor(p);`. Exactly the
+  constructor-sugar let triggers — manual construction, struct-literal
+  lets, copies, and assignments schedule nothing (the opt-out spellings) —
+  and the call shares the defer machinery verbatim: LIFO with explicit
+  defers, per loop iteration, and on every unwinding exit (early
+  return/break/continue/try-propagation; `@noreturn` exits run no
+  destructors, as no defers). Destruction ignores a `const` view (scope
+  teardown, not user mutation — a user-written call on a const value still
+  errors), returning or emitting the whole auto-destructed local is a hard
+  error (return the constructor expression directly, or construct manually
+  to own the cleanup; field escapes are not caught), and manually calling
+  `p.destructor()` beside the automatic call is undefined behavior, like a
+  C double-free. `destructor` was previously an unclaimed method name; any
+  existing family under it gains the automatic call. See
+  [Destructors](docs/language.md#destructors) and
+  [destructors.mc](examples/types/destructors.mc).
+
 - **Implicit empty constructors** — every type now has one: `T()` with no
   arguments is exactly `let t: T;` (the slot default-initialized as the
   bare declaration — declared field defaults apply, anything else starts

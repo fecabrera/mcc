@@ -1350,7 +1350,10 @@ generic:
 **Every type also has an implicit empty constructor**: `T()` with no
 arguments is exactly `let t: T;` — the slot, default-initialized as the
 bare declaration is (a struct with declared field defaults starts from
-them, anything else starts uninitialized), is the value. It applies to any
+them, anything else starts uninitialized), is the value; a `let` binding
+it still schedules a declared [destructor](#destructors), so
+`let p = point<float64>();` is `let p: point<float64>;` plus
+`defer point<float64>::destructor(p);`. It applies to any
 type the sugar head accepts — `char()`, `int32()`, `point<float64>()`, a
 derived `pointf()`, an alias — and, unlike C++, **declaring constructors
 does not suppress it**: a 2-argument family beside `point<float64>()`
@@ -1378,6 +1381,108 @@ arguments at the head are the struct's; a converting constructor's own
 parameters (`<U>` above) are inference-only, as at any `::` call.
 
 See [examples/types/constructors.mc](../examples/types/constructors.mc).
+
+#### Destructors
+
+A method named `destructor` is the other half of the pair: when a type
+declares (or [inherits](#inherited-methods)) one, the **constructor-sugar
+`let`** schedules the cleanup call on the enclosing block's
+[defers](#defer) —
+
+```c
+let p = point<float64>();
+// == let p: point<float64>;
+//    point<float64>::constructor(p);      // when a member claims the call
+//    defer point<float64>::destructor(p);
+```
+
+— so the value is destroyed when its scope exits, however it exits:
+
+```c
+struct handle { fd: int32; }
+fn handle::constructor(mut self: handle, fd: int32) { self.fd = fd; }
+fn handle::destructor(mut self: handle) { close(self.fd); }
+
+fn use_it() -> int32 {
+    let h = handle(acquire());
+    if (bad()) {
+        return -1;              // h.fd closed here...
+    }
+    work(h.fd);
+    return 0;                   // ...and here — never forgotten
+}
+```
+
+**The trigger surface is exactly the constructor-sugar `let`**:
+`let t = T(args);` and `let t = T();` (a declared or
+[implicit empty](#constructors) constructor alike). Everything else is a
+documented opt-out spelling that schedules nothing — manual construction
+(`let t: T; T::constructor(t, ...);`), a struct-literal `let t = T{...};`,
+a copy `let b = a;`, and plain assignment. An annotation that coerces the
+constructed value away (boxing into `any`) binds a copy rather than the
+constructed slot, so it schedules nothing either.
+
+The scheduled call **shares the defer machinery verbatim**: it runs LIFO
+with explicit `defer`s (values destroy in reverse construction order), per
+iteration in a loop body, and on every unwinding exit — early `return`,
+`break`, `continue`, and [bare-`try` propagation](#propagation-bare-try).
+As with any defer, a [`@noreturn`](#noreturn-functions) exit runs no
+destructors, and the destructor sees the value's **latest state**,
+mutations after construction included.
+
+Details and sharp edges:
+
+- **Resolution is ordinary — a dumb desugar.** The scheduled call is the
+  qualified `T::destructor(t)` over the family, so overload resolution,
+  privacy, arity, and every diagnostic are the family call's own, reported
+  at the `let`'s line: a family whose members all need extra non-defaulted
+  arguments errors at every constructor-let (`'big::destructor' expects 2
+  argument(s), got 1` — positions count the receiver), and a cross-module
+  `@private` destructor makes foreign constructor-lets error with the
+  usual visibility diagnostic. Extra-parameter overloads stay manually
+  callable; they just cannot be automatic. Because the qualified call
+  never goes through dot syntax, a *field* named `destructor` cannot
+  shadow it (a user-written `t.destructor()` is field-first, as at any
+  dot call).
+- **A const view is still destroyed.** `let p: const T = T(...);` keeps
+  the read-only view for user code, but destruction is scope teardown, not
+  user mutation (the C++ stance): the synthesized call alone bypasses the
+  const view. A user-written `p.destructor()` on a const `p` keeps the
+  ordinary mut-receiver error.
+- **Manually destroying an auto-destructed value is undefined behavior.**
+  `p.destructor()` (or a manual `defer p.destructor();`) beside the
+  automatic call compiles and destroys twice — like a C double-free: no
+  suppression magic, no warning. Destroy manually only what you
+  constructed manually.
+- **Copies are bitwise and alias.** `let b = a;` copies the fields, and
+  only `a` (the constructed let) is destroyed — if the type owns a
+  resource, both views name it, exactly C's problem. A future
+  `-Wdestructor-copy` may flag such copies; today the language does not
+  track them.
+- **Returning or emitting the whole value is a hard error.** `return t;`
+  copies the value out, then the unwinding destroys the original — the
+  caller would receive a bitwise copy of already-destroyed state — so it
+  is rejected (`cannot return 't': its automatic destructor runs as the
+  return unwinds this scope, ...`); `emit t;` of a local declared inside
+  the [block expression](#block-expressions) likewise (emitting a local
+  from *outside* the block survives the emit and stays an ordinary,
+  legal copy). The escape hatches: return the constructor expression
+  directly (`return T(args);` — an expression-position temporary owns no
+  automatic cleanup; only the `let` form does), or construct manually and
+  own the cleanup. A **field** escape (`return t.data;`) is *not* caught —
+  interior ownership is yours to reason about. A future move-out may lift
+  the whole-value restriction.
+- **Base cleanup chains manually**, mirroring constructor chaining: a
+  derived destructor that wants it ends its body with
+  `base::destructor(self);`. A derived type that declares **no**
+  destructor of its own inherits the base's through the
+  [merged family](#inherited-methods), and the automatic call resolves it
+  (receiver-only upcast, as at any inherited call).
+- **Scope: stack `let`s only.** Globals and `@static` values, function
+  parameters, heap values, and expression-position temporaries
+  (`f(T(args))`, `return T(args);`) are never destroyed automatically.
+
+See [examples/types/destructors.mc](../examples/types/destructors.mc).
 
 #### Inherited methods
 
@@ -2964,11 +3069,16 @@ body fires at the end of that block — each loop iteration runs its own. The
 deferred code is evaluated when it runs, not when it is scheduled, so it sees
 the latest values of the variables it names (unlike Go, which snapshots the
 arguments). A returned value is computed _before_ the defers run, so freeing a
-buffer in a defer can't clobber what you return.
+buffer in a defer can't clobber what you return. A
+[destructor-declaring type's](#destructors) constructor-sugar `let`
+registers its automatic cleanup call as an ordinary entry on this same
+stack, so values destroy LIFO, interleaved with explicit defers in
+registration order.
 
 Defers run on every **block exit** — and a call to a
 [`@noreturn` function](#noreturn-functions) is not one. `exit(1);` leaves
-enclosing defers unrun (the process ends inside the callee; there is no
+enclosing defers unrun — automatic [destructor](#destructors) calls
+included (the process ends inside the callee; there is no
 return path to unwind), matching C, where `exit()` runs `atexit` handlers
 but never unwinds the calling stack. Code that must clean up should
 `return` an error up to `main` instead of exiting deep in the call tree. An

@@ -400,6 +400,7 @@ class GenContext:
     scope_names: set = dataclass_field(metadata={"fork": set})
     defer_stack: list = dataclass_field(metadata={"fork": _fork_defer_stack})
     defer_marks: list = dataclass_field(metadata={"fork": list})
+    auto_destroyed: dict = dataclass_field(metadata={"fork": dict})
     block_exprs: list = dataclass_field(metadata={"fork": list})
     const_locals: set = dataclass_field(metadata={"fork": set})
     mut_locals: set = dataclass_field(metadata={"fork": set})
@@ -842,6 +843,14 @@ class CodeGen:
         # would re-unwind the very scope whose defers are running. Compared
         # against at the jump statements themselves.
         self.defer_marks: list[tuple[int, int]] = []
+        # Slots bound by a constructor-sugar let whose type declares (or
+        # inherits) a destructor, mapped to the defer-scope index the
+        # automatic `T::destructor(t)` call was registered at (see
+        # schedule_auto_destructor). Return/emit consult it to reject a bare
+        # copy of such a value escaping its own destruction. Keyed by the
+        # slot, not the name, so a shadowing let is unaffected and stale
+        # entries for out-of-scope slots are unreachable.
+        self.auto_destroyed: dict = {}
         self.str_count = 0
         # One rodata global per distinct string contents; identical literals
         # (source strings and `typename` results alike) share bytes.
@@ -5674,6 +5683,7 @@ class CodeGen:
         self.loops = []  # break/continue cannot escape into a caller's loop
         self.block_exprs = []  # emit cannot escape into a caller's block-expr
         self.defer_marks = []  # a body instantiated mid-defer is not "in" it
+        self.auto_destroyed = {}  # per body, like the defer stack it mirrors
         hidden = self.hidden_ref_indices(func, params)
         self.const_locals = set(func.const_params)
         self.mut_locals = set(func.mut_params)
@@ -7390,6 +7400,23 @@ class CodeGen:
                     del self.locals[hidden]
                     self.scope_names.discard(hidden)
                 return
+            # Returning a whole auto-destructed local is rejected: the value
+            # is copied out, then the unwinding defers run its destructor,
+            # so the caller would receive a bitwise copy of an already-
+            # destroyed value. (A field escape, `return t.data`, is not
+            # caught -- the language does not track interior ownership.)
+            if isinstance(stmt.value, Var):
+                bound = self.locals.get(stmt.value.name)
+                if bound is not None and bound[0] in self.auto_destroyed:
+                    raise LangError(
+                        f"cannot return {stmt.value.name!r}: its automatic "
+                        "destructor runs as the return unwinds this scope, "
+                        "so the returned copy would escape its own cleanup; "
+                        "return the constructor expression directly, or "
+                        "construct manually (an uninitialized let plus a "
+                        "constructor call) and manage cleanup yourself",
+                        stmt.line,
+                    )
             if stmt.value is None:
                 if self.ret_type is not VOID:
                     raise LangError(f"return needs a {self.ret_type} value", stmt.line)
@@ -7462,6 +7489,26 @@ class CodeGen:
                     "has nothing to emit",
                     stmt.line,
                 )
+            # Emitting a whole auto-destructed local declared inside the
+            # block expression is rejected like returning one: the emit
+            # copies the value out, then unwinds the scope that destroys
+            # it. A local from outside the block expression survives the
+            # emit, so emitting it is an ordinary copy and stays legal.
+            if isinstance(stmt.value, Var):
+                bound = self.locals.get(stmt.value.name)
+                if (
+                    bound is not None
+                    and self.auto_destroyed.get(bound[0], -1) >= ctx.defer_depth
+                ):
+                    raise LangError(
+                        f"cannot emit {stmt.value.name!r}: its automatic "
+                        "destructor runs as the emit unwinds the block, so "
+                        "the emitted copy would escape its own cleanup; "
+                        "emit the constructor expression directly, or "
+                        "construct manually (an uninitialized let plus a "
+                        "constructor call) and manage cleanup yourself",
+                        stmt.line,
+                    )
             # Evaluate the value before the defers run, so a defer cannot clobber
             # what is being emitted (as with a return value).
             if ctx.type is None:
@@ -7551,6 +7598,7 @@ class CodeGen:
                             self.builder.store(tv.value, slot)
                             final = tv.type
                     self.bind_local(stmt.name, slot, final)
+                    self.schedule_auto_destructor(stmt, slot, built, final)
                     return
             if stmt.value is None:  # let x: T; -- uninitialized, like a C local
                 declared = self.lang_type(stmt.type_name, stmt.line)
@@ -13836,6 +13884,63 @@ class CodeGen:
         finally:
             del self.locals[hidden]
         return slot, built
+
+    def schedule_auto_destructor(
+        self, stmt: Let, slot, built: LangType, final: LangType
+    ) -> None:
+        """Register a constructed let's automatic destructor call, if any.
+
+        The other half of RAII: when the constructed type declares (or
+        inherits) a ``T::destructor`` family, ``let t = T(args);`` schedules
+        ``T::destructor(t)`` on the enclosing block's defer scope, making
+        the sugar equivalent to ``let t: T; T::constructor(t, args);
+        defer T::destructor(t);``. Only the constructor-sugar let triggers:
+        manual construction, struct literals, copies, and plain assignments
+        never schedule cleanup (they are the opt-out spellings), and an
+        annotation that coerces the constructed value away (boxing into
+        ``any``) binds a copy rather than the constructed slot, so nothing
+        is scheduled either.
+
+        The synthesized call is the QUALIFIED family call over a hidden
+        rebinding of the slot -- immune to name shadowing (a later
+        ``let t`` rebinds the name, not the hidden one) and to field-first
+        dot-call shadowing (a field named ``destructor`` cannot capture
+        it). The hidden binding drops the let's const view: destruction is
+        scope teardown, not user mutation, so a ``const``-viewed value is
+        still destroyed (a user-written ``t.destructor()`` on a const ``t``
+        keeps erroring like any other mut-receiver call). Resolution of the
+        deferred call is otherwise ordinary, so a family whose members
+        cannot take the lone receiver, or that is ``@private`` to another
+        file, errors at this let's line exactly as the explicit ``defer``
+        spelling would.
+
+        Args:
+            stmt: The ``let`` statement, for its name and line.
+            slot: The constructed value's storage (the bound slot).
+            built: The constructed type (already const-stripped).
+            final: The bound type -- ``built`` or a const view of it.
+        """
+        if strip_const(final) != built:
+            return  # annotation mismatch: the slot bound is a coerced copy
+        family = f"{built.template or built.name}::destructor"
+        if not self.method_family_exists(family):
+            return
+        hidden = f"0dtor{self.hidden_seq}"
+        self.hidden_seq += 1
+        # Not bind_local: no scope_names entry (the name is unlexable, so
+        # nothing can collide with or shadow it) and no narrowing
+        # bookkeeping. The block-exit locals restore drops the binding
+        # right after the defers that reference it have run.
+        self.locals[hidden] = (slot, built)
+        self.defer_stack[-1].append(
+            [
+                ExprStmt(
+                    Call(family, [], [Var(hidden, stmt.line)], stmt.line),
+                    stmt.line,
+                )
+            ]
+        )
+        self.auto_destroyed[slot] = len(self.defer_stack) - 1
 
     def gen_call(self, expr: Call) -> TypedValue:
         """Emit a call to a named function.

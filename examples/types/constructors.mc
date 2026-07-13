@@ -9,7 +9,10 @@ import "std/io";
 // (positions count the hidden receiver, so a bad first written argument
 // reports "argument 2"). `let p = S(args);` binds the constructed slot
 // directly, no temporary and no copy, so a `mut self` constructor writes
-// p's own storage. The head follows type-use spelling -- explicit type
+// p's own storage. (For a type that declares a `destructor` family, that
+// same constructor-sugar let additionally schedules the automatic cleanup
+// call, `defer S::destructor(p);` -- see destructors.mc; none of the
+// types here declare one.) The head follows type-use spelling -- explicit type
 // arguments, a complete type bare, a transparent alias -- plus one form
 // unique to calls: a BARE generic head (`point(1.5, 2.5)`) infers the
 // instantiation from the constructor's arguments.
@@ -218,7 +221,10 @@ fn main() -> int32 {
 // compiles and simply initializes nothing, and a non-void constructor's
 // return value is discarded by `S(args)`.
 //
-// See also: methods.mc and generic_methods.mc for the method families the
+// See also: destructors.mc for the other half of the pair, the automatic
+// `defer S::destructor(s);` the constructor-sugar let schedules when the
+// type declares (or inherits) a destructor; methods.mc and
+// generic_methods.mc for the method families the
 // sugar calls into; method_calls.mc for `recv.method(args)`, the call-side
 // sibling of this head-side sugar (both are exact desugars into the same
 // families); method_alias.mc for the alias chasing behind the pointf

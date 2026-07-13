@@ -93,3 +93,8 @@ fn main() -> int32 {
 // expression. Constructs opened *inside* the body reset the judgment:
 // build_labels' cleanup loop above is fine because the loop itself lives
 // in the defer, and it could break or continue itself as usual.
+//
+// Destructors ride this exact stack: a constructor-sugar `let` of a type
+// that declares a `destructor` method schedules `defer T::destructor(t);`
+// automatically, LIFO with the explicit defers here (and skipped by a
+// @noreturn exit, like any defer). See types/destructors.mc.
