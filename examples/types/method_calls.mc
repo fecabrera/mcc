@@ -207,4 +207,6 @@ fn main() -> int32 {
 // builtin receivers; constructors.mc for `S(args)`, the head-side sibling
 // of this call-side sugar; functions/mut_returns.mc for the `-> mut`
 // formation and re-lending rules the lvalue dot calls ride on;
-// systems/char_methods.mc for the std/char family behind 'q'.upper().
+// method_inheritance.mc for a dot call resolving over a base's family
+// through `extends`; systems/char_methods.mc for the std/char family
+// behind 'q'.upper().

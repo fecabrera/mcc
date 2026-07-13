@@ -52,5 +52,7 @@ fn main() -> int32 {
 }
 
 // See also: extends.mc for the named-base fundamentals (prefix layout,
-// explicit upcasts, defaults); memory/intrusive_list.mc for the
-// bare-parameter base `extends T`.
+// explicit upcasts, defaults); method_inheritance.mc for the base's method
+// families riding the lineage, a generic derivation's staying generic
+// included; memory/intrusive_list.mc for the bare-parameter base
+// `extends T`.

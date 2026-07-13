@@ -171,4 +171,7 @@ fn main() -> int32 {
 // head and for builtin qualifiers like `char::`; struct_literals.mc for the
 // no-constructor spelling and the field defaults the slot starts from;
 // functions/overloading.mc and mixed_overloads.mc for the ranking that picks
-// between the diagonal and converting constructors.
+// between the diagonal and converting constructors; method_inheritance.mc
+// for constructors merging into a derived type's family through `extends`
+// (this diagonal/converting pair returns there, split across a base and its
+// extender).

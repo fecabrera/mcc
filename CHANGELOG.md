@@ -37,6 +37,34 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Method inheritance through `extends`** — a derived struct now exposes
+  its base chain's method families, constructors included: a family call on
+  the derived type (dot sugar or the qualified spelling) resolves over the
+  merged set of its own members and every base hop's, the latter rebased at
+  the declared base instantiation — on `pointf extends point<float64>`, the
+  inherited `fn point<T>::constructor(mut self, x: T, y: T)` is a concrete
+  `(float64, float64)` member that outranks a derived generic for float
+  arguments, while `pointf(1, 1)` still picks the converting `<U>`. The
+  rank key gains a hop component — `(no-collect, tier, −hop, specificity,
+  fixed)` — so a derived same-shape member shadows an inherited one and a
+  nearer base shadows a farther one, with no override marker and no name
+  hiding (different signatures overload). Base specializations, diagonal
+  qualifiers, and constrained members filter by the declared instantiation;
+  generic derivations (`pd<T> extends point<T>`) stay generic, bare-head
+  constructor inference included. The **receiver position** of any
+  method-family call upcasts along the declared lineage — `mut`/`const`
+  receivers lend the base prefix in place (a `mut self`'s writes land in
+  the derived value's leading fields), by-value receivers prefix-copy, and
+  explicit qualified calls get it too, so `point::constructor(self, x, y)`
+  chains from a derived constructor — while every non-receiver argument
+  keeps the explicit `as`. Emission instantiates the origin template (one
+  instance per base instantiation, shared across derived types), ambiguity
+  notes name the origin (`candidate is here (inherited from
+  point<float64>)`), and the bare-type-parameter base (`extends T`) stays
+  out — no declared family to inherit. See
+  [Inherited methods](docs/language.md#inherited-methods) and
+  [method_inheritance.mc](examples/types/method_inheritance.mc).
+
 - **Method call sugar `recv.method(args)`** — a dot-shaped call whose
   receiver type registers a `Type::method` family desugars to
   `Type::method(recv, args)`, the receiver passing verbatim so overload

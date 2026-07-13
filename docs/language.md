@@ -1260,6 +1260,9 @@ The rules:
   `import "std/char";`, `'c'.upper()` is `char::upper('c')`; a
   `slice<int32>` receiver dispatches `fn slice<T>::first`, an alias-typed
   receiver its target's family.
+- **A derived receiver reaches its base chain's families.** A struct that
+  `extends` another dispatches the merged set of its own and its bases'
+  members — see [inherited methods](#inherited-methods).
 - **An rvalue receiver evaluates once.** A chained receiver
   (`p.get().upper().lower()`) is a call result: it evaluates once into a
   hidden local. A plain rvalue spills to a **const** slot, so a mut-self
@@ -1354,6 +1357,113 @@ arguments at the head are the struct's; a converting constructor's own
 parameters (`<U>` above) are inference-only, as at any `::` call.
 
 See [examples/types/constructors.mc](../examples/types/constructors.mc).
+
+#### Inherited methods
+
+A struct that [`extends`](#structs) another **exposes its base chain's
+method families**: a family call on the derived type — dot sugar or the
+qualified spelling — resolves over the **merged set** of the derived type's
+own members and every base hop's, the latter entering **rebased at the
+declared base instantiation**. Constructors merge like any other family, so
+deriving makes the base's constructors callable on the derived type:
+
+```c
+struct point<T> { x: T; y: T; }
+struct pointf extends point<float64> {}
+
+fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+    self.x = x; self.y = y;
+}
+fn pointf::constructor<U>(mut self: pointf, x: U, y: U) {   // converting
+    self.x = x as float64; self.y = y as float64;
+}
+fn point<T>::magnitude(const self: point<T>) -> float64 {
+    return sqrt(pow(self.x, 2.0) + pow(self.y, 2.0));
+}
+
+fn main() -> int32 {
+    let p = pointf(1.0, 1.0);       // the INHERITED diagonal, T = float64
+    let q = pointf(1, 1);           // the derived <U>: int literals never
+                                    // adapt to the diagonal's float64 slots
+    return p.magnitude() as int32;  // the inherited fn point<T>::magnitude
+}
+```
+
+Rebasing is what makes the ranking read naturally: on `pointf`, the
+inherited diagonal **is** a concrete `(float64, float64)` member — so it
+outranks the derived generic `<U>` for float arguments (a concrete signature
+beats a template, [as always](#function-overloading)), while for int
+literals it is simply not viable and the converting `<U>` wins. The rank key
+gains one component, becoming **(no-collect, tier, −hop, specificity, fixed
+count)** — the *hop* is an inherited member's distance up the `extends`
+chain, `0` for a member declared on the receiver type itself:
+
+- **The tier beats the hop**: an inherited exact/concrete match beats a
+  derived generic — exactness beats genericity wherever it was declared. A
+  derived member never *hides* a base family (no C++ name hiding): a
+  different signature simply **overloads** the merged set.
+- **The hop beats specificity**: a derived member shadows a same-shape
+  inherited one, and a nearer base's shadows a farther one — override
+  semantics with no marker.
+
+The merged set is built per hop with **no cascade** — each base contributes
+exactly the members declared on it — and membership is judged against the
+declared instantiation: a base-family
+[specialization](#specializing-a-method-for-one-instantiation) is inherited
+only where the `extends` clause names its instantiation (`fn
+point<int32>::m` never appears on `pointf`), a diagonal qualifier
+(`fn pair<A, A>::m`) only where the base arguments agree, and a member whose
+seeded type parameter carries a [group](#closed-type-groups) or
+[bound](#bounds) the instantiation violates is filtered out (a generic
+derivation carries the constraint along instead). A generic derivation stays
+generic: `struct pd<T> extends point<T>` inherits `point<T>`'s members with
+the receiver binding `T`, bare-head constructor inference included
+(`pd(1, 2)` builds a `pd<int32>`).
+
+**The receiver upcasts — and only the receiver.** In the receiver position
+(the first argument) of any method-family call, a derived value passes where
+the resolved parameter is a declared base of its lineage: a `mut` or
+`const` (hidden-reference) receiver **lends its base prefix in place** — the
+same storage viewed as the base, so a `mut self` method's writes land in the
+derived value's leading fields — and a by-value receiver **prefix-copies**
+(the honest data slicing the [`as` upcast](#structs) performs; the derived
+tail is simply not passed). This covers the explicit qualified spelling too:
+`point::magnitude(p)` accepts a `pointf`, and a derived constructor
+**chains** by calling the base's directly:
+
+```c
+struct point3f extends point<float64> { z: float64; }
+
+fn point3f::constructor(mut self: point3f, x: float64, y: float64, z: float64) {
+    point::constructor(self, x, y);   // the receiver upcasts: constructor chaining
+    self.z = z;
+}
+```
+
+Every **non-receiver** argument keeps the explicit `as`: `b::plus(v, w)`
+with a derived `w` is a type error until it is written `w as b`. An
+inherited constructor never sees the derived type's added fields — they keep
+their `let s: S;` semantics (declared field defaults apply, anything else
+starts uninitialized) — and an inherited method's **return type stays
+spelled at the base** (`fn point<T>::flipped(...) -> point<T>` returns a
+`point<float64>` on `pointf`, never a `pointf`).
+
+Under the hood there is **one instance per base instantiation, not per
+derived type**: resolution runs over the rebased view, but emission always
+instantiates the *origin* — `pa.sum()` and `pb.sum()` on two structs
+extending `point<int32>` call the same `point::sum<int32>` symbol through a
+receiver cast. Diagnostics attribute accordingly: an ambiguity's contender
+note points at the origin declaration and reads `candidate is here
+(inherited from point<float64>)`.
+
+The [bare-type-parameter base](#structs) (`struct entry<T> extends T`) does
+**not** participate — there is no declared base family to inherit at the
+declaration; a payload's methods are reached through the explicit upcast. A
+file-scoped `@static` base method stays file-scoped (never inherited), and a
+cross-module `@private` base member is filtered per file, exactly as in any
+[open overload set](#function-overloading).
+
+See [examples/types/method_inheritance.mc](../examples/types/method_inheritance.mc).
 
 ### @noreturn functions
 
@@ -3954,7 +4064,8 @@ struct pl011 {       // a UART's register block; see examples/baremetal/
 }
 ```
 
-A struct can `extends` another to reuse its layout. The base's fields are
+A struct can `extends` another to reuse its layout — and its
+[method families](#inherited-methods). The base's fields are
 placed **first**, followed by the new struct's own, so the base occupies the
 start of the derived struct and a pointer to the derived struct is
 layout-compatible with a pointer to the base:
@@ -3974,9 +4085,13 @@ fn main() -> int32 {
 
 Because the base is a true prefix, the upcast `&p as struct point*` reads the
 same storage; casting the value, `p as struct point`, copies just the base
-prefix. Both are _explicit_ — there is no implicit upcast, so a
-`struct point3*` is a distinct type that won't silently pass where a
-`struct point*` is expected. What decides whether the upcast is allowed is the
+prefix. Outside one carve-out, both are _explicit_ — a `struct point3*` is a
+distinct type that won't silently pass where a `struct point*` is expected.
+The carve-out is the **receiver position of a method-family call**, which
+upcasts implicitly — deriving from a struct also inherits its
+[methods](#inherited-methods), and there a derived receiver lends (or
+prefix-copies into) the base parameter; every other position keeps the
+explicit `as`. What decides whether the upcast is allowed is the
 **declared `extends` lineage**, not the layout: only a struct that names the
 target — transitively — in an `extends` clause upcasts to it. A struct that
 merely shares the target's field prefix, with no `extends` between them, is
@@ -4047,12 +4162,14 @@ works, but `linked_list_entry { value = 5, next = null }` is an error, since
 (`struct branded<T> extends T;`) brands its payload per instantiation — each
 instance a distinct type with its payload's exact layout.
 
-This is distinct from the planned `T extends mystruct` **bound**: a bound
+This is distinct from the `T extends mystruct` [**bound**](#bounds): a bound
 constrains what a caller may bind `T` to, while this uses `T` as the base —
-same keyword, different position, no overlap — and the two will compose as
-`struct wrapper<T extends node> extends T`. The usual `extends` non-goals
-carry over: no method inheritance (a payload's methods will be reached
-through the upcast) and no constructor chaining.
+same keyword, different position, no overlap — and the two compose as
+`struct wrapper<T extends node> extends T`. Unlike a named base, a bare
+type-parameter base does **not** participate in
+[method inheritance](#inherited-methods): the payload is only known per
+instantiation, so there is no declared base family at the declaration, and a
+payload's methods are reached through the explicit upcast instead.
 
 A struct extends a single base — named as a struct (optionally generic) or a
 bare type parameter that must be bound to a struct; a pointer, array, or

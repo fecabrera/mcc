@@ -79,5 +79,8 @@ fn main() -> int32 {
 }
 
 // See also: generic_extends.mc for a generic struct extending a generic
-// base; memory/intrusive_list.mc for the bare-parameter form `extends T`,
-// where the base is whatever payload the struct is instantiated with.
+// base; method_inheritance.mc for what rides on this lineage besides the
+// fields: the base's method and constructor families, callable on the
+// derived type; memory/intrusive_list.mc for the bare-parameter form
+// `extends T`, where the base is whatever payload the struct is
+// instantiated with.

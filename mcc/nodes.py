@@ -493,6 +493,15 @@ class Func:
             (``fn box<int32>::m(...)``): a method declaration must annotate a
             generic qualifier's type parameters, so a bare-qualifier
             prototype would not re-parse. ``None`` otherwise.
+        qualifier_args: The classified pre-``::`` qualifier annotation, kept
+            for every method after ``struct_type_args`` clears -- one
+            ``TypeRef`` per struct type parameter, positionally aligned with
+            the struct declaration's parameter list (a fresh name for a
+            generic method's position, a concrete type for a specialized
+            one). Method inheritance rebases a base family member onto a
+            deriving struct by matching this list against the ``extends``
+            clause's type arguments. ``None`` when the qualifier carries no
+            annotation (a method on a non-generic struct or a bare builtin).
     """
 
     name: str
@@ -528,6 +537,7 @@ class Func:
     struct_arg_defaults: dict[str, TypeRef] = field(default_factory=dict)
     alias_qualifier: str | None = None
     spec_qualifier_args: list[TypeRef] | None = None
+    qualifier_args: list[TypeRef] | None = None
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 

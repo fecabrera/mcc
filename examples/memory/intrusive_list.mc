@@ -65,6 +65,9 @@ fn main() -> int32 {
 }
 
 // See also: types/extends.mc for the named-base form of extends, where the
-// prefix layout and explicit-upcast rules used here originate;
+// prefix layout and explicit-upcast rules used here originate (a NAMED base
+// also lends the derived type its method families, types/method_inheritance.mc;
+// the bare `extends T` inherits nothing, there is no declared base family
+// at the declaration, so a payload's methods stay behind the upcast);
 // types/structs.mc for the non-intrusive list that wraps its payload in a
 // named `value` field; pointers.mc for `as` pointer casts.

@@ -215,6 +215,44 @@ class _CtorSelf:
     type: "LangType | None" = None
 
 
+@dataclass
+class _InheritedOrigin:
+    """A resolution-only inherited-method clone's link back to its origin.
+
+    Method inheritance enters a base family member into a derived family's
+    candidate set as a CLONE -- name, receiver, parameters, and return
+    rebased at the declared base instantiation -- but the clone is never
+    emitted: once resolution picks it, the ORIGIN template is instantiated
+    (sharing its instance cache and symbol) and the derived receiver coerces
+    to the base parameter at the call boundary. This record, keyed by
+    ``id(clone)`` in ``inherited_origins``, carries what that hand-off needs.
+
+    Attributes:
+        origin: The base family member the clone stands for.
+        seed: ``{origin type parameter: TypeRef}`` -- the bindings the
+            ``extends`` clause fixes (``T -> float64`` for ``pointf extends
+            point<float64>``; the ref may name the DERIVED struct's own
+            parameters when the derivation is generic).
+        rename: ``{origin type parameter: clone type parameter}`` for the
+            origin's leftover (method-own) parameters, renamed when they
+            collide with a derived struct parameter.
+        hop: Distance up the ``extends`` chain (1 = immediate base). Ranks
+            below the tier and above pattern specificity, so a derived
+            same-shape member shadows an inherited one.
+        base_label: The base instantiation's spelling for diagnostics
+            (``"point<float64>"``).
+        source: The deriving struct's file, where the ``extends`` clause's
+            type references resolve.
+    """
+
+    origin: Func
+    seed: dict[str, TypeRef]
+    rename: dict[str, str]
+    hop: int
+    base_label: str
+    source: str | None
+
+
 # The f-string sink rule: an interpolated literal may stand only where an
 # @format callee's format string receives it (marshal_args and the set-path
 # winner emission substitute the desugared text and splice the holes there).
@@ -690,6 +728,16 @@ class CodeGen:
         # fast path.
         self.overloads: dict[str, list[Func]] = {}
         self.overload_symbols: dict[int, str] = {}  # id(Func) -> mangled symbol
+        # Method inheritance: a derived struct's family call merges its own
+        # members with resolution-only CLONES of its base chain's members,
+        # rebased at the declared base instantiation (see
+        # inherited_candidates). Clone lists are cached per (source, family);
+        # each clone maps back to its origin template through
+        # inherited_origins -- emission always instantiates the ORIGIN (one
+        # shared instance cache and symbol), coercing the receiver at the
+        # call boundary.
+        self.inherited_sets: dict[tuple[str | None, str], list[Func]] = {}
+        self.inherited_origins: dict[int, _InheritedOrigin] = {}
         self.globals: dict[str, tuple[ir.GlobalVariable, LangType, bool]] = {}
         # @static globals are file-scoped storage, keyed by (source, name) so
         # other files may reuse the name -- like @static functions.
@@ -4654,6 +4702,10 @@ class CodeGen:
                 func.ret_type = self.subst_struct_args(func.ret_type, binding)
                 func.type_params = fresh_names + func.type_params
                 self.merge_struct_arg_decorations(func)
+            # Keep the classified annotation for method inheritance: rebasing
+            # a base family member onto a deriving struct matches this
+            # positional list against the `extends` clause's type arguments.
+            func.qualifier_args = list(args)
             func.struct_type_args = None
             func.struct_arg_groups = {}
             func.struct_arg_bounds = {}
@@ -10091,6 +10143,8 @@ class CodeGen:
             return static_symbol in self.mut_ret
         candidates = list(self.templates.get(call.name, ()))
         candidates += self.concrete_decls.get(call.name, {}).values()
+        if "::" in call.name:
+            candidates += self.inherited_candidates(call.name)
         return bool(candidates) and all(f.mut_return for f in candidates)
 
     def lvalue_type(self, expr) -> "LangType | None":
@@ -12949,13 +13003,530 @@ class CodeGen:
             file-scoped ``@static`` member answers to the name.
         """
         key = (self.current_source, family)
-        return (
+        if (
             family in self.templates
             or family in self.overloads
             or family in self.funcs
             or key in self.static_templates
             or key in self.static_funcs
-        )
+        ):
+            return True
+        # A derived struct exposes its base chain's families.
+        return bool(self.inherited_candidates(family))
+
+    def struct_base_ref(self, decl) -> "TypeRef | None":
+        """A struct declaration's ``extends`` target, alias-normalized.
+
+        The decl-level (``TypeRef``) mirror of :meth:`resolve_base`, for
+        walking a base chain before any instantiation exists: plain aliases
+        chase to their target and generic-alias applications expand
+        (:meth:`dealias_pattern`), so the returned reference heads a real
+        struct or builtin name whose arguments are spelled over the
+        declaring struct's own type parameters.
+
+        Args:
+            decl: The ``StructDecl`` whose base to normalize.
+
+        Returns:
+            The normalized base ``TypeRef``, or ``None`` when the struct
+            extends nothing, extends a bare type parameter (``extends T`` --
+            no declared base family to inherit), or the reference does not
+            normalize here (the instantiation reports those).
+        """
+        base = decl.base
+        if base is None:
+            return None
+        type_params = list(decl.type_params)
+        outer_source = self.current_source
+        self.current_source = decl.source
+        try:
+            seen: set[str] = set()
+            while True:
+                if base.name in type_params:
+                    return None  # `extends T`: intrusive reuse, no inheritance
+                if base.stars or base.dims or base.params is not None:
+                    return None  # not a struct; instantiation reports it
+                if base.args:
+                    expanded = self.dealias_pattern(base, type_params)
+                    if expanded is not base:
+                        base = expanded
+                        continue  # re-judge the expansion's head
+                if (
+                    self.lookup_struct_decl(base.name) is not None
+                    or base.name in TYPES
+                    or base.name in RESERVED_TYPE_NAMES
+                ):
+                    return base
+                alias = self.lookup_alias(base.name)
+                if alias is None or alias.type_params or base.name in seen:
+                    return None  # unresolvable here; instantiation reports it
+                seen.add(base.name)
+                base = alias.target
+        finally:
+            self.current_source = outer_source
+
+    def base_chain(
+        self, name: str
+    ) -> "list[tuple[str, list[TypeRef], int, str | None]]":
+        """Walk a struct's declared ``extends`` chain at the ``TypeRef`` level.
+
+        Each hop's type arguments compose through the previous hop's, so a
+        deep base's instantiation is spelled over the ORIGINAL struct's type
+        parameters: ``a<T> extends b<T>`` over ``b<U> extends c<list<U>>``
+        yields ``[("b", [T], 1), ("c", [list<T>], 2)]``.
+
+        Args:
+            name: The (derived) struct's name.
+
+        Returns:
+            ``(base name, composed type arguments, hop, declaring source)``
+            per hop, nearest first; empty for a non-struct or a root. The
+            chain ends at a builtin base (no declaration to walk further),
+            a cycle, or an arity mismatch (the instantiation reports those).
+        """
+        chain: "list[tuple[str, list[TypeRef], int, str | None]]" = []
+        seen = {name}
+        decl = self.lookup_struct_decl(name)
+        binding: "dict[str, TypeRef] | None" = None
+        hop = 0
+        while decl is not None:
+            ref = self.struct_base_ref(decl)
+            if ref is None:
+                break
+            if binding is not None:
+                ref = self.subst_struct_args(ref, binding)
+            hop += 1
+            if ref.name in seen:
+                break  # cyclic extends; instantiation reports it
+            seen.add(ref.name)
+            chain.append((ref.name, list(ref.args), hop, decl.source))
+            next_decl = self.lookup_struct_decl(ref.name)
+            if next_decl is None:
+                break  # a builtin base (e.g. slice): the chain ends
+            if len(next_decl.type_params) != len(ref.args):
+                break  # arity mismatch; instantiation reports it
+            binding = dict(zip(next_decl.type_params, ref.args))
+            decl = next_decl
+        return chain
+
+    def inherited_candidates(self, family: str) -> list[Func]:
+        """The rebased base-chain members a derived family call merges in.
+
+        A derived struct exposes its base chain's method families: a call to
+        ``pointf::magnitude`` (dot sugar included) resolves over the union of
+        ``pointf``'s own members and each base hop's, the latter entering as
+        resolution-only clones rebased at the declared base instantiation
+        (see :meth:`rebase_member`). The merged set is one overload set --
+        same-shape members shadow by hop in :meth:`call_rank`, different
+        shapes overload -- and there is no cascade: each hop contributes only
+        the members declared on it.
+
+        Args:
+            family: The qualified name as called, e.g.
+                ``"pointf::magnitude"``.
+
+        Returns:
+            The clone list (possibly empty), cached per (source, family).
+        """
+        if "::" not in family:
+            return []
+        key = (self.current_source, family)
+        cached = self.inherited_sets.get(key)
+        if cached is not None:
+            return cached
+        qualifier, method = family.split("::", 1)
+        clones: list[Func] = []
+        derived = self.lookup_struct_decl(qualifier)
+        if derived is not None:
+            derived_params = list(derived.type_params)
+            for base_name, base_args, hop, source in self.base_chain(qualifier):
+                base_family = f"{base_name}::{method}"
+                members = list(self.templates.get(base_family, ()))
+                if base_family in self.overloads:
+                    members += self.overloads[base_family]
+                else:
+                    members += self.concrete_decls.get(base_family, {}).values()
+                label = base_name + (
+                    "<" + ", ".join(str(a) for a in base_args) + ">"
+                    if base_args
+                    else ""
+                )
+                for origin in members:
+                    clone = self.rebase_member(
+                        origin, qualifier, derived_params, method,
+                        base_name, base_args, hop, label, source,
+                    )
+                    if clone is not None:
+                        clones.append(clone)
+        self.inherited_sets[key] = clones
+        return clones
+
+    def rebase_member(
+        self,
+        origin: Func,
+        derived_name: str,
+        derived_params: list[str],
+        method: str,
+        base_name: str,
+        base_args: "list[TypeRef]",
+        hop: int,
+        base_label: str,
+        source: "str | None",
+    ) -> "Func | None":
+        """Clone a base family member onto a deriving struct, or filter it.
+
+        The member's positional qualifier annotation
+        (:attr:`Func.qualifier_args`) matches against the declared base
+        instantiation's arguments: a fresh type parameter seeds (``T ->
+        float64`` for ``pointf extends point<float64>``, or ``T -> U`` for a
+        generic derivation), while a concrete (specialized) position must
+        agree with the declared argument -- a specialization for another
+        instantiation simply does not apply and filters out, as does a
+        diagonal qualifier the base arguments break, or a seeded parameter
+        whose type group / ``extends`` bound the concrete seed violates.
+
+        The clone renames to the derived family, respells the receiver as
+        the DERIVED type (so a concrete derivation's inherited member ranks
+        concrete -- tier 2 -- and a generic one stays generic), substitutes
+        the seed through the remaining parameters and the return type, and
+        keeps the origin's leftover (method-own) type parameters, renamed
+        away from collisions with the derived struct's. It is registered in
+        ``inherited_origins`` for emission (which instantiates the ORIGIN)
+        and its constraint tables are forwarded/rebased so ranking,
+        viability, and subsumption see the bounds the origin declared.
+
+        Args:
+            origin: The base family member.
+            derived_name: The deriving struct's name.
+            derived_params: The deriving struct's type parameters.
+            method: The family's method name.
+            base_name: The base hop's struct (or builtin) name.
+            base_args: The declared base instantiation's arguments, spelled
+                over ``derived_params``.
+            hop: Distance up the chain (1 = immediate base).
+            base_label: The base instantiation's display spelling.
+            source: The file whose ``extends`` clause spelled ``base_args``.
+
+        Returns:
+            The resolution-only clone, or ``None`` when the member does not
+            apply at this instantiation.
+        """
+        qargs = origin.qualifier_args or []
+        if len(qargs) != len(base_args):
+            return None  # a bare-qualifier member of a generic builtin
+        outer_source = self.current_source
+        self.current_source = origin.source
+        try:
+            seed: "dict[str, TypeRef]" = {}
+            for qa, ba in zip(qargs, base_args):
+                if (
+                    qa.params is None
+                    and not qa.args
+                    and not qa.stars
+                    and not qa.dims
+                    and qa.name in origin.type_params
+                ):
+                    prior = seed.get(qa.name)
+                    if prior is not None and str(prior) != str(ba):
+                        return None  # a diagonal qualifier the base breaks
+                    seed[qa.name] = ba
+                    continue
+                # A concrete (specialized) position: the member applies only
+                # when the declared base argument is that exact type.
+                if self.names_type_param(ba, derived_params):
+                    return None  # not provable per-declaration; filtered
+                theirs = self.resolve_concrete_pattern(qa, origin)
+                ours = self.resolve_ref_at(ba, source)
+                if theirs is None or ours is None or theirs != ours:
+                    return None
+            # Constraints on seeded parameters: a concrete seed is judged
+            # now (a violating member is not inherited); a seed naming a
+            # derived parameter transfers the constraint onto it; anything
+            # else defers to the instantiation backstop.
+            ogroups = self.group_types.get(id(origin), {})
+            obounds = self.bound_types.get(id(origin), {})
+            clone_groups: "dict[str, list[LangType]]" = {}
+            clone_bounds: "dict[str, LangType]" = {}
+            group_refs: "dict[str, list[TypeRef]]" = {}
+            bound_refs: "dict[str, TypeRef]" = {}
+            for pname, ref in seed.items():
+                group = ogroups.get(pname)
+                bound = obounds.get(pname)
+                if group is None and bound is None:
+                    continue
+                if (
+                    ref.params is None
+                    and not ref.args
+                    and not ref.stars
+                    and not ref.dims
+                    and ref.name in derived_params
+                ):
+                    if group is not None:
+                        clone_groups[ref.name] = group
+                        group_refs[ref.name] = origin.type_param_groups[pname]
+                    if bound is not None:
+                        clone_bounds[ref.name] = bound
+                        bound_refs[ref.name] = origin.type_param_bounds[pname]
+                    continue
+                if self.names_type_param(ref, derived_params):
+                    continue  # judged per instantiation by the backstop
+                resolved = self.resolve_ref_at(ref, source)
+                if resolved is None:
+                    continue  # ditto
+                bare = strip_const(resolved)
+                if group is not None and all(
+                    m != resolved and m != bare for m in group
+                ):
+                    return None  # outside the closed group: not inherited
+                if bound is not None and not self.nominal_subtype(bound, bare):
+                    return None  # fails the extends bound: not inherited
+            # Leftover (method-own) parameters, renamed off a collision with
+            # a derived struct parameter.
+            rename: "dict[str, str]" = {}
+            used = set(derived_params)
+            leftovers: list[str] = []
+            for pname in origin.type_params:
+                if pname in seed:
+                    continue
+                new = pname
+                while new in used:
+                    new += "'"
+                used.add(new)
+                rename[pname] = new
+                leftovers.append(new)
+                if pname in ogroups:
+                    clone_groups[new] = ogroups[pname]
+                    group_refs[new] = origin.type_param_groups[pname]
+                if pname in obounds:
+                    clone_bounds[new] = obounds[pname]
+                    bound_refs[new] = origin.type_param_bounds[pname]
+            binding: "dict[str, TypeRef]" = dict(seed)
+            for old, new in rename.items():
+                if new != old:
+                    binding[old] = TypeRef(new)
+            params: list[tuple[str, TypeRef]] = []
+            for i, (pname, ptype) in enumerate(origin.params):
+                head = self.dealias_pattern(ptype, origin.type_params)
+                if (
+                    i == 0
+                    and head.stars == 0
+                    and not head.dims
+                    and head.params is None
+                    and head.name == base_name
+                    and len(head.args) == len(qargs)
+                    and all(
+                        str(x) == str(y) for x, y in zip(head.args, qargs)
+                    )
+                ):
+                    # The receiver respells as the DERIVED type: the family
+                    # is exposed on it, so its own spelling is the pattern.
+                    params.append(
+                        (
+                            pname,
+                            TypeRef(
+                                derived_name,
+                                args=[TypeRef(p) for p in derived_params],
+                                const=ptype.const,
+                                nonnull=ptype.nonnull,
+                                mut=ptype.mut,
+                            ),
+                        )
+                    )
+                    continue
+                params.append((pname, self.subst_struct_args(ptype, binding)))
+            ret = self.subst_struct_args(origin.ret_type, binding)
+            defaults = {
+                rename[pname]: self.subst_struct_args(dref, binding)
+                for pname, dref in origin.type_param_defaults.items()
+                if pname not in seed
+            }
+            type_params = [
+                p
+                for p in derived_params
+                if any(self.names_type_param(t, [p]) for _, t in params)
+                or self.names_type_param(ret, [p])
+            ] + leftovers
+            clone = dataclasses_replace(
+                origin,
+                name=f"{derived_name}::{method}",
+                type_params=type_params,
+                params=params,
+                ret_type=ret,
+                type_param_defaults=defaults,
+                type_param_groups=group_refs,
+                type_param_bounds=bound_refs,
+            )
+            if clone_groups:
+                self.group_types[id(clone)] = clone_groups
+            if clone_bounds:
+                self.bound_types[id(clone)] = clone_bounds
+            self.inherited_origins[id(clone)] = _InheritedOrigin(
+                origin, seed, rename, hop, base_label, source
+            )
+            return clone
+        finally:
+            self.current_source = outer_source
+
+    def resolve_ref_at(
+        self, ref: TypeRef, source: "str | None"
+    ) -> "LangType | None":
+        """Resolve a ``TypeRef`` under a given file, with no live bindings.
+
+        Used while rebasing inherited members, where an ``extends`` clause's
+        type arguments belong to the deriving struct's file.
+
+        Args:
+            ref: The reference to resolve.
+            source: The file whose scope it resolves in.
+
+        Returns:
+            The resolved type, or ``None`` when it does not resolve.
+        """
+        outer_bindings = self.type_bindings
+        outer_source = self.current_source
+        self.type_bindings = {}
+        self.current_source = source
+        try:
+            return self.lang_type(ref, 0)
+        except LangError:
+            return None
+        finally:
+            self.type_bindings = outer_bindings
+            self.current_source = outer_source
+
+    def origin_bindings(
+        self, inh: _InheritedOrigin, bindings: "dict[str, LangType]", line: int
+    ) -> "dict[str, LangType]":
+        """An inherited winner's bindings, translated to its origin template.
+
+        The seed references the ``extends`` clause fixed resolve under the
+        clone's deduced bindings (a generic derivation's ``T -> U`` seed
+        picks up the call's ``U``); the leftover parameters carry over
+        through their rename.
+
+        Args:
+            inh: The clone's origin record.
+            bindings: The clone's deduced bindings.
+            line: The call's line, for diagnostics.
+
+        Returns:
+            The complete ``{origin type parameter: type}`` map.
+        """
+        outer_bindings = self.type_bindings
+        outer_source = self.current_source
+        self.type_bindings = bindings
+        self.current_source = inh.source
+        try:
+            resolved: "dict[str, LangType]" = {}
+            for pname in inh.origin.type_params:
+                ref = inh.seed.get(pname)
+                if ref is not None:
+                    resolved[pname] = self.lang_type(ref, line)
+                else:
+                    resolved[pname] = bindings[inh.rename[pname]]
+            return resolved
+        finally:
+            self.type_bindings = outer_bindings
+            self.current_source = outer_source
+
+    def receiver_view(
+        self, pattern: TypeRef, actual: LangType, type_params: list[str]
+    ) -> LangType:
+        """The base-chain view a method call's receiver unifies through.
+
+        The receiver position of a method-family call upcasts: when the
+        first parameter's pattern heads a struct that is a declared base of
+        the argument's ``extends`` lineage, inference and the shape filter
+        see the receiver AS that base instantiation -- so
+        ``point::magnitude(p)`` with a ``pointf`` receiver binds
+        ``T = float64``. Receiver position only; every other argument keeps
+        the explicit ``as`` upcast.
+
+        Args:
+            pattern: The candidate's first parameter pattern.
+            actual: The receiver argument's type.
+            type_params: The candidate's type-parameter names.
+
+        Returns:
+            The matching base instantiation, or ``actual`` unchanged.
+        """
+        if actual is CTOR_SELF or actual is NULLT:
+            return actual
+        p = self.dealias_pattern(pattern, type_params)
+        if p.stars or p.dims or p.params is not None or p.name in type_params:
+            return actual
+        bare = strip_const(actual)
+        if not is_struct(bare):
+            return actual
+        if bare.template == p.name or bare.name == p.name:
+            return actual
+        current = bare.base
+        while current is not None:
+            anc = strip_const(current)
+            if anc.template == p.name or anc.name == p.name:
+                return const_of(anc) if actual.const else anc
+            current = anc.base
+        return actual
+
+    def receiver_upcast_target(
+        self, t: LangType, p: LangType
+    ) -> "LangType | None":
+        """The base type a method receiver upcasts to, or ``None``.
+
+        Args:
+            t: The receiver argument's type.
+            p: The resolved receiver parameter's type.
+
+        Returns:
+            The (const-stripped) base target when ``t`` reaches ``p`` up its
+            declared ``extends`` lineage, else ``None``.
+        """
+        target = strip_const(p)
+        bare = strip_const(t)
+        if not is_struct(target) or not is_struct(bare) or target == bare:
+            return None
+        return target if self.nominal_subtype(target, bare) else None
+
+    def upcast_struct_value(self, tv: TypedValue, target: LangType) -> TypedValue:
+        """Prefix-copy a derived struct value as one of its declared bases.
+
+        The value round-trips through memory -- store the derived value,
+        reinterpret the slot as the base, load -- which keeps any
+        ``@packed``/``@align`` padding identical (the same honest data
+        slicing the ``as`` upcast performs).
+
+        Args:
+            tv: The derived struct value.
+            target: The base type (a declared ancestor of ``tv.type``).
+
+        Returns:
+            The base-typed prefix value.
+        """
+        slot = self.builder.alloca(strip_const(tv.type).ir)
+        self.builder.store(tv.value, slot)
+        base_ptr = self.builder.bitcast(slot, target.ir.as_pointer())
+        return TypedValue(self.builder.load(base_ptr), target)
+
+    def upcast_hidden_ref(self, tv: TypedValue, target: LangType):
+        """Spill a derived receiver value and lend it as a base reference.
+
+        A ``const`` (hidden-reference) receiver parameter takes a pointer;
+        a derived value already lowered for inference spills to a temporary
+        of its OWN type, whose address then reads as the base prefix.
+
+        Args:
+            tv: The derived struct value.
+            target: The base type (a declared ancestor of ``tv.type``).
+
+        Returns:
+            The temporary's address, typed as a base pointer.
+        """
+        src = strip_const(tv.type)
+        tmp = self.entry_alloca(src.ir)
+        if over_aligned(src):
+            tmp.align = type_align(src)
+        self.builder.store(tv.value, tmp)
+        return self.builder.bitcast(tmp, target.ir.as_pointer())
 
     def ctor_sugar_target(self, expr: Call) -> "str | None":
         """The canonical type name a bare call would construct, or ``None``.
@@ -13078,12 +13649,14 @@ class CodeGen:
             # placeholder, and the winner's first parameter fixes the
             # instantiation. A family that is one plain concrete function
             # (a lone specialization) never enters the set path, so its
-            # declared receiver fixes the slot directly instead.
+            # declared receiver fixes the slot directly instead -- unless
+            # inherited members join it into a set after all.
             key = (self.current_source, family)
             if (
                 family not in self.templates
                 and family not in self.overloads
                 and key not in self.static_templates
+                and not self.inherited_candidates(family)
             ):
                 symbol = self.static_funcs.get(key, family)
                 _, params, _ = self.signatures[symbol]
@@ -13216,19 +13789,27 @@ class CodeGen:
         # (A variable, const, or file-scoped @static legitimately shadows a
         # global function name -- all checked above.)
         self.check_removed(expr.name, expr.line)
+        # A method family's candidate set merges the receiver type's own
+        # members with its base chain's, rebased at the declared base
+        # instantiation (method inheritance); a plain name inherits nothing.
+        inherited = (
+            self.inherited_candidates(expr.name) if "::" in expr.name else []
+        )
         generic = self.templates.get(expr.name)
-        if generic is not None or expr.name in self.overloads:
+        if generic is not None or expr.name in self.overloads or inherited:
             # An overload set -- generic, concrete, or mixed -- resolves in
             # one order (viability, group filter, then the
             # (tier, specificity) rank) through the same pre-evaluate path.
             # A mixed set's
             # concrete side is either the mangled set or a single plain
-            # function sharing the name.
+            # function sharing the name (which also joins here when
+            # inherited members make a set of a lone declaration).
             candidates = list(generic) if generic is not None else []
             if expr.name in self.overloads:
                 candidates += self.overloads[expr.name]
-            elif generic is not None:
+            else:
                 candidates += self.concrete_decls.get(expr.name, {}).values()
+            candidates += inherited
             # Sets are open and privacy is per overload: another module's
             # @private member is not a candidate here -- the call simply
             # falls through to the members this file can see (so a foreign
@@ -13535,6 +14116,11 @@ class CodeGen:
             extern=symbol in self.extern_decls,
             abi=abi,
             sret_slot=sret_slot,
+            # A method-family call's receiver may upcast to a declared
+            # `extends` base (`point::magnitude(p)` with a pointf receiver);
+            # never for an @extern (no mcc lineage crosses the C boundary,
+            # and its aggregates marshal through the ABI plan above anyway).
+            receiver_upcast="::" in expr.name and abi is None,
         )
         raw = self.emit_call(
             self.funcs[symbol],
@@ -13774,6 +14360,7 @@ class CodeGen:
         extern: bool = False,
         abi: "ExternABI | None" = None,
         sret_slot=None,
+        receiver_upcast: bool = False,
     ) -> list:
         """Evaluate and coerce a call's arguments against the parameter types.
 
@@ -13814,6 +14401,11 @@ class CodeGen:
                 form (see :meth:`lower_abi_arg`); ``None`` for every other call.
             sret_slot: The caller-allocated result slot to prepend as the hidden
                 first argument when ``abi`` returns a struct indirectly.
+            receiver_upcast: Whether this is a method-family call, whose
+                first argument -- the receiver -- may upcast to a declared
+                ``extends`` base of its type: a ``mut``/hidden reference
+                lends the storage's base prefix, a by-value receiver
+                prefix-copies. Never set for indirect or ``@extern`` calls.
 
         Returns:
             The marshalled LLVM argument values.
@@ -13889,7 +14481,12 @@ class CodeGen:
             if i in mut:
                 # Before the string-literal adaptation: a literal is not the
                 # caller's storage, so it must be rejected, not spilled.
-                args.append(self.mut_ref_arg(arg_expr, params[i], line, context))
+                args.append(
+                    self.mut_ref_arg(
+                        arg_expr, params[i], line, context,
+                        receiver=receiver_upcast and i == 0,
+                    )
+                )
                 continue
             if i < len(params) and (
                 self.struct_literal_adapts(arg_expr, params[i])
@@ -13909,7 +14506,12 @@ class CodeGen:
                     args.append(tv.value)
                 continue
             if i in hidden:
-                args.append(self.hidden_ref_arg(arg_expr, params[i], line, context))
+                args.append(
+                    self.hidden_ref_arg(
+                        arg_expr, params[i], line, context,
+                        receiver=receiver_upcast and i == 0,
+                    )
+                )
                 continue
             if i < len(params) and is_valist(params[i]):
                 # A va_list is handed over in its platform-specific passed form,
@@ -13918,6 +14520,12 @@ class CodeGen:
                 continue
             tv = self.gen_expr(arg_expr)
             if i < len(params):
+                if receiver_upcast and i == 0:
+                    # A by-value receiver prefix-copies into a declared base
+                    # parameter (honest data slicing, as the `as` upcast).
+                    target = self.receiver_upcast_target(tv.type, params[i])
+                    if target is not None:
+                        tv = self.upcast_struct_value(tv, target)
                 tv = self.coerce(tv, params[i], line, f"argument {i + 1} of {label}")
                 value = tv.value
             elif is_integer(tv.type) and tv.type.ir.width < 32:
@@ -14648,7 +15256,8 @@ class CodeGen:
             )
 
     def hidden_ref_arg(
-        self, arg_expr, ptype: LangType, line: int, context: str
+        self, arg_expr, ptype: LangType, line: int, context: str,
+        receiver: bool = False,
     ) -> ir.Value:
         """Lower a hidden-reference (const struct) argument to a pointer.
 
@@ -14656,15 +15265,17 @@ class CodeGen:
         shared directly -- no copy, which is the point of the optimization. A
         proven-non-null pointer to the parameter's type *decays*: the pointer
         value itself is forwarded as the hidden reference (see
-        :meth:`decays_to`). An rvalue (or a type that still needs coercion,
-        e.g. an ``extends`` upcast) is materialized into a temporary whose
-        address is passed instead.
+        :meth:`decays_to`). An rvalue (or a type that still needs coercion)
+        is materialized into a temporary whose address is passed instead.
 
         Args:
             arg_expr: The argument expression.
             ptype: The parameter's (struct) type.
             line: Source line for diagnostics.
             context: A label for coercion error messages.
+            receiver: Whether this is a method-family call's receiver, which
+                may upcast: a derived argument's storage (or temporary) is
+                lent viewed as the declared base prefix.
 
         Returns:
             A pointer to the argument's storage.
@@ -14673,6 +15284,12 @@ class CodeGen:
             addr, t, align, volatile = self.gen_addr(arg_expr, line)
             if t.ir is ptype.ir:
                 return addr
+            if receiver:
+                target = self.receiver_upcast_target(t, ptype)
+                if target is not None:
+                    # A derived receiver borrows as the base prefix: the
+                    # same no-copy storage share, viewed as the base.
+                    return self.builder.bitcast(addr, target.ir.as_pointer())
             if self.decays_to(t, ptype, mut=False):
                 self.check_decay_arg(
                     arg_expr, strip_const(t), "const", ptype, context, line
@@ -14687,11 +15304,23 @@ class CodeGen:
                 # argument takes (a const parameter promises not to write
                 # through it).
                 return tv.lvalue
+            if receiver and tv.lvalue is not None:
+                target = self.receiver_upcast_target(tv.type, ptype)
+                if target is not None:
+                    return self.builder.bitcast(
+                        tv.lvalue, target.ir.as_pointer()
+                    )
             if self.decays_to(tv.type, ptype, mut=False):
                 self.check_decay_arg(
                     arg_expr, tv.type, "const", ptype, context, line
                 )
                 return tv.value
+        if receiver:
+            target = self.receiver_upcast_target(tv.type, ptype)
+            if target is not None:
+                # A derived rvalue receiver spills to its own temporary,
+                # lent viewed as the base prefix.
+                return self.upcast_hidden_ref(tv, target)
         return self.spill_to_temp(tv, ptype, line, context)
 
     def check_mut_storage(
@@ -14766,7 +15395,8 @@ class CodeGen:
             self.kill_paths_rooted(arg_expr.name)
 
     def mut_ref_arg(
-        self, arg_expr, ptype: LangType, line: int, context: str
+        self, arg_expr, ptype: LangType, line: int, context: str,
+        receiver: bool = False,
     ) -> ir.Value:
         """Lower a ``mut`` argument to a pointer to the caller's storage.
 
@@ -14789,6 +15419,9 @@ class CodeGen:
             ptype: The parameter's type.
             line: Source line for diagnostics.
             context: A label for error messages.
+            receiver: Whether this is a method-family call's receiver, which
+                may upcast: a derived lvalue lends its base prefix (the same
+                storage, viewed as the declared base).
 
         Returns:
             A pointer to the argument's storage (or the decayed pointer).
@@ -14806,6 +15439,12 @@ class CodeGen:
                 return self.gen_load(addr, align=align, volatile=volatile)
             self.check_mut_storage(arg_expr, t, align, volatile, line)
             if t != ptype:
+                if receiver:
+                    target = self.receiver_upcast_target(t, ptype)
+                    if target is not None:
+                        return self.builder.bitcast(
+                            addr, target.ir.as_pointer()
+                        )
                 raise LangError(
                     f"{context}: expected a {ptype} lvalue, got {t}", line
                 )
@@ -14822,8 +15461,14 @@ class CodeGen:
                 # vouched for the storage (and rejected const/@volatile/
                 # @packed at the return site), so no caller-side storage
                 # re-check -- just the exact-type rule every mut reference
-                # obeys.
+                # obeys, plus the receiver upcast (the base prefix re-lends).
                 if tv.type != ptype:
+                    if receiver:
+                        target = self.receiver_upcast_target(tv.type, ptype)
+                        if target is not None:
+                            return self.builder.bitcast(
+                                tv.lvalue, target.ir.as_pointer()
+                            )
                     raise LangError(
                         f"{context}: expected a {ptype} lvalue, got {tv.type}",
                         line,
@@ -15276,9 +15921,20 @@ class CodeGen:
                     for rank_key, contender, _ in viable:
                         if rank_key != top:
                             break
+                        # An inherited contender's note points at the ORIGIN
+                        # declaration, naming the base it was inherited from.
+                        contender_inh = self.inherited_origins.get(
+                            id(contender)
+                        )
+                        label = (
+                            "candidate is here (inherited from "
+                            f"{contender_inh.base_label})"
+                            if contender_inh is not None
+                            else "candidate is here"
+                        )
                         err.notes.append(
                             Note(
-                                "candidate is here",
+                                label,
                                 contender.line,
                                 contender.source,
                             )
@@ -15306,7 +15962,26 @@ class CodeGen:
         # Instantiation comes first: identifying a decayed position needs
         # the resolved parameter types. A concrete winner has no instance to
         # stamp out -- its mangled ir.Function was declared up front.
-        if func.type_params:
+        inh = self.inherited_origins.get(id(func))
+        if inh is not None:
+            # An inherited clone is never emitted: its ORIGIN instantiates
+            # (or looks up) instead -- one shared instance cache and symbol,
+            # no per-derived-type code -- with the seed bindings the
+            # `extends` clause fixed plus whatever the call inferred for the
+            # leftover parameters. The derived receiver then coerces to the
+            # base parameter at the boundary below.
+            obindings = self.origin_bindings(inh, bindings, expr.line)
+            if inh.origin.type_params:
+                fn, ret, params = self.instantiate(
+                    inh.origin, obindings, expr.line
+                )
+            else:
+                symbol = self.overload_symbols.get(
+                    id(inh.origin), inh.origin.name
+                )
+                fn = self.funcs[symbol]
+                ret, params, _ = self.signatures[symbol]
+        elif func.type_params:
             fn, ret, params = self.instantiate(func, bindings, expr.line)
         else:
             # A mangled set member, or a mixed set's single plain concrete
@@ -15323,6 +15998,15 @@ class CodeGen:
             # exactly what `S::constructor(s, args)` would.
             marker = expr.args[0]
             recv = strip_const(params[0]) if params else None
+            if inh is not None and func.params:
+                # An inherited constructor's origin receiver is the BASE
+                # type; the constructed slot must be the DERIVED one the
+                # clone's own receiver pattern spells (its boundary upcast
+                # then lends the slot's base prefix to the origin).
+                derived_params = self.try_param_types(func, bindings)
+                recv = (
+                    strip_const(derived_params[0]) if derived_params else None
+                )
             if recv is None or not (
                 recv.template == marker.struct_name
                 or recv.name == marker.struct_name
@@ -15365,8 +16049,25 @@ class CodeGen:
                     continue
                 self.check_mut_storage(expr.args[i], t, align, volatile, expr.line)
                 if t != p:
-                    raise LangError(
-                        f"{context}: expected a {p} lvalue, got {t}", expr.line
+                    target = (
+                        self.receiver_upcast_target(t, p)
+                        if i == 0 and "::" in expr.name
+                        else None
+                    )
+                    if target is None:
+                        raise LangError(
+                            f"{context}: expected a {p} lvalue, got {t}",
+                            expr.line,
+                        )
+                    # A derived receiver lends its base prefix: the same
+                    # storage, viewed as the base (the layout guarantee
+                    # `extends` makes), so the callee's writes land in the
+                    # derived value's leading fields.
+                    addrs[i] = (
+                        self.builder.bitcast(
+                            addrs[i][0], target.ir.as_pointer()
+                        ),
+                        t, align, volatile,
                     )
                 continue
             # No address was formed (an rvalue): only a proven-non-null
@@ -15386,12 +16087,26 @@ class CodeGen:
             if tv.lvalue is not None:
                 # A mut-return re-lend: the callee's formation rule vouched
                 # for the storage, so only the exact-type rule applies (as
-                # on the direct path, see mut_ref_arg).
+                # on the direct path, see mut_ref_arg) -- plus the receiver
+                # upcast, which re-lends the storage's base prefix.
                 if tv.type != p:
-                    raise LangError(
-                        f"{context}: expected a {p} lvalue, got {tv.type}",
-                        expr.line,
+                    target = (
+                        self.receiver_upcast_target(tv.type, p)
+                        if i == 0 and "::" in expr.name
+                        else None
                     )
+                    if target is None:
+                        raise LangError(
+                            f"{context}: expected a {p} lvalue, got {tv.type}",
+                            expr.line,
+                        )
+                    addrs[i] = (
+                        self.builder.bitcast(
+                            tv.lvalue, target.ir.as_pointer()
+                        ),
+                        tv.type, None, False,
+                    )
+                    continue
                 addrs[i] = (tv.lvalue, tv.type, None, False)
                 continue
             raise LangError(self.not_assignable(i, expr.name), expr.line)
@@ -15500,8 +16215,25 @@ class CodeGen:
                     )
                     args.append(tv.value)
                 else:
-                    args.append(self.spill_to_temp(tv, p, expr.line, context))
+                    target = (
+                        self.receiver_upcast_target(tv.type, p)
+                        if i == 0 and "::" in expr.name
+                        else None
+                    )
+                    if target is not None:
+                        # A derived receiver borrows as the base prefix.
+                        args.append(self.upcast_hidden_ref(tv, target))
+                    else:
+                        args.append(
+                            self.spill_to_temp(tv, p, expr.line, context)
+                        )
             else:
+                if i == 0 and "::" in expr.name:
+                    # A by-value receiver prefix-copies into the base
+                    # parameter (honest data slicing, as the `as` upcast).
+                    target = self.receiver_upcast_target(tv.type, p)
+                    if target is not None:
+                        tv = self.upcast_struct_value(tv, target)
                 args.append(self.coerce(tv, p, expr.line, context).value)
         if collecting:
             # Collection is emitted from the already-evaluated values (no
@@ -15553,8 +16285,9 @@ class CodeGen:
                     expr.line,
                 )
             )
+        effect_owner = inh.origin if inh is not None else func
         raw = self.emit_call(
-            fn, args, preserves=self.effect_bits.get(id(func)) is False
+            fn, args, preserves=self.effect_bits.get(id(effect_owner)) is False
         )
         if func.mut_return:
             # As in gen_direct_call: the eager load serves value contexts,
@@ -15865,6 +16598,13 @@ class CodeGen:
                 bare = strip_const(actuals[i])
                 if actuals[i] is not NULLT and bare.pointee is not None:
                     actuals[i] = bare.pointee
+        # A method-family call's receiver upcasts: inference and the shape
+        # filter see it as the base instantiation the first parameter's
+        # pattern names, when its declared `extends` lineage reaches one.
+        if "::" in expr.name and actuals and n_fixed >= 1:
+            actuals[0] = self.receiver_view(
+                func.params[0][1], actuals[0], func.type_params
+            )
         try:
             if expr.type_args and len(expr.type_args) < len(func.type_params):
                 self.fill_default_bindings(func, bindings, expr.line)
@@ -16300,22 +17040,27 @@ class CodeGen:
 
     def call_rank(
         self, func: Func, arg_tvs: list[TypedValue]
-    ) -> tuple[int, int, int, int]:
+    ) -> tuple[int, int, int, int, int]:
         """A viable candidate's per-call sort key.
 
-        ``(no-collect, tier, specificity, fixed count)``: a candidate that
-        matches this call without collecting beats any candidate that must
-        collect, as the outermost component regardless of tier -- an
+        ``(no-collect, tier, -hop, specificity, fixed count)``: a candidate
+        that matches this call without collecting beats any candidate that
+        must collect, as the outermost component regardless of tier -- an
         exact-arity generic beats a concrete collecting fallback (the C++
         ellipsis-ranks-worst analogue). A pass-through-shaped match counts
         as not-collecting at full specificity (see :meth:`passes_through`).
-        A collecting match scores specificity over its fixed prefix only --
-        the trailing ``slice<const any>`` pattern's own points must never
-        arbitrate against a competing prefix -- and more fixed parameters
-        break the remaining tie; equal fixed counts with a tying
-        fixed-prefix specificity stay the ambiguity error. Non-collecting
-        matches all share this call's arity, so their trailing count is
-        inert and every pre-collection ordering is preserved.
+        The hop -- an inherited member's distance up the ``extends`` chain,
+        0 for a member declared on the receiver type itself -- sits below
+        the tier and above specificity: a derived same-shape member shadows
+        an inherited one, while a base member of a better tier (an inherited
+        exact/concrete match) still beats a derived generic. A collecting
+        match scores specificity over its fixed prefix only -- the trailing
+        ``slice<const any>`` pattern's own points must never arbitrate
+        against a competing prefix -- and more fixed parameters break the
+        remaining tie; equal fixed counts with a tying fixed-prefix
+        specificity stay the ambiguity error. Non-collecting matches all
+        share this call's arity, so their trailing count is inert and every
+        pre-collection ordering is preserved.
 
         Args:
             func: The viable candidate.
@@ -16325,12 +17070,14 @@ class CodeGen:
             The sort key, greater meaning preferred.
         """
         tier, spec = self.rank(func)
+        inh = self.inherited_origins.get(id(func))
+        hop = inh.hop if inh is not None else 0
         if self.collecting_candidate(func) and not self.passes_through(
             func, arg_tvs
         ):
             fixed = len(func.params) - 1
-            return (0, tier, self.specificity(func, fixed), fixed)
-        return (1, tier, spec, len(func.params))
+            return (0, tier, -hop, self.specificity(func, fixed), fixed)
+        return (1, tier, -hop, spec, len(func.params))
 
     def passes_through(self, func: Func, arg_tvs: list[TypedValue]) -> bool:
         """Whether a call to a collecting candidate is pass-through-shaped.
