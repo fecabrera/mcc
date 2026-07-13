@@ -84,6 +84,36 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Move-out returns: `-> own T` and `move(v)`** — a function declared
+  `-> own T` hands its caller an owned value, lifting the whole-value
+  return hard error for destructor-carrying types exactly there:
+  returning the auto-destructed local cancels its scheduled destructor on
+  that path (per-path — other exits still destroy it) and the caller's
+  `let` adopts the obligation, scheduling `T::destructor` like a
+  constructor-sugar let. The formation rule is strict: unmarked returns
+  must visibly hold the obligation (the constructed local, a fresh
+  constructor expression, or a chained own call — a bare `try` unwrap of
+  one included); any plain copy needs the explicit `move(v)` assertion —
+  a builtin-shaped `fn move<T>(v: T) -> T` claimed by call shape like
+  `ok(`/`error(` (no keyword reserved), legal around the whole value
+  (`return move(v);`) or on the ok payload (`return ok(move(v));`), the
+  pop-owned idiom — a wrong `move()` is the usual aliasing double-free,
+  made visible instead of silent. Ownership composes with
+  results through the ok payload: `return ok(local)` transfers,
+  `return error(...)` destroys normally, `let s = try f();` and the
+  except-let adopt the unwrapped payload (an error-only `result<E>`
+  cannot be `own`). Everything else is inert by the expression-temporary
+  stance: discard, argument position, assignment, and `?? fallback`
+  drop the obligation (documented leaks). `own` is a flag beside `mut`
+  (mutually exclusive, no ABI change), a no-op on destructor-less types
+  (generic `-> own T` stays writable), rides `.mci` stubs, and is barred
+  from `@extern`, `@asm`, and `@property`/`@accessor` methods. Also
+  closes a shipped escape hole in *every* function: `return ok(local)` of
+  an auto-destructed local is now the same hard error as the bare
+  `return local`. `emit` keeps its whole-value error (a block expression
+  has no signature to carry the marker). See
+  [Move-out returns](docs/language.md#move-out-returns-own).
+
 - **`@accessor` methods — overloading the `[]` operator** — a method
   annotated `@accessor` is the type's `[]`: `xs[i]` calls `list<T>::at(xs,
   i)`, `@property`'s indexed sibling with the same bare-vs-pair split. The

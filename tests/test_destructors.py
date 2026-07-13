@@ -479,9 +479,10 @@ def test_returning_the_auto_destructed_local_is_an_error():
         match=re.escape(
             "cannot return 'r': its automatic destructor runs as the return "
             "unwinds this scope, so the returned copy would escape its own "
-            "cleanup; return the constructor expression directly, or "
-            "construct manually (an uninitialized let plus a constructor "
-            "call) and manage cleanup yourself"
+            "cleanup; declare the function `-> own` to transfer ownership, "
+            "return the constructor expression directly, or construct "
+            "manually (an uninitialized let plus a constructor call) and "
+            "manage cleanup yourself"
         ),
     ):
         compile_ir(

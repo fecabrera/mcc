@@ -206,17 +206,20 @@ fn main() -> int32 {
 //
 //     "cannot return 'src': its automatic destructor runs as the return
 //      unwinds this scope, so the returned copy would escape its own
-//      cleanup; return the constructor expression directly, or construct
-//      manually (an uninitialized let plus a constructor call) and manage
-//      cleanup yourself"
+//      cleanup; declare the function `-> own` to transfer ownership,
+//      return the constructor expression directly, or construct manually
+//      (an uninitialized let plus a constructor call) and manage cleanup
+//      yourself"
 //
-// `return file(9);` directly is legal -- an expression-position temporary
-// owns no automatic cleanup, only the let form schedules -- and so is a
-// field escape like `return src.fd;` (interior ownership is yours to
-// reason about). The caller-side corollary of the first hatch: binding the
-// call, `let f = make();`, is a COPY let, not constructor sugar, so the
-// caller schedules nothing either -- a returned resource is managed
-// manually.
+// The first hatch is the move-out lift (see own_returns.mc): an `-> own`
+// function cancels the local's schedule on the moving return and the
+// caller's let adopts the cleanup. Without `own`: `return file(9);`
+// directly is legal -- an expression-position temporary owns no automatic
+// cleanup, only the let form schedules -- and so is a field escape like
+// `return src.fd;` (interior ownership is yours to reason about); binding
+// a non-own call, `let f = make();`, is a COPY let, not constructor
+// sugar, so the caller schedules nothing either -- a returned resource is
+// then managed manually.
 //
 // Two more edges. A const view is still destroyed: `let f: const file =
 // file(1);` closes at scope exit, because destruction is scope teardown,

@@ -1731,19 +1731,22 @@ Details and sharp edges:
   resource, both views name it, exactly C's problem. A future
   `-Wdestructor-copy` may flag such copies; today the language does not
   track them.
-- **Returning or emitting the whole value is a hard error.** `return t;`
-  copies the value out, then the unwinding destroys the original — the
-  caller would receive a bitwise copy of already-destroyed state — so it
-  is rejected (`cannot return 't': its automatic destructor runs as the
-  return unwinds this scope, ...`); `emit t;` of a local declared inside
-  the [block expression](#block-expressions) likewise (emitting a local
-  from *outside* the block survives the emit and stays an ordinary,
-  legal copy). The escape hatches: return the constructor expression
-  directly (`return T(args);` — an expression-position temporary owns no
-  automatic cleanup; only the `let` form does), or construct manually and
-  own the cleanup. A **field** escape (`return t.data;`) is *not* caught —
-  interior ownership is yours to reason about. A future move-out may lift
-  the whole-value restriction.
+- **Returning or emitting the whole value is a hard error** — unless the
+  function is declared [`-> own`](#move-out-returns-own), the move-out
+  lift. `return t;` copies the value out, then the unwinding destroys the
+  original — the caller would receive a bitwise copy of already-destroyed
+  state — so it is rejected (`cannot return 't': its automatic destructor
+  runs as the return unwinds this scope, ...`), and so is smuggling the
+  same copy through a result wrap (`return ok(t);`); `emit t;` of a local
+  declared inside the [block expression](#block-expressions) likewise
+  (emitting a local from *outside* the block survives the emit and stays
+  an ordinary, legal copy — and the emit error has no `own` lift: a block
+  expression has no signature to carry the marker). The other hatches:
+  return the constructor expression directly (`return T(args);` — an
+  expression-position temporary owns no automatic cleanup; only the `let`
+  form does), or construct manually and own the cleanup. A **field**
+  escape (`return t.data;`) is *not* caught — interior ownership is yours
+  to reason about.
 - **Base cleanup chains manually**, mirroring constructor chaining: a
   derived destructor that wants it ends its body with
   `base::destructor(self);` — and a generic owner destroys a generic
@@ -1758,6 +1761,102 @@ Details and sharp edges:
   (`f(T(args))`, `return T(args);`) are never destroyed automatically.
 
 See [examples/types/destructors.mc](../examples/types/destructors.mc).
+
+#### Move-out returns: `-> own`
+
+A function declared `-> own T` hands its caller an **owned value**: the
+signature says, visibly, that the return transfers a resource and the
+caller must clean it up. Like [`-> mut`](#mut-returns), `own` is a flag on
+the declaration, not part of the type (the two are mutually exclusive:
+`mut` lends a view of existing storage, `own` hands over a value) — and it
+changes no ABI; everything below is compile-time policy.
+
+```c
+fn greeting(@nonnull who: char*) -> own string {
+    let s = string("hello, ");   // schedules string::destructor(s)
+    s.append(who);
+    return s;                    // TRANSFER: the schedule is cancelled on
+}                                // this path; the caller adopts
+
+let msg = greeting("world");     // adopts: destroys msg at scope end,
+                                 // exactly like a constructor-sugar let
+```
+
+**In the body**, returning an auto-destructed local cancels the local's
+scheduled destructor *on that return path only* and transfers the cleanup
+obligation — the [whole-value hard error](#destructors) is lifted exactly
+here. Other exits keep the schedule: a path that returns something else
+still destroys the local. The **formation rule is strict**: an unmarked
+return must visibly hold the obligation it hands over —
+
+- the constructed **local** (the transfer above),
+- a fresh **constructor expression** (`return string("hi");` — the
+  temporary owns no scheduled cleanup, so the obligation is minted for the
+  caller), or
+- a **chained own call** (`return inner();` with `inner` also `-> own` —
+  the obligation flows through untouched; a bare `try inner()` unwrap of
+  an own call chains the same way).
+
+Anything else is a **plain copy** — the original stays behind, still
+owned — and minting a caller obligation from it is exactly the aliasing
+double-free the copies-are-bitwise stance warns about. Asserting that the
+source truly relinquishes the value takes the explicit marker:
+
+```c
+fn box::pop(mut self: box) -> own res {
+    return move(self.r);   // "I own this and I am handing it over"
+}
+```
+
+`move(v)` behaves like a builtin `fn move<T>(v: T) -> T` — the value
+passes through unchanged; the call *is* the assertion — and is claimed by
+call shape exactly like `ok(`/`error(`, so a bare `move` stays an
+ordinary identifier. It is legal only in the return value of an `-> own`
+function, around the whole value or on the ok payload
+(`return ok(move(v));`); anywhere else it has no transfer target and is
+rejected. A *wrong* `move()` (the field stays reachable and owned) is the
+same undefined double-free as any aliasing copy — the marker makes the
+risky case visible, never silent.
+
+**At the caller**, a `let` bound to an own call **adopts**: it schedules
+`T::destructor` on its scope exactly like a constructor-sugar let (a
+`const`-viewed binding adopts and is still destroyed, same stance). Every
+other consumption is inert, consistent with expression-position
+temporaries owning no cleanup: discarding the call (`f();`), passing it as
+an argument (`g(f())`), chaining off it, assigning it to an existing
+variable, and a `try f() ?? fallback` mix all drop the obligation — a
+documented leak, yours to manage.
+
+**With a result return** the ownership rides the **ok payload**:
+
+```c
+fn load(path: char*) -> own result<string, io_error> {
+    let s = string("...");
+    if (bad) return error(io_error::NOT_FOUND);  // error path: s destroyed
+    return ok(s);                                // transfer via the payload
+}
+
+let s = try load(p);                  // adopts the unwrapped payload
+let t = try load(p) except (e) { return -1; };   // adopts too
+```
+
+`return error(...)` transfers nothing (that path's locals are destroyed
+normally), and an error-only `result<E>` cannot be `own` (there is no ok
+payload to hand over). Note the general guard this feature also closes:
+in *any* function, `return ok(local)` of an auto-destructed local is now
+the same hard error as the bare `return local` — the result wrap no longer
+smuggles the destroyed copy out.
+
+`own` on a **destructor-less type is a no-op** — nothing to cancel or
+adopt — which keeps generic signatures writable: `fn pool<T>::take(...) ->
+own T` compiles for every `T`, and does its job exactly when `T` carries a
+destructor. The flag rides `.mci` interface stubs (`fn make(v: int32) ->
+own res;`) and its mismatch against a prototype is rejected like a `mut`
+mismatch. `@extern` functions cannot be `own` (C hands over no destructor
+obligation), and neither can `@property`/`@accessor` methods (reads
+through field or index syntax never transfer).
+
+See [examples/types/own_returns.mc](../examples/types/own_returns.mc).
 
 #### Inherited methods
 

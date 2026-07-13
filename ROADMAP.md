@@ -2283,7 +2283,10 @@ already do).
           (an expression-position temporary owns no automatic cleanup)
           or construct manually and own the cleanup; field escapes are
           not caught, and emitting a local declared OUTSIDE the block
-          expression survives the emit and stays a legal copy;
+          expression survives the emit and stays a legal copy (the
+          RETURN half of this error now lifts under an `-> own`
+          signature, the shipped move-out sub-item below; `emit`
+          keeps it);
           (3) a CONST-viewed constructor let IS destroyed — destruction
           is scope teardown, not user mutation (the C++ stance,
           OVERRULING the explorer's error-first recommendation): the
@@ -2315,18 +2318,72 @@ already do).
           unclaimed method name, now semantic: any existing family under
           it gains the automatic call. Implemented, see
           [Destructors](docs/language.md#destructors):
-      - [ ] move-out returns — lift the whole-value return/emit hard
-            error: returning the local cancels the scheduled defer and
-            transfers the cleanup obligation to the caller's scope.
-            Recorded at the ship as the future lift; together with
-            caller-adopted destruction it is the gate the
-            [string-valued f-strings](#strings-and-formatting) item
-            waits on (the shipped v1 alone does not unblock it — a
-            callee cannot yet hand an owned value out)
+      - [x] move-out returns — `-> own T` and the `move(v)` assertion:
+            a function declared `fn make() -> own T` hands its caller
+            an owned value, lifting the whole-value RETURN hard error
+            exactly there. Returning the auto-destructed local cancels
+            its scheduled destructor ON THAT PATH ONLY (other exits
+            still destroy it) and the caller's let ADOPTS the
+            obligation, scheduling `T::destructor` exactly like a
+            constructor-sugar let: both halves of this item's
+            cancel-and-transfer design, shipped together. `own` is a
+            keyword flag on the declaration beside `mut` (mutually
+            exclusive: mut lends a view, own hands over a value; no
+            ABI change), a no-op on a destructor-less type (generic
+            `-> own T` stays writable), rides `.mci` stubs (a
+            prototype mismatch rejects like a mut mismatch), and is
+            barred on `@extern`, `@asm`, and `@property`/`@accessor`.
+            The formation rule is STRICT (USER RULING, chosen over the
+            permissive alternative): an unmarked return must visibly
+            hold the obligation it hands over (the constructed local,
+            a fresh constructor expression, or a chained own call, a
+            bare `try` unwrap of one included); any plain copy needs
+            the explicit `move(v)` assertion, a builtin-shaped
+            `fn move<T>(v: T) -> T` claimed by call shape exactly like
+            `ok(`/`error(` (no keyword reserved for `move`; `own` IS a
+            keyword), legal only in the return value of an own
+            function, around the whole value (`return move(v);`) or on
+            the ok payload (`return ok(move(v));`), and rejected
+            anywhere else ("no transfer target here"); a wrong
+            `move()` is the recorded aliasing double-free UB, made
+            visible instead of silent. Result composition shipped in
+            v1 (USER RULING, "support now"): ownership rides the ok
+            payload, so `return ok(local)` transfers,
+            `return error(...)` destroys normally, and
+            `let s = try f();` and the except-let adopt the unwrapped
+            payload (the handler's emitted fallback rides the same
+            schedule); an error-only `own result<E>` rejects at the
+            declaration. Every other consumption is INERT, the
+            expression-temporary C stance (documented leaks): discard,
+            argument position, assignment, chaining, and
+            `try f() ?? fallback`. Also closed a shipped soundness
+            hole in EVERY function: `return ok(local)` of an
+            auto-destructed local is now the same hard error as the
+            bare `return local` (the result wrap no longer smuggles a
+            destroyed copy out), and the bare error gained a
+            "declare `-> own`" hint. `emit` keeps its whole-value hard
+            error, deliberately unlifted (a block expression has no
+            signature to carry the marker). With the caller adoption
+            this opens the
+            [string-valued f-strings](#strings-and-formatting) gate
+            for let position only; that item records the
+            argument-position temporary gap that remains. Implemented,
+            see
+            [Move-out returns](docs/language.md#move-out-returns-own):
+        - [ ] fn-pointer-type `own` parity — a `fn() -> own T` TYPE
+              does not carry the bit, so an indirect call never
+              vouches for the obligation and adoption is lost through
+              a pointer: exactly the gap `mut` had during its rollout
+        - [ ] `-Wdiscarded-own` — warn when an own call's obligation
+              is dropped (discard, argument position, assignment), the
+              diagnostic direction the documented-leak stance above
+              points at; `-Wdestructor-copy` below is its sibling
       - [ ] `-Wdestructor-copy` — warn on a bitwise copy of a value
             whose type declares a destructor (two views naming one
             resource, C's aliasing problem), the direction the shipped
-            copies-are-not-tracked stance records
+            copies-are-not-tracked stance records; the shipped
+            `move(v)` assertion is the sanctioned relinquishing
+            spelling such a warning would exempt
     - [ ] `new <struct>(...)` sugar — heap construction: desugars to a
           block that allocates with `new<<struct>>()`, runs the shipped
           constructor family on the allocation, and emits the pointer
@@ -3518,23 +3575,23 @@ already do).
   - [ ] string-valued f-strings — an f-string used outside an `@format`
         argument, as a standalone value (`let s = f"{x}";`), rendering into a
         runtime `string` so it can go anywhere a string can, not only into an
-        `@format` argument position. Deferred: the destructor/RAII
-        lifecycle in [Methods / OOP](#functions-and-methods) has shipped,
-        but its v1 alone does NOT unblock this — returning the
-        auto-destructed local is a hard error and expression-position
-        temporaries own no cleanup, so a callee cannot yet hand an owned
-        `string` to the caller's scope; the gate is the move-out-returns
-        follow-up nested under the shipped destructor item (cancel the
-        defer, transfer the cleanup) plus caller-adopted destruction,
-        which is the machinery
-        it needs: `let s = f"..."` desugars to `let s = format("...", args...)`
-        over a renderer `fn format(str, args...) -> string` whose returned
-        `string` is constructed in the callee, owned by the caller's scope, and
-        destructed at the end of that scope (RAII over
+        `@format` argument position. The gate is now HALF OPEN: the shipped
+        move-out returns (`-> own`, nested under the destructor item in
+        [Methods / OOP](#functions-and-methods)) plus caller-adopted
+        destruction cover LET position — `let s = f"..."` can desugar to
+        `let s = format("...", args...)` over a renderer
+        `fn format(str, args...) -> own string` whose returned `string` is
+        constructed in the callee, adopted by the caller's let, and destroyed
+        at the end of that scope (RAII over
         [`defer`](docs/language.md#defer), the same discipline the destructor
-        item establishes). The shipped `@format`-only rule above (an f-string
-        anywhere but a format-string argument is a compile error) is exactly
-        this deferral, and lifts to the desugar once the lifecycle exists
+        item establishes). What remains is ARGUMENT position:
+        `println("{}", f"{x}")` produces an expression temporary, and
+        temporaries own no cleanup (the shipped inert-consumption stance), so
+        the rendered `string` would leak; end-of-statement temporary
+        destruction is machinery no item owns yet. The shipped `@format`-only
+        rule above (an f-string anywhere but a format-string argument is a
+        compile error) is exactly this deferral, and lifts to the desugar
+        position by position as the lifecycle allows
 
 ### Tooling and C interop
 

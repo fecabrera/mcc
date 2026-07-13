@@ -418,6 +418,23 @@ class Func:
             reference from a ``mut``/pointer parameter or a global (never
             this call's own frame). A flag on the function, not part of the
             return ``TypeRef`` -- ``mut`` is not a type.
+        own_return: ``-> own T`` -- the function returns an owned value:
+            the caller receives the cleanup obligation for a
+            destructor-carrying type. Purely compile-time policy (no ABI
+            change; ``own`` on a destructor-less type is a no-op, which
+            keeps generic ``-> own T`` writable). In the body, ``return``
+            of an auto-destructed local cancels its scheduled destructor
+            on that path and transfers; a fresh constructor expression or
+            a chained ``own`` call also return unmarked; any other value
+            (a plain copy) needs the explicit ``move(...)`` assertion
+            (``return move(e);``). With a ``result<T, E>`` return type the ownership
+            rides the *ok payload*: ``return ok(local)`` transfers,
+            ``return error(...)`` is the error path (locals destroyed
+            normally). At a caller's let (`let s = f();`,
+            ``let s = try f();``, the except form), the bound value adopts
+            the obligation like a constructor-sugar let. A flag beside
+            ``mut_return`` (the two are mutually exclusive), not part of
+            the type.
         deprecated_msg: The ``@deprecated("...")`` migration message, or
             ``None``. Every call site (and function-value use) emits a
             warning carrying it; the function stays callable.
@@ -552,6 +569,7 @@ class Func:
     format_params: set[str] = field(default_factory=set)
     noreturn: bool = False
     mut_return: bool = False
+    own_return: bool = False
     deprecated_msg: str | None = None
     removed_msg: str | None = None
     override: bool = False
@@ -1280,6 +1298,30 @@ class ResultLit:
 
     kind: str
     value: object | None
+    line: int
+
+
+@dataclass
+class Move:
+    """The transfer assertion: ``move(v)``.
+
+    Behaves like a builtin ``fn move<T>(v: T) -> T`` — the value passes
+    through unchanged — whose meaning is the assertion: the source
+    relinquishes ``v``, so the ``-> own`` return handing it to the caller
+    may mint the cleanup obligation from a plain copy the strict formation
+    rule would otherwise reject. Legal only in the return value of an
+    ``-> own`` function (around the whole value, ``return move(self.r);``,
+    or on the ok payload, ``return ok(move(self.r));``); anywhere else it
+    has no transfer target and errors. Claimed by call shape like
+    ``ok(``/``error(``, so a bare ``move`` stays an ordinary identifier
+    and no keyword is reserved.
+
+    Attributes:
+        value: The relinquished expression.
+        line: Source line for diagnostics.
+    """
+
+    value: object
     line: int
 
 

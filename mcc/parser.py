@@ -54,6 +54,7 @@ from mcc.nodes import (
     NullLit,
     OffsetOf,
     Program,
+    Move,
     ResultLit,
     Return,
     SizeOf,
@@ -1740,18 +1741,48 @@ class Parser:
         self.expect(")")
         ret_type = TypeRef("void")
         mut_return = False
+        own_return = False
         if self.accept("->"):
             # `-> mut T`: the function returns an lvalue (a reference to
             # caller-reachable storage). A flag on the declaration; the
             # fn(...) -> mut T pointer type spells the same convention.
+            # `-> own T`: the function returns an owned value (the caller
+            # adopts the cleanup obligation). Also a flag, and the two are
+            # mutually exclusive: mut lends a view, own hands over a value.
             mut_tok = self.cur if self.cur.kind == "mut" else None
             mut_return = bool(self.accept("mut"))
+            own_tok = self.cur if self.cur.kind == "own" else None
+            own_return = bool(self.accept("own"))
+            if mut_return and own_return:
+                raise LangError(
+                    "a return cannot be both mut and own (mut lends the "
+                    "caller a view of existing storage, own hands it an "
+                    "owned value)",
+                    own_tok.line,
+                )
+            if own_return and self.cur.kind == "mut":
+                raise LangError(
+                    "a return cannot be both own and mut (mut lends the "
+                    "caller a view of existing storage, own hands it an "
+                    "owned value)",
+                    self.cur.line,
+                )
             ret_type = self.parse_type_ref()
             if mut_return and ret_type.const:
                 raise LangError(
                     "a return cannot be both mut and const "
                     "(a mut return must be writable)",
                     mut_tok.line,
+                )
+            if own_return and (
+                ret_type.name == "void"
+                and not ret_type.stars
+                and not ret_type.dims
+            ):
+                raise LangError(
+                    "an own return needs a value to hand over; void owns "
+                    "nothing",
+                    own_tok.line,
                 )
         if variadic and type_params:
             raise LangError("a generic function cannot be variadic", line)
@@ -1771,6 +1802,25 @@ class Parser:
             raise LangError(
                 "a mut return is not allowed on @extern functions "
                 "(it would change the C calling convention)",
+                line,
+            )
+        if own_return and extern:
+            raise LangError(
+                "an own return is not allowed on @extern functions "
+                "(C has no destructor obligation to hand over)",
+                line,
+            )
+        if own_return and asm:
+            raise LangError(
+                "an own return is not allowed on @asm functions "
+                "(an asm template constructs nothing to hand over)",
+                line,
+            )
+        if own_return and (prop or acc):
+            raise LangError(
+                "a @property or @accessor method cannot return own "
+                "(reads through field or index syntax never transfer "
+                "ownership)",
                 line,
             )
         if extern:  # a declaration: signature only, no body
@@ -1928,6 +1978,7 @@ class Parser:
                 format_params=format_params,
                 noreturn=noreturn,
                 mut_return=mut_return,
+                own_return=own_return,
                 deprecated_msg=deprecated,
                 removed_msg=removed,
                 type_param_defaults=type_param_defaults,
@@ -2031,6 +2082,7 @@ class Parser:
             format_params=format_params,
             noreturn=noreturn,
             mut_return=mut_return,
+            own_return=own_return,
             deprecated_msg=deprecated,
             removed_msg=removed,
             override=override,
@@ -3187,6 +3239,22 @@ class Parser:
                         )
                 self.expect(")")
                 return ResultLit(tok.text, value, tok.line)
+            # `move(` is the transfer assertion of an `-> own` return --
+            # claimed by the same call shape (it behaves like a builtin
+            # fn move<T>(v: T) -> T), so a bare `move` stays an ordinary
+            # identifier.
+            if tok.text == "move" and self.cur.kind == "(":
+                self.advance()
+                if self.cur.kind == ")":
+                    raise LangError(
+                        "move() takes the value being relinquished", tok.line
+                    )
+                with self._struct_literals(True):
+                    value = self.parse_expr()
+                if self.cur.kind == ",":
+                    raise LangError("move() takes a single value", tok.line)
+                self.expect(")")
+                return Move(value, tok.line)
             # `error_name(` / `error_message(` are the error accessors, claimed
             # by the same call shape so the names stay ordinary identifiers.
             if (

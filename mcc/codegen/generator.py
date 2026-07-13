@@ -70,6 +70,7 @@ from mcc.nodes import (
     NullLit,
     OffsetOf,
     Program,
+    Move,
     ResultLit,
     Return,
     SizeOf,
@@ -264,6 +265,12 @@ FSTRING_MISPLACED = (
     "like 'println' or 'format_args'"
 )
 
+MOVE_MISPLACED = (
+    "move(...) has no transfer target here: it is legal only in the "
+    "return value of an `-> own` function (around the whole value or on "
+    "the ok payload)"
+)
+
 
 def borrows_array_literal(expr) -> bool:
     """Whether an expression is a non-empty array literal, ternary arms included.
@@ -393,6 +400,7 @@ class GenContext:
     locals: dict = dataclass_field(metadata={"fork": dict})
     ret_type: LangType = dataclass_field(metadata={})
     ret_mut: bool = dataclass_field(metadata={})
+    ret_own: bool = dataclass_field(metadata={})
     formation_params: dict = dataclass_field(metadata={"fork": dict})
     loops: list = dataclass_field(metadata={"fork": list})
     current_variadic: bool = dataclass_field(metadata={})
@@ -840,6 +848,10 @@ class CodeGen:
         # `return` statements hand back an address under the formation rule
         # instead of a value. Set per body by gen_function, like ret_type.
         self.ret_mut: bool = False
+        # Whether it returns own (`-> own T`): its `return` statements
+        # transfer the cleanup obligation under the own formation rule
+        # (see the Return arm). Set per body by gen_function, like ret_mut.
+        self.ret_own: bool = False
         # The current function's plain (non-mut, non-const) parameters:
         # name -> whether the parameter's type is a pointer. The mut-return
         # formation walk consults this to tell a pointer parameter (a legal
@@ -1210,7 +1222,8 @@ class CodeGen:
             )
 
     def check_mut_return_decl(self, func: Func, ret: LangType):
-        """Validate a ``-> mut`` declaration once its return type resolves.
+        """Validate a ``-> mut`` / ``-> own`` declaration once its return
+        type resolves.
 
         A ``mut`` return references existing storage, so ``void`` (no
         storage) is rejected -- for a generic per instance, since the
@@ -1219,13 +1232,25 @@ class CodeGen:
         already banned at parse time (the pointer-typed return would change
         the C calling convention).
 
+        An ``own`` return over a ``result`` owns the *ok payload*, so the
+        error-only ``result<E>`` (no ok value) is rejected -- also per
+        instance, since a generic's return may resolve to one.
+
         Args:
             func: The declared function.
             ret: Its resolved return type.
 
         Raises:
-            LangError: When a ``-> mut`` function is ``main`` or void.
+            LangError: When a ``-> mut`` function is ``main`` or void, or
+                an ``-> own`` function returns an error-only result.
         """
+        if func.own_return and is_result(ret) and len(ret.args) == 1:
+            raise LangError(
+                f"function {func.name!r} cannot return own {ret}: an own "
+                "return hands over the ok payload, and an error-only "
+                "result has none",
+                func.line,
+            )
         if not func.mut_return:
             return
         if func.name == "main":
@@ -2574,7 +2599,11 @@ class CodeGen:
             # `-> mut T` (mut is not part of the type), so the flag is
             # checked on its own: a mismatch would let a stub and its
             # definition disagree on the call's lvalue-ness and ABI.
+            # `own` likewise: a mismatch would let callers of the stub
+            # adopt (or fail to adopt) a cleanup obligation the
+            # definition does not hand over.
             or prior.mut_return != func.mut_return
+            or prior.own_return != func.own_return
         ):
             if func.proto and prior.proto:
                 message = f"conflicting prototypes for {name!r}"
@@ -5766,6 +5795,7 @@ class CodeGen:
         """
         self.ret_type = ret
         self.ret_mut = func.mut_return
+        self.ret_own = func.own_return
         self.current_source = func.source
         self.current_variadic = func.variadic  # gates va_start
         self.current_noreturn = func.name if func.noreturn else None
@@ -6156,6 +6186,17 @@ class CodeGen:
         )
         self.builder.store(tv.value, slot)
         self.bind_local(stmt.name, slot, declared)
+        # Adoption, as at a plain let: the unwrapped ok payload of an
+        # `-> own` call carries its obligation into the bound slot (the
+        # handler's emit fallback fills the same slot, so an owned
+        # fallback rides the same scheduled cleanup). The return-position
+        # desugar's hidden let never adopts -- its transfer travels on the
+        # synthesized return's move flag instead, and a non-own function
+        # keeps today's plain-copy behavior for it.
+        if stmt.name != "0except" and self.own_call_initializer(expr.value):
+            self.schedule_auto_destructor(
+                stmt, slot, strip_const(declared), declared
+            )
         if expr.otherwise is not None:
             self.gen_block(expr.otherwise)
         ok_falls = not self.builder.block.is_terminated
@@ -7472,45 +7513,127 @@ class CodeGen:
                     f"{self.current_noreturn!r} (it promises never to return)",
                     stmt.line,
                 )
-            if isinstance(stmt.value, Except):
+            if isinstance(stmt.value, Except) or (
+                isinstance(stmt.value, Move)
+                and isinstance(stmt.value.value, Except)
+            ):
                 # `return try f() except (err) { H } [else { S }];`: desugar to
                 # a hidden let (evaluate once, run the handler/else arms, fill
                 # the ok slot) followed by an ordinary return of the slot, so
                 # the normal return path owns defers, coercion to the return
                 # type, and the mut-return discipline. The name is not a
                 # lexable identifier, so it cannot collide.
+                moved_wrap = isinstance(stmt.value, Move)
+                if moved_wrap and not self.ret_own:
+                    raise LangError(MOVE_MISPLACED, stmt.line)
+                exc = stmt.value.value if moved_wrap else stmt.value
                 hidden = "0except"
-                self.gen_statement(Let(hidden, None, stmt.value, stmt.line))
+                self.gen_statement(Let(hidden, None, exc, stmt.line))
                 try:
                     # When the handler diverges and a diverging else keeps
                     # even the ok arm from falling through, the join is
                     # already unreachable and there is nothing to return.
                     if not self.builder.block.is_terminated:
-                        self.gen_statement(
-                            Return(Var(hidden, stmt.line), stmt.line)
+                        # In an own function the unwrapped payload transfers
+                        # when the tested call itself hands ownership over
+                        # (an own chain) or the whole form sat in a
+                        # move(...); the re-wrapped Move carries the
+                        # blessing through the desugar (the hidden slot is
+                        # never auto-destructed, so nothing cancels).
+                        transfer = self.ret_own and (
+                            moved_wrap
+                            or self.own_transfer_source(exc.value)
                         )
+                        returned = Var(hidden, stmt.line)
+                        if transfer:
+                            returned = Move(returned, stmt.line)
+                        self.gen_statement(Return(returned, stmt.line))
                 finally:
                     del self.locals[hidden]
                     self.scope_names.discard(hidden)
                 return
-            # Returning a whole auto-destructed local is rejected: the value
-            # is copied out, then the unwinding defers run its destructor,
-            # so the caller would receive a bitwise copy of an already-
-            # destroyed value. (A field escape, `return t.data`, is not
-            # caught -- the language does not track interior ownership.)
-            if isinstance(stmt.value, Var):
-                bound = self.locals.get(stmt.value.name)
+            # The own transfer and the destroyed-copy escape guard, both
+            # over the same payload view: for a result return the ok
+            # payload is what transfers (or escapes), so classification
+            # looks through `ok(...)`; `error(...)` is the error path and
+            # transfers nothing (its locals are destroyed normally). A
+            # move(...) assertion is stripped wherever it sits -- around
+            # the whole value (`return move(v);`) or on the ok payload
+            # (`return ok(move(v));`) -- and remembered.
+            moved = None  # the one (scope index, entry) this return cancels
+            asserted = False
+            ret_value = stmt.value
+            if isinstance(ret_value, Move):
+                asserted = True
+                ret_value = ret_value.value
+            payload = ret_value
+            err_path = False
+            if isinstance(payload, ResultLit):
+                err_path = payload.kind == "error"
+                inner = payload.value
+                if isinstance(inner, Move):
+                    asserted = True
+                    inner = inner.value
+                    payload = ResultLit(payload.kind, inner, payload.line)
+                    ret_value = payload
+                payload = inner
+            if asserted and not self.ret_own:
+                raise LangError(MOVE_MISPLACED, stmt.line)
+            if asserted and err_path:
+                raise LangError(
+                    "an error return transfers nothing to move; ownership "
+                    "rides the ok payload",
+                    stmt.line,
+                )
+            # Returning a whole auto-destructed local: in an `-> own`
+            # function (and not on the error path) this is THE transfer --
+            # the local's scheduled destructor is cancelled on this path
+            # and the caller adopts the obligation. Anywhere else it is
+            # rejected: the value is copied out, then the unwinding defers
+            # run its destructor, so the caller would receive a bitwise
+            # copy of an already-destroyed value. (A field escape,
+            # `return t.data`, is not caught -- the language does not
+            # track interior ownership.)
+            if isinstance(payload, Var):
+                bound = self.locals.get(payload.name)
                 if bound is not None and bound[0] in self.auto_destroyed:
-                    raise LangError(
-                        f"cannot return {stmt.value.name!r}: its automatic "
-                        "destructor runs as the return unwinds this scope, "
-                        "so the returned copy would escape its own cleanup; "
-                        "return the constructor expression directly, or "
-                        "construct manually (an uninitialized let plus a "
-                        "constructor call) and manage cleanup yourself",
-                        stmt.line,
-                    )
-            if stmt.value is None:
+                    if self.ret_own and not err_path:
+                        moved = self.auto_destroyed[bound[0]]
+                    else:
+                        raise LangError(
+                            f"cannot return {payload.name!r}: its automatic "
+                            "destructor runs as the return unwinds this "
+                            "scope, so the returned copy would escape its "
+                            "own cleanup; declare the function `-> own` to "
+                            "transfer ownership, return the constructor "
+                            "expression directly, or construct manually "
+                            "(an uninitialized let plus a constructor "
+                            "call) and manage cleanup yourself",
+                            stmt.line,
+                        )
+            # The own formation rule: an unmarked return must visibly hold
+            # the obligation it hands over -- the transferred local above,
+            # a fresh constructor expression, or a chained own call. Any
+            # other value is a plain copy (the original stays behind,
+            # still owned), so minting a caller obligation from it needs
+            # the explicit move(...) assertion.
+            if (
+                self.ret_own
+                and not err_path
+                and moved is None
+                and not asserted
+                and ret_value is not None
+                and not self.own_transfer_source(payload)
+            ):
+                raise LangError(
+                    "an own return transfers ownership, but this value is "
+                    "a plain copy (the original stays behind, still "
+                    "owned); return the constructed local, a constructor "
+                    "expression, or a chained own call -- or assert the "
+                    "transfer explicitly with `return move(...)`",
+                    stmt.line,
+                )
+            if ret_value is None:
                 if self.ret_type is not VOID:
                     raise LangError(f"return needs a {self.ret_type} value", stmt.line)
                 self.run_defers_through(0)  # all enclosing blocks
@@ -7526,9 +7649,9 @@ class CodeGen:
                 # (`return xs as slice<T>`) stays legal: the caller can at
                 # least reason about the local's storage.
                 if (
-                    isinstance(stmt.value, Cast)
-                    and borrows_array_literal(stmt.value.value)
-                    and is_slice(self.lang_type(stmt.value.type_name, stmt.line))
+                    isinstance(ret_value, Cast)
+                    and borrows_array_literal(ret_value.value)
+                    and is_slice(self.lang_type(ret_value.type_name, stmt.line))
                 ):
                     raise LangError(
                         "cannot return an array literal borrowed as a slice: "
@@ -7538,23 +7661,41 @@ class CodeGen:
                         "the call",
                         stmt.line,
                     )
-                # Evaluate the result before the defers run, so a defer that
-                # frees a buffer cannot clobber what is being returned.
+                # Evaluate the result (move(...) already stripped: the
+                # assertion passes the value through) before the defers
+                # run, so a defer that frees a buffer cannot clobber what
+                # is being returned.
                 if (
-                    self.struct_literal_adapts(stmt.value, self.ret_type)
-                    or self.str_literal_adapts(stmt.value, self.ret_type)
-                    or self.result_literal_adapts(stmt.value, self.ret_type)
+                    self.struct_literal_adapts(ret_value, self.ret_type)
+                    or self.str_literal_adapts(ret_value, self.ret_type)
+                    or self.result_literal_adapts(ret_value, self.ret_type)
                 ):
-                    tv = self.gen_adapted_literal(stmt.value, self.ret_type, stmt.line)
+                    tv = self.gen_adapted_literal(ret_value, self.ret_type, stmt.line)
                 else:
-                    tv = self.gen_expr(stmt.value)
+                    tv = self.gen_expr(ret_value)
                     if tv.type is VOID:
                         # `return f();` where f is void: there is no void value to
                         # return (matching `let x = f();`). Call f as a statement
                         # and use a bare `return;` instead.
                         raise LangError("cannot return a void value", stmt.line)
                     tv = self.coerce(tv, self.ret_type, stmt.line, "return value")
-                self.run_defers_through(0)
+                if moved is not None:
+                    # The own transfer: unwind with the returned local's
+                    # scheduled destructor withheld on this path only (the
+                    # value was already copied out above). Other exits keep
+                    # the entry, so the LIFO position is restored after.
+                    scope_idx, entry = moved
+                    scope = self.defer_stack[scope_idx]
+                    pos = next(
+                        i for i, e in enumerate(scope) if e is entry
+                    )
+                    scope.pop(pos)
+                    try:
+                        self.run_defers_through(0)
+                    finally:
+                        scope.insert(pos, entry)
+                else:
+                    self.run_defers_through(0)
                 if not self.builder.block.is_terminated:
                     self.builder.ret(tv.value)
         elif isinstance(stmt, Emit):
@@ -7589,10 +7730,11 @@ class CodeGen:
             # emit, so emitting it is an ordinary copy and stays legal.
             if isinstance(stmt.value, Var):
                 bound = self.locals.get(stmt.value.name)
-                if (
-                    bound is not None
-                    and self.auto_destroyed.get(bound[0], -1) >= ctx.defer_depth
-                ):
+                sched = (
+                    None if bound is None
+                    else self.auto_destroyed.get(bound[0])
+                )
+                if sched is not None and sched[0] >= ctx.defer_depth:
                     raise LangError(
                         f"cannot emit {stmt.value.name!r}: its automatic "
                         "destructor runs as the emit unwinds the block, so "
@@ -7834,6 +7976,18 @@ class CodeGen:
                 slot.align = type_align(tv.type)
             self.builder.store(tv.value, slot)
             self.bind_local(stmt.name, slot, tv.type)
+            # Adoption: a let bound to an `-> own` call receives the
+            # cleanup obligation the callee handed over, so it schedules
+            # the automatic destructor exactly like a constructor-sugar
+            # let (`let s = make();` cleans up like `let s = string(...)`;
+            # a bare-try unwrap, `let s = try make();`, adopts the ok
+            # payload the same way). A destructor-less type is a no-op,
+            # and an annotation that coerced the value away binds a copy
+            # whose type has no family -- also a no-op.
+            if self.own_call_initializer(stmt.value):
+                self.schedule_auto_destructor(
+                    stmt, slot, strip_const(tv.type), tv.type
+                )
             # Fact-seeding through let: a pointer local initialized from a
             # provably non-null value (`let q = p!`, `let q = p` under a
             # guard, `let s: uint8* = "..."`) starts flow-narrowed, under
@@ -9907,6 +10061,12 @@ class CodeGen:
             # a ternary sibling or the expected type will bind (a bare use with
             # no such context is rejected at coerce / the sink guards below).
             return self.gen_result_pending(expr)
+        if isinstance(expr, Move):
+            # The Return arm strips a well-placed move(...) before
+            # evaluation, so one reaching here sits where no transfer
+            # happens (a let, an argument, an emit) -- rejected rather
+            # than silently passing the value through as a copy.
+            raise LangError(MOVE_MISPLACED, expr.line)
         if isinstance(expr, ErrorName):
             return self.gen_error_name(expr)
         if isinstance(expr, TupleLit):
@@ -10422,6 +10582,91 @@ class CodeGen:
         if "::" in call.name:
             candidates += self.inherited_candidates(call.name)
         return bool(candidates) and all(f.mut_return for f in candidates)
+
+    def known_own_call(self, call: Call) -> bool:
+        """Whether a named call certainly resolves to an ``-> own`` return.
+
+        Judged by name, before overload resolution, exactly like
+        :meth:`known_mut_return_call`: every candidate behind the name must
+        carry ``-> own`` (a mixed set is conservatively rejected). A
+        variable or const shadowing the name is an indirect call through a
+        function-pointer value, whose type does not carry the own bit
+        (yet) -- it never vouches.
+
+        Args:
+            call: The ``Call`` node.
+
+        Returns:
+            ``True`` when the call is certainly an ``own`` return.
+        """
+        if self.var_type_of(call.name) is not None or call.name in self.consts:
+            return False
+        key = (self.current_source, call.name)
+        static_template = self.static_templates.get(key)
+        if static_template is not None:
+            return static_template.own_return
+        static_decl = self.static_func_decls.get(key)
+        if static_decl is not None:
+            return static_decl.own_return
+        candidates = list(self.templates.get(call.name, ()))
+        candidates += self.concrete_decls.get(call.name, {}).values()
+        if "::" in call.name:
+            candidates += self.inherited_candidates(call.name)
+        return bool(candidates) and all(f.own_return for f in candidates)
+
+    def own_transfer_source(self, expr) -> bool:
+        """Whether a return value visibly holds the obligation it hands over.
+
+        The unmarked forms of the ``-> own`` formation rule (besides the
+        transferred auto-destructed local, which the Return arm handles
+        itself): a constructor expression (a fresh temporary that owns no
+        scheduled cleanup -- the obligation is minted here for the caller),
+        a call that certainly resolves ``-> own`` (the obligation chains
+        through untouched), a dot-call resolving the same, and a bare
+        ``try`` over such a call (the unwrapped ok payload is the owned
+        value). Everything else is a plain copy and needs the explicit
+        ``return move e;`` assertion.
+
+        Args:
+            expr: The candidate return-value expression.
+
+        Returns:
+            ``True`` when the value transfers unmarked.
+        """
+        if isinstance(expr, Call) and self.ctor_sugar_target(expr) is not None:
+            return True
+        return self.own_call_initializer(expr)
+
+    def own_call_initializer(self, expr) -> bool:
+        """Whether an expression is certainly an ``-> own`` call (possibly
+        under a bare ``try`` unwrap, or spelled as a dot-call).
+
+        The caller-side twin of :meth:`own_transfer_source`: a let bound to
+        such an initializer adopts the cleanup obligation the callee handed
+        over (``let s = f();``, ``let s = try f();``, and the except form
+        through :meth:`gen_let_except`).
+
+        Args:
+            expr: The initializer (or return-value) expression.
+
+        Returns:
+            ``True`` when the expression is certainly an ``own`` call.
+        """
+        if isinstance(expr, Try):
+            return self.own_call_initializer(expr.value)
+        if isinstance(expr, Call):
+            return self.known_own_call(expr)
+        if (
+            isinstance(expr, CallExpr)
+            and isinstance(expr.callee, Member)
+            and not expr.callee.arrow
+        ):
+            base_t = self.dot_receiver_type(expr.callee.base)
+            if base_t is not None:
+                plan = self.plan_dot_call(expr, base_t)
+                if plan is not None:
+                    return self.known_own_call(plan)
+        return False
 
     def lvalue_type(self, expr) -> "LangType | None":
         """Best-effort static type of a simple lvalue, without emitting code.
@@ -14608,15 +14853,16 @@ class CodeGen:
         # bookkeeping. The block-exit locals restore drops the binding
         # right after the defers that reference it have run.
         self.locals[hidden] = (slot, built)
-        self.defer_stack[-1].append(
-            [
-                ExprStmt(
-                    Call(family, [], [Var(hidden, stmt.line)], stmt.line),
-                    stmt.line,
-                )
-            ]
-        )
-        self.auto_destroyed[slot] = len(self.defer_stack) - 1
+        entry = [
+            ExprStmt(
+                Call(family, [], [Var(hidden, stmt.line)], stmt.line),
+                stmt.line,
+            )
+        ]
+        self.defer_stack[-1].append(entry)
+        # The entry rides along so an own-transferring return can cancel
+        # exactly this scheduled call on its path (see the Return arm).
+        self.auto_destroyed[slot] = (len(self.defer_stack) - 1, entry)
 
     def gen_call(self, expr: Call) -> TypedValue:
         """Emit a call to a named function.

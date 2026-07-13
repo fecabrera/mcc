@@ -349,8 +349,11 @@ class InterfaceWriter:
         # `-> mut` rides along: the importer's call sites must be lvalue
         # expressions with a pointer-typed return, and the stub must keep
         # pairing with its definition (the pair check rejects a mismatch).
+        # `-> own` likewise: the importer's lets must adopt the handed-over
+        # cleanup obligation (the two flags are mutually exclusive).
         mut = "mut " if func.mut_return else ""
-        ret = "" if _is_void(func.ret_type) else f" -> {mut}{func.ret_type}"
+        own = "own " if func.own_return else ""
+        ret = "" if _is_void(func.ret_type) else f" -> {mut}{own}{func.ret_type}"
         head = "@private fn" if func.private else "fn"
         # @noreturn is re-emitted so the importer's call sites diverge too
         # (and so the stub keeps pairing with its definition -- the pair
