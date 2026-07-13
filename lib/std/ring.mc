@@ -1,5 +1,8 @@
 import "std/memory";
 
+@private
+const DEFAULT_RING_CAPACITY = 2;
+
 // Dynamic ring-buffer FIFO ring<T>. Grows automatically when full; never
 // shrinks.
 struct ring<T> {
@@ -9,13 +12,17 @@ struct ring<T> {
     capacity: uint64; // total allocated slots
 }
 
+fn ring<T>::constructor(mut self: ring<T>) {
+    ring<T>::constructor(self, DEFAULT_RING_CAPACITY);
+}
+
 /**
  * Allocates the backing buffer and initialises an empty ring.
  *
  * @param self:     ring to initialise
  * @param capacity: initial slot count
  */
-fn ring_init<T>(mut self: ring<T>, capacity: uint64) {
+fn ring<T>::constructor(mut self: ring<T>, capacity: uint64) {
     self.data = alloc<T>(capacity);
     self.head = 0;
     self.length = 0;
@@ -27,7 +34,7 @@ fn ring_init<T>(mut self: ring<T>, capacity: uint64) {
  *
  * @param self: ring to destroy
  */
-fn ring_destroy<T>(mut self: ring<T>) {
+fn ring<T>::destructor(mut self: ring<T>) {
     dealloc(self.data);
 
     self.data = null;
@@ -42,9 +49,9 @@ fn ring_destroy<T>(mut self: ring<T>) {
  * @param self:  ring to push onto
  * @param value: value to append
  */
-fn ring_push<T>(mut self: ring<T>, value: T) {
+fn ring<T>::push(mut self: ring<T>, value: T) {
     if (self.length == self.capacity)
-        ring_grow(self);
+        self.grow();
 
     let pos = (self.head + self.length) % (self.capacity);
 
@@ -60,7 +67,7 @@ fn ring_push<T>(mut self: ring<T>, value: T) {
  *
  * @return the popped value
  */
-fn ring_pop<T>(mut self: ring<T>) -> T {
+fn ring<T>::pop(mut self: ring<T>) -> T {
     let pos = self.head;
 
     self.head = (self.head + 1) % self.capacity;
@@ -70,7 +77,7 @@ fn ring_pop<T>(mut self: ring<T>) -> T {
 }
 
 /**
- * Reports whether a logical index is in bounds — whether ring_at is defined
+ * Reports whether a logical index is in bounds — whether `.at` is defined
  * for it; index 0 is the front.
  *
  * @param self:  ring to test against
@@ -78,15 +85,15 @@ fn ring_pop<T>(mut self: ring<T>) -> T {
  *
  * @return true if index < self.length
  */
-fn ring_has<T>(const self: ring<T>, index: uint64) -> bool {
+fn ring<T>::has(const self: ring<T>, index: uint64) -> bool {
     return index < self.length;
 }
 
 /**
  * Unchecked mutable access at a logical index; index 0 is the front. Returns
- * the element as an lvalue, so `ring_at(r, 0) = v` writes in place and
- * `let x = ring_at(r, 0)` copies out. Undefined if index is out of bounds —
- * guard with ring_has. The lvalue points into the ring's storage: consume it
+ * the element as an lvalue, so `r.at(0) = v` writes in place and
+ * `let x = r.at(0)` copies out. Undefined if index is out of bounds —
+ * guard with `.has`. The lvalue points into the ring's storage: consume it
  * before any call that can grow the ring.
  *
  * @param self:  ring to access
@@ -94,7 +101,7 @@ fn ring_has<T>(const self: ring<T>, index: uint64) -> bool {
  *
  * @return the element at that position, as an assignable lvalue
  */
-fn ring_at<T>(mut self: ring<T>, index: uint64) -> mut T {
+fn ring<T>::at(mut self: ring<T>, index: uint64) -> mut T {
     let pos = (self.head + index) % (self.capacity);
     return self.data![pos];
 }
@@ -108,19 +115,8 @@ fn ring_at<T>(mut self: ring<T>, index: uint64) -> mut T {
  *
  * @return the front value
  */
-fn ring_peek<T>(const self: ring<T>) -> T {
+fn ring<T>::peek(const self: ring<T>) -> T {
     return self.data![self.head];
-}
-
-/**
- * Returns the number of elements currently on the ring.
- *
- * @param self: ring to measure
- *
- * @return the live element count
- */
-fn ring_len<T>(const self: ring<T>) -> uint64 {
-    return self.length;
 }
 
 /**
@@ -130,19 +126,19 @@ fn ring_len<T>(const self: ring<T>) -> uint64 {
  *
  * @return true if the ring is empty, false otherwise
  */
-fn ring_is_empty<T>(const self: ring<T>) -> bool {
+fn ring<T>::is_empty(const self: ring<T>) -> bool {
     return self.length == 0;
 }
 
 /**
  * Doubles the backing buffer and re-lays the elements in logical order from
- * index 0, resetting head. Internal; called by ring_push when the ring is
+ * index 0, resetting head. Internal; called by `.push` when the ring is
  * full.
  *
  * @param self: ring whose buffer to grow
  */
 @private
-fn ring_grow<T>(mut self: ring<T>) {
+fn ring<T>::grow(mut self: ring<T>) {
     let new_capacity: uint64 = self.capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;

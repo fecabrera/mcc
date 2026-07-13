@@ -872,33 +872,25 @@ fn main() -> int32 {
     let ys = list<int32>(2);
     ys.push(9);
     let eq = equals(xs as slice<int32>, ys as slice<int32>);
-    let r: ring<int32>;
-    ring_init(r, 1);
-    for i in range(5) { ring_push(r, i as int32); }
-    ring_at(r, 0) = 3;
-    let rr = ring_peek(r) + ring_pop(r); ring_destroy(r);
-    let st: struct stack<int32>;
-    stack_init(st, 1);
-    for i in range(5) { stack_push(st, i as int32); }
-    let ss = stack_peek(st) + stack_pop(st); stack_destroy(st);
-    let q: queue<int32>;
-    queue_init(q);
-    for i in range(4) { queue_push(q, i as int32); }
-    let qq: int32 = queue_peek(q);
+    let r = ring<int32>(1);
+    for i in range(5) { r.push(i as int32); }
+    r.at(0) = 3;
+    let rr = r.peek() + r.pop();
+    let st = stack<int32>(1);
+    for i in range(5) { st.push(i as int32); }
+    let ss = st.peek() + st.pop();
+    let q = queue<int32>();
+    for i in range(4) { q.push(i as int32); }
+    let qq: int32 = q.peek();
     for v in &q { qq += v; }
-    queue_destroy(q);
-    let d: dict<int32>;
-    dict_init(d, 2);
-    dict_set(d, "a", 1); dict_set(d, "b", 2); dict_set(d, "c", 3);
-    let dv: int32; dict_get(d, "b", dv); dict_remove(d, "a");
+    let d = dict<int32>(2);
+    d.set("a", 1); d.set("b", 2); d.set("c", 3);
+    let dv: int32; d.get("b", dv); d.remove("a");
     for p in &d { dv += p.value; }
-    dict_destroy(d);
-    let m: struct set<int32, int32>;
-    set_init(m, 2);
-    for i in range(6) { set_set(m, i as int32, (i * i) as int32); }
-    let mv: int32; set_get(m, 3, mv); set_remove(m, 1);
+    let m = set<int32, int32>(2);
+    for i in range(6) { m.set(i as int32, (i * i) as int32); }
+    let mv: int32; m.get(3, mv); m.remove(1);
     for p in &m { mv += p.value; }
-    set_destroy(m);
     let buf: uint8[5] = [104, 101, 108, 108, 111];
     let digest: uint8[16];
     md5(buf, 5, digest);

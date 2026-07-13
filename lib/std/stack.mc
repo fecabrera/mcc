@@ -1,9 +1,16 @@
 import "std/memory";
 
+@private
+const DEFAULT_STACK_CAPACITY = 2;
+
 struct stack<T> {
     data: T*;         // heap-allocated element buffer
     top: uint64;      // index of the next free slot (== live element count)
     capacity: uint64; // total allocated slots
+}
+
+fn stack<T>::constructor(mut self: stack<T>) {
+    stack<T>::constructor(self, DEFAULT_STACK_CAPACITY);
 }
 
 /**
@@ -12,7 +19,7 @@ struct stack<T> {
  * @param self:     stack to initialize
  * @param capacity: initial slot count
  */
-fn stack_init<T>(mut self: struct stack<T>, capacity: uint64) {
+fn stack<T>::constructor(mut self: stack<T>, capacity: uint64) {
     self.data = alloc<T>(capacity);
     self.top = 0;
     self.capacity = capacity;
@@ -23,7 +30,7 @@ fn stack_init<T>(mut self: struct stack<T>, capacity: uint64) {
  *
  * @param self: stack to destroy
  */
-fn stack_destroy<T>(mut self: struct stack<T>) {
+fn stack<T>::destructor(mut self: stack<T>) {
     dealloc(self.data);
 
     self.data = null;
@@ -37,9 +44,9 @@ fn stack_destroy<T>(mut self: struct stack<T>) {
  * @param self:  stack to push onto
  * @param value: value to push
  */
-fn stack_push<T>(mut self: struct stack<T>, value: T) {
+fn stack<T>::push(mut self: stack<T>, value: T) {
     if (self.top == self.capacity)
-        stack_grow<T>(self);
+        self.grow();
 
     self.data![self.top] = value;
     self.top += 1;
@@ -53,7 +60,7 @@ fn stack_push<T>(mut self: struct stack<T>, value: T) {
  *
  * @return the popped value
  */
-fn stack_pop<T>(mut self: struct stack<T>) -> T {
+fn stack<T>::pop(mut self: stack<T>) -> T {
     self.top -= 1;
     return self.data![self.top];
 }
@@ -66,7 +73,7 @@ fn stack_pop<T>(mut self: struct stack<T>) -> T {
  *
  * @return the top value
  */
-fn stack_peek<T>(const self: struct stack<T>) -> T {
+fn stack<T>::peek(const self: stack<T>) -> T {
     return self.data![self.top - 1];
 }
 
@@ -77,7 +84,7 @@ fn stack_peek<T>(const self: struct stack<T>) -> T {
  *
  * @return the live element count
  */
-fn stack_len<T>(const self: struct stack<T>) -> uint64 {
+fn stack<T>::length(const self: stack<T>) -> uint64 {
     return self.top;
 }
 
@@ -88,18 +95,18 @@ fn stack_len<T>(const self: struct stack<T>) -> uint64 {
  *
  * @return true if the stack is empty, false otherwise
  */
-fn stack_is_empty<T>(const self: struct stack<T>) -> bool {
+fn stack<T>::is_empty(const self: stack<T>) -> bool {
     return self.top == 0;
 }
 
 /**
  * Doubles the backing buffer, preserving the elements. Internal; called by
- * stack_push when the stack is full.
+ * `.push` when the stack is full.
  *
  * @param self: stack whose buffer to grow
  */
 @private
-fn stack_grow<T>(mut self: struct stack<T>) {
+fn stack<T>::grow(mut self: stack<T>) {
     let new_capacity: uint64 = self.capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;

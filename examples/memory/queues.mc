@@ -6,20 +6,19 @@ import "std/queue";
 // The array-backed FIFO this replaced lives on as ring<T> (lib/std/ring.mc).
 
 fn main() -> int32 {
-    // The queue functions take const/mut receivers, so a local queue passes
+    // The queue methods take const/mut receivers, so a local queue passes
     // directly: no & needed. (A queue<T>* still works via pointer decay; see
-    // examples/functions/pointer_decay.mc.)
-    let q: struct queue<int32>;
-    queue_init(q);
-    defer queue_destroy(q);
+    // examples/functions/pointer_decay.mc.) The ctor-sugar `let` auto-defers
+    // queue<T>::destructor at scope end.
+    let q = queue<int32>();
 
     let i: int32 = 1;
     while (i <= 5) {
-        queue_push(q, i);
+        q.push(i);
         i += 1;
     }
 
-    println("front {}", queue_peek(q));
+    println("front {}", q.peek());
 
     // for-in walks front to back (oldest to newest) without consuming.
     print("queue (walk):  ");
@@ -30,8 +29,8 @@ fn main() -> int32 {
 
     // Popping returns the oldest element first.
     print("queue (FIFO):  ");
-    until (queue_is_empty(q)) {
-        print("{} ", queue_pop(q));        // 1 2 3 4 5
+    until (q.is_empty()) {
+        print("{} ", q.pop());             // 1 2 3 4 5
     }
     println("");
 

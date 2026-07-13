@@ -21,25 +21,23 @@ def splitmix64(key: int) -> int:
 
 def test_direct_receiver_with_growth():
     # The post-migration idiom: a local set passes directly, no `&`.
-    # Capacity 2 forces set_grow (mut-to-mut re-lending inside set_set).
+    # Capacity 2 forces the grow path (mut-to-mut re-lending inside .set).
     assert run(
         """
         import "std/set";
         fn main() -> int32 {
-            let s: struct set<uint64, uint64>;
-            set_init(s, 2);
-            set_set(s, 1, 10);
-            set_set(s, 2, 20);
-            set_set(s, 3, 30);
-            set_set(s, 2, 22);                 // update in place, same length
+            let s = set<uint64, uint64>(2);
+            s.set(1, 10);
+            s.set(2, 20);
+            s.set(3, 30);
+            s.set(2, 22);                      // update in place, same length
             let v: uint64 = 0;
-            if (!set_get(s, 2, v)) return 100;
+            if (!s.get(2, v)) return 100;
             if (v != 22) return 101;
             if (s.length != 3) return 102;
             if (s.capacity < 4) return 103;    // grew from 2
-            set_remove(s, 1);
-            if (set_get(s, 1, v)) return 104;
-            set_destroy(s);
+            s.remove(1);
+            if (s.get(1, v)) return 104;
             return 0;
         }
         """
@@ -52,12 +50,10 @@ def test_amp_call_sites_still_compile():
         """
         import "std/set";
         fn main() -> int32 {
-            let s: struct set<int32, int32>;
-            set_init(&s, 4);
-            set_set(&s, 5, 50);
+            let s = set<int32, int32>(4);
+            s.set(5, 50);
             let v: int32 = 0;
-            let found = set_get(&s, 5, v);
-            set_destroy(&s);
+            let found = s.get(5, v);
             return (found and v == 50) ? 0 : 1;
         }
         """
@@ -74,10 +70,10 @@ def test_iteration_visits_all_entries():
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
             if (s == null) return 1;    // proves s for the receiver slots below
-            set_init(s, 8);
-            set_set(s, 10, 100);
-            set_set(s, 20, 200);
-            set_set(s, 30, 300);
+            set::constructor(s, 8);
+            set::set(s, 10, 100);
+            set::set(s, 20, 200);
+            set::set(s, 30, 300);
             let it = set_it<uint64, uint64>(s);
             let p: struct pair<uint64, uint64>;
             let total: uint64 = 0;
@@ -101,10 +97,10 @@ def test_for_in_iterates_set():
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
             if (s == null) return 1;    // proves s for the receiver slots below
-            set_init(s, 8);
-            set_set(s, 10, 100);
-            set_set(s, 20, 200);
-            set_set(s, 30, 300);
+            set::constructor(s, 8);
+            set::set(s, 10, 100);
+            set::set(s, 20, 200);
+            set::set(s, 30, 300);
             let total: uint64 = 0;
             for x in s { total = total + x.key + x.value; }
             return total as int32;
@@ -140,21 +136,21 @@ def test_set_behaves_like_a_dict(tmp_path, capfd):
         fn main() -> int32 {
             let s = alloc<struct set<uint64, uint64>>(1);
             if (s == null) { return 1; }   // narrows s, loops keep it
-            set_init(s, 4);
+            set::constructor(s, 4);
 
             let i: uint64 = 0;
             while (i < 200) {
-                set_set(s!, i * 7, i * 1000);  // insert (forces growth); s at a
+                set::set(s!, i * 7, i * 1000);  // insert (forces growth); s at a
                 i = i + 1;                     // mut receiver in a loop drops
             }                                  // its narrowed fact, so !
             i = 0;
             while (i < 100) {
-                set_set(s!, i * 7, i * 2000);  // update
+                set::set(s!, i * 7, i * 2000);  // update
                 i = i + 1;
             }
             i = 0;
             while (i < 200) {
-                set_remove(s!, i * 7);         // remove every third key
+                set::remove(s!, i * 7);         // remove every third key
                 i = i + 3;
             }
 
@@ -162,7 +158,7 @@ def test_set_behaves_like_a_dict(tmp_path, capfd):
             let value: uint64 = 0;
             i = 0;
             while (i < 200) {
-                let found = set_get(s!, i * 7, value);
+                let found = set::get(s!, i * 7, value);
                 if (i % 3 == 0) {
                     if (found)
                         errors = errors + 1;
@@ -177,17 +173,17 @@ def test_set_behaves_like_a_dict(tmp_path, capfd):
                 }
                 i = i + 1;
             }
-            if (set_get(s!, 999999, value))
+            if (set::get(s!, 999999, value))
                 errors = errors + 1;           // absent key must not be found
 
             i = 0;
             while (i < 200) {
-                set_set(s!, i * 7, 42);        // re-insert into tombstones
+                set::set(s!, i * 7, 42);        // re-insert into tombstones
                 i = i + 3;
             }
 
             printf("%llu %llu %llu\\n", errors, s->length, s->capacity);
-            set_destroy(s!);                   // the loops killed s's fact for good
+            set::destructor(s!);                   // the loops killed s's fact for good
             dealloc(s);
             return 0;
         }
@@ -210,25 +206,25 @@ def test_generic_keys_and_values(tmp_path, capfd):
             // int32 keys mapping to float64 values
             let prices = alloc<struct set<int32, float64>>(1);
             if (prices == null) { return 1; }  // proves prices for the receivers
-            set_init(prices, 8);
-            set_set(prices, -5, 1.25);
-            set_set(prices, 7, 2.5);
+            set::constructor(prices, 8);
+            set::set(prices, -5, 1.25);
+            set::set(prices, 7, 2.5);
             let price: float64 = 0.0;
-            if (set_get(prices, -5, price))
+            if (set::get(prices, -5, price))
                 printf("%f\\n", price);
-            set_destroy(prices);
+            set::destructor(prices);
             dealloc(prices);
 
             // pointer keys (hashed via ptrtoint)
             let names = alloc<struct set<uint8*, int32>>(1);
             if (names == null) { return 1; }   // proves names for the receivers
-            set_init(names, 8);
+            set::constructor(names, 8);
             let hello: uint8* = "hello";   // a uint8* key, matching set<uint8*, _>
-            set_set(names, hello, 42);
+            set::set(names, hello, 42);
             let found: int32 = 0;
-            if (set_get(names, hello, found))
+            if (set::get(names, hello, found))
                 printf("%d\\n", found);
-            set_destroy(names);
+            set::destructor(names);
             dealloc(names);
             return 0;
         }

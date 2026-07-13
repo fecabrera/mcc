@@ -57,10 +57,8 @@ def test_containers_yield_builtin_pair(capfd):
         import "std/set";
         import "libc/stdio";
         fn main() -> int32 {
-            let s: set<uint64, uint64>;
-            set_init(&s, 4);
-            defer set_destroy(&s);
-            set_set(&s, 2, 20);
+            let s = set<uint64, uint64>(4);
+            s.set(2, 20);
             let it = set_it<uint64, uint64>(&s);
             let p: struct pair<uint64, uint64>;
             let total: uint64 = 0;

@@ -35,13 +35,11 @@ fn main() -> int32 {
     // The same `for x in` walks any container. A set yields a `pair<K, V>` per
     // entry, in unspecified (hash-table) order; read its fields as x.key and
     // x.value. `pair` is a builtin struct, so no import is needed to name it.
-    let table: set<uint64, uint64>;
-    set_init(table, 2);
-    defer set_destroy(table);
+    let table = set<uint64, uint64>(2);    // ctor-sugar: auto-defers cleanup
 
-    set_set(table, 1, 10);
-    set_set(table, 2, 11);
-    set_set(table, 3, 12);
+    table.set(1, 10);
+    table.set(2, 11);
+    table.set(3, 12);
 
     for x in &table {
         println("{}: {}", x.key, x.value);
@@ -49,12 +47,10 @@ fn main() -> int32 {
 
     // A dict iterates the same way: a string key and its value per entry. Each
     // x.key borrows the dict's own copy, valid until the dict changes.
-    let cmds: dict<char*>;
-    dict_init(cmds, 2);
-    defer dict_destroy(cmds);
+    let cmds = dict<char*>(2);
 
-    dict_set(cmds, "help", "show this help");
-    dict_set(cmds, "quit", "exit the program");
+    cmds.set("help", "show this help");
+    cmds.set("quit", "exit the program");
 
     for x in &cmds {
         println("{}: {}", x.key, x.value);

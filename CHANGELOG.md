@@ -20,6 +20,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **`std/stack`, `std/queue`, `std/ring`, `std/set`, and `std/dict` are now
+  method families** — following list/string, the `stack_*`/`queue_*`/`ring_*`/
+  `set_*`/`dict_*` free functions become the `stack<T>::`/`queue<T>::`/
+  `ring<T>::`/`set<K,V>::`/`dict<V>::` member families. Each capacity-taking
+  container also gains a parameterless constructor with a small default
+  capacity, so `let s = stack<int32>()` and `let s = stack<int32>(cap)` both
+  work and auto-defer the destructor at scope end (retiring the paired
+  `defer stack_destroy(s)`); access through dot-calls (`s.push(v)`,
+  `d.set("k", 1)`, `r.at(i) = v`). Two names shift: `stack`'s count accessor
+  becomes `stack<T>::length()` and `ring` drops its accessor for the public
+  `.length` field it already exposes (the `stack_len`/`ring_len` free
+  functions are gone, `len` being a keyword). Iteration
+  (`queue_it`/`queue_next`, `set_it`/`set_next`,
+  `dict_it`/`dict_next`) is unchanged, pending a later overhaul. Migration:
+  `stack_init(s, n)` → `let s = stack<T>(n)`, `stack_push(s, v)` → `s.push(v)`,
+  drop the explicit `defer stack_destroy(s)`; on a heap `T*` receiver use the
+  qualified form (`set::set(p, k, v)`).
+
 - **`std/list` and `std/string` are now method families** — the free-function
   APIs (`list_init`/`list_push`/`list_destroy`/…, `string_init`/`string_append`/…)
   become the `list<T>::` and `string::` member families. Construct with

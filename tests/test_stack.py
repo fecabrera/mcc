@@ -6,23 +6,21 @@ from helpers import run
 
 def test_lifo_with_direct_receiver():
     # The post-migration idiom: a local stack passes directly, no `&`.
-    # Capacity 1 forces stack_grow (mut-to-mut re-lending inside stack_push).
+    # Capacity 1 forces the grow path (mut-to-mut re-lending inside push).
     assert run(
         """
         import "std/stack";
         fn main() -> int32 {
-            let s: struct stack<int32>;
-            stack_init(s, 1);
-            stack_push(s, 1);
-            stack_push(s, 2);
-            stack_push(s, 3);
-            if (stack_len(s) != 3) return 100;
-            if (stack_peek(s) != 3) return 101;
-            let last = stack_pop(s);          // LIFO: most recent first
-            let mid = stack_pop(s);
-            if (stack_is_empty(s)) return 102; // one element left
-            stack_destroy(s);
-            return last * 10 + mid;            // 32
+            let s = stack<int32>(1);
+            s.push(1);
+            s.push(2);
+            s.push(3);
+            if (s.length() != 3) return 100;
+            if (s.peek() != 3) return 101;
+            let last = s.pop();               // LIFO: most recent first
+            let mid = s.pop();
+            if (s.is_empty()) return 102;     // one element left
+            return last * 10 + mid;           // 32
         }
         """
     ) == 32
@@ -34,13 +32,11 @@ def test_amp_call_sites_still_compile():
         """
         import "std/stack";
         fn main() -> int32 {
-            let s: struct stack<char>;
-            stack_init(&s, 2);
-            stack_push(&s, 'a');
-            stack_push(&s, 'b');
-            let top = stack_peek(&s);
-            let n = stack_len(&s) as int32;
-            stack_destroy(&s);
+            let s = stack<char>(2);
+            s.push('a');
+            s.push('b');
+            let top = s.peek();
+            let n = s.length() as int32;
             return (top == 'b' and n == 2) ? 0 : 1;
         }
         """
@@ -49,7 +45,8 @@ def test_amp_call_sites_still_compile():
 
 def test_heap_pointer_decays_after_guard():
     # A heap stack<T>* reaches the receiver slots through the usual @nonnull
-    # proof: one null guard covers every later call.
+    # proof: one null guard covers every later call. Explicit construction, so
+    # the matching destructor is called by hand (no ctor-sugar auto-defer).
     assert run(
         """
         import "std/stack";
@@ -57,11 +54,11 @@ def test_heap_pointer_decays_after_guard():
         fn main() -> int32 {
             let p = alloc<struct stack<int32>>(1);
             if (p == null) return 1;
-            stack_init(p, 2);
-            stack_push(p, 7);
-            let v = stack_pop(p);
-            let empty = stack_is_empty(p);
-            stack_destroy(p);
+            stack::constructor(p, 2);
+            stack::push(p, 7);
+            let v = stack::pop(p);
+            let empty = stack::is_empty(p);
+            stack::destructor(p);
             dealloc(p);
             return (v == 7 and empty) ? 0 : 2;
         }

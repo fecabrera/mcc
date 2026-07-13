@@ -23,7 +23,7 @@ struct queue_iterator<T> {
  *
  * @param self: queue to initialise
  */
-fn queue_init<T>(mut self: queue<T>) {
+fn queue<T>::constructor(mut self: queue<T>) {
     self.head = null;
     self.tail = null;
 }
@@ -34,10 +34,10 @@ fn queue_init<T>(mut self: queue<T>) {
  *
  * @param self: queue to destroy
  */
-fn queue_destroy<T>(mut self: queue<T>) {
-    until (queue_is_empty<T>(self))
-        queue_pop<T>(self);
-    
+fn queue<T>::destructor(mut self: queue<T>) {
+    until (self.is_empty())
+        self.pop();
+
     self.head = null;
     self.tail = null;
 }
@@ -48,7 +48,7 @@ fn queue_destroy<T>(mut self: queue<T>) {
  * @param self:  queue to push onto
  * @param value: value to enqueue
  */
-fn queue_push<T>(mut self: queue<T>, value: T) {
+fn queue<T>::push(mut self: queue<T>, value: T) {
     let node = {
         let tmp = new<queue_node<T>>()!;
         *tmp = queue_node<T> { value = value };
@@ -66,13 +66,13 @@ fn queue_push<T>(mut self: queue<T>, value: T) {
 
 /**
  * Dequeues the front (oldest) value in O(1), unlinking and freeing its node.
- * The caller must ensure the queue is non-empty (!queue_is_empty(q));
+ * The caller must ensure the queue is non-empty (!q.is_empty());
  * behaviour is undefined on an empty queue.
  *
  * @param self: queue to pop from
  * @return the dequeued value
  */
-fn queue_pop<T>(mut self: queue<T>) -> T {
+fn queue<T>::pop(mut self: queue<T>) -> T {
     let node = self.head!;
     self.head = node->next;
     
@@ -87,13 +87,13 @@ fn queue_pop<T>(mut self: queue<T>) -> T {
 
 /**
  * Returns the front (oldest) value without removing it. The caller must
- * ensure the queue is non-empty (!queue_is_empty(q)); behaviour is undefined
+ * ensure the queue is non-empty (!q.is_empty()); behaviour is undefined
  * on an empty queue.
  *
  * @param self: queue to peek at
  * @return the front value
  */
-fn queue_peek<T>(const self: queue<T>) -> T {
+fn queue<T>::peek(const self: queue<T>) -> T {
     return self.head!->value;
 }
 
@@ -103,7 +103,7 @@ fn queue_peek<T>(const self: queue<T>) -> T {
  * @param self: queue to inspect
  * @return true if the queue holds no values
  */
-fn queue_is_empty<T>(const self: queue<T>) -> bool {
+fn queue<T>::is_empty(const self: queue<T>) -> bool {
     return self.head == null;
 }
 

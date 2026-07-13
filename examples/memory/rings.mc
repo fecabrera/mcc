@@ -7,51 +7,51 @@ import "std/ring";
 // For the linked-list FIFO with one node per value, see queues.mc.
 
 fn main() -> int32 {
-    // The ring functions take const/mut receivers, so a local ring passes
+    // The ring methods take const/mut receivers, so a local ring passes
     // directly: no & needed. (A ring<T>* still works via pointer decay; see
-    // examples/functions/pointer_decay.mc.)
-    let r: struct ring<int32>;
-    ring_init(r, 4);                       // 4 slots: [_ _ _ _]
-    defer ring_destroy(r);
+    // examples/functions/pointer_decay.mc.) The ctor-sugar `let` auto-defers
+    // ring<T>::destructor at scope end.
+    let r = ring<int32>(4);                // 4 slots: [_ _ _ _]
 
     // Fill every slot.
     let v: int32 = 1;
     while (v <= 4) {
-        ring_push(r, v);                   // [1 2 3 4], head at slot 0
+        r.push(v);                         // [1 2 3 4], head at slot 0
         v += 1;
     }
 
-    println("pop {}", ring_pop(r));        // pop 1
-    println("pop {}", ring_pop(r));        // pop 2 -- head is now at slot 2
+    println("pop {}", r.pop());            // pop 1
+    println("pop {}", r.pop());            // pop 2 -- head is now at slot 2
 
     // Pushing again reuses the two freed slots: the buffer physically holds
     // [5 6 3 4], but logically the ring still reads 3 4 5 6 front to back.
-    ring_push(r, 5);
-    ring_push(r, 6);
+    r.push(5);
+    r.push(6);
 
-    println("front {}", ring_peek(r));     // front 3
+    println("front {}", r.peek());         // front 3
 
-    // ring_at indexes logically from the front (index 0), wrap and all.
+    // .at indexes logically from the front (index 0), wrap and all; .length
+    // is the live element count.
     print("ring (wrapped): ");
-    for i in range(ring_len(r)) {
-        print("{} ", ring_at(r, i));       // 3 4 5 6
+    for i in range(r.length) {
+        print("{} ", r.at(i));             // 3 4 5 6
     }
     println("");
 
     // The ring is full again, so this push doubles the buffer to 8 slots,
     // re-laying the wrapped elements in logical order from slot 0.
-    ring_push(r, 7);
+    r.push(7);
 
     print("ring (grown):   ");
-    for i in range(ring_len(r)) {
-        print("{} ", ring_at(r, i));       // 3 4 5 6 7
+    for i in range(r.length) {
+        print("{} ", r.at(i));             // 3 4 5 6 7
     }
     println("");
 
     // Draining pops in arrival order, like any FIFO.
     print("ring (FIFO):    ");
-    until (ring_is_empty(r)) {
-        print("{} ", ring_pop(r));         // 3 4 5 6 7
+    until (r.is_empty()) {
+        print("{} ", r.pop());             // 3 4 5 6 7
     }
     println("");
 

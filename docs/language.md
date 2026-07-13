@@ -628,7 +628,7 @@ argument attributes.
 destination pointer parameters of the stdlib declare their contracts with
 `@nonnull`: the `memory` copy/fill family (`bytecopy`, `copy`, `bytezero`,
 `zero`, `bytefill`, `fill`), the `hashing/` digests (`md5`, `crc32`,
-`murmur3`), `dict`'s string keys (`dict_set`/`dict_get`/`dict_remove`),
+`murmur3`), `dict`'s string keys (`dict::set`/`dict::get`/`dict::remove`),
 and the raw-array `(T*, n)` source overload of the `list<T>` constructor
 (which `string` inherits).
 Passing an unproven pointer to any of them is a compile error instead of

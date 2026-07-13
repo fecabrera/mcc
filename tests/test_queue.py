@@ -14,17 +14,15 @@ def test_fifo_with_direct_receiver():
         """
         import "std/queue";
         fn main() -> int32 {
-            let q: struct queue<int32>;
-            queue_init(q);
-            queue_push(q, 1);
-            queue_push(q, 2);
-            queue_push(q, 3);
-            if (queue_peek(q) != 1) return 101;
-            let first = queue_pop(q);          // FIFO: oldest first
-            let second = queue_pop(q);
-            if (queue_is_empty(q)) return 103; // one element left
-            queue_destroy(q);
-            return first * 10 + second;         // 12
+            let q = queue<int32>();
+            q.push(1);
+            q.push(2);
+            q.push(3);
+            if (q.peek() != 1) return 101;
+            let first = q.pop();               // FIFO: oldest first
+            let second = q.pop();
+            if (q.is_empty()) return 103;      // one element left
+            return first * 10 + second;        // 12
         }
         """
     ) == 12
@@ -38,15 +36,13 @@ def test_first_push_links_head():
         """
         import "std/queue";
         fn main() -> int32 {
-            let q: struct queue<int32>;
-            queue_init(q);
-            queue_push(q, 7);
-            if (queue_is_empty(q)) return 100;   // head was linked
-            if (queue_pop(q) != 7) return 101;
-            if (!queue_is_empty(q)) return 102;  // drained: head and tail reset
-            queue_push(q, 8);                    // relinks after the drain
-            if (queue_peek(q) != 8) return 103;
-            queue_destroy(q);
+            let q = queue<int32>();
+            q.push(7);
+            if (q.is_empty()) return 100;      // head was linked
+            if (q.pop() != 7) return 101;
+            if (!q.is_empty()) return 102;     // drained: head and tail reset
+            q.push(8);                         // relinks after the drain
+            if (q.peek() != 8) return 103;
             return 0;
         }
         """
@@ -59,14 +55,12 @@ def test_for_in_yields_fifo_order():
         """
         import "std/queue";
         fn main() -> int32 {
-            let q: struct queue<int32>;
-            queue_init(q);
-            queue_push(q, 1);
-            queue_push(q, 2);
-            queue_push(q, 3);
+            let q = queue<int32>();
+            q.push(1);
+            q.push(2);
+            q.push(3);
             let sum: int32 = 0;
             for v in &q { sum = sum * 10 + v; }
-            queue_destroy(q);
             return sum;             // 123 in FIFO order
         }
         """
@@ -79,13 +73,11 @@ def test_amp_call_sites_still_compile():
         """
         import "std/queue";
         fn main() -> int32 {
-            let q: struct queue<char>;
-            queue_init(&q);
-            queue_push(&q, 'a');
-            queue_push(&q, 'b');
-            let front = queue_peek(&q);
-            queue_destroy(&q);
-            return (front == 'a' and queue_is_empty(&q)) ? 0 : 1;
+            let q = queue<char>();
+            q.push('a');
+            q.push('b');
+            let front = q.peek();
+            return (front == 'a' and !q.is_empty()) ? 0 : 1;
         }
         """
     ) == 0

@@ -347,7 +347,7 @@ def test_decay_binding_beats_untyped_literal_at_struct_receiver():
     # pointer, so a pointer lvalue there binds T through the decay reading
     # even when another argument -- an untyped literal leaning int32 --
     # already gave the direct pass a "successful" (but unemittable) binding.
-    # The libmc stage-3 shape: dict_set(d, "k", 10) on a heap dict<uint64>*.
+    # The libmc stage-3 shape: dict::set(d, "k", 10) on a heap dict<uint64>*.
     assert run(
         BOX + "fn put<T>(mut b: struct box<T>, v: T) { b.value = v; }\n"
         "fn main() -> int32 {\n"

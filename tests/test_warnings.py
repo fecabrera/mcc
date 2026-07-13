@@ -419,12 +419,10 @@ def test_stdlib_compiles_clean_of_deprecation_warnings(tmp_path):
         'import "std/dict";\n'
         'import "std/hashing/md5";\n'
         "fn main() -> int32 {\n"
-        "    let d: dict<int32>;\n"
-        "    dict_init(&d, 4);\n"
-        '    dict_set(&d, "k", 1);\n'
+        "    let d = dict<int32>(4);\n"
+        '    d.set("k", 1);\n'
         "    let digest: uint8[16];\n"
         '    md5("abc", 3, &digest[0]);\n'  # a cast would strip the literal's non-null proof
-        "    dict_destroy(&d);\n"
         "    return 0;\n"
         "}\n"
     )
