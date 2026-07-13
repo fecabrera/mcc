@@ -48,7 +48,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `string` inherits list's constructor, destructor, and accessors and keeps
   only its own NUL-terminated `char*` constructor/`append` and `equals`
   members; the old `DEFAULT_STRING_CAPACITY` (10) is gone, so a fresh string
-  starts at the list default. Iteration (`list_it`/`list_next`,
+  starts at the list default. The equality members generalized with it:
+  `list<T>::equals` takes a `slice<const T>` run or — via a dependent
+  `extends slice<T>` bound — any list/slice-shaped value with no `as` at the
+  call, so `string` inherits both and adds only a NUL-terminated `char*`
+  comparison of its own. Iteration (`list_it`/`list_next`,
   `string_it`/`string_next`) is unchanged. Migration: `list_init(xs, n)` →
   `let xs = list<T>(n)`, `list_push(xs, v)` → `xs.push(v)`, drop the explicit
   `defer list_destroy(xs)`, and `string_append(s, …)` → `s.append(…)`.

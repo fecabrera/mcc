@@ -183,6 +183,45 @@ fn list<T>::append(mut self: list<T>, @nonnull items: T*, n: uint64) {
 }
 
 /**
+ * Compares a list against a run of elements for element-by-element equality,
+ * the list member of the equality protocol. Re-lends `self` into the generic
+ * slice `equals` in `equality`. Different lengths are never equal; empty
+ * runs compare equal.
+ *
+ * @param self: list to compare
+ * @param lst:  elements to compare against -- another list borrows in
+ *              (`b as slice<const T>`); for a list<char> a string literal
+ *              adapts, so `s.equals("hi")` works directly
+ *
+ * @return true if both sides have the same length and elements, false
+ *         otherwise
+ */
+@inline
+fn list<T>::equals(const self: list<T>, const lst: slice<const T>) -> bool {
+    return equals(self as slice<const T>, lst);
+}
+
+/**
+ * Compares a list against any T-slice-shaped value for element-by-element
+ * equality. `U` is bounded by the DEPENDENT bound `slice<T>` -- the
+ * container's own element type -- so `lst` may be another `list<T>`, a
+ * `string` (against a `list<char>`), or a `slice<T>`: anything that
+ * `extends slice<T>` binds `U` and needs no explicit borrow at the call
+ * site. Both sides then borrow into the generic slice `equals`, so neither
+ * is copied.
+ *
+ * @param self: list to compare
+ * @param lst:  any value whose type extends `slice<T>` to compare against
+ *
+ * @return true if both sides have the same length and elements, false
+ *         otherwise
+ */
+@inline
+fn list<T>::equals<U extends slice<T>>(const self: list<T>, const lst: U) -> bool {
+    return self.equals(lst as slice<const T>);
+}
+
+/**
  * Doubles the list's capacity, moving the existing elements.
  * Internal; called by `.push` when storage runs out.
  *

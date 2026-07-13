@@ -43,41 +43,29 @@ fn string::append(mut self: string, @nonnull str: char*) {
 }
 
 /**
- * Compares a string against a run of bytes for byte-for-byte equality, a
- * string member of the equality protocol. Re-lends `self` into the generic
- * slice `equals` in `equality`. Different lengths are never equal; empty
- * runs compare equal.
+ * Compares a string against a NUL-terminated C string byte by byte: equal
+ * when every byte matches and the C string's terminator sits exactly at the
+ * string's length. The overload for C strings whose length is not known up
+ * front; the slice members inherited from list<char> cover everything else
+ * (a literal, another string, a slice).
  *
  * @param self: string to compare
- * @param str:  bytes to compare against -- another string borrows in
- *              (`b as slice<const char>`); a literal adapts, so
- *              `s.equals("hi")` works directly
+ * @param arr:  NUL-terminated bytes to compare against
  *
- * @return true if both sides have the same length and bytes, false otherwise
- */
-@inline
-fn string::equals(const self: string, const str: slice<const char>) -> bool {
-    return equals(self as slice<const char>, str);
-}
-
-/**
- * Compares a string against any char-slice for byte-for-byte equality, the
- * string-vs-char-slice member of the equality protocol. `T` is bounded to
- * `slice<char>`, so `str` may be another `string`, a `list<char>`, or a
- * `slice<char>` -- anything that `extends` the char slice binds `T` and needs
- * no explicit borrow at the call site. Both sides then borrow into the generic
- * slice `equals`, so neither is copied.
- *
- * @param self: string to compare
- * @param str:  any value whose type extends `slice<char>` (a `string`,
- *              `list<char>`, or `slice<char>`) to compare against
- *
- * @return true if both sides have the same length and bytes, false
+ * @return true if the string's bytes are exactly the C string's, false
  *         otherwise
  */
 @inline
-fn string::equals<T extends slice<char>>(const self: string, const str: T) -> bool {
-    return self.equals(str as slice<const char>);
+fn string::equals(const self: string, @nonnull arr: char*) -> bool {
+    for el in enumerate(self) {
+        if (el.value != arr[el.index])
+            return false;
+    }
+
+    if (arr[self.length] != '\0')
+        return false;
+
+    return true;
 }
 
 /***************************************
