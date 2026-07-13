@@ -693,7 +693,11 @@ that keep it C-simple:
   edges: an import may supply a *better-ranked* candidate (a concrete
   beating a group template is the intended protocol behavior, see below),
   an *equal-ranked* candidate makes existing calls ambiguous (a loud error
-  citing both declaration sites), and a name growing into a set moves its
+  citing both declaration sites) — unless it is strictly *more specialized*
+  than the incumbents, in which case
+  [subsumption](#rank-tied-templates-subsumption) hands it the former tie,
+  the same deliberate better-candidate-wins edge one rung down — and a
+  name growing into a set moves its
   calls off the direct-call fast path and makes `let g = f;` an error
   (below).
 - **A single visible signature keeps its plain symbol.** A name mangles per
@@ -756,8 +760,9 @@ collecting, whatever their tiers (an exact-arity unbounded generic beats a
 concrete collecting fallback), a pass-through-shaped final argument counts
 as not collecting, a collecting candidate's specificity counts its fixed
 prefix only, and more fixed parameters breaks a tie between collectors.
-Two same-tier
-candidates of equal specificity stay the
+Two same-tier candidates of equal specificity go to one last arbiter —
+[subsumption](#rank-tied-templates-subsumption) — and only a cohort it
+cannot order stays the
 ambiguity error, which is also the enforced collision rule between the
 classes (a generic whose substituted parameter list duplicates a concrete
 one is not statically detectable in general). The concrete side of a mixed
@@ -765,6 +770,78 @@ set keeps the concrete rules: `main`, C-variadic, and `va_list`-taking
 functions cannot join, whichever side declares first. The symbol choice
 counts concrete signatures alone, so one concrete member beside a template
 still keeps its plain, C-linkable symbol.
+
+#### Rank-tied templates: subsumption
+
+The full resolution order for a call is **viability, then rank, then
+subsumption, then ambiguity**:
+
+1. **Viability** — each candidate must match the arguments by shape, with
+   the group/bound filters applied to its deduced bindings. An untyped
+   integer literal at a bare type-parameter slot keeps a candidate viable
+   only when the deduced binding is an **integer type** — the generic
+   mirror of the concrete `is_integer` shape rule, since mcc has no
+   int-to-float literal adaptation. So with a diagonal
+   `f(x: T, y: T)` beside a converting `f(x: T, y: U)`, the call
+   `f(fv, 1)` on a `float64` variable is *not* a tie: the diagonal deduces
+   `T = float64` at the literal's slot, cannot emit it, and drops out.
+2. **Rank** — `(collecting?, tier, specificity)` as above: tiers and
+   specificity are supreme, and no comparison ever crosses them (a bounded
+   template still beats an unbounded one outright, tier-over-specificity).
+3. **Subsumption** — among the top rank-tied cohort, the candidate that is
+   **strictly more specialized than every other member** wins; only a
+   cohort with no such maximum is the ambiguity error.
+
+Template `A` **subsumes into** `B` (`A ⊑ B`, "A is at least as specialized
+as B") when `A`'s parameter pattern is an *instance* of `B`'s **and** `A`'s
+constraints *imply* `B`'s:
+
+- **Pattern instance.** `B`'s type parameters act as wildcards that must
+  bind **consistently** to sub-patterns of `A` — a repeated name must bind
+  the same sub-pattern every time. That is exactly what orders the
+  diagonal: `f(x: T, y: T) ⊑ f(x: T, y: U)` (`T := T`, `U := T` binds
+  fine), while the reverse mapping fails (`A`'s single `T` cannot stand for
+  both wildcards' occurrences at once). A wildcard absorbs surplus pointer
+  stars (`T` matches `int32*`); a concrete name needs the exact name and
+  equal pointer depth; [generic-alias](#generic-aliases) spellings are
+  expanded first, exactly as in inference, so an alias-spelled diagonal
+  (`diag<V>` for `pair<V, V>`) orders identically. Arity, the
+  [collecting](#native-variadic-arguments) flag, and the `mut` positions
+  must agree outright (`mut` markers are template identity); `const`
+  markers and return types are ignored, as in the duplicate rules.
+- **Constraint implication.** For every wildcard of `B` that carries a
+  constraint — a [closed type group](#closed-type-groups) or an
+  [`extends` bound](#bounds); a *default* is a fill-in, not a constraint —
+  the sub-pattern it bound must provably satisfy it. A concrete sub-pattern
+  is checked directly (group membership / the nominal subtype relation). A
+  type parameter of `A` must carry a constraint that **implies** the
+  wildcard's: groups imply by **subset** (`T: int8` implies
+  `U: int8 | int16`), bounds by the declared **nominal chain**
+  (`T extends circle` implies `U extends shape` when `circle` extends
+  `shape`, transitively). A group never implies a bound nor vice versa —
+  incomparable, conservatively — and an **unconstrained** parameter implies
+  nothing. So a bounded diagonal with the *tighter* constraint still wins
+  (`f<T: int8 | int16>(x: T, y: T)` over
+  `f<A: int8 | int16, B: int8 | int16>(x: A, y: B)`), while a *looser*
+  diagonal against a tighter open pattern has its pattern direction and
+  constraint direction in conflict: incomparable, and the tie stands.
+
+The winner must be the cohort's unique **maximum** — strictly subsuming
+into *every* other member. A three-way tie between
+`f(T, T, T)`, `f(T, T, U)`, and `f(T, U, V)` therefore resolves to the full
+diagonal, while the fork `f(T, T, U)` / `f(T, U, U)` / `f(T, U, V)` stays
+ambiguous: the two partial diagonals are mutually non-subsuming, so no
+member beats *all* others. Mutual subsumption (alpha-equal value patterns
+that are nonetheless distinct templates, e.g. via an extra defaulted
+parameter) likewise leaves no strict winner. Two distinct maxima are
+impossible — they would strictly subsume each other, and alpha-equivalent
+patterns already collide at declaration. Note what subsumption does *not*
+do: it never reorders across tiers or specificity, and it never rescues a
+genuinely incomparable pair — rank-tied
+[partial specializations](#partial-specialization) like `pair<int32, U>`
+vs `pair<T, int8>` each hold a concrete type where the other holds a
+wildcard, and stay the ambiguity error. See
+[examples/functions/overload_subsumption.mc](../examples/functions/overload_subsumption.mc).
 
 **Prototypes pair per signature.** A
 [bodyless prototype](#bodyless-fn-prototypes) names the member with its
@@ -1007,7 +1084,10 @@ generic method share the open-template tier, where the partial's concrete
 positions score higher *pattern specificity* than bare parameter names. Two
 partials that tie on rank for one receiver (`pair<int32, U>` and
 `pair<T, int8>` for `pair<int32, int8>`) are the standard ambiguity error —
-there is no C++-style partial ordering between them. The rules:
+they are **incomparable** under the
+[subsumption tie-break](#rank-tied-templates-subsumption): each holds a
+concrete type where the other holds a wildcard, so neither pattern is an
+instance of the other and the tie stands. The rules:
 
 - **Fresh names are real type parameters.** They are inferred at the call,
   prepend the method's own `<...>` list (`fn pair<int32, U>::pick<W>` works),
@@ -1090,10 +1170,12 @@ rules:
   `type diag<T> = pair<T, T>`, `fn diag<U>::m` declares **one** parameter
   `U` that must unify consistently — a `pair<int32, int32>` receiver binds
   it, a `pair<int32, float64>` receiver is rejected (or falls through to a
-  generic sibling). The diagonal does **not** outrank an open
-  `fn pair<A, B>::m` for an agreeing receiver — repeated names score no
-  extra pattern specificity (the same no-partial-ordering rule as two
-  rank-tied partials), so that call is the standard ambiguity error.
+  generic sibling). The diagonal **beats** an open `fn pair<A, B>::m` for
+  an agreeing receiver: repeated names score no extra pattern specificity,
+  so the two tie on rank, and the
+  [subsumption tie-break](#rank-tied-templates-subsumption) picks the
+  diagonal — `pair<U, U>` is strictly an instance of `pair<A, B>` (the
+  alias spelling participates through the same expansion inference uses).
 - **A bare generic-alias qualifier is an error, like a bare generic
   struct.** A declaration must [annotate a generic qualifier's type
   parameters](#methods-on-a-generic-struct): with `type pf<T> = point<T>`,
@@ -1348,7 +1430,11 @@ Imported files can extend an overload set with new variants — new
 return-type-only variant of an existing member) is a duplicate definition
 wherever it is declared, same module or another (see
 [Template symbols](#template-symbols) below). Two equally specific viable
-variants make the call ambiguous — a compile error.
+variants go to the
+[subsumption tie-break](#rank-tied-templates-subsumption) — the strictly
+more specialized pattern wins (`f(x: T, y: T)` beats `f(x: T, y: U)` for
+agreeing arguments) — and a pair it cannot order makes the call ambiguous,
+a compile error.
 
 ### Closed type groups
 

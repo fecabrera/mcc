@@ -83,6 +83,7 @@ fn main() -> int32 {
 
 // See also: mut_overloads.mc (generic overload sets and the resolution
 // order), mixed_overloads.mc (a generic template joining a concrete set),
+// overload_subsumption.mc (the tie-break ordering rank-tied templates),
 // open_overloads.mc (extending a set from another module),
 // mut_params.mc (mut parameters), types/structs.mc (struct types, covered
 // later in the tour). Full rules: docs/language.md, "Function overloading".

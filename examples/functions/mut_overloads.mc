@@ -15,7 +15,8 @@ fn set<T>(p: T*)    { *p! = 9 as T; }  // for storage reached by pointer
 // position. Then the most specific pattern wins (`T*` beats `T`, concrete
 // types beat both). Lvalue-ness never breaks a tie: this same-shape pair is
 // fine for an rvalue (only the by-value overload is viable) but ambiguous
-// for an lvalue --
+// for an lvalue -- mut markers are template identity, so neither member
+// subsumes the other (overload_subsumption.mc) --
 //     let x: int32 = 0; pick(x);
 //     error: call to 'pick' is ambiguous between overloads
 fn pick<T>(mut a: T) -> int32 { a = a; return 1; }

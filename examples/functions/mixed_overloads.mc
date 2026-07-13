@@ -22,8 +22,10 @@ fn describe<T>(x: T*)   -> int32 { return 4; }   // generic, any pointer
 // instantiates nothing, even though describe<T> at T=int32 has the same
 // effective signature. (That shadowed instantiation is also why the two
 // classes never collide as definitions: the concrete member simply
-// outranks it.) Within one tier the shipped rules stand unchanged; two
-// equally specific viable members are still
+// outranks it.) Within one tier the shipped rules stand mostly unchanged,
+// but a rank tie has one last arbiter: subsumption orders a strictly more
+// specialized pattern ahead (overload_subsumption.mc), and only a cohort it
+// cannot order is still
 //     error: call to 'describe' is ambiguous between overloads
 
 fn main() -> int32 {
@@ -51,7 +53,8 @@ fn main() -> int32 {
 // concrete member leaves that member's plain C-linkable symbol intact.
 
 // See also: overloading.mc (concrete sets and their rules), mut_overloads.mc
-// (specificity and mut inside a generic set), types/generics.mc
+// (specificity and mut inside a generic set), overload_subsumption.mc (the
+// subsumption tie-break among rank-tied templates), types/generics.mc
 // (monomorphization), types/type_groups.mc (closed type groups adding a
 // bounded tier between the concrete and generic ranks here),
 // native_variadics.mc (collecting `args...` members joining a set, ranked

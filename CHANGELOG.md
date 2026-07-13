@@ -37,6 +37,36 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Subsumption ordering of rank-tied generic overloads** — a rank tie
+  (same tier, same pattern specificity) is no longer automatically
+  ambiguous: among the tied cohort, the candidate whose parameter pattern
+  is strictly an **instance** of every other member's — and whose
+  type-parameter constraints **imply** theirs — is the more specialized
+  declaration and wins. The canonical case: the diagonal `f(x: T, y: T)`
+  now beats the open `f(x: T, y: U)` for agreeing arguments (repeated
+  names must bind consistently, so the open pattern's wildcards map onto
+  the diagonal but not vice versa); the alias-spelled diagonal
+  (`fn diag<U>::m` with `type diag<T> = pair<T, T>`) beats an open
+  `fn pair<A, B>::m` the same way. Constraints participate: closed type
+  groups imply by **subset** (`T: int8` implies `U: int8 | int16`),
+  `extends` bounds by the declared **nominal chain**; a group never
+  implies a bound nor vice versa, and an unconstrained parameter implies
+  nothing — so a looser-bounded diagonal against a tighter-bounded open
+  pattern is incomparable and stays ambiguous. The winner must be the
+  cohort's unique **maximum** (strictly subsuming into *every* other
+  member): mutually non-subsuming forks, mutual subsumption via a
+  defaulted extra parameter, and rank-tied partial specializations
+  (`pair<int32, U>` vs `pair<T, int8>`) all still report the standard
+  ambiguity error, and the tie-break never crosses tiers or specificity.
+  Alongside it, an **adaptable-literal viability fix**: an untyped integer
+  literal at a bare type-parameter slot keeps a candidate viable only when
+  the deduced binding is an *integer* type (mcc has no int-to-float
+  literal adaptation), so a diagonal whose `T` deduced `float64` from
+  another argument no longer manufactures a phantom tie — `f(fv, 1)`
+  simply picks the sibling that can emit the literal. Open sets gain the
+  matching deliberate edge: an imported *equal-rank but strictly more
+  specialized* candidate now wins a former tie. See
+  `examples/functions/overload_subsumption.mc`.
 - **`std/char` — character classification and case conversion** — a new
   stdlib module (`import "std/char";`) registering the ctype family as
   methods on the builtin `char` type: `char::is_alpha`, `is_alnum`,
@@ -61,7 +91,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `type swap<X, Y> = pair<Y, X>` is the partial `fn pair<U, int32>::pick`,
   and a duplicate-position alias (`type diag<T> = pair<T, T>`) becomes a
   **diagonal constraint** — one parameter that must unify consistently, so a
-  `pair<int32, float64>` receiver is rejected. A *bare* generic-alias
+  `pair<int32, float64>` receiver is rejected, and (since the subsumption
+  entry above) an agreeing receiver picks the diagonal over an open
+  `fn pair<A, B>::m` sibling. A *bare* generic-alias
   qualifier is an error like any bare generic qualifier (`type alias 'pf' is
   generic; the method qualifier must annotate its type parameter(s), e.g.
   'fn pf<T>::m' or 'fn pf<float64>::m'`) — with the fully-defaulted
@@ -87,7 +119,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   **existing overload ranking** — full specialization (concrete tier) beats
   a partial, whose concrete positions in turn out-score the fully generic
   method's bare names on pattern specificity; two rank-tied partials stay
-  the standard ambiguity error (no C++-style partial ordering). A fresh
+  the standard ambiguity error (incomparable under the subsumption entry
+  above — each holds a concrete type where the other holds a wildcard, so
+  neither pattern is an instance of the other). A fresh
   position may carry a **closed type group, `extends` bound, or default**
   (`fn pair<int32, U: int8 | int16>::m`) exactly as in a declaration list —
   note the tier rule: a bounded *generic* method outranks an *unbounded*

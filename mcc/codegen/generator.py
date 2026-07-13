@@ -14726,24 +14726,38 @@ class CodeGen:
                 )
             viable.sort(key=lambda entry: entry[0], reverse=True)
             if len(viable) > 1 and viable[0][0] == viable[1][0]:
-                # Open sets make cross-module ties possible, so cite the
-                # contenders' declaration sites.
-                err = LangError(
-                    f"call to {expr.name!r} is ambiguous between overloads", expr.line
-                )
+                # A rank tie is not yet an ambiguity: among the tied cohort,
+                # a candidate whose parameter pattern is strictly an instance
+                # of every other's (and whose constraints imply theirs) is
+                # the more specialized declaration and wins -- see
+                # :meth:`subsumption_winner`. Only a cohort with no such
+                # maximum stays ambiguous.
                 top = viable[0][0]
-                for rank_key, contender, _ in viable:
-                    if rank_key != top:
-                        break
-                    err.notes.append(
-                        Note(
-                            "candidate is here",
-                            contender.line,
-                            contender.source,
-                        )
+                cohort = [f for key, f, _ in viable if key == top]
+                winner = self.subsumption_winner(cohort)
+                if winner is None:
+                    # Open sets make cross-module ties possible, so cite the
+                    # contenders' declaration sites.
+                    err = LangError(
+                        f"call to {expr.name!r} is ambiguous between overloads",
+                        expr.line,
                     )
-                raise err
-            _, func, bindings = viable[0]
+                    for rank_key, contender, _ in viable:
+                        if rank_key != top:
+                            break
+                        err.notes.append(
+                            Note(
+                                "candidate is here",
+                                contender.line,
+                                contender.source,
+                            )
+                        )
+                    raise err
+                _, func, bindings = next(
+                    entry for entry in viable if entry[1] is winner
+                )
+            else:
+                _, func, bindings = viable[0]
         # The winner is known; a mixed overload set warns only when resolution
         # picks a deprecated candidate.
         self.warn_deprecated(expr.name, func.deprecated_msg, expr.line)
@@ -15331,6 +15345,27 @@ class CodeGen:
                 if self.shape_matches(
                     ptype, actual, tv.adaptable, func.type_params, expr.line
                 ):
+                    if tv.adaptable:
+                        # An adaptable integer constant at a bare
+                        # type-parameter slot is emittable only when the
+                        # deduced binding is an integer type -- the generic
+                        # mirror of shape_matches' concrete `is_integer`
+                        # rule (mcc has no int-to-float literal adaptation).
+                        # Without this, a diagonal `f(x: T, y: T)` whose T
+                        # deduced float64 from another argument would
+                        # "match" an int literal it can never emit,
+                        # manufacturing phantom ties.
+                        p = self.dealias_pattern(ptype, func.type_params)
+                        if (
+                            not p.stars
+                            and not p.args
+                            and p.name in func.type_params
+                        ):
+                            bound = bindings.get(p.name)
+                            if bound is not None and not is_integer(
+                                strip_const(bound)
+                            ):
+                                return None
                     continue
                 if self.literal_adapts_to_pattern(
                     arg, func, ptype, bindings, expr.line
@@ -15444,6 +15479,240 @@ class CodeGen:
         if adaptable and is_integer(resolved) and is_integer(peeled):
             return True
         return resolved == RAWPTR and is_pointer(peeled)
+
+    def subsumes(self, a: Func, b: Func) -> bool:
+        """Whether ``a`` is at least as specialized as ``b`` (``a`` ⊑ ``b``).
+
+        The subsumption relation over template declarations: ``a``'s
+        parameter pattern must be an *instance* of ``b``'s, and ``a``'s
+        type-parameter constraints must *imply* ``b``'s
+        (:meth:`constraints_imply`). The pattern half is a one-way match on
+        the ``dealias_pattern``-normalized patterns: ``b``'s type parameters
+        are wildcards binding **consistently** to sub-patterns of ``a`` --
+        a repeated name must bind the same sub-pattern every time, which is
+        what makes a diagonal ``f(x: T, y: T)`` an instance of the open
+        ``f(x: T, y: U)`` -- while ``a``'s own parameters are opaque
+        constants. A wildcard absorbs surplus pointer stars (``T`` matches
+        ``int32*``, binding ``T := int32*``); concrete names need the exact
+        name and equal stars; array dimensions must spell equally
+        (conservative); a function-pointer pattern matches only its exact
+        spelling (v1 -- differently-spelled fn types are incomparable, which
+        conservatively keeps the ambiguity). ``const`` markers and return
+        types are ignored (same-pattern variants already collide as
+        duplicates), while arity, the collecting flag, and the ``mut``
+        positions must agree outright (``mut`` markers are template
+        identity, see :meth:`template_base`).
+
+        Args:
+            a: The candidate proposed as the more specialized.
+            b: The candidate proposed as the more general.
+
+        Returns:
+            ``True`` when ``a``'s pattern maps into ``b``'s and ``a``'s
+            constraints imply ``b``'s.
+        """
+        if len(a.params) != len(b.params):
+            return False
+        if self.collecting_candidate(a) != self.collecting_candidate(b):
+            return False
+        if self.mut_indices(a) != self.mut_indices(b):
+            return False
+        binding: dict[str, TypeRef] = {}
+
+        def match(bp: TypeRef, ap: TypeRef) -> bool:
+            bp = self.dealias_pattern(bp, b.type_params)
+            ap = self.dealias_pattern(ap, a.type_params)
+            if [str(d) for d in bp.dims] != [str(d) for d in ap.dims]:
+                return False
+            if bp.params is not None or ap.params is not None:
+                return str(bp) == str(ap)
+            if bp.name in b.type_params and not bp.args:
+                if ap.stars < bp.stars:
+                    return False
+                sub = dataclasses_replace(
+                    ap, stars=ap.stars - bp.stars, const=False
+                )
+                prior = binding.get(bp.name)
+                if prior is None:
+                    binding[bp.name] = sub
+                    return True
+                return str(prior) == str(sub)
+            if bp.stars != ap.stars:
+                return False
+            if bp.name != ap.name or ap.name in a.type_params:
+                return False
+            if len(bp.args) != len(ap.args):
+                return False
+            return all(match(x, y) for x, y in zip(bp.args, ap.args))
+
+        if not all(
+            match(bt, at) for (_, bt), (_, at) in zip(b.params, a.params)
+        ):
+            return False
+        return self.constraints_imply(a, b, binding)
+
+    def constraints_imply(
+        self, a: Func, b: Func, binding: "dict[str, TypeRef]"
+    ) -> bool:
+        """Whether ``a``'s constraints imply ``b``'s under a pattern mapping.
+
+        The constraint half of :meth:`subsumes`: for every wildcard of ``b``
+        that carries a constraint -- a [closed type group] or an ``extends``
+        bound; a *default* is a fill-in, never a constraint -- the sub-pattern
+        of ``a`` it bound must be guaranteed to satisfy it:
+
+        - A **concrete** sub-pattern must satisfy the constraint directly
+          (group membership / the nominal subtype relation, the same tests
+          instantiation runs).
+        - A bare type parameter of ``a`` must carry a constraint that
+          **implies** the wildcard's: type groups by subset
+          (``T: int8`` implies ``U: int8 | int16``), ``extends`` bounds by
+          the declared nominal chain (``T extends derived`` implies
+          ``U extends base`` when ``derived`` extends ``base``,
+          transitively). A group never implies a bound nor vice versa
+          (incomparable, conservative), and an *unconstrained* parameter
+          implies nothing.
+        - Any other sub-pattern naming one of ``a``'s type parameters is
+          conservatively unprovable.
+
+        An unconstrained wildcard is implied by anything.
+
+        Args:
+            a: The proposed more-specialized candidate.
+            b: The proposed more-general candidate.
+            binding: The wildcard-to-sub-pattern mapping the pattern match
+                produced (``b``'s type parameter name -> ``a``'s
+                sub-pattern).
+
+        Returns:
+            ``True`` when every constrained wildcard's binding provably
+            satisfies its constraint.
+        """
+        b_groups = self.group_types.get(id(b), {})
+        b_bounds = self.bound_types.get(id(b), {})
+        if not b_groups and not b_bounds:
+            return True
+        a_groups = self.group_types.get(id(a), {})
+        a_bounds = self.bound_types.get(id(a), {})
+        for wildcard, sub in binding.items():
+            w_group = b_groups.get(wildcard)
+            w_bound = b_bounds.get(wildcard)
+            if w_group is None and w_bound is None:
+                continue
+            if (
+                sub.params is None
+                and not sub.args
+                and not sub.stars
+                and not sub.dims
+                and sub.name in a.type_params
+            ):
+                t_group = a_groups.get(sub.name)
+                t_bound = a_bounds.get(sub.name)
+                if w_group is not None and (
+                    t_group is None
+                    or not all(
+                        any(m == n for n in w_group) for m in t_group
+                    )
+                ):
+                    return False
+                if w_bound is not None and (
+                    t_bound is None
+                    or not self.nominal_subtype(w_bound, t_bound)
+                ):
+                    return False
+                continue
+            if self.names_type_param(sub, a.type_params):
+                return False
+            resolved = self.resolve_concrete_pattern(sub, a)
+            if resolved is None:
+                return False
+            bare = strip_const(resolved)
+            if w_group is not None and all(
+                m != resolved and m != bare for m in w_group
+            ):
+                return False
+            if w_bound is not None and not self.nominal_subtype(
+                w_bound, bare
+            ):
+                return False
+        return True
+
+    @staticmethod
+    def names_type_param(ref: TypeRef, type_params: list[str]) -> bool:
+        """Whether ``ref`` names one of ``type_params``, at any depth."""
+        if ref.name in type_params:
+            return True
+        if any(
+            CodeGen.names_type_param(arg, type_params) for arg in ref.args
+        ):
+            return True
+        if ref.params is not None and any(
+            CodeGen.names_type_param(p, type_params) for p in ref.params
+        ):
+            return True
+        return ref.ret is not None and CodeGen.names_type_param(
+            ref.ret, type_params
+        )
+
+    def resolve_concrete_pattern(
+        self, ref: TypeRef, func: Func
+    ) -> "LangType | None":
+        """Resolve a concrete sub-pattern in its declaring template's scope.
+
+        Used by :meth:`constraints_imply` to test a concrete binding against
+        a wildcard's constraint. The pattern comes from ``func``'s
+        declaration, so it resolves under ``func``'s source (it may name that
+        file's private types) with no live type bindings.
+
+        Args:
+            ref: The sub-pattern (contains no type parameters of ``func``).
+            func: The declaring template.
+
+        Returns:
+            The resolved type, or ``None`` when it does not resolve
+            (conservatively unprovable).
+        """
+        outer_bindings = self.type_bindings
+        outer_source = self.current_source
+        self.type_bindings = {}
+        self.current_source = func.source
+        try:
+            return self.lang_type(ref, func.line)
+        except LangError:
+            return None
+        finally:
+            self.type_bindings = outer_bindings
+            self.current_source = outer_source
+
+    def subsumption_winner(self, cohort: "list[Func]") -> "Func | None":
+        """The rank-tied cohort's unique maximum under subsumption, if any.
+
+        The tie-break that runs *inside* one rank-tied cohort only -- tiers
+        and specificity stay supreme, so a bounded template still beats an
+        unbounded one outright and no cross-tier comparison happens here.
+        The winner must **strictly** subsume into every other member
+        (:meth:`subsumes` one way and not the other); two members that
+        mutually subsume, or that are incomparable, leave no maximum and the
+        call stays the ambiguity error. Two distinct maxima are impossible:
+        they would strictly subsume each other, and alpha-equivalent
+        patterns already collide at declaration (:meth:`template_base`).
+
+        Args:
+            cohort: The rank-tied top candidates.
+
+        Returns:
+            The unique most-specialized member, or ``None``.
+        """
+
+        def strictly(x: Func, y: Func) -> bool:
+            return self.subsumes(x, y) and not self.subsumes(y, x)
+
+        winners = [
+            f
+            for f in cohort
+            if all(strictly(f, g) for g in cohort if g is not f)
+        ]
+        return winners[0] if len(winners) == 1 else None
 
     def call_rank(
         self, func: Func, arg_tvs: list[TypedValue]

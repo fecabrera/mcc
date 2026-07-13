@@ -680,8 +680,10 @@ def test_default_on_a_partial_fresh_param(capfd):
 
 def test_two_rank_tied_partials_are_ambiguous():
     # Two partials that each match the receiver and tie on (tier, specificity)
-    # hit the standard ambiguity error -- there is no C++-style partial
-    # ordering between `pair<int32, U>` and `pair<T, int8>`.
+    # hit the standard ambiguity error: `pair<int32, U>` and `pair<T, int8>`
+    # are INCOMPARABLE under the subsumption tie-break -- neither pattern is
+    # an instance of the other (each holds a concrete type where the other
+    # holds a wildcard), so no maximum exists and the tie stands.
     with pytest.raises(
         LangError,
         match=r"call to 'pair::m' is ambiguous between overloads",
@@ -1401,15 +1403,15 @@ def test_diagonal_alias_beside_a_generic_sibling():
         )
         == 0
     )
-    # ...but an AGREEING receiver stays the standard ambiguity error: the
-    # diagonal pattern pair2<U, U> and the open pair2<A, B> score the same
-    # pattern specificity (repeated names do not rank higher -- there is no
-    # C++-style partial ordering, the same rule as two rank-tied partial
-    # specializations).
-    with pytest.raises(
-        LangError, match=r"call to 'pair2::which' is ambiguous between overloads"
-    ):
-        compile_ir(
+    # ...and an AGREEING receiver picks the DIAGONAL: the two patterns tie
+    # on rank (repeated names score no extra specificity), and the
+    # subsumption tie-break resolves the tie -- pair2<U, U> is strictly an
+    # instance of the open pair2<A, B> (A := U, B := U binds consistently;
+    # the reverse mapping cannot, since U would have to bind both A and B),
+    # so the diagonal is the more specialized declaration and wins. The
+    # alias spelling participates through dealias_pattern, like inference.
+    assert (
+        run(
             """
             struct pair2<A, B> { a: A; b: B; }
             type diag<T> = pair2<T, T>;
@@ -1421,6 +1423,8 @@ def test_diagonal_alias_beside_a_generic_sibling():
             }
             """
         )
+        == 1
+    )
 
 
 def test_alias_and_canonical_spellings_collide_as_duplicates():

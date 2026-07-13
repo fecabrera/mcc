@@ -123,11 +123,12 @@ fn diag<U>::same(const self: diag<U>) -> U {
 }
 
 // Beside a generic sibling, a receiver that DISAGREES on the diagonal falls
-// through to the generic like any filtered overload. (An AGREEING receiver
-// would be the standard ambiguity error here -- repeated names score no extra
-// pattern specificity over the open `fn pair<A, B>::trace`, so main only
-// calls trace with a mismatched receiver. See "Methods on type aliases and
-// builtin types" in docs/language.md.)
+// through to the generic like any filtered overload. An AGREEING receiver
+// picks the diagonal: the alias expands to pair<U, U>, whose repeated name is
+// strictly more specialized than the open `fn pair<A, B>::trace` under the
+// subsumption tie-break (this exact pair used to be the standard ambiguity
+// error; see functions/overload_subsumption.mc and "Rank-tied templates:
+// subsumption" in docs/language.md).
 fn pair<A, B>::trace(const self: pair<A, B>) {
     println("  [generic]   pair<A, B>::trace, diagonal filtered out");
 }
@@ -208,6 +209,11 @@ fn main() -> int32 {
     println("pair<int32, float64> trace:");
     pair::trace(ge);                                    // [generic]
 
+    // dd agrees, and the alias-spelled diagonal wins the subsumption
+    // tie-break against the open sibling (functions/overload_subsumption.mc).
+    println("pair<int32, int32> trace:");
+    pair::trace(dd);                                    // [diagonal]
+
     // Builtin qualifiers: the alias and canonical spellings call one clamp.
     println("int32::clamp / myint::clamp:");
     println("  int32::clamp(15, 0, 10) = {}", int32::clamp(15, 0, 10));   // 10
@@ -223,7 +229,9 @@ fn main() -> int32 {
 
 // See also: method_specialization.mc for the full-specialization form a plain
 // alias qualifier spells; method_partial_specialization.mc for the partial
-// form a generic alias substitutes into; type_aliases.mc / generic_alias.mc
+// form a generic alias substitutes into; functions/overload_subsumption.mc
+// for the subsumption tie-break the diagonal trace call rides on;
+// type_aliases.mc / generic_alias.mc
 // for alias transparency itself; memory/slices.mc for the `as slice<T>`
 // borrow feeding slice::first; systems/char_methods.mc for the stdlib
 // module (std/char) built on the builtin-qualifier form shown here.
