@@ -200,16 +200,37 @@ def test_bound_target_that_is_a_union_is_a_declaration_error():
         )
 
 
-def test_bound_referencing_a_type_parameter_is_rejected_at_parse():
-    # `<S, T extends S>` -- a bound over an earlier parameter -- is deferred.
+def test_bound_referencing_a_type_parameter_resolves_per_call():
+    # `<S, T extends S>` -- a DEPENDENT bound over an earlier parameter --
+    # resolves at the call site once S is deduced: satisfied when T's binding
+    # extends S's, rejected otherwise (the resolved bound in the message).
+    assert run(
+        HIER
+        + """
+        fn f<S, T extends S>(a: S, b: T) -> int32 {
+            return (b as shape).area;
+        }
+        fn main() -> int32 {
+            let s = shape { area = 7 };
+            let c = circle { area = 9, r = 1 };
+            return f(s, c);       // S = shape, T = circle extends shape
+        }
+        """
+    ) == 9
+
     with pytest.raises(
         LangError,
-        match=r"bound S for type parameter 'T' references type parameter 'S'",
+        match=r"shape does not satisfy the bound circle of 'f'",
     ):
         compile_ir(
-            """
-            fn f<S, T extends S>(a: S, b: T) -> int32 { return 1; }
-            fn main() -> int32 { return 0; }
+            HIER
+            + """
+            fn f<S, T extends S>(a: S, b: T) -> int32 { return 0; }
+            fn main() -> int32 {
+                let s = shape { area = 7 };
+                let c = circle { area = 9, r = 1 };
+                return f(c, s);   // S = circle; shape does not extend it
+            }
             """
         )
 
@@ -402,3 +423,189 @@ def test_reimported_bound_still_rejects_a_non_subtype(tmp_path):
         match=r"blob does not satisfy the bound shape of 'area'",
     ):
         compile_to_ir(main)
+
+
+# ------------------------------------------------- dependent bounds
+
+# The driving stdlib shape: a generic container method accepting "anything
+# that extends slice<T>" with no explicit borrow at the call site.
+DEP = """
+struct box<T> extends slice<T> { cap: uint64; }
+fn box<T>::eq<U extends slice<T>>(const self: box<T>, const o: U) -> bool {
+    return self.length == (o as slice<const T>).length;
+}
+"""
+
+
+def test_qualifier_dependent_bound_accepts_without_a_borrow():
+    # `U extends slice<T>` references the METHOD QUALIFIER's parameter: the
+    # bound resolves per instantiation (T = int32 makes it slice<int32>), so
+    # a whole box<int32> argument binds U with no `as` at the call.
+    assert run(
+        DEP
+        + """
+        fn main() -> int32 {
+            let a: box<int32>;     // uninitialized (C-style): set the fields read
+            a.length = 2;
+            let b: box<int32>;
+            b.length = 2;
+            return a.eq(b) ? 0 : 1;
+        }
+        """
+    ) == 0
+
+
+def test_qualifier_dependent_bound_partitions_per_instantiation():
+    # The same family under T = int32 rejects a box<char>: the RESOLVED
+    # bound (slice<int32>) appears in the message.
+    with pytest.raises(
+        LangError,
+        match=r"box<char> does not satisfy the bound slice<int32> of 'box::eq'",
+    ):
+        compile_ir(
+            DEP
+            + """
+            fn main() -> int32 {
+                let a: box<int32>;
+                let c: box<char>;
+                return box<int32>::eq(a, c) ? 0 : 1;
+            }
+            """
+        )
+
+
+def test_unrelated_struct_fails_the_dependent_bound():
+    with pytest.raises(
+        LangError,
+        match=r"other does not satisfy the bound slice<int32> of 'box::eq'",
+    ):
+        compile_ir(
+            DEP
+            + """
+            struct other { n: int32; }
+            fn main() -> int32 {
+                let a: box<int32>;
+                let o = other { n = 1 };
+                return a.eq(o) ? 0 : 1;
+            }
+            """
+        )
+
+
+def test_unsatisfiable_dependent_bound_rejects():
+    # `U extends T` with T deduced to a scalar: the resolved bound is not a
+    # struct, so nothing satisfies it -- the standard rejection, naming it.
+    with pytest.raises(
+        LangError,
+        match=r"does not satisfy the bound int32 of 'f'",
+    ):
+        compile_ir(
+            """
+            fn f<T, U extends T>(a: T, b: U) -> int32 { return 0; }
+            fn main() -> int32 { return f(1 as int32, 2 as int32); }
+            """
+        )
+
+
+def test_dependent_bound_inherited_by_concrete_derivation():
+    # A derived struct inherits the dependently-bounded method with the
+    # qualifier parameter seeded (T = int32): the bound resolves through the
+    # seed and both accepts and (below) rejects correctly.
+    assert run(
+        DEP
+        + """
+        struct ibox extends box<int32> { extra: int32; }
+        fn main() -> int32 {
+            let a: ibox;
+            a.length = 3;
+            let b: box<int32>;
+            b.length = 3;
+            return a.eq(b) ? 0 : 1;
+        }
+        """
+    ) == 0
+
+    with pytest.raises(
+        LangError,
+        match=r"other does not satisfy the bound slice<int32> of 'box::eq'",
+    ):
+        compile_ir(
+            DEP
+            + """
+            struct ibox extends box<int32> { extra: int32; }
+            struct other { n: int32; }
+            fn main() -> int32 {
+                let a: ibox;
+                let o = other { n = 1 };
+                return a.eq(o) ? 0 : 1;
+            }
+            """
+        )
+
+
+def test_dependent_bound_inherited_by_generic_derivation():
+    assert run(
+        DEP
+        + """
+        struct gbox<T> extends box<T> { extra: int32; }
+        fn main() -> int32 {
+            let a: gbox<int32>;
+            a.length = 3;
+            let b: box<int32>;
+            b.length = 3;
+            return a.eq(b) ? 0 : 1;
+        }
+        """
+    ) == 0
+
+
+def test_unbounded_fallback_catches_what_the_dependent_bound_excludes():
+    # Tier ranking is unchanged: the dependently-bounded overload wins where
+    # its (resolved) bound holds; anything it excludes falls to the unbounded
+    # same-name fallback one tier below.
+    assert run(
+        """
+        struct box<T> extends slice<T> { cap: uint64; }
+        fn box<T>::tag<U extends slice<T>>(const self: box<T>, const o: U) -> int32 {
+            return 1;                    // the bounded member
+        }
+        fn box<T>::tag<U>(const self: box<T>, const o: U) -> int32 {
+            return 2;                    // the unbounded fallback
+        }
+        fn main() -> int32 {
+            let a: box<int32>;
+            let b: box<int32>;
+            let n: int32 = 7;
+            return a.tag(b) * 10 + a.tag(n);   // bounded, then fallback: 12
+        }
+        """
+    ) == 12
+
+
+def test_dependent_bound_round_trips_through_an_interface(tmp_path):
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "struct box<T> extends slice<T> { cap: uint64; }\n"
+        "fn box<T>::eq<U extends slice<T>>"
+        "(const self: box<T>, const o: U) -> bool {\n"
+        "    return self.length == (o as slice<const T>).length;\n"
+        "}\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    stub = out.read_text()
+    # The template travels verbatim, dependent bound included.
+    assert "<U extends slice<T>>" in stub
+    lib.unlink()  # force the import to resolve through the stub
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "lib";\n'
+        "fn main() -> int32 {\n"
+        "    let a: box<int32>;\n"
+        "    a.length = 1;\n"
+        "    let b: box<int32>;\n"
+        "    b.length = 1;\n"
+        "    return a.eq(b) ? 0 : 1;\n"
+        "}\n"
+    )
+    assert run_path(main) == 0  # the re-imported dependent bound still works

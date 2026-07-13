@@ -2114,20 +2114,52 @@ checked the same way. The relation is the single
 slice-borrow also use, so a struct that merely shares `shape`'s field prefix
 but does not declare `extends shape` is **rejected** — the asymmetry the
 nominal model exists to remove. A non-struct deduced type (say `int32`) fails
-the same way. The bound target must be a concrete struct: an unknown or
+the same way. A concrete bound target must be a struct: an unknown or
 non-struct target errors at the *declaration* (`int32 is not a struct; cannot
-extend it`), and it may not reference a type parameter — `<S, T extends S>` is
-a deliberately deferred follow-up. It may be a fully-applied generic or
-[alias](#type-aliases) instance (`extends pair<int32, V>`, `extends
-ipair<char>`), which resolves to the underlying struct.
+extend it`). It may be a fully-applied generic or [alias](#type-aliases)
+instance (`extends pair<int32, char>`, `extends ipair<char>`), which resolves
+to the underlying struct.
+
+**A bound target may reference type parameters** — the enclosing method
+qualifier's or the parameter list's own — forming a **dependent bound** that
+is collected at the declaration and resolved *per call*, once deduction has
+bound the parameters it names:
+
+```c
+// The stdlib shape that motivates it: accept anything that extends slice<T>,
+// with T the container's own element type -- no `as` at the call site.
+fn list<T>::equals<U extends slice<T>>(const self: list<T>, const lst: U) -> bool {
+    return self.equals(lst as slice<const T>);
+}
+
+let a = list<int32>(2);
+let b = list<int32>(a as slice<int32>);
+a.equals(b);      // T = int32 makes the bound slice<int32>; U = list<int32> satisfies it
+
+fn f<S, T extends S>(a: S, b: T) -> int32 { ... }   // the same-list form
+```
+
+The check is unchanged, just deferred: under the deduced bindings the target
+resolves (`slice<T>` at `T = char` is `slice<char>`) and the binding must
+satisfy the *resolved* bound, which the rejection names — `box<char> does not
+satisfy the bound slice<int32> of 'box::eq'`. While a referenced parameter is
+still unbound, the bound passes (the usual lenient-trial rule), and deduction
+itself is still unchanged — a parameter mentioned *only* in a bound is not
+inferred from it. A dependent target that resolves to a non-struct
+(`U extends T` with `T = int32`) is unsatisfiable and rejects whatever was
+deduced. Inherited methods carry their dependent bounds through `extends`
+with the base's parameters seeded, so a derived container's calls enforce the
+same resolved bound.
 
 The essential difference from a closed group is that the satisfying set is
 **open-ended** — any struct, anywhere, may later `extends` the bound — so
 there is no eager enumeration: the bound is checked **lazily** against each
 deduced binding, at every call and instantiation site. A bound composes with a
 [default](#type-parameter-defaults) (`<T extends shape = circle>`), which must
-itself satisfy the bound (checked at the declaration, mirroring the closed-group
-member-default check). A parameter may not carry both a bound and a group.
+itself satisfy the bound (checked at the declaration for a concrete bound,
+mirroring the closed-group member-default check; a dependent bound checks the
+filled default where it resolves, like any binding). A parameter may not carry
+both a bound and a group.
 
 Bounds slot into the same **overload ranking** middle tier — **concrete beats
 bounded generic beats unbounded generic** (see

@@ -675,6 +675,13 @@ class CodeGen:
         # there is no eager enumeration -- the bound is checked lazily against
         # each deduced binding at the call/instantiation sites.
         self.bound_types: dict[int, dict[str, LangType]] = {}
+        # DEPENDENT `extends` bounds -- bound targets that reference type
+        # parameters (`fn list<T>::equals<U extends slice<T>>`, or
+        # `<S, T extends box<S>>`). These cannot resolve at the declaration;
+        # the raw TypeRef is kept and resolved per call/instantiation, once
+        # deduction has bound the referenced parameters:
+        # id(Func) -> {type parameter: bound TypeRef}.
+        self.dependent_bounds: dict[int, dict[str, TypeRef]] = {}
         # (id(template Func), bound types) -> mangled instance name
         self.instances: dict[tuple[int, tuple[str, ...]], str] = {}
         self.struct_templates: dict[str, "StructDecl | UnionDecl"] = {}
@@ -1627,16 +1634,21 @@ class CodeGen:
     def check_bound_decl(self, func: Func):
         """Resolve and validate a template's ``extends`` bounds at declaration.
 
-        Each bound target must resolve to a concrete struct (the parser
-        already rejected targets naming a type parameter; an unknown name or a
-        non-struct errors here, reusing :meth:`resolve_base`'s rejection
-        strings). A bounded parameter that also carries a default has that
-        default checked against the bound now -- mirroring the closed-group
-        member-default check -- so a violating default fails at the
-        *declaration*. The resolved bounds are cached for the lazy call-site
-        viability filter; resolving here, where no instantiation's
-        ``type_bindings`` are live, keeps a bound name from ever meaning a
-        binding.
+        A CONCRETE bound target must resolve to a struct here (an unknown
+        name or a non-struct errors, reusing :meth:`resolve_base`'s rejection
+        strings), and a bounded parameter that also carries a default has
+        that default checked against the bound now -- mirroring the
+        closed-group member-default check -- so a violating default fails at
+        the *declaration*. The resolved bounds are cached for the lazy
+        call-site viability filter; resolving here, where no instantiation's
+        ``type_bindings`` are live, keeps a concrete bound name from ever
+        meaning a binding.
+
+        A DEPENDENT bound -- one whose target references type parameters,
+        like ``fn list<T>::equals<U extends slice<T>>`` -- is only
+        *collected* here (into :attr:`dependent_bounds`); it resolves per
+        call/instantiation in :meth:`bound_violation`, once deduction has
+        bound the parameters it names.
 
         Unlike a closed group the satisfying set is open-ended, so there is no
         eager enumeration and no overlap check: same-pattern bounded templates
@@ -1656,6 +1668,16 @@ class CodeGen:
             return
         resolved: dict[str, LangType] = {}
         for tparam, ref in func.type_param_bounds.items():
+            if self.names_type_param(ref, func.type_params):
+                # A DEPENDENT bound: the target references type parameters
+                # (the method qualifier's, or the list's own), so there is
+                # nothing to resolve yet. Keep the raw reference; the
+                # call-site viability filter resolves it once deduction has
+                # bound the parameters it names (a default on the bounded
+                # parameter is likewise judged there, where it fills a
+                # binding like any other).
+                self.dependent_bounds.setdefault(id(func), {})[tparam] = ref
+                continue
             bound = self.lang_type(ref, func.line)
             if not is_aggregate(bound):
                 raise LangError(
@@ -1691,6 +1713,14 @@ class CodeGen:
         a layout twin that does not declare the lineage is rejected. ``const``
         is shed before the comparison, matching unification.
 
+        A DEPENDENT bound (its target references type parameters, e.g.
+        ``U extends slice<T>``) resolves here, under the deduced bindings --
+        so ``T = char`` makes the bound ``slice<char>`` -- and then checks
+        identically. While any referenced parameter is still unbound (a
+        lenient partial trial) the bound passes, like an unbound bounded
+        parameter; a target that resolves to a non-struct is unsatisfiable
+        and rejects whatever was deduced.
+
         Args:
             func: The candidate template.
             bindings: The deduced ``{type parameter: type}`` map (may be
@@ -1701,18 +1731,66 @@ class CodeGen:
             bound, else the offending (const-stripped) deduced type and the
             bound struct it failed (for the not-a-subtype error).
         """
-        bounds = self.bound_types.get(id(func))
-        if not bounds:
+        bounds = self.bound_types.get(id(func), {})
+        deps = self.dependent_bounds.get(id(func), {})
+        if not bounds and not deps:
             return None
         for tparam in func.type_params:
-            bound = bounds.get(tparam)
             deduced = bindings.get(tparam)
-            if bound is None or deduced is None:
+            if deduced is None:
                 continue
+            bound = bounds.get(tparam)
+            if bound is None:
+                ref = deps.get(tparam)
+                if ref is None:
+                    continue
+                if any(
+                    p not in bindings
+                    for p in func.type_params
+                    if self.names_type_param(ref, [p])
+                ):
+                    # A referenced parameter is still unbound (a lenient
+                    # partial trial): pass, like an unbound bounded parameter.
+                    continue
+                bound = self.resolve_dependent_bound(func, ref, bindings)
+                if not is_aggregate(bound) or is_union(bound):
+                    # The bound resolved to something no type can extend
+                    # (`U extends T` with T = char): unsatisfiable, so any
+                    # deduction violates it -- the not-a-subtype rejection,
+                    # naming the resolved bound.
+                    return strip_const(deduced), bound
             bare = strip_const(deduced)
             if not self.nominal_subtype(bound, bare):
                 return bare, bound
         return None
+
+    def resolve_dependent_bound(
+        self, func: Func, ref: TypeRef, bindings: dict[str, LangType]
+    ) -> LangType:
+        """Resolve a dependent bound target under a candidate's bindings.
+
+        The reference resolves in the declaring template's file (it may name
+        that file's private types) with exactly the deduced bindings live, so
+        ``slice<T>`` under ``T = char`` is ``slice<char>``.
+
+        Args:
+            func: The declaring template.
+            ref: The dependent bound's target reference.
+            bindings: The deduced ``{type parameter: type}`` map; every
+                parameter the reference names is already bound.
+
+        Returns:
+            The resolved bound type (validated by the caller).
+        """
+        outer_bindings = self.type_bindings
+        outer_source = self.current_source
+        self.type_bindings = dict(bindings)
+        self.current_source = func.source
+        try:
+            return self.lang_type(ref, func.line)
+        finally:
+            self.type_bindings = outer_bindings
+            self.current_source = outer_source
 
     @staticmethod
     def bound_error(name: str, offender: LangType, bound: LangType) -> str:

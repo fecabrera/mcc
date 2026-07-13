@@ -80,6 +80,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Dependent `extends` bounds — a bound target may reference type
+  parameters** — `fn list<T>::equals<U extends slice<T>>(const self, const
+  lst: U)` constrains `U` by the *enclosing qualifier's* `T`, and
+  `fn f<S, T extends S>` by an earlier parameter of the same list (previously
+  a parse error, "a bound must be a concrete struct"). The bound is collected
+  at the declaration and resolved per call, once deduction has bound the
+  parameters it names: under `T = int32` the bound is `slice<int32>`, and the
+  rejection names the *resolved* bound (`box<char> does not satisfy the bound
+  slice<int32> of 'box::eq'`). Deduction itself is unchanged (a parameter
+  mentioned only in a bound is not inferred from it); while a referenced
+  parameter is unbound the bound passes, as in any lenient trial; a target
+  that resolves to a non-struct is unsatisfiable and rejects whatever was
+  deduced. Tier ranking, the unbounded-fallback shape, inheritance through
+  `extends` (the bound resolves through the seeded base parameters), symbol
+  mangling (`matches<$1 extends slice<$0>>`), and `.mci` round-trips all
+  carry over. This unlocks the stdlib container pattern: an `equals` (or
+  `contains`, …) accepting anything that extends `slice<T>` with no `as` at
+  the call site. See [Bounds](docs/language.md#bounds).
+
 - **`@property` methods, reachable through field syntax** — a method annotated
   `@property` reads like a field: `s.length` calls `stack<T>::length(s)`,
   dropping the parentheses a dot-call needs (the call spelling `s.length()`

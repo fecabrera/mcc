@@ -285,9 +285,11 @@ already do).
         [nominal struct subtyping](docs/language.md#structs) model the
         upcast and slice-borrow also follow (without it this bound would reject
         a layout twin that the upcast beside it still accepts, the asymmetry
-        that model removed). The explicit-set form, once sketched here
-        as `T in (t1, t2, ...)`, is settled under a different spelling as the
-        closed-type-groups sub-item below
+        that model removed). The target was concrete-only when this
+        shipped; since generalized, it may reference type parameters (the
+        dependent-bounds sub-item below). The explicit-set form, once
+        sketched here as `T in (t1, t2, ...)`, is settled under a different
+        spelling as the closed-type-groups sub-item below
     - [x] [closed type groups](docs/language.md#closed-type-groups) — a
           pipe-separated closed group of types after
           the parameter name, `fn f<T: int64 | int32>(x: T)`, constrains
@@ -336,6 +338,41 @@ already do).
           `typename(T)` composes trivially. The motivating example is the
           signed/unsigned formatter grouping at the function level, with
           no `case type` needed
+    - [x] [dependent bounds](docs/language.md#bounds) — a bound's target
+          may reference type parameters: the enclosing method qualifier's
+          (`fn list<T>::equals<U extends slice<T>>(const self: list<T>,
+          const lst: U)`) or an earlier (indeed any) parameter of the
+          same list (`fn f<S, T extends S>`), both previously rejected by
+          the parser's "a bound must be a concrete struct" error (the
+          same-list form the parser had called a deliberately deferred
+          follow-up). The bound is collected at the declaration
+          (classified dependent when its target names any of the
+          function's type parameters) and resolved at each call in the
+          declaring file's scope, once deduction has bound the parameters
+          it names (`slice<T>` at `T = int32` resolves to `slice<int32>`),
+          then checked by the same nominal-subtype relation as a concrete
+          bound; a rejection names the resolved bound (`box<char> does
+          not satisfy the bound slice<int32> of 'box::eq'`). Deduction is
+          unchanged: a parameter mentioned only in a bound is not
+          inferred from it, a bound whose referenced parameter is still
+          unbound passes the lenient partial trial, and a target that
+          resolves to a non-struct (`U extends T` at `T = int32`) is
+          unsatisfiable, rejecting whatever was deduced. Carried over
+          byte-for-byte: concrete-bound behavior, tier ranking (concrete
+          beats bounded beats unbounded) and the v1
+          one-bounded-overload-beside-an-unbounded-fallback shape, method
+          inheritance through `extends` (the bound resolves through the
+          seeded base parameters, verified for concrete and generic
+          derivations), template
+          [symbol bases](docs/language.md#template-symbols) (a dependent
+          bound substitutes placeholders,
+          `matches<$1 extends slice<$0>>`), and `.mci` round-trips
+          (templates travel verbatim); a bounded parameter's default is
+          now checked where the bound resolves (declaration for concrete,
+          per call for dependent). The driving use case is the stdlib
+          container pattern: `list<T>::equals<U extends slice<T>>`
+          accepts any `slice<T>`-extending value with no `as` at the
+          call site
     - [ ] interface bounds — `fn myfunc<T implements I>(x: T)`, asserting
           that `T` implements interface `I`: checked at each monomorphized
           instantiation (the concrete type must define every method `I`

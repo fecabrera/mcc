@@ -1133,11 +1133,15 @@ class Parser:
 
         A parameter may instead declare a **nominal bound** -- a struct after
         ``extends`` (``<T extends shape>``), constraining the parameter to that
-        struct and its declared ``extends`` lineage. Like a group member, the
-        bound target must be concrete (it may not reference a type parameter);
-        unlike a group, the set is open-ended, so it composes with a default
-        (``<T extends shape = circle>``) whose satisfaction is checked at the
-        declaration. A parameter may not carry both a bound and a group.
+        struct and its declared ``extends`` lineage. Unlike a group member,
+        the bound target may reference type parameters -- the enclosing
+        method qualifier's (``fn list<T>::equals<U extends slice<T>>``) or
+        the list's own (``<S, T extends box<S>>``) -- forming a *dependent*
+        bound that codegen resolves per instantiation instead of at the
+        declaration. The set is open-ended, so a bound composes with a
+        default (``<T extends shape = circle>``) whose satisfaction is
+        checked where the bound resolves. A parameter may not carry both a
+        bound and a group.
 
         Returns:
             The type-parameter names, the ``{name: TypeRef}`` defaults, the
@@ -1226,18 +1230,6 @@ class Parser:
                             "must name a group member",
                             lines[pname],
                         )
-            for pname, ref in bounds.items():
-                # A bound target is a concrete type: referencing a type
-                # parameter (an earlier one included -- `<S, T extends S>` is
-                # deferred) is not yet a resolvable bound.
-                bad = type_ref_names(ref) & set(type_params)
-                if bad:
-                    raise LangError(
-                        f"bound {ref} for type parameter {pname!r} references "
-                        f"type parameter {min(bad)!r}; a bound must be a "
-                        "concrete struct",
-                        lines[pname],
-                    )
         return type_params, defaults, groups, bounds
 
     def parse_struct(

@@ -48,6 +48,27 @@ fn footprint<T extends shape = circle>() -> int32 {
     return sizeof(T) as int32;
 }
 
+// A DEPENDENT bound: the target may reference type parameters -- here the
+// method qualifier's T -- so the bound is collected at the declaration and
+// resolved per call, once deduction binds T. This is the stdlib's container
+// shape (list<T>::equals): accept anything that extends slice<T>, with T the
+// container's own element type, no `as` at the call site. Under T = int32
+// the bound is slice<int32>, so another pack<int32> binds U directly; a
+// pack<char> would be rejected naming the RESOLVED bound:
+//     error: pack<char> does not satisfy the bound slice<int32> of 'pack::matches'
+struct pack<T> extends slice<T> { cap: uint64; }
+
+fn pack<T>::matches<U extends slice<T>>(const self: pack<T>, const o: U) -> bool {
+    return self.length == (o as slice<const T>).length;
+}
+
+// The same-list form works too: T's bound references S, resolved once S is
+// deduced from the first argument. (A parameter mentioned ONLY in a bound is
+// not inferred from it -- deduction is unchanged, the bound still filters.)
+fn wider<S extends shape, T extends S>(a: S*, b: T*) -> bool {
+    return b!->area > a!->area;
+}
+
 fn main() -> int32 {
     let s = shape  { area = 3 };
     let c = circle { area = 10, r = 4 };
@@ -68,10 +89,29 @@ fn main() -> int32 {
 
     // The default anchored the measurement to circle.
     println("footprint<circle> = {} bytes", footprint());
+
+    // Dependent bounds resolve per call: T = int32 makes the bound
+    // slice<int32>, and the whole pack<int32> argument binds U with no
+    // borrow spelled at the call. (A bare `let p: pack<int32>;` is C-style
+    // UNINITIALIZED -- see memory/lists.mc -- so point the views at real
+    // storage before comparing.)
+    let arr: int32[3];
+    let brr: int32[3];
+    let p: pack<int32>;
+    p.data = &arr[0]; p.length = 3; p.cap = 3;
+    let q: pack<int32>;
+    q.data = &brr[0]; q.length = 3; q.cap = 3;
+    println("p.matches(q) = {}", p.matches(q));         // true (equal lengths)
+
+    // The same-list form: S = shape binds from `a`, then T's bound resolves
+    // to shape and circle satisfies it.
+    println("wider(&s, &c) = {}", wider(&s, &c));       // true (10 > 3)
+
     return 0;
 }
 
-// The bound joins the template's symbol base (`describe<$0 extends shape>`,
+// The bound joins the template's symbol base (`describe<$0 extends shape>`;
+// a dependent one substitutes placeholders, `matches<$1 extends slice<$0>>`,
 // see docs/language.md "Template symbols") and renders in `.mci` interface
 // stubs, so a re-imported bounded template enforces identically. Two bounded
 // same-pattern overloads are not yet supported (an open set cannot be shown
