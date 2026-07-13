@@ -10,6 +10,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Removed
 
+- **`std/equality`** — the free-function equality protocol
+  (`equals<T>(slice<T>, slice<T>)`) was always a stopgap before methods
+  landed; it is now the `slice<T>::equals` method in the new
+  [`std/slice`](lib/std/slice.mc). Migrate `equals(a, b)` to `a.equals(b)`
+  (a string literal reaches it directly, `"hi".equals(s)`, via the
+  string-literal dot-call adaptation). Every stdlib call site moved
+  (`std/list`, `std/format`); `list<T>::equals` and `string`'s equals
+  members are unchanged at the call site.
+
 - **The `PRINTF_PRINTLN` toggle and the legacy printf-style
   `print`/`println`** — the `-D PRINTF_PRINTLN=1` escape hatch is retired:
   `std/io`'s `@if`/`@else` branches are deleted and the slice-typed `{}`
@@ -83,6 +92,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and writing families only.
 
 ### Added
+
+- **`std/slice` — methods on the builtin `slice<T>`** — a new module home for
+  slice-receiver methods. `slice<T>::equals` compares two slices element by
+  element (different lengths never equal, empty slices equal, `T` must support
+  `!=`) — the equality protocol as a per-type method (replacing the removed
+  free `equals`), with a `slice<const char>`-vs-`string` overload for text.
+  `slice::format` is a format-string entry point — `"{}"` holes filled from
+  variadic args through the `std/format` overload set, `{modifier}` carrying a
+  format modifier, `{{`/`}}` escaping a literal brace — returning an `own
+  string`; `string::format` is the `string`-receiver delegate. Reached on a
+  bare string literal (`"{}".format(x)`, `"hi".equals(s)`) through the
+  string-literal dot-call adaptation.
 
 - **String-literal dot-call receivers adapt to `slice<const char>`** — a bare
   string literal as a dot-call receiver now borrows into `slice<const char>` so

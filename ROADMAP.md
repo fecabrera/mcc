@@ -170,8 +170,20 @@ its reference section in the [language reference](docs/language.md).
 
 - [x] Core — `memory` (typed `alloc`/`dealloc`), `io` (the formatted
       `print`/`println`, `swap`/`replace`), `format` (the open per-type
-      `format` overload set behind the `{}` placeholders), `equality`
-      (the open `equals` set), `hash` (generic `hash<T>`)
+      `format` overload set behind the `{}` placeholders), `slice`
+      (methods on the builtin `slice<T>`: `slice<T>::equals` is the
+      equality protocol as a per-type method, `a.equals(b)`, which
+      replaced the free-function `equals<T>` in the now-removed
+      `std/equality` — always an explicit stopgap before methods, per its
+      own "should turn to `slice::equals()` once OOP lands" note, so this
+      is that migration landing, not a regression; a `slice<const char>`
+      compares against a `string` through a bridging overload. Also
+      `slice::format` / its `string::format` delegate, a format-string
+      builder filling `{}` holes from variadic args through the `format`
+      set (`{modifier}` carries a modifier, `{{`/`}}` escape braces) and
+      returning an `own string`, reached on a bare literal —
+      `"{}".format(x)` — via the string-literal dot-call adaptation and
+      owning via move-out returns), `hash` (generic `hash<T>`)
 - [x] Containers — `list`, `stack`, `queue`, `ring`, `set`, `dict`, `string` (counting
       loops use the builtin [`range`](docs/language.md#control-flow))
 - [x] Hashing — `splitmix64`, `fnv1a`, `murmur3`, `crc32`, `md5`
@@ -3610,8 +3622,10 @@ already do).
         move-out returns (`-> own`, nested under the destructor item in
         [Methods / OOP](#functions-and-methods)) plus caller-adopted
         destruction cover LET position — `let s = f"..."` can desugar to
-        `let s = format("...", args...)` over a renderer
-        `fn format(str, args...) -> own string` whose returned `string` is
+        `let s = "...".format(args...)` over the since-shipped
+        `slice::format` / `string::format` `-> own string` builder (the
+        `std/slice` format-string entry point in the Core stdlib above),
+        the renderer this desugar always wanted, whose returned `string` is
         constructed in the callee, adopted by the caller's let, and destroyed
         at the end of that scope (RAII over
         [`defer`](docs/language.md#defer), the same discipline the destructor

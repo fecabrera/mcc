@@ -857,7 +857,6 @@ import "std/stack";
 import "std/queue";
 import "std/dict";
 import "std/set";
-import "std/equality";
 import "std/hashing/md5";
 import "std/hashing/murmur3";
 import "std/hashing/fnv1a";
@@ -871,7 +870,7 @@ fn main() -> int32 {
     for v in xs { lo += v; }
     let ys = list<int32>(2);
     ys.push(9);
-    let eq = equals(xs as slice<int32>, ys as slice<int32>);
+    let eq = xs.equals(ys as slice<int32>);
     let r = ring<int32>(1);
     for i in range(5) { r.push(i as int32); }
     r.at(0) = 3;

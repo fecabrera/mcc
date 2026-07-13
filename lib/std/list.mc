@@ -1,4 +1,5 @@
 import "std/memory";
+import "std/slice";
 
 @private
 const DEFAULT_LIST_CAPACITY = 2;
@@ -202,7 +203,7 @@ fn list<T>::append(mut self: list<T>, @nonnull items: T*, n: uint64) {
  */
 @inline
 fn list<T>::equals(const self: list<T>, const lst: slice<const T>) -> bool {
-    return equals(self as slice<const T>, lst);
+    return (self as slice<const T>).equals(lst);
 }
 
 /**

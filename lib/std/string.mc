@@ -1,5 +1,5 @@
 import "std/list";
-import "std/equality";
+import "std/slice";
 
 /**
  * A growable, heap-backed byte string.
@@ -44,6 +44,18 @@ fn string::append(mut self: string, @nonnull str: char*) {
 }
 
 /**
+ * Appends a slice of characters to a string: the overload for slices whose
+ * length is not known up front.
+ *
+ * @param self: string to append to
+ * @param str:  slice of characters to append
+ */
+@inline
+fn string::format(const self: string, args...) -> own string {
+    return move((self as slice<const char>).format(args));
+}
+
+/**
  * Compares a string against a NUL-terminated C string byte by byte: equal
  * when every byte matches and the C string's terminator sits exactly at the
  * string's length. The overload for C strings whose length is not known up
@@ -67,6 +79,21 @@ fn string::equals(const self: string, @nonnull arr: char*) -> bool {
         return false;
 
     return true;
+}
+
+/**
+ * Compares a string against a slice of characters: equal when every character
+ * matches and the slice's length is exactly the string's length.
+ *
+ * @param self: string to compare
+ * @param str:  slice of characters to compare against
+ *
+ * @return true if the string's characters are exactly the slice's, false
+ *         otherwise
+ */
+@inline
+fn slice::equals(const self: slice<const char>, const str: string) -> bool {
+    return str.equals(self as slice<const char>);
 }
 
 /***************************************

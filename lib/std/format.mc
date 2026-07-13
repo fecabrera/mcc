@@ -1,5 +1,4 @@
 import "std/string";
-import "std/equality";
 import "libc/stdio";
 import "libc/stdlib";
 
@@ -313,9 +312,9 @@ fn format(mut str: string, value: float64, const modifier: slice<char>) {
  *                  renders true/false
  */
 fn format(mut str: string, value: bool, const modifier: slice<char>) {
-    if (equals(modifier, "y"))
+    if (modifier.equals("y"))
         str.append(value ? "y" : "n");
-    else if (equals(modifier, "yes"))
+    else if (modifier.equals("yes"))
         str.append(value ? "yes" : "no");
     else
         str.append(value ? "true" : "false");
