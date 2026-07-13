@@ -595,6 +595,40 @@ def test_postfix_assert_silences_the_site():
     assert class_warnings(src) == []
 
 
+def test_ternary_of_proven_arms_deref_does_not_warn():
+    # `*(flag ? p : q)` with both arms narrowed: whichever arm executes is a
+    # proven source, so the site is silent.
+    src = """
+    fn pick(flag: bool, p: int32*, q: int32*) -> int32 {
+        if (p == null) { return 0; }
+        if (q == null) { return 0; }
+        return *(flag ? p : q);
+    }
+    fn main() -> int32 {
+        let x: int32 = 1;
+        let y: int32 = 2;
+        return pick(true, &x, &y) - 1;
+    }
+    """
+    assert class_warnings(src) == []
+
+
+def test_ternary_with_unproven_arm_deref_warns():
+    # One unproven arm keeps the site warning.
+    src = """
+    fn pick(flag: bool, p: int32*, q: int32*) -> int32 {
+        if (p == null) { return 0; }
+        return *(flag ? p : q);
+    }
+    fn main() -> int32 {
+        let x: int32 = 1;
+        let y: int32 = 2;
+        return pick(true, &x, &y) - 1;
+    }
+    """
+    assert class_warnings(src) == [(DEREF_MSG, 4)]
+
+
 def test_let_seeded_local_deref_does_not_warn():
     src = """
     fn main() -> int32 {

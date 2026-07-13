@@ -380,6 +380,109 @@ def test_null_to_plain_parameter_still_allowed():
     ) == 1
 
 
+# ----------------------------------------------------------- ternary proofs
+
+
+HEAD = "fn head(@nonnull s: uint8*) -> int32 { return *s as int32; }\n"
+
+
+def test_ternary_of_literals_proves_nonnull():
+    # Whichever arm executes is a proven source; the condition is irrelevant.
+    assert run(
+        HEAD + "fn main() -> int32 {\n"
+        "    let flag = false;\n"
+        '    return head(flag ? "A" : "B");\n'
+        "}"
+    ) == 66
+
+
+def test_nested_ternary_chain_proves_nonnull():
+    # The proof recurses: a ternary arm that is itself a ternary of proven
+    # arms proves.
+    assert run(
+        HEAD + "fn main() -> int32 {\n"
+        "    let a = false;\n"
+        "    let b = true;\n"
+        '    return head(a ? "X" : b ? "Y" : "Z");\n'
+        "}"
+    ) == 89
+
+
+def test_ternary_of_nonnull_params_proves_nonnull():
+    # Non-literal proven sources work too: both arms are @nonnull parameters.
+    assert run(
+        FIRST + "fn pick(flag: bool, @nonnull a: int32*, @nonnull b: int32*)"
+        " -> int32 {\n"
+        "    return first(flag ? a : b);\n"
+        "}\n"
+        "fn main() -> int32 {\n"
+        "    let x: int32 = 3;\n"
+        "    let y: int32 = 8;\n"
+        "    return pick(false, &x, &y);\n"
+        "}"
+    ) == 8
+
+
+def test_ternary_seeds_let_narrowing():
+    # A let initialized from a proven ternary starts flow-narrowed.
+    assert run(
+        HEAD + "fn main() -> int32 {\n"
+        "    let flag = true;\n"
+        '    let m = flag ? "hello" : "world";\n'
+        "    return head(m) - 104;\n"
+        "}"
+    ) == 0
+
+
+def test_reassignment_after_ternary_seed_kills_the_fact():
+    # The seeded fact dies like any narrowing when a possibly-null source is
+    # assigned over it.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            HEAD + "fn f(u: char*) -> int32 {\n"
+            "    let flag = true;\n"
+            '    let m = flag ? "a" : "b";\n'
+            "    head(m);\n"
+            "    m = u;\n"
+            "    return head(m);\n"
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_ternary_with_unproven_arm_rejected():
+    # One possibly-null arm fails the whole expression, exactly as before.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            HEAD + "fn f(flag: bool, u: uint8*) -> int32 {\n"
+            '    return head(flag ? "a" : u);\n'
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_ternary_with_null_arm_rejected():
+    # `null` adapting to the pointer arm is an unproven arm.
+    with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
+        compile_ir(
+            HEAD + "fn f(flag: bool) -> int32 {\n"
+            '    return head(flag ? "a" : null);\n'
+            "}\n"
+            "fn main() -> int32 { return 0; }"
+        )
+
+
+def test_cast_of_ternary_threads_the_proof():
+    # A pointer cast of a proven ternary keeps the proof, like any other
+    # proven source under an `as` pointer cast.
+    assert run(
+        HEAD + "fn main() -> int32 {\n"
+        "    let flag = true;\n"
+        '    return head((flag ? "A" : "B") as uint8*);\n'
+        "}"
+    ) == 65
+
+
 # --------------------------------------------------------- binding soundness
 
 

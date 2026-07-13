@@ -407,7 +407,11 @@ array step is address arithmetic off the chain's base, never a load, so
 its decay is a derived address like `p + n`), transitively a `@nonnull` parameter of
 the calling function (so a `@nonnull` callee forwards its own parameter
 onward with no check), a plain pointer local or a pointer-typed field
-projection flow-narrowed by a null check (below), an `as` cast to a
+projection flow-narrowed by a null check (below), a conditional
+`c ? a : b` whose arms are both proven sources (whichever arm executes
+is proven, recursively, so `flag ? "y" : "n"` compiles while
+`flag ? "y" : maybe_null` stays rejected; the condition is irrelevant),
+an `as` cast to a
 pointer type of any proven source (aliases of
 pointer types count; a non-pointer intermediate like `p as uint64 as T*`
 severs the proof), and the explicit escape hatch (further below).
@@ -494,8 +498,9 @@ condition).
 
 Facts also seed through `let`: a pointer binding whose initializer is
 provably non-null (`let q = p;` under a guard, `let p = &x;`,
-`let s: uint8* = "...";`, `let q = p!;`) starts narrowed, under the same
-eligibility rules, and dies on the same events.
+`let s: uint8* = "...";`, `let m = flag ? "y" : "n";`, `let q = p!;`)
+starts narrowed, under the same eligibility rules, and dies on the same
+events.
 
 **Projection facts.** The same guard shapes also narrow a pointer-typed
 *field projection*: `if (b->data != null)` proves `b->data` in the then

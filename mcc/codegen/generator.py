@@ -15497,7 +15497,9 @@ class CodeGen:
         way (``if (a->ptr != null) { ... }``; see :meth:`nonnull_path_of`),
         a postfix ``p!`` assertion (the programmer's explicit, unchecked
         claim), pointer arithmetic ``p + n`` / ``p - n`` (the derived address
-        of ``&p[n]``, an always-non-null source like ``&p[n]`` itself), and an
+        of ``&p[n]``, an always-non-null source like ``&p[n]`` itself), a
+        conditional expression whose arms both prove non-null (whichever arm
+        executes is a proven source, so the condition is irrelevant), and an
         ``as`` cast to a pointer type of any of these (a
         pointer reinterpretation preserves the address; a non-pointer
         intermediate, e.g. an integer round-trip, severs the proof).
@@ -15526,6 +15528,14 @@ class CodeGen:
             return is_pointer(
                 self.lang_type(expr.type_name, expr.line)
             ) and self.proves_nonnull(expr.value)
+        if isinstance(expr, Ternary):
+            # Whichever arm executes is the value's source, so the proof asks
+            # that both arms prove non-null; the condition is irrelevant. An
+            # unproven arm (a `null` adapting to the other's pointer type, a
+            # plain pointer local) fails the whole expression.
+            return self.proves_nonnull(expr.then) and self.proves_nonnull(
+                expr.otherwise
+            )
         if isinstance(expr, Var):
             if expr.name in self.nonnull_locals or expr.name in self.narrowed_nonnull:
                 return True

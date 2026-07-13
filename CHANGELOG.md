@@ -653,6 +653,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A conditional of proven non-null arms was rejected at `@nonnull`
+  slots** — the syntactic non-null proof had no case for `?:`, so
+  `take(flag ? "y" : "n")` errored even though both arms are string
+  literals, and `let m = flag ? "a" : "b";` failed to seed the binding's
+  narrowed fact. A conditional expression now proves non-null exactly when
+  both arms prove non-null, recursively (whichever arm executes is a
+  proven source; the condition is irrelevant). The proof threads through
+  every consumer — `@nonnull` arguments, `const`/`mut` decay, let-seeding,
+  and the `-Wunchecked-dereference` warning, which no longer fires on
+  `*(flag ? p : q)` when both are narrowed. A conditional with a
+  possibly-null arm (`flag ? "y" : maybe_null`, a `null`-adapted arm)
+  stays rejected, unchanged.
 - **A hole-free f-string lost its `@format`-only semantics** — a hole-free
   `f"..."` (only plain text or escaped braces, `f"{{}}"`, `f"no holes"`)
   was collapsed to a plain string literal at parse time, so it slipped past
