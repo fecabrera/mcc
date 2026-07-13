@@ -1988,7 +1988,20 @@ already do).
         method type params stay inference-only, the documented limit
         mirroring the open explicit-type-args-at-`::` refinement above.
         Sugared bodies round-trip `.mci` verbatim, and the explicit
-        `Type::method(...)` spelling stays valid alongside. Provenance:
+        `Type::method(...)` spelling stays valid alongside. AMENDED by
+        the qualified-only corrective slice (the USER RULING recorded
+        verbatim at the constructor item below): the two semantic names
+        are carved out of the sugar — `p.constructor(args)` and
+        `p.destructor()` are compile errors teaching the qualified form
+        (`'destructor' cannot be called with method syntax; use
+        point::destructor(p)`), so the dot-to-`Type::` equivalence
+        holds for every method name BUT those two; a genuine FIELD of
+        either name keeps the field-first behavior above (fields shadow
+        methods before the ban is judged), receivers of every kind are
+        covered (struct, union, builtin, alias, pointer — the pointer
+        suggestion spells the one-hop deref), and a spilled rvalue
+        receiver's suggestion renders `value`, never the hidden local's
+        name. Provenance:
         as planned, this item staged a pre-receiver-kinds
         `var->method(...)` form, `.` arriving only once the receiver
         kinds landed; that staging is SUPERSEDED — the sugar shipped
@@ -2040,7 +2053,19 @@ already do).
         the no-constructor error) — also OVERRULING the explorer's
         recommendation. Naming settled by shipping: the pair is
         `constructor`/`destructor` (the once-open `init`/`destroy`
-        alternative closes). Overloaded constructors (empty / copy /
+        alternative closes). AMENDED by a corrective slice: the pair is
+        QUALIFIED-ONLY (USER RULING, verbatim: "for a type T calling
+        t.destructor() or t.constructor(args) directly should be
+        forbidden, they can only be called by their fully qualified
+        form T::constructor(t, args) and T::destructor(t), which should
+        be mainly used for chaining constructors and destructors") —
+        the dot spellings are compile errors, `T::constructor(t, args)`
+        / `T::destructor(t)` the only callable spellings, kept mainly
+        for chaining a base's from a derived body; the `S(args)` sugar
+        and the automatic destructor are unaffected (the synthesized
+        auto-defer was always the qualified call over the hidden
+        rebind), and the method-call sugar above records the dot-side
+        carve-out. Overloaded constructors (empty / copy /
         converting / from raw parts) ride the shipped
         [function overloading](docs/language.md#function-overloading);
         the diagonal-beside-converting constructor pair is what
@@ -2100,7 +2125,11 @@ already do).
           cleanup counterpart: releases what the constructor acquired.
           USER SPEC, recorded verbatim: "if a type T declares a
           destructor, `let t = T(args)` automatically defers
-          `t.destructor()` at the end of the scope", with the
+          `t.destructor()` at the end of the scope" (the quote's dot
+          spelling predates the qualified-only corrective ruling at the
+          parent item — that spelling is now a compile error, and the
+          synthesized call was always the qualified `T::destructor`
+          over the hidden rebind, so the machinery is unaffected), with the
           user-authored desugar equivalence `let p = point<float64>();`
           ≡ `let p: point<float64>; point<float64>::constructor(p);
           defer point<float64>::destructor(p);` — RAII over the existing
@@ -2123,8 +2152,12 @@ already do).
           diagnostic (arity, overloads, cross-module `@private`) is the
           family call's own at the let's line, propagated and never
           masked. Sharp edges, each a USER RULING: (1) a manual
-          `p.destructor()` beside the automatic call is UNDEFINED
-          BEHAVIOR, a C double-free — no suppression, no warning;
+          `T::destructor(p)` beside the automatic call is UNDEFINED
+          BEHAVIOR, a C double-free — no suppression, no warning
+          (originally recorded over the dot spelling; the corrective
+          qualified-only slice made `p.destructor()` a compile error,
+          so the stance is unchanged in substance and its reachable
+          spelling is now qualified-only);
           (2) `return t` / `emit t` of the whole auto-destructed local
           is a HARD ERROR (the copy would carry already-destroyed
           state) — hatches: return the constructor expression directly
