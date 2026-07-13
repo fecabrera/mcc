@@ -1341,10 +1341,31 @@ generic:
   type-use arity error — annotate the head (`diag<int32>(1, 2)`).
 - **Any type with a declared `constructor` family is constructible** —
   builtins included: declare `fn char::constructor(mut self: char, code:
-  int32)` and `char(65)` works. Without a declared constructor the call is
-  an error (`type 'int32' has no constructor` — it does **not** become a
-  cast), and for a struct, `struct 'point' has no constructor` — the
-  [struct literal](#structs) remains the no-constructor spelling.
+  int32)` and `char(65)` works. Without a declared constructor a call
+  **with arguments** is an error (`type 'int32' has no constructor` — it
+  does **not** become a cast), and for a struct, `struct 'point' has no
+  constructor` — the [struct literal](#structs) remains the no-constructor
+  spelling. The zero-argument call never errs this way — see below.
+
+**Every type also has an implicit empty constructor**: `T()` with no
+arguments is exactly `let t: T;` — the slot, default-initialized as the
+bare declaration is (a struct with declared field defaults starts from
+them, anything else starts uninitialized), is the value. It applies to any
+type the sugar head accepts — `char()`, `int32()`, `point<float64>()`, a
+derived `pointf()`, an alias — and, unlike C++, **declaring constructors
+does not suppress it**: a 2-argument family beside `point<float64>()`
+leaves the zero-argument call default-initializing. Declared members still
+win — a visible family member that accepts just the receiver (a
+`(mut self)`-only constructor, or a
+[collecting](#native-variadic-arguments) one
+whose fixed prefix is only the receiver) claims `T()` and runs normally —
+so the implicit form is strictly the fallback and no ambiguity between the
+two can arise. A bare generic head with required parameters has no
+arguments to infer from, so `point()` stays the cannot-infer error
+(fully-defaulted generics are complete types, as always). One corollary of
+the dumb desugar: a literal zero-*parameter* member
+(`fn s::constructor()`) can never accept the hidden receiver, so it never
+claims the call — the receiver-taking form above is the empty constructor.
 
 Name resolution is unchanged: a same-named function, variable, constant, or
 file-scoped `@static` wins unconditionally (the sugar sits where the call

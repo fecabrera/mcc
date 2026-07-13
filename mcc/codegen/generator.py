@@ -13592,6 +13592,112 @@ class CodeGen:
             name = alias.target.name
         return True
 
+    def ctor_zero_arg_member(self, family: str) -> bool:
+        """Whether a constructor family claims the zero-argument call.
+
+        The declared-wins rule of the implicit empty constructor: a visible
+        family member that can accept exactly one argument -- the hidden
+        receiver -- claims ``T()`` and resolves (or errors) normally; the
+        implicit ``let t: T;`` form applies only when none can. Arity is the
+        judgment: a non-collecting member with one parameter, or a
+        collecting member whose fixed prefix is at most the receiver. A
+        cross-module ``@private`` member is not visible here, exactly as it
+        is not a candidate at the call.
+
+        Args:
+            family: The qualified name, e.g. ``"point::constructor"``.
+
+        Returns:
+            ``True`` when some visible member takes the zero-argument call.
+        """
+        key = (self.current_source, family)
+        symbol = self.static_funcs.get(key)
+        if symbol is not None:
+            _, params, _ = self.signatures[symbol]
+            if (
+                len(params) - 1 <= 1
+                if self.collecting_params(params)
+                else len(params) == 1
+            ):
+                return True
+        members = list(self.templates.get(family, ()))
+        if family in self.overloads:
+            members += self.overloads[family]
+        else:
+            members += self.concrete_decls.get(family, {}).values()
+        members += self.inherited_candidates(family)
+        static_template = self.static_templates.get(key)
+        if static_template is not None:
+            members.append(static_template)
+        for func in members:
+            if func.private and func.source != self.current_source:
+                continue
+            if self.collecting_candidate(func):
+                if len(func.params) - 1 <= 1:
+                    return True
+            elif len(func.params) == 1:
+                return True
+        return False
+
+    def gen_empty_ctor(self, expr: Call, canonical: str, decl) -> tuple:
+        """Emit the implicit empty constructor: ``T()`` is ``let t: T;``.
+
+        Allocates a slot of the (fully-spelled) type and default-initializes
+        it exactly as the bare declaration would -- a struct with declared
+        field defaults starts from them, anything else starts uninitialized.
+        No family member runs; there may not even be one. A bare generic
+        head with required parameters has nothing to infer from (there are
+        no arguments), so it keeps the constructor sugar's cannot-infer
+        error; a fully-defaulted generic is a complete type, as everywhere.
+
+        Args:
+            expr: The zero-argument sugar ``Call``.
+            canonical: The alias-chased type name being constructed.
+            decl: The struct declaration behind ``canonical``, or ``None``
+                for a builtin.
+
+        Returns:
+            The ``(slot, LangType)`` pair of the default-initialized value.
+
+        Raises:
+            LangError: On a bare generic head with required type parameters,
+                or a head that does not spell a complete type.
+        """
+        if (
+            not expr.type_args
+            and decl is not None
+            and decl.type_params
+            and len(decl.type_param_defaults) < len(decl.type_params)
+            and self.ctor_head_is_bare(expr.name)
+        ):
+            missing = [
+                p
+                for p in decl.type_params
+                if p not in decl.type_param_defaults
+            ]
+            raise LangError(
+                f"cannot infer type parameter(s) {', '.join(missing)} for "
+                f"'{canonical}::constructor'; spell the instantiation, e.g. "
+                f"{expr.name}<int32>(...)",
+                expr.line,
+            )
+        built = strip_const(
+            self.lang_type(
+                TypeRef(expr.name, args=list(expr.type_args)), expr.line
+            )
+        )
+        if built is VOID:
+            raise LangError("cannot construct a void value", expr.line)
+        slot = self.builder.alloca(built.ir)
+        if over_aligned(built):
+            slot.align = type_align(built)
+        elif is_valist(built):
+            self.require_valist(expr.line)
+            slot.align = self.va_list_align  # as `let v: va_list;` aligns
+        if is_struct(built):
+            self.init_struct_defaults(slot, built)
+        return slot, built
+
     def gen_ctor_call(self, expr: Call, canonical: str) -> tuple:
         """Emit ``S(args)`` constructor sugar: allocate, then construct.
 
@@ -13608,6 +13714,15 @@ class CodeGen:
         -- exactly as a bare qualified call ``S::constructor(s, ...)``
         infers.
 
+        Every type also has an **implicit empty constructor**: ``T()`` with
+        no arguments is ``let t: T;`` -- the slot, default-initialized
+        exactly as the bare declaration, is the value. Declared members win:
+        a family member that accepts just the receiver (arity one, or a
+        collecting member whose fixed prefix is at most the receiver) claims
+        the zero-argument call and resolves normally; only when no visible
+        member can is the implicit form used -- so declaring constructors
+        never suppresses it, and no ambiguity between the two ever arises.
+
         Args:
             expr: The sugar ``Call`` (``expr.name`` is the written head).
             canonical: The alias-chased type name being constructed.
@@ -13616,11 +13731,16 @@ class CodeGen:
             The ``(slot, LangType)`` pair of the constructed value.
 
         Raises:
-            LangError: When no constructor family is declared for the type,
-                or the family call itself fails to resolve.
+            LangError: When no constructor family is declared for the type
+                (and the call has arguments), or the family call itself
+                fails to resolve.
         """
         family = f"{canonical}::constructor"
         decl = self.lookup_struct_decl(canonical)
+        if not expr.args and not self.ctor_zero_arg_member(family):
+            # The implicit empty constructor: no declared member takes just
+            # the receiver, so `T()` is `let t: T;` -- family or no family.
+            return self.gen_empty_ctor(expr, canonical, decl)
         if not self.method_family_exists(family):
             if decl is not None:
                 kind = "union" if decl.union else "struct"

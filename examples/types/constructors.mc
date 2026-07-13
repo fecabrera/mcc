@@ -14,11 +14,14 @@ import "std/io";
 // unique to calls: a BARE generic head (`point(1.5, 2.5)`) infers the
 // instantiation from the constructor's arguments.
 //
-// Without a declared constructor the call is an error, never a cast:
-// "struct 'point' has no constructor; declare 'fn point::constructor(...)'
-// or build the value with a struct literal" -- and for a builtin,
-// "type 'int32' has no constructor; declare 'fn int32::constructor(...)'".
-// Struct literals (struct_literals.mc) remain the no-constructor spelling.
+// Without a declared constructor a call WITH arguments is an error, never
+// a cast: "struct 'point' has no constructor; declare
+// 'fn point::constructor(...)' or build the value with a struct literal"
+// -- and for a builtin, "type 'int32' has no constructor; declare
+// 'fn int32::constructor(...)'". Struct literals (struct_literals.mc)
+// remain the no-constructor spelling. The ZERO-argument call never errs
+// this way: `T()` is the implicit empty constructor, demonstrated at the
+// end of main.
 //
 // Prerequisites: methods.mc and generic_methods.mc for method families and
 // their inference, struct_literals.mc for field defaults, and
@@ -81,6 +84,26 @@ fn box<T>::constructor(mut self: box<T>, v: T) {
 // never falls back to a cast.
 fn char::constructor(mut self: char, code: int32) {
     self = code as char;
+}
+
+// ---- The empty call, T(): implicit by default, claimable by declaration ----
+
+// `T()` with ZERO arguments is exactly `let t: T;` -- the slot,
+// default-initialized as the bare declaration is, is the value. Every type
+// has this implicit empty constructor, and (unlike C++) a declared family
+// does NOT suppress it. A visible member that accepts JUST the receiver
+// claims `T()` and runs normally, though: the implicit form is strictly
+// the fallback, so no ambiguity between the two can arise. (A literal
+// zero-parameter `fn token::constructor()` could never accept the hidden
+// receiver, so it never claims the call; this receiver-only shape is the
+// empty constructor.)
+struct token {
+    id: int32 = -1;
+}
+
+fn token::constructor(mut self: token) {
+    println("  [empty]      token::constructor");
+    self.id = 7;
 }
 
 // Constructor calls are ordinary expressions: argument position here, and
@@ -152,6 +175,37 @@ fn main() -> int32 {
     let d: point<int32>;
     point::constructor(d, 7, 9);
     println("  d = ({}, {})", d.x, d.y);
+
+    // The implicit empty constructor. point's declared family is
+    // 2-argument, so point<float64>() default-initializes: NO marker
+    // follows the header line because no family member runs, and x and y
+    // start uninitialized exactly as in `let e: point<float64>;` -- assign
+    // before reading. (A BARE generic head stays the cannot-infer error:
+    // `point()` has no arguments to deduce T from.)
+    println("point<float64>():");
+    let e = point<float64>();
+    e.x = 8.0;
+    e.y = 0.5;
+    println("  e = ({:.2f}, {:.2f})", e.x, e.y);
+
+    // Field defaults apply, exactly as in the bare declaration: counter()
+    // starts from step = 1 with no constructor body run.
+    let z = counter();
+    z.n = 0;                    // n has no default; assign before reading
+    println("counter(): z.step = {} (default), z.n = {}", z.step, z.n);
+
+    // token's receiver-only member claims token(): the marker proves the
+    // body ran, overriding the field default with 7.
+    println("token():");
+    let tk = token();
+    println("  tk.id = {}", tk.id);                       // 7
+
+    // Builtin heads too: char() is `let c0: char;` even though the
+    // declared char family above is 1-argument (char(65) still needs it;
+    // int32(5) with no family stays the has-no-constructor error).
+    let c0 = char();
+    c0 = 'z';
+    println("char() then assigned: {}", c0);              // z
 
     return 0;
 }

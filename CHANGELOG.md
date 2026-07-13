@@ -37,6 +37,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Implicit empty constructors** — every type now has one: `T()` with no
+  arguments is exactly `let t: T;` (the slot default-initialized as the
+  bare declaration — declared field defaults apply, anything else starts
+  uninitialized), for any head the constructor sugar accepts: `char()`,
+  `int32()`, `point<float64>()`, a derived `pointf()`, an alias. Unlike
+  C++, declaring constructors does not suppress it — a family with only
+  argument-taking members leaves `T()` default-initializing — but declared
+  members win: a visible member that accepts just the receiver (a
+  `(mut self)`-only constructor, or a collecting one whose fixed prefix is
+  only the receiver) claims the zero-argument call and resolves normally,
+  so the implicit form is strictly the fallback and no ambiguity can
+  arise. Calls **with** arguments are untouched (`int32(5)` stays
+  `type 'int32' has no constructor`), and a bare generic head keeps the
+  cannot-infer error — there are no arguments to infer from. See
+  [Constructors](docs/language.md#constructors) and
+  [constructors.mc](examples/types/constructors.mc).
+
 - **Method inheritance through `extends`** — a derived struct now exposes
   its base chain's method families, constructors included: a family call on
   the derived type (dot sugar or the qualified spelling) resolves over the
