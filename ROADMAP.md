@@ -163,7 +163,8 @@ its reference section in the [language reference](docs/language.md).
       `is_hex`, `is_space`, `is_upper`, `is_lower`, and
       `char::upper`/`char::lower` with non-letters unchanged, all taking
       `const self: char`; `@inline` over the libc `ctype` bindings, and
-      the stdlib's first use of the builtin-qualifier method form)
+      the stdlib's first use of the builtin-qualifier method form —
+      called as `'C'.lower()` since the method-call sugar shipped)
 
 ## Tooling
 
@@ -1153,12 +1154,14 @@ already do).
         resolution only when no candidate matches the pointer type
         directly, so `f(x: T*)` alongside `f(mut x: T)` stays unambiguous.
         A decayed argument is a borrowed reference, never a transfer of ownership:
-        the planned constructor/destructor machinery never runs a
-        destructor on it. The method-call sugar's receiver auto-deref
-        (Methods / OOP below) becomes an instance of this rule, and it is
-        the mechanism that lets the `libmc` container-self migration to
+        the planned destructor machinery (Methods / OOP below) never runs a
+        destructor on it. The since-shipped method-call sugar's receiver
+        auto-deref landed as an explicit one-hop dereference riding the
+        dereference machinery (`-Wunchecked-dereference` included) rather
+        than as an instance of this rule, while decay remains
+        the mechanism that let the `libmc` container-self migration to
         `mut` receivers keep one call shape for stack containers and heap
-        `T*`s alike, even before method syntax lands (the migration is the
+        `T*`s alike before method syntax landed (the migration is the
         item nested below); implemented, see
         [pointer decay](docs/language.md#pointer-decay-into-constmut-parameters):
     - [ ] `libmc` receiver migration — flip the standard library's struct
@@ -1214,10 +1217,11 @@ already do).
           atomically instead of carrying legacy overloads. The migration
           doubles as the decay rule's acceptance test (the whole stdlib
           plus its tests and examples compiling over decayed call sites
-          proves the rule covers real call patterns) and pre-positions
-          [Methods / OOP](#functions-and-methods): the receiver kinds land
-          as method sugar over already-correct `mut self`/`const self`
-          signatures. Lands **staged**, in a forced order (each stage its
+          proves the rule covers real call patterns) and pre-positioned
+          [Methods / OOP](#functions-and-methods): the since-shipped
+          dot-call sugar dispatches `c.push(v)` over the already-correct
+          `mut self`/`const self` signatures, with the formal receiver
+          kinds still to land. Lands **staged**, in a forced order (each stage its
           own change set with its own CHANGELOG entry; this box ticks
           when the last stage lands):
       - [x] stage 1: pointer decay — the enabling rule ships on its own,
@@ -1333,8 +1337,10 @@ already do).
           The marker ban decides the receiver: overloads of one name
           differing only in `const`/`mut` are uncallable, so `_at` is
           `mut self` only, `const` code reads through `_get`/`_has`, and
-          future method sugar changes nothing (`c.at(i)` resolves to the
-          one `mut self` overload; a `const` receiver simply cannot call
+          the since-shipped method-call sugar changed nothing (`c.at(i)`
+          resolves to the
+          one `mut self` overload and is an assignable mut-returning
+          dot-call, `l.at(i) = v`; a `const` receiver simply cannot call
           it). `dict` settles as guard-then-access: `dict_has` then
           `dict_at`, UB on a missing key, and **no insert-if-missing**
           (C++ `operator[]`'s implicit insert means a hidden allocation
@@ -1358,11 +1364,14 @@ already do).
             `dict_has`/`set_has` (the load-bearing membership case) with
             `dict_at`, plus `ring_get` to close the `const`-ring read
             gap the stage-1 flip opened
-  - [ ] motivating use case: method receivers — once methods / OOP (the item
-        below) land, `const`/`mut`/by-value on `self` express
-        read-only / mutating / consuming methods directly, replacing today's raw
-        `self: <struct>*` receiver, and a `mut` return formed from `self` gives a
-        memory-safe mutable accessor. See its receiver-kind note for the
+  - [ ] motivating use case: method receivers — `const`/`mut`/by-value on
+        `self` express read-only / mutating / consuming methods directly,
+        and the since-shipped method-call sugar
+        ([Methods / OOP](#functions-and-methods) below) already dispatches
+        `var.method()` over these ordinary parameters; what remains is the
+        formal receiver-kind check, and a `mut`
+        return formed from `self` as the memory-safe mutable accessor.
+        See the receiver-kind note for the
         field-projection and view-table details
 - [x] Open overload sets — lifted the rule that all overloads of a
       name live in one defining module: sets are open by default, with
@@ -1653,11 +1662,13 @@ already do).
       on the coerce path, not in viability or unification
 - [ ] Methods / OOP — `fn <type>::<method>(...)` definitions
       keyed to a type, structs foremost (the explicit qualified-call
-      foundation has shipped,
-      see the checked sub-item; the receiver is an ordinary parameter, not the
+      foundation, the `recv.method(args)` dot-call sugar, and the `S(args)`
+      constructor sugar have shipped,
+      see the checked sub-items; the receiver is an ordinary parameter, not the
       raw `self: <struct>*` this line once sketched), including `@private`
       methods and the special
-      constructor/destructor below (the `for … in` protocol already dispatches
+      constructor (call sugar shipped) / destructor (pending) below (the
+      `for … in` protocol already dispatches
       by struct name to pave the way, though iteration itself is slated to
       move to the overload-set protocol family of the open overload sets item
       above). Method calls through raw pointers and by-value receivers
@@ -1674,9 +1685,9 @@ already do).
       rather than the reverse:
   ```c
   struct point { x: int32; y: int32; }
-  fn point::length2(const self: point) -> int32 { ... }   // shipped: explicit Type::method(...) call
+  fn point::length2(const self: point) -> int32 { ... }   // shipped: var.length2() or point::length2(var)
   @private fn point::helper(mut self: point) { ... }        // shipped: @private on the qualified name
-  fn point::constructor(mut self: point, x: int32, y: int32) { ... }   // constructor sugar still below
+  fn point::constructor(mut self: point, x: int32, y: int32) { ... }   // shipped: let var = point(3, 4)
   ```
 
   - [x] qualified `fn Type::method` definitions + explicit `Type::method(...)`
@@ -1699,7 +1710,9 @@ already do).
         parameters; this slice's acceptance of bare `fn point::m` on a
         generic struct was an unvalidated accident, since reversed by
         USER RULING there), the `self`-conventions
-        becoming load-bearing only when the call sugar below lands. Parser:
+        having become load-bearing (positionally — the receiver is the
+        first argument) with the since-shipped call sugar below, which
+        stayed a dumb desugar enforcing no convention. Parser:
         `fn Type::method` is claimed in definition position (this slice parsed
         it before type-params; generic-struct methods `fn Type<T>::m` followed
         as the next slice below, since shipped, which reordered the parse);
@@ -1831,7 +1844,13 @@ already do).
           zero codegen); (c) a second type-arg list
           `point<float64>::map<int32>(...)` (a bigger parser change). No option
           is chosen. Independent of the bare-`point` sugar above (parser-only,
-          no shared prerequisite — either can ship first)
+          no shared prerequisite — either can ship first). The since-shipped
+          dot-call sugar below records the sibling limit (explicit type args
+          at a dot call, `p.m<int32>(...)`, do not parse; method type params
+          are inference-only at both spellings), and the shipped constructor
+          sugar already binds the STRUCT params from an explicit head
+          (`point<float64>(1, 1)`), so this item's decision sets the pattern
+          the dot spelling would follow
   - [x] methods on type aliases and builtin types — the qualifier left of
         `::` may be ANY nameable type, not just a struct. USER RULING, the
         governing principle: methods register to a TYPE; an alias is just an
@@ -1908,7 +1927,7 @@ already do).
         pre-existing gap the diagonal ruling forced closed. This SUBSUMED
         the epic's deferred non-struct receivers item on the definition
         side; the `.method()` dot sugar on scalars (`'C'.lower()` over
-        the since-shipped `std/char`) rides
+        the since-shipped `std/char`) shipped with
         the method-call sugar item below, where its receiver-kind notes now
         live. Still errors: enums as qualifiers (enum receivers wait for
         [nominal enums](#types-and-generics), where a method name must not
@@ -1918,6 +1937,149 @@ already do).
         ever wanted), and builtin specialization (above). AMENDS the
         foundation slice's qualifier ruling: aliases and builtins are now
         legal qualifiers; enums and undeclared names remain the error
+  - [x] method-call sugar — `recv.method(args)` desugars to
+        `Type::method(recv, args)`: a dot-shaped call whose receiver type
+        registers a `Type::method` family rewrites to the qualified
+        spelling, the receiver passing VERBATIM as the first argument, so
+        overload resolution (specializations, partials, subsumption),
+        `mut`-receiver legality, evaluate-once addressing, and every
+        diagnostic are the desugared call's own. Adopted standing
+        recommendations, shipped as recorded: fields shadow methods (a
+        fn-typed field named `m` keeps the field-call behavior, the
+        method reachable as `Type::m(s, args)`; only a call shape with
+        NEITHER gets the new `struct '...' has no field or method '...'`
+        error, and a bare member access `p.m` keeps the exact field
+        diagnostics — there are no bound-method values), and `->` stays
+        fields-only (the language keeps C's `.`/`->` distinction for
+        FIELDS, so `p->x` and `p.method()` coexist on one pointer, the
+        Go/Rust/Swift receiver-adaptation model; `q->m()` where `m` is
+        not a field errors as before). A pointer receiver auto-derefs
+        exactly one hop: `q.m()` on an `S*` is `S::m(*q, ...)` — shipped
+        as an explicit dereference riding the deref machinery
+        (`-Wunchecked-dereference` included) rather than as a
+        pointer-decay instance — and an `S**` receiver stays an error.
+        Builtin, alias, and slice receivers dispatch their canonical
+        families: `'C'.lower()` over the shipped `std/char` works, this
+        item's motivating stdlib case, with the scalar receiver-kind
+        notes holding as recorded (no lvalue sits behind a literal
+        receiver, so `std/char` declares `const self: char` throughout
+        and a `mut self` method is never callable on `'C'`). The same
+        reasoning generalizes: an rvalue receiver evaluates once into a
+        hidden CONST local, so a `mut self` method on a temporary is an
+        error (`mk().bump()` rejects — the mutation would vanish with
+        the temporary), while a `mut`-returning receiver re-lends its
+        carried lvalue (`b.ref().grow()` writes the caller's storage),
+        and a `mut`-returning dot-call is an lvalue on every surface:
+        assignment (`l.at(i) = v`), compound assignment, chained store
+        targets, and the mut-return formation walk. Explicit type
+        arguments at a dot call do not parse (`p.m<int32>(...)`) —
+        method type params stay inference-only, the documented limit
+        mirroring the open explicit-type-args-at-`::` refinement above.
+        Sugared bodies round-trip `.mci` verbatim, and the explicit
+        `Type::method(...)` spelling stays valid alongside. Provenance:
+        as planned, this item staged a pre-receiver-kinds
+        `var->method(...)` form, `.` arriving only once the receiver
+        kinds landed; that staging is SUPERSEDED — the sugar shipped
+        directly as `.` over the ordinary shipped
+        `mut`/`const`/by-value receiver parameters, no receiver-kind
+        machinery added (the formal receiver-kind item below stays
+        open), and `->` was never a method spelling. Implemented, see
+        [Calling methods: dot syntax](docs/language.md#calling-methods-dot-syntax)
+  - [x] constructor call sugar — a method named `constructor` makes its
+        type callable: `let s = S(args);` is exactly
+        `let s: S; S::constructor(s, args);`, a DUMB DESUGAR by adopted
+        recommendation — `Type::` still enforces no `self` convention, so
+        a `const self` or by-value `self` "constructor" compiles and
+        initializes nothing, and a non-void constructor's return value is
+        discarded — with overload resolution, receiver legality, privacy,
+        and every diagnostic the family call's own. `let p = S(args);`
+        ELIDES into the let slot (one construction, no temporary, no
+        copy: a `mut self` constructor writes `p`'s own storage), the
+        load-bearing property for the destructor item nested below (RAII
+        wants exactly one construction site to hang the deferred
+        destructor on), and the sugar works in any expression position
+        (`f(point<int32>(1, 2))`, returns, nested constructor
+        arguments). The head follows type-use spelling: explicit type
+        arguments (`point<float64>(1, 1)`), a non-generic type bare, a
+        FULLY-defaulted generic bare (defaults fill in, the typed path —
+        a deliberate deviation), a plain alias transparently
+        (`pointf(1, 2)`); a GENERIC alias used bare keeps the type-use
+        arity error, bareness judged on the written spelling. Four
+        USER RULINGS: (1) name resolution is unchanged — a same-named
+        function, variable, constant, or `@static` wins UNCONDITIONALLY
+        over the constructor interpretation (the sugar hooks the call
+        path's last resort, sitting exactly where the call was
+        previously `undefined function`); (2) a BARE GENERIC head infers
+        its type params from the constructor arguments
+        (`point(1.5, 2.5)`: the receiver enters the family's ordinary
+        overload resolution as a placeholder and the winner's first
+        parameter fixes the constructed type) — OVERRULING the
+        explorer's recommendation to error, on consistency grounds: call
+        sites are bare-and-infer throughout the language, the
+        annotate-the-generic-qualifier rule of the alias/builtin item
+        above is declaration-side only; (3) a type with NO declared
+        `constructor` family gets a bespoke error
+        (`struct 'point' has no constructor`), NEVER a cast, and the
+        `S{...}` struct literal remains the no-constructor spelling;
+        (4) ANY type with a declared constructor family is constructible,
+        builtins and aliases-to-builtins included (`char(65)` calls a
+        declared `fn char::constructor`; an undeclared `int32(5)` stays
+        the no-constructor error) — also OVERRULING the explorer's
+        recommendation. Naming settled by shipping: the pair is
+        `constructor`/`destructor` (the once-open `init`/`destroy`
+        alternative closes). Overloaded constructors (empty / copy /
+        converting / from raw parts) ride the shipped
+        [function overloading](docs/language.md#function-overloading);
+        the diagonal-beside-converting constructor pair is what
+        motivated the shipped subsumption ordering above. Provenance:
+        this item as planned bundled heap `new <struct>(...)`
+        construction and the implicit destructor-defer RAII with the
+        stack form; the stack-value `S(args)` half shipped, and the heap
+        and destructor halves stay open as the items nested below.
+        Implemented, see
+        [Constructors](docs/language.md#constructors):
+    - [ ] destructor — `fn <struct>::destructor(mut self: <struct>)`, the
+          cleanup counterpart: releases what the constructor acquired.
+          Constructing a stack value implicitly `defer`s its destructor
+          to the end of the enclosing scope, so a stack value cleans up
+          after itself — RAII over the existing
+          [`defer`](docs/language.md#defer) machinery, hung off the
+          shipped sugar above: the let-elision gives each construction
+          exactly ONE slot, no temporary whose cleanup could double- or
+          zero-fire, so the construction site is the precise point the
+          defer attaches to. The implicitly-deferred destructor of a
+          stack value is exact by construction (a constructed value's
+          type is statically known); for a heap `new`, the destructor
+          runs explicitly before the memory is freed. Destruction
+          follows the dispatch boundary below: through a raw base-typed
+          `T*` the call is static and runs the base type's destructor
+          (the one-word C convention carries no dynamic identity), so
+          owning a derived value through a raw base pointer is not a
+          blessed pattern; through a fat base view the table may reserve
+          a destructor slot so the dynamic type's destructor runs, one
+          of the open points on the polymorphic base views item below
+    - [ ] `new <struct>(...)` sugar — heap construction: desugars to a
+          block that allocates with `new<<struct>>()`, runs the shipped
+          constructor family on the allocation, and emits the pointer
+          (the constructor counterpart to the
+          [`new T { ... }`](#structs-arrays-and-data-layout) literal
+          sugar):
+      ```c
+      let var = new point(3, 4);
+      // desugars to
+      let var = {
+          let tmp = new<struct point>();
+          point::constructor(tmp, 3, 4);
+          emit tmp;
+      };
+      ```
+          The family call is the shipped desugar's own; the design point
+          the shipped receiver shapes add is that `tmp` is a nullable
+          `point*` entering a `mut self` slot, which the shipped
+          [pointer decay](docs/language.md#pointer-decay-into-constmut-parameters)
+          admits only proven non-null — the emitted block guards or
+          asserts (`tmp!`) at the allocation, or leans on a future
+          non-null-returning `new`
   - [ ] receiver kind — the shipped foundation already lets the receiver be any
         ordinary `const` / `mut` / by-value parameter with no enforced `self`
         convention; this item makes the three receiver flavors a formal, checked
@@ -1925,10 +2087,14 @@ already do).
         `const self: point` (read-only method), `mut self: point` (mutating
         method — `&self` cannot escape, the memory-safe replacement for today's
         raw `self: point*`), and `self: point` (consuming/copying method). None
-        require the caller to write `&`, so the method-call sugar below becomes
-        plain `var.method()` with the hidden reference formed at the call. Two
-        pieces of design work this pulls in: (1) `mut self` must project a
-        field to an lvalue (`self.x = ...`) and, in a constructor, never fire
+        require the caller to write `&`; the since-shipped method-call sugar
+        above already dispatches plain `var.method()` with the hidden
+        reference formed at the call, so this item adds the formal check
+        over the same shapes. Two
+        pieces of design work this pulls in: (1) `mut self` field projection
+        to an lvalue (`self.x = ...`) is proven live by the shipped
+        constructor sugar above; the check that remains is that a
+        constructor never fires
         its rvalue "copy on read" on the still-uninitialized whole `self`;
         (2) it must reconcile with the fat view's table ABI below (the
         base-typed and interface-typed views): a `mut`-using function is
@@ -1938,77 +2104,6 @@ already do).
         the view's `object*`, so the table slot's first param is a
         genuine `T*` under an ABI the compiler controls internally. A `mut` return formed from `self` is then
         the natural spelling for a mutable accessor method
-  - [ ] constructor — `fn <struct>::constructor(self: <struct>*, ...)`, the
-        method that initializes a value: run by the `new <struct>(...)` sugar
-        below, or invoked on a stack value. Constructing a stack-allocated
-        struct implicitly `defer`s its destructor to the end of the enclosing
-        scope, so a stack value cleans up after itself — RAII over the
-        existing [`defer`](docs/language.md#defer) machinery. Naming is still
-        open: `constructor`/`destructor` or `init`/`destroy` (both pairs on
-        the table for now; examples use the former). A struct wanting several
-        initialization signatures (empty / copy / from raw parts) declares
-        overloaded constructors, riding the shipped
-        [function overloading](docs/language.md#function-overloading)
-  - [ ] destructor — `fn <struct>::destructor(self: <struct>*)`, the cleanup
-        counterpart: releases what the constructor acquired. Deferred
-        automatically for a stack-constructed value (above); for a heap
-        `new`, run explicitly before the memory is freed. Destruction
-        follows the dispatch boundary below: through a raw base-typed
-        `T*` the call is static and runs the base type's destructor (the
-        one-word C convention carries no dynamic identity), so owning a
-        derived value through a raw base pointer is not a blessed
-        pattern; through a fat base view the table may reserve a
-        destructor slot so the dynamic type's destructor runs, one of
-        the open points on the polymorphic base views item below. The
-        implicitly-deferred destructor of a stack value is exact by
-        construction (a constructed value's type is statically known)
-  - [ ] method-call sugar — `var->method(...)` desugars to
-        `point::method(var, ...)`, passing the receiver as `self` (so `var` is a
-        `struct point*`). That `->` form is the pre-receiver-kinds starting
-        point; once the receiver kinds above land, calls are uniformly
-        `var.method()` — the method's declared `self` kind dictates the receiver
-        convention (`const`/`mut self` forms a hidden reference from the
-        receiver's storage, by-value `self` copies), and a `point*` receiver
-        (e.g. from `new`) auto-derefs one level first, an instance of the
-        pointer-decay rule above that inherits its proven-non-null
-        requirement. No ambiguity, since
-        methods key on the receiver's type, not the pointer type:
-        `ptr.method()` can only mean the method on the pointee. With
-        builtin-typed methods shipped (the alias/builtin qualifiers item
-        above), the same sugar is what makes `'C'.lower()` and
-        `c.lower()` work over the shipped
-        [`std/char`](docs/language.md#methods-on-type-aliases-and-builtin-types)
-        module's `fn char::lower(const self: char) -> char` (the ctype
-        family as `char` methods, today called as explicit
-        `char::lower(c)`: shortening exactly those calls is the
-        motivating stdlib case); a scalar receiver is by-value `self: char`
-        or `const self: char` (as `std/char` declares throughout), since
-        no lvalue sits behind a literal receiver, and for the same reason
-        a `mut self` method needs the caller's own writable scalar and is
-        never callable on `'C'` (the value-returning `char::lower` takes
-        a `const self`; a `mut self` variant would be the in-place
-        editor). The one honest tradeoff: this splits
-        method calls from field access — the language keeps C's `.`/`->`
-        distinction for **fields**, so `p->x` (field) and `p.method()` (method)
-        on the same pointer use different operators (the Go/Rust/Swift
-        receiver-adaptation model); `->` is retained only for field access:
-    ```c
-    var->length2();   // pre-receiver-kinds: desugars to point::length2(var)
-    var.length2();    // once receiver kinds land
-    ```
-  - [ ] `new <struct>(...)` sugar — desugars to a block that allocates with
-        `new<<struct>>()`, runs the constructor (above), and emits the pointer
-        (the constructor counterpart to the
-        [`new T { ... }`](#structs-arrays-and-data-layout) literal sugar):
-    ```c
-    let var = new point(3, 4);
-    // desugars to
-    let var = {
-        let tmp = new<struct point>();
-        point::constructor(tmp, 3, 4);
-        emit tmp;
-    };
-    ```
   - [ ] polymorphic base views — dynamic dispatch, built on the language's
         one data type kind: there is no `class`, everything falls under
         `struct`, and polymorphism arrives through dispatch tables that
@@ -2972,13 +3067,15 @@ already do).
         argument, as a standalone value (`let s = f"{x}";`), rendering into a
         runtime `string` so it can go anywhere a string can, not only into an
         `@format` argument position. Deferred until the
-        constructor/destructor lifecycle in
-        [Methods / OOP](#functions-and-methods) lands, which is the machinery
+        destructor/RAII lifecycle in
+        [Methods / OOP](#functions-and-methods) lands (the constructor call
+        sugar has shipped; the destructor item nested under it is the gate),
+        which is the machinery
         it needs: `let s = f"..."` desugars to `let s = format("...", args...)`
         over a renderer `fn format(str, args...) -> string` whose returned
         `string` is constructed in the callee, owned by the caller's scope, and
         destructed at the end of that scope (RAII over
-        [`defer`](docs/language.md#defer), the same discipline the constructor
+        [`defer`](docs/language.md#defer), the same discipline the destructor
         item establishes). The shipped `@format`-only rule above (an f-string
         anywhere but a format-string argument is a compile error) is exactly
         this deferral, and lifts to the desugar once the lifecycle exists
