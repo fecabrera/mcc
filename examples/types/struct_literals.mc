@@ -141,3 +141,6 @@ fn main() -> int32 {
 // array-literal fields above rely on. The field assignment `cmd.name = "hi"`
 // mirrors the `command { name = "ls" }` literal above; see
 // memory/slice_assignment.mc for that and the other assignment lvalue forms.
+// A struct that declares a `constructor` method is also callable, `S(args)`
+// running your code over the default-initialized slot; literals remain the
+// no-constructor spelling. See constructors.mc.

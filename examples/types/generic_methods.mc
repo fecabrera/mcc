@@ -72,10 +72,12 @@ fn main() -> int32 {
     return 0;
 }
 
-// Still to come, as in methods.mc: the `.method()` call sugar, constructors and
-// destructors, dynamic dispatch, non-struct receivers, and explicit type args
-// at a `::` call (`point<float64>::sum(...)`) are all future work; today every
-// call spells out its qualifier and infers its type arguments.
+// Still to come, as in methods.mc: the `.method()` call sugar, destructors,
+// dynamic dispatch, non-struct receivers, and explicit type args at a `::`
+// call (`point<float64>::sum(...)`) are all future work; today every call
+// spells out its qualifier and infers its type arguments. Constructors have
+// shipped: a method named `constructor` makes the type itself callable
+// (`point<float64>(1.5, 2.5)`, see constructors.mc).
 //
 // See also: method_specialization.mc, which builds on this file to give ONE
 // instantiation (`fn point<float64>::name`) its own concrete body that outranks

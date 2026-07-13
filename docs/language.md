@@ -1215,6 +1215,85 @@ the feature and
 [examples/systems/char_methods.mc](../examples/systems/char_methods.mc) for
 the `std/char` module.
 
+#### Constructors
+
+A method named `constructor` makes its type callable: `S(args)` is sugar for
+
+```c
+let s: S;                    // allocate (and default-initialize) the slot
+S::constructor(s, args);     // construct in place
+// ... S(args) evaluates to s
+```
+
+The desugaring is exact — overload resolution, `mut`/`const` receiver
+legality, privacy, and every diagnostic are the family call's own (arities
+and argument positions count the receiver, so a mismatch reports
+`argument 2` for the first written argument). The slot default-initializes
+exactly as a bare `let s: S;` does: a struct with declared field defaults
+starts from them, anything else starts uninitialized, and the constructor
+fills it in place. `let p = S(args);` binds the constructed slot directly —
+no temporary, no copy — so a `mut self` constructor writes `p`'s own storage.
+
+```c
+struct point<T> { x: T; y: T; }
+
+fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+    self.x = x; self.y = y;
+}
+fn point<T>::constructor<U>(mut self: point<T>, x: U, y: U) {  // converting
+    self.x = x as T; self.y = y as T;
+}
+
+fn main() -> int32 {
+    let a = point<float64>(1, 1);   // the converting ctor: T = float64 is
+                                    // pinned, so the diagonal is non-viable
+                                    // for int literals into float64 slots
+    let b = point(1.5, 2.5);        // bare head: the arguments infer T
+    let c: point<float64>;          // the desugared spelling stays valid
+    point::constructor(c, 1, 1);
+    return 0;
+}
+```
+
+The head follows type-use spelling, plus call-side inference for a bare
+generic:
+
+- **Explicit type arguments** (`point<float64>(1, 1)`) type the receiver up
+  front, so it binds the struct's parameters during the family's inference —
+  exactly as the desugared call's receiver does.
+- **A bare generic head** (`point(1.5, 2.5)`) spells no instantiation: the
+  receiver enters overload resolution as a placeholder, the arguments (and
+  the winner's declared defaults) deduce the bindings, and the winner's
+  first parameter fixes the constructed type. Uninferable bindings say so
+  (`cannot infer type parameter(s) T for 'point::constructor'; spell the
+  instantiation, e.g. point<int32>(...)`), and a rank tie is the family's
+  ordinary ambiguity error. In a no-overload message the untyped receiver
+  renders as `<self>`.
+- **A fully-defaulted generic** written bare is a complete type (as in
+  `let b: box;`), so `box(1)` constructs `box` at its defaults.
+- **Type aliases are transparent**: with `type pointf = point<float64>`,
+  `pointf(1, 2)` constructs `point<float64>`; a plain alias of the bare name
+  keeps the inferring behavior. A *generic* alias used bare keeps the
+  type-use arity error — annotate the head (`diag<int32>(1, 2)`).
+- **Any type with a declared `constructor` family is constructible** —
+  builtins included: declare `fn char::constructor(mut self: char, code:
+  int32)` and `char(65)` works. Without a declared constructor the call is
+  an error (`type 'int32' has no constructor` — it does **not** become a
+  cast), and for a struct, `struct 'point' has no constructor` — the
+  [struct literal](#structs) remains the no-constructor spelling.
+
+Name resolution is unchanged: a same-named function, variable, constant, or
+file-scoped `@static` wins unconditionally (the sugar sits where the call
+would otherwise be `undefined function`), so declaring `fn point(...)`
+beside `struct point` keeps calling the function. `Type::` still enforces no
+`self` convention — the sugar is a dumb desugar, so a `const self` or
+by-value `self` "constructor" compiles and simply initializes nothing, and a
+non-void constructor's return value is discarded by `S(args)`. Explicit type
+arguments at the head are the struct's; a converting constructor's own
+parameters (`<U>` above) are inference-only, as at any `::` call.
+
+See [examples/types/constructors.mc](../examples/types/constructors.mc).
+
 ### @noreturn functions
 
 `@noreturn` marks a function that never returns to its caller — it exits,

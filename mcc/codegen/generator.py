@@ -182,6 +182,39 @@ class ExternABI:
     ret: object = None
 
 
+# The placeholder type of a constructor-sugar receiver while the family
+# resolves: `point(1, 2)` on a generic struct spells no instantiation, so the
+# receiver enters overload resolution as this sentinel -- it binds no type
+# parameter and matches any receiver pattern -- and the winner's first
+# parameter then fixes the constructed type (see gen_generic_call). The name
+# renders in a no-overload signature, e.g. `point::constructor(<self>, bool)`.
+CTOR_SELF = LangType("<self>", ir.IntType(8), signed=False)
+
+
+@dataclass
+class _CtorSelf:
+    """The receiver slot of ``S(args)`` constructor sugar, not yet typed.
+
+    Stands as argument 0 of the desugared ``S::constructor`` call when the
+    written head is a bare generic (``point(1, 2)``): the instantiation is
+    whatever the family's overload resolution deduces from the remaining
+    arguments (and declared defaults), so the slot cannot be allocated up
+    front. ``gen_generic_call`` materializes it once the winner is known and
+    records it here for the caller (``gen_ctor_call``).
+
+    Attributes:
+        struct_name: The canonical type name being constructed.
+        line: The call's source line, for diagnostics.
+        slot: The materialized alloca, filled in by ``gen_generic_call``.
+        type: The constructed ``LangType``, filled in with ``slot``.
+    """
+
+    struct_name: str
+    line: int
+    slot: object = None
+    type: "LangType | None" = None
+
+
 # The f-string sink rule: an interpolated literal may stand only where an
 # @format callee's format string receives it (marshal_args and the set-path
 # winner emission substitute the desugared text and splice the holes there).
@@ -526,6 +559,10 @@ class CodeGen:
         # global context).
         self.module = ir.Module(name=name, context=ir.Context())
         self.funcs: dict[str, ir.Function] = {}
+        # Sequence for hidden locals desugarings mint (e.g. the constructor
+        # sugar's receiver); the names start with a digit, so they can never
+        # collide with a lexable identifier.
+        self.hidden_seq = 0
         # name -> (return type, param types, variadic)
         self.signatures: dict[str, tuple[LangType, list[LangType], bool]] = {}
         # symbol -> indices of params passed by hidden reference (const
@@ -7420,6 +7457,49 @@ class CodeGen:
             if isinstance(stmt.value, Except):
                 self.gen_let_except(stmt)
                 return
+            if isinstance(stmt.value, Call):
+                canonical = self.ctor_sugar_target(stmt.value)
+                if canonical is not None:
+                    # `let p = S(args);` constructs straight into p's slot --
+                    # no temporary, no copy. Load-bearing beyond IR quality:
+                    # the constructor's `mut self` is p's own storage, so a
+                    # callee that publishes interior addresses (or a future
+                    # RAII hook) observes the final object.
+                    slot, built = self.gen_ctor_call(stmt.value, canonical)
+                    final = built
+                    if stmt.type_name is not None:
+                        declared = self.lang_type(stmt.type_name, stmt.line)
+                        if declared is VOID:
+                            raise LangError(
+                                "cannot declare a void variable", stmt.line
+                            )
+                        if is_array(declared):
+                            raise LangError(
+                                f"an array variable is initialized from an "
+                                f"array literal, not a {built}",
+                                stmt.line,
+                            )
+                        if strip_const(declared) == built:
+                            final = declared  # keep a written const view
+                        else:
+                            # A mismatched annotation coerces (boxing into
+                            # `any`, or erroring) exactly as the plain path
+                            # would; the constructed slot is the temporary.
+                            tv = self.coerce(
+                                self.value_at(slot, built),
+                                declared,
+                                stmt.line,
+                                f"let {stmt.name}",
+                            )
+                            slot = self.builder.alloca(
+                                tv.type.ir, name=stmt.name
+                            )
+                            if over_aligned(tv.type):
+                                slot.align = type_align(tv.type)
+                            self.builder.store(tv.value, slot)
+                            final = tv.type
+                    self.bind_local(stmt.name, slot, final)
+                    return
             if stmt.value is None:  # let x: T; -- uninitialized, like a C local
                 declared = self.lang_type(stmt.type_name, stmt.line)
                 if declared is VOID:
@@ -12637,6 +12717,216 @@ class CodeGen:
             name = target.name
         return name
 
+    def method_family_exists(self, family: str) -> bool:
+        """Whether a qualified method name has any registered member.
+
+        Checked before desugaring sugar into a ``Type::method`` call, so a
+        missing family reports at the sugar's own altitude (a bespoke
+        no-constructor / no-method error) instead of ``undefined function``.
+
+        Args:
+            family: The qualified name, e.g. ``"point::constructor"``.
+
+        Returns:
+            ``True`` when a template, overload set, plain function, or
+            file-scoped ``@static`` member answers to the name.
+        """
+        key = (self.current_source, family)
+        return (
+            family in self.templates
+            or family in self.overloads
+            or family in self.funcs
+            or key in self.static_templates
+            or key in self.static_funcs
+        )
+
+    def ctor_sugar_target(self, expr: Call) -> "str | None":
+        """The canonical type name a bare call would construct, or ``None``.
+
+        The constructor sugar ``S(args)`` sits at name resolution's last
+        resort: a variable, constant, file-scoped ``@static``, or function
+        of the same name wins unconditionally (the checks below mirror
+        :meth:`gen_call`'s resolution order), and only a leftover name that
+        names a type -- a struct, union, builtin, or a type alias chain
+        landing on one -- is construction.
+
+        Args:
+            expr: The ``Call`` node.
+
+        Returns:
+            The canonical type name (alias-chased), or ``None`` when the
+            call is not constructor sugar.
+        """
+        name = expr.name
+        if "::" in name:
+            return None
+        if self.var_type_of(name) is not None or name in self.consts:
+            return None
+        key = (self.current_source, name)
+        if key in self.static_templates or key in self.static_funcs:
+            return None
+        if (
+            name in self.templates
+            or name in self.overloads
+            or name in self.funcs
+        ):
+            return None
+        return self.chase_alias_qualifier(name, expr.line)
+
+    def ctor_head_is_bare(self, name: str) -> bool:
+        """Whether a sugar head's written spelling pins no instantiation.
+
+        ``point(1, 2)`` is bare (resolution infers the type arguments from
+        the constructor's arguments), and so is a plain alias chain landing
+        on the bare struct name; ``pointf(1, 2)`` over ``type pointf =
+        point<float64>`` is not -- the alias spells the instantiation, so
+        the receiver types up front (a generic alias used bare keeps the
+        type-use arity error).
+
+        Args:
+            name: The written head, already known to chase to a type.
+
+        Returns:
+            ``True`` when no link of the alias chain carries type arguments.
+        """
+        seen: set[str] = set()
+        while (
+            self.lookup_struct_decl(name) is None
+            and name not in TYPES
+            and name not in RESERVED_TYPE_NAMES
+        ):
+            alias = self.lookup_alias(name)
+            if alias is None or name in seen:
+                return True  # unreachable: the chase already validated this
+            seen.add(name)
+            if alias.target.args:
+                return False
+            name = alias.target.name
+        return True
+
+    def gen_ctor_call(self, expr: Call, canonical: str) -> tuple:
+        """Emit ``S(args)`` constructor sugar: allocate, then construct.
+
+        The desugaring is ``let s: S; S::constructor(s, args);`` -- the slot
+        is allocated (default-initialized exactly as a bare ``let s: S;``)
+        and passed as the family call's first argument, so overload
+        resolution, ``mut``/``const`` receiver legality, and every
+        diagnostic are the desugared call's own. A fully-spelled head
+        (explicit type arguments, a non-generic type, or an alias of a
+        complete type) types the slot up front, letting the receiver bind
+        the struct's type parameters during inference; a bare generic head
+        defers the slot to resolution instead (see :class:`_CtorSelf`),
+        where the arguments and declared defaults deduce the instantiation
+        -- exactly as a bare qualified call ``S::constructor(s, ...)``
+        infers.
+
+        Args:
+            expr: The sugar ``Call`` (``expr.name`` is the written head).
+            canonical: The alias-chased type name being constructed.
+
+        Returns:
+            The ``(slot, LangType)`` pair of the constructed value.
+
+        Raises:
+            LangError: When no constructor family is declared for the type,
+                or the family call itself fails to resolve.
+        """
+        family = f"{canonical}::constructor"
+        decl = self.lookup_struct_decl(canonical)
+        if not self.method_family_exists(family):
+            if decl is not None:
+                kind = "union" if decl.union else "struct"
+                hint = (
+                    f"declare 'fn {canonical}::constructor(...)' or build "
+                    "the value with a struct literal"
+                )
+            else:
+                kind = "type"
+                hint = f"declare 'fn {canonical}::constructor(...)'"
+            raise LangError(
+                f"{kind} {expr.name!r} has no constructor; {hint}", expr.line
+            )
+        if (
+            not expr.type_args
+            and decl is not None
+            and decl.type_params
+            # A fully-defaulted generic is a complete type when written
+            # bare (`box(1)` constructs box at its defaults, exactly as
+            # `let b: box;` reads) -- only a head with required parameters
+            # is inference.
+            and len(decl.type_param_defaults) < len(decl.type_params)
+            and self.ctor_head_is_bare(expr.name)
+        ):
+            # A bare generic head: the receiver enters resolution as a
+            # placeholder, and the winner's first parameter fixes the
+            # instantiation. A family that is one plain concrete function
+            # (a lone specialization) never enters the set path, so its
+            # declared receiver fixes the slot directly instead.
+            key = (self.current_source, family)
+            if (
+                family not in self.templates
+                and family not in self.overloads
+                and key not in self.static_templates
+            ):
+                symbol = self.static_funcs.get(key, family)
+                _, params, _ = self.signatures[symbol]
+                built = strip_const(params[0]) if params else None
+                if built is None or not (
+                    built.template == canonical or built.name == canonical
+                ):
+                    raise LangError(
+                        f"cannot construct {expr.name!r}: "
+                        f"'fn {family}' does not take the constructed "
+                        f"{canonical} as its first parameter",
+                        expr.line,
+                    )
+                return self.emit_ctor_into(expr, family, built)
+            marker = _CtorSelf(canonical, expr.line)
+            self.gen_call(Call(family, [], [marker, *expr.args], expr.line))
+            return marker.slot, marker.type
+        built = strip_const(
+            self.lang_type(
+                TypeRef(expr.name, args=list(expr.type_args)), expr.line
+            )
+        )
+        return self.emit_ctor_into(expr, family, built)
+
+    def emit_ctor_into(self, expr: Call, family: str, built: LangType) -> tuple:
+        """Allocate a typed receiver slot and emit the constructor call.
+
+        The slot rides a hidden local (an unlexable name, so it can never
+        collide or be captured), giving the family call an ordinary
+        addressable receiver argument -- a ``mut self`` lends it, a
+        ``const self`` borrows it, a by-value ``self`` copies it, all
+        through the unchanged argument machinery.
+
+        Args:
+            expr: The sugar ``Call`` supplying the constructor arguments.
+            family: The resolved ``Type::constructor`` family name.
+            built: The constructed type (the slot's type).
+
+        Returns:
+            The ``(slot, LangType)`` pair of the constructed value.
+        """
+        slot = self.builder.alloca(built.ir)
+        if over_aligned(built):
+            slot.align = type_align(built)
+        # Default field values initialize the slot exactly as `let s: S;`
+        # does; a defaultless struct stays uninitialized for the
+        # constructor to fill.
+        if is_struct(built):
+            self.init_struct_defaults(slot, built)
+        hidden = f"0ctor{self.hidden_seq}"
+        self.hidden_seq += 1
+        self.locals[hidden] = (slot, built)
+        try:
+            self.gen_call(
+                Call(family, [], [Var(hidden, expr.line), *expr.args], expr.line)
+            )
+        finally:
+            del self.locals[hidden]
+        return slot, built
+
     def gen_call(self, expr: Call) -> TypedValue:
         """Emit a call to a named function.
 
@@ -12755,6 +13045,16 @@ class CodeGen:
                 )
             return self.gen_generic_call(expr, visible)
         if expr.name not in self.funcs:
+            # Name resolution's last resort: a leftover name that names a
+            # type is constructor sugar -- `point<float64>(1, 1)` desugars
+            # to `let s: point<float64>; point::constructor(s, 1, 1);` and
+            # evaluates to the constructed value. A same-named function
+            # (or variable, constant, or @static) won above, so the sugar
+            # can never shadow one.
+            canonical = self.ctor_sugar_target(expr)
+            if canonical is not None:
+                slot, built = self.gen_ctor_call(expr, canonical)
+                return self.value_at(slot, built)
             raise LangError(
                 f"undefined function {expr.name!r} (missing import?)", expr.line
             )
@@ -14549,6 +14849,15 @@ class CodeGen:
         # interleaved with lowering).
         proofs: list[bool] = []
         for i, arg in enumerate(expr.args):
+            if isinstance(arg, _CtorSelf):
+                # Constructor sugar's untyped receiver: no value exists yet
+                # (the slot's type is exactly what resolution is about to
+                # decide), so a placeholder that binds no type parameter and
+                # matches any receiver pattern stands in; the winner's first
+                # parameter materializes it below.
+                proofs.append(False)
+                arg_tvs.append(TypedValue(None, CTOR_SELF))
+                continue
             proofs.append(self.proves_nonnull(arg))
             if i in maybe_mut and self.denotes_storage(arg):
                 addr, t, align, volatile = self.gen_addr(arg, expr.line)
@@ -14680,7 +14989,12 @@ class CodeGen:
                 unaddressed = [
                     i
                     for i in self.mut_indices(func)
-                    if i not in addrs and arg_tvs[i].lvalue is None
+                    if i not in addrs
+                    and arg_tvs[i].lvalue is None
+                    # A constructor-sugar receiver is storage by construction
+                    # (the slot materializes once the winner is known), so it
+                    # never disqualifies a mut candidate.
+                    and arg_tvs[i].type is not CTOR_SELF
                 ]
                 if unaddressed:
                     mut_failures.append(min(unaddressed))
@@ -14783,6 +15097,38 @@ class CodeGen:
             symbol = self.overload_symbols.get(id(func), func.name)
             fn = self.funcs[symbol]
             ret, params, _ = self.signatures[symbol]
+        if expr.args and isinstance(expr.args[0], _CtorSelf):
+            # Constructor sugar's receiver: the winner is known, so the
+            # instantiation is too -- its first parameter is the constructed
+            # type. Materialize the slot the placeholder stood for and
+            # rewrite the argument into the desugared call's ordinary hidden
+            # receiver, so the deferred mut-legality checks and emission see
+            # exactly what `S::constructor(s, args)` would.
+            marker = expr.args[0]
+            recv = strip_const(params[0]) if params else None
+            if recv is None or not (
+                recv.template == marker.struct_name
+                or recv.name == marker.struct_name
+            ):
+                raise LangError(
+                    f"cannot construct {marker.struct_name!r}: the resolved "
+                    f"'fn {expr.name}' does not take the constructed "
+                    f"{marker.struct_name} as its first parameter",
+                    expr.line,
+                )
+            slot = self.builder.alloca(recv.ir)
+            if over_aligned(recv):
+                slot.align = type_align(recv)
+            if is_struct(recv):
+                self.init_struct_defaults(slot, recv)
+            marker.slot, marker.type = slot, recv
+            # The rewritten argument is never evaluated (fixed arguments
+            # emit from the pre-evaluated values and formed addresses); the
+            # Var only serves the syntactic post-resolution checks.
+            expr.args[0] = Var(f"0ctor{self.hidden_seq}", expr.line)
+            self.hidden_seq += 1
+            addrs[0] = (slot, recv, None, False)
+            arg_tvs[0] = self.value_at(slot, recv)
         mut_positions = self.mut_indices(func)
         decayed: set[int] = set()
         for i in sorted(mut_positions):
@@ -15071,6 +15417,8 @@ class CodeGen:
                 continue
             ok = True
             for i in self.mut_indices(func):
+                if arg_tvs[i].type is CTOR_SELF:
+                    continue  # a constructor-sugar receiver: storage by construction
                 if i in addrs and addrs[i][1] == params[i]:
                     continue  # a direct lend of the caller's storage
                 if (
@@ -15313,6 +15661,12 @@ class CodeGen:
                 for (_, ptype), tv, actual in zip(
                     func.params[:n_fixed], arg_tvs, actuals
                 ):
+                    # A constructor-sugar receiver placeholder carries no
+                    # type: like null, it never binds a parameter (the
+                    # winner's own receiver pattern types the slot after
+                    # resolution).
+                    if tv.type is CTOR_SELF:
+                        continue
                     if tv.adaptable == adaptable_pass and tv.type is not NULLT:
                         self.unify(
                             ptype,
@@ -15333,6 +15687,15 @@ class CodeGen:
         if missing:
             if lenient:
                 return None
+            if expr.args and isinstance(expr.args[0], _CtorSelf):
+                # Constructor sugar: the fix is spelling the instantiation
+                # at the sugar head, not at the (unwritable) family call.
+                raise LangError(
+                    f"cannot infer type parameter(s) {', '.join(missing)} "
+                    f"for {expr.name!r}; spell the instantiation, e.g. "
+                    f"{expr.args[0].struct_name}<int32>(...)",
+                    expr.line,
+                )
             raise LangError(
                 f"cannot infer type parameter(s) {', '.join(missing)} for {expr.name!r}; "
                 f"specify them explicitly, e.g. {expr.name}<int32>(...)",
@@ -15342,6 +15705,10 @@ class CodeGen:
             for (_, ptype), tv, actual, arg in zip(
                 func.params[:n_fixed], arg_tvs, actuals, expr.args
             ):
+                if actual is CTOR_SELF:
+                    # The receiver placeholder matches any receiver pattern;
+                    # the winner's own first parameter types the slot.
+                    continue
                 if self.shape_matches(
                     ptype, actual, tv.adaptable, func.type_params, expr.line
                 ):

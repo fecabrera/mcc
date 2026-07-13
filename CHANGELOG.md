@@ -37,6 +37,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Constructor call sugar `S(args)`** — a method named `constructor` makes
+  its type callable: `let s = S(args);` is exactly `let s: S;
+  S::constructor(s, args);`, with `let` binding the constructed slot
+  directly (no temporary, no copy). The head follows type-use spelling —
+  explicit type arguments (`point<float64>(1, 1)`), a non-generic or
+  fully-defaulted type bare, a transparent alias (`pointf(1, 2)`) — plus
+  call-side inference for a bare generic head: `point(1.5, 2.5)` deduces the
+  instantiation from the constructor's arguments through the family's
+  ordinary overload resolution. Any type with a declared `constructor`
+  family is constructible, builtins included; without one the call errors
+  (`struct 'point' has no constructor` / `type 'int32' has no constructor` —
+  never a cast), and a same-named function, variable, or constant still wins
+  unconditionally. See [Constructors](docs/language.md#constructors).
+
 - **Subsumption ordering of rank-tied generic overloads** — a rank tie
   (same tier, same pattern specificity) is no longer automatically
   ambiguous: among the tied cohort, the candidate whose parameter pattern

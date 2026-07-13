@@ -232,6 +232,8 @@ fn main() -> int32 {
 // form a generic alias substitutes into; functions/overload_subsumption.mc
 // for the subsumption tie-break the diagonal trace call rides on;
 // type_aliases.mc / generic_alias.mc
-// for alias transparency itself; memory/slices.mc for the `as slice<T>`
+// for alias transparency itself; constructors.mc for the `S(args)` sugar,
+// whose alias and builtin heads ride this same qualifier chase;
+// memory/slices.mc for the `as slice<T>`
 // borrow feeding slice::first; systems/char_methods.mc for the stdlib
 // module (std/char) built on the builtin-qualifier form shown here.
