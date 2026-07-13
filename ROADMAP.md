@@ -1158,8 +1158,10 @@ already do).
         resolution only when no candidate matches the pointer type
         directly, so `f(x: T*)` alongside `f(mut x: T)` stays unambiguous.
         A decayed argument is a borrowed reference, never a transfer of ownership:
-        the planned destructor machinery (Methods / OOP below) never runs a
-        destructor on it. The since-shipped method-call sugar's receiver
+        the since-shipped destructor machinery (Methods / OOP below) keeps
+        that promise trivially — its trigger surface is only the
+        constructor-sugar let, and parameters are never destroyed
+        automatically. The since-shipped method-call sugar's receiver
         auto-deref landed as an explicit one-hop dereference riding the
         dereference machinery (`-Wunchecked-dereference` included) rather
         than as an instance of this rule; decay composed with the
@@ -1676,7 +1678,8 @@ already do).
       shipped, see the checked sub-items; the receiver is an ordinary parameter, not the
       raw `self: <struct>*` this line once sketched), including `@private`
       methods and the special
-      constructor (call sugar shipped) / destructor (pending) below (the
+      constructor (call sugar shipped) / destructor (automatic stack
+      cleanup shipped) below (the
       `for … in` protocol already dispatches
       by struct name to pave the way, though iteration itself is slated to
       move to the overload-set protocol family of the open overload sets item
@@ -2004,9 +2007,10 @@ already do).
         and every diagnostic the family call's own. `let p = S(args);`
         ELIDES into the let slot (one construction, no temporary, no
         copy: a `mut self` constructor writes `p`'s own storage), the
-        load-bearing property for the destructor item nested below (RAII
-        wants exactly one construction site to hang the deferred
-        destructor on), and the sugar works in any expression position
+        load-bearing property the since-shipped destructor item nested
+        below leans on (RAII wants exactly one construction site to hang
+        the deferred destructor on, and the shipped automatic call
+        attaches exactly there), and the sugar works in any expression position
         (`f(point<int32>(1, 2))`, returns, nested constructor
         arguments). The head follows type-use spelling: explicit type
         arguments (`point<float64>(1, 1)`), a non-generic type bare, a
@@ -2044,10 +2048,15 @@ already do).
         this item as planned bundled heap `new <struct>(...)`
         construction and the implicit destructor-defer RAII with the
         stack form; the stack-value `S(args)` half shipped (since
-        extended by the implicit empty constructor nested below), and
-        the heap and destructor halves stay open as the items nested
-        below. Adoption direction: the stdlib's containers are picking
-        up declared constructor families over this sugar (in progress).
+        extended by the implicit empty constructor nested below), the
+        destructor half has since shipped too (the [x] item nested
+        below), and only the heap `new` half stays open. Adoption
+        direction: the stdlib's containers are picking up declared
+        constructor families over this sugar (in progress), and with the
+        destructor shipped, `list` and `string` are the natural adopters
+        of `T::destructor` — an adoption must migrate the manual
+        `list_destroy`/`string_destroy` call sites in the same change,
+        or every constructor-sugar let double-frees.
         Implemented, see
         [Constructors](docs/language.md#constructors):
     - [x] implicit empty constructors — every type has one: `T()` with no
@@ -2087,33 +2096,85 @@ already do).
           claim, and `void()` errs
           (`cannot construct a void value`). Implemented, see
           [Constructors](docs/language.md#constructors)
-    - [ ] destructor — `fn <struct>::destructor(mut self: <struct>)`, the
+    - [x] destructor — `fn <struct>::destructor(mut self: <struct>)`, the
           cleanup counterpart: releases what the constructor acquired.
-          Constructing a stack value implicitly `defer`s its destructor
-          to the end of the enclosing scope, so a stack value cleans up
-          after itself — RAII over the existing
+          USER SPEC, recorded verbatim: "if a type T declares a
+          destructor, `let t = T(args)` automatically defers
+          `t.destructor()` at the end of the scope", with the
+          user-authored desugar equivalence `let p = point<float64>();`
+          ≡ `let p: point<float64>; point<float64>::constructor(p);
+          defer point<float64>::destructor(p);` — RAII over the existing
           [`defer`](docs/language.md#defer) machinery, hung off the
-          shipped sugar above: the let-elision gives each construction
-          exactly ONE slot, no temporary whose cleanup could double- or
-          zero-fire, so the construction site is the precise point the
-          defer attaches to. The implicitly-deferred destructor of a
-          stack value is exact by construction (a constructed value's
-          type is statically known); for a heap `new`, the destructor
-          runs explicitly before the memory is freed. Base-destructor
-          chaining now has a shipped precedent to build on: the
-          method-inheritance receiver upcast (the [x] item below)
-          already lets a derived destructor call
-          `point::destructor(self)` exactly as constructor chaining
-          does; whether the implicitly-deferred destructor of a derived
-          value also runs base destructors automatically (and in what
-          order) is a design point this item still owns. Destruction
-          follows the dispatch boundary below: through a raw base-typed
-          `T*` the call is static and runs the base type's destructor
-          (the one-word C convention carries no dynamic identity), so
-          owning a derived value through a raw base pointer is not a
-          blessed pattern; through a fat base view the table may reserve
-          a destructor slot so the dynamic type's destructor runs, one
-          of the open points on the polymorphic base views item below
+          shipped sugar above exactly as planned: the let-elision gives
+          each construction ONE slot, and that slot is where the defer
+          attaches. The trigger surface is SPEC-LITERAL (USER RULING):
+          only the constructor-sugar let (`let t = T(args)` /
+          `let t = T()`, a declared or implicit empty constructor, the
+          family declared or inherited) schedules; manual construction,
+          struct-literal lets, copies, and assignments schedule
+          nothing — the documented opt-out hatches — and an any-coercing
+          annotation binds a copy, so it schedules nothing either. The
+          scheduled call shares the defer stack verbatim (adopted
+          recommendation): LIFO with explicit defers, per loop
+          iteration, unwinding on early return/break/continue/
+          try-propagation, `@noreturn` exits skip. Resolution is the
+          dumb desugar again (adopted): a visible family means the
+          qualified receiver-only call is synthesized, and every
+          diagnostic (arity, overloads, cross-module `@private`) is the
+          family call's own at the let's line, propagated and never
+          masked. Sharp edges, each a USER RULING: (1) a manual
+          `p.destructor()` beside the automatic call is UNDEFINED
+          BEHAVIOR, a C double-free — no suppression, no warning;
+          (2) `return t` / `emit t` of the whole auto-destructed local
+          is a HARD ERROR (the copy would carry already-destroyed
+          state) — hatches: return the constructor expression directly
+          (an expression-position temporary owns no automatic cleanup)
+          or construct manually and own the cleanup; field escapes are
+          not caught, and emitting a local declared OUTSIDE the block
+          expression survives the emit and stays a legal copy;
+          (3) a CONST-viewed constructor let IS destroyed — destruction
+          is scope teardown, not user mutation (the C++ stance,
+          OVERRULING the explorer's error-first recommendation): the
+          synthesized call alone bypasses the const view, a user-written
+          destructor call on const keeps the mut-receiver error, and the
+          bypass and shadow-safety are ONE mechanism, a hidden
+          const-stripped rebinding of the slot (`0dtor{n}`) immune to
+          name and field shadowing; (4) implicit-empty construction
+          stays UNINITIALIZED like `let t: T;` ("keep stack luck"), so a
+          destructor may observe uninitialized fields. Base cleanup
+          chains MANUALLY (USER RULING), mirroring constructor chaining:
+          a derived destructor ends with `point::destructor(self);` via
+          the shipped receiver upcast, and a derived type with NO
+          destructor of its own inherits the base's through the merged
+          family, the automatic call resolving it — this SUPERSEDES the
+          auto-run/order design point this item used to own. Destruction
+          still follows the dispatch boundary below: the automatic call
+          is exact by construction (a constructed stack value's type is
+          statically known) and a call through a raw base-typed `T*`
+          stays static, so owning a derived value through a raw base
+          pointer is not a blessed pattern; whether a fat base view's
+          table reserves a destructor slot remains the polymorphic base
+          views item's open point below. Copies are bitwise and alias
+          (the C stance, documented — two views naming one resource,
+          only the constructed let destroyed); globals, `@static`s,
+          parameters, heap values, and expression-position temporaries
+          are never destroyed automatically (heap destruction travels
+          with the `new` sugar sibling below). `destructor` was an
+          unclaimed method name, now semantic: any existing family under
+          it gains the automatic call. Implemented, see
+          [Destructors](docs/language.md#destructors):
+      - [ ] move-out returns — lift the whole-value return/emit hard
+            error: returning the local cancels the scheduled defer and
+            transfers the cleanup obligation to the caller's scope.
+            Recorded at the ship as the future lift; together with
+            caller-adopted destruction it is the gate the
+            [string-valued f-strings](#strings-and-formatting) item
+            waits on (the shipped v1 alone does not unblock it — a
+            callee cannot yet hand an owned value out)
+      - [ ] `-Wdestructor-copy` — warn on a bitwise copy of a value
+            whose type declares a destructor (two views naming one
+            resource, C's aliasing problem), the direction the shipped
+            copies-are-not-tracked stance records
     - [ ] `new <struct>(...)` sugar — heap construction: desugars to a
           block that allocates with `new<<struct>>()`, runs the shipped
           constructor family on the allocation, and emits the pointer
@@ -2135,7 +2196,13 @@ already do).
           [pointer decay](docs/language.md#pointer-decay-into-constmut-parameters)
           admits only proven non-null — the emitted block guards or
           asserts (`tmp!`) at the allocation, or leans on a future
-          non-null-returning `new`
+          non-null-returning `new`. The destructor half is now concrete:
+          the shipped automatic destructor (the [x] item above) is
+          stack-lets-only by ruling, so a heap construction owns its
+          cleanup explicitly — the destructor runs before the memory is
+          freed, the delete-shaped counterpart this item designs — and
+          expression-position temporary lifetimes (`f(T(args))` owns no
+          automatic cleanup in the shipped v1) are deferred here with it
   - [x] method inheritance through `extends` — a derived struct exposes its
         base chain's method families, constructors included: a family call
         on the derived type (dot sugar or the qualified spelling) resolves
@@ -2319,7 +2386,10 @@ already do).
         member shadowing by hop, so a marker would arrive here for both
         the static and dynamic surfaces — as is (5) whether the table
         reserves a destructor slot so destroying through a base view runs
-        the dynamic type's destructor (the destructor note above).
+        the dynamic type's destructor: the since-shipped automatic
+        destructor above deliberately left this open — its call is exact
+        by construction on stack lets and base chaining is manual, so
+        static destruction is settled and dynamic destruction lives here.
         Depends on the receiver kinds above (`const`/`mut self` is how a
         dispatching receiver travels) and the parent item's method
         machinery, whose STATIC half is now in place: the shipped method
@@ -3204,10 +3274,14 @@ already do).
   - [ ] string-valued f-strings — an f-string used outside an `@format`
         argument, as a standalone value (`let s = f"{x}";`), rendering into a
         runtime `string` so it can go anywhere a string can, not only into an
-        `@format` argument position. Deferred until the
-        destructor/RAII lifecycle in
-        [Methods / OOP](#functions-and-methods) lands (the constructor call
-        sugar has shipped; the destructor item nested under it is the gate),
+        `@format` argument position. Deferred: the destructor/RAII
+        lifecycle in [Methods / OOP](#functions-and-methods) has shipped,
+        but its v1 alone does NOT unblock this — returning the
+        auto-destructed local is a hard error and expression-position
+        temporaries own no cleanup, so a callee cannot yet hand an owned
+        `string` to the caller's scope; the gate is the move-out-returns
+        follow-up nested under the shipped destructor item (cancel the
+        defer, transfer the cleanup) plus caller-adopted destruction,
         which is the machinery
         it needs: `let s = f"..."` desugars to `let s = format("...", args...)`
         over a renderer `fn format(str, args...) -> string` whose returned
