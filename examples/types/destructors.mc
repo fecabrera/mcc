@@ -129,12 +129,15 @@ fn main() -> int32 {
     println("opt-outs:");
 
     // Manual construction: the user owns cleanup (call it, defer it, or
-    // skip it). Destroy manually ONLY what you constructed manually: a
-    // user-written destructor call beside an automatic one compiles and
-    // destroys twice -- undefined behavior, exactly a C double-free.
+    // skip it). The qualified form is the ONLY callable spelling of the
+    // pair -- `m.destructor()` / `m.constructor(...)` are compile errors
+    // ('destructor' cannot be called with method syntax; use
+    // file::destructor(m)) -- and destroy manually ONLY what you
+    // constructed manually: a manual destructor call beside an automatic
+    // one compiles and destroys twice -- UB, exactly a C double-free.
     let m: file;
     file::constructor(m, 40);
-    m.destructor();             // manual pairs with manual
+    file::destructor(m);        // manual pairs with manual
 
     // A struct-literal let builds the value without the constructor
     // family and schedules nothing either.
@@ -173,9 +176,9 @@ fn main() -> int32 {
 //
 // Two more edges. A const view is still destroyed: `let f: const file =
 // file(1);` closes at scope exit, because destruction is scope teardown,
-// not user mutation (a user-written f.destructor() on the const value
-// keeps the ordinary mut-receiver error). And the scope is stack lets
-// only: globals, @static values, parameters, heap values, and
+// not user mutation (a user-written file::destructor(f) on the const
+// value keeps the ordinary mut-receiver error). And the scope is stack
+// lets only: globals, @static values, parameters, heap values, and
 // expression-position temporaries are never destroyed automatically.
 //
 // See also: constructors.mc for the sugar and its head forms;

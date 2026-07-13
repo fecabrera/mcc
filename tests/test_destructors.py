@@ -20,9 +20,11 @@ and destruction ignores a ``const`` view (scope teardown is not user
 mutation; a user-written call on a const value still errors). Returning or
 emitting the whole auto-destructed local is a hard error (the copy would
 escape its own cleanup); returning the constructor expression directly, a
-field escape, or manual construction are the escape hatches. Manually
-calling ``t.destructor()`` on an auto-destructed value compiles and double-
-destroys -- undefined behavior, exactly like a C double-free.
+field escape, or manual construction are the escape hatches. The dot
+spelling of the two semantic method names is refused outright
+(``t.destructor()`` -- use the qualified form; see test_dot_calls.py), and
+manually calling ``T::destructor(t)`` on an auto-destructed value compiles
+and double-destroys -- undefined behavior, exactly like a C double-free.
 """
 
 import re
@@ -449,8 +451,10 @@ def test_const_viewed_let_is_still_destroyed(capfd):
 
 
 def test_user_destructor_call_on_const_still_errors():
-    # The bypass is exactly the synthesized call: a user-written
-    # `r.destructor()` on a const view keeps the ordinary mut-receiver error.
+    # The bypass is exactly the synthesized call: a user-written qualified
+    # `res::destructor(r)` on a const view keeps the ordinary mut-receiver
+    # error. (The dot spelling is refused before any mut check -- see
+    # test_dot_calls.py.)
     with pytest.raises(
         LangError, match=r"cannot pass a read-only const res as a mut argument"
     ):
@@ -459,7 +463,7 @@ def test_user_destructor_call_on_const_still_errors():
             + """
             fn main() -> int32 {
                 let r: const res = res(1);
-                r.destructor();
+                res::destructor(r);
                 return 0;
             }
             """
@@ -593,16 +597,17 @@ def test_return_of_a_shadowing_non_destructed_local_is_legal(capfd):
 
 
 def test_manual_call_alongside_the_automatic_one_compiles_and_runs_twice(capfd):
-    # No suppression magic, no warning (v1): the manual call runs, then the
-    # scheduled one runs again. Undefined behavior by contract -- this test
-    # only pins that it compiles and that both calls execute.
+    # No suppression magic, no warning (v1): the manual qualified call (the
+    # only reachable manual spelling -- the dot form is refused) runs, then
+    # the scheduled one runs again. Undefined behavior by contract -- this
+    # test only pins that it compiles and that both calls execute.
     assert run(
         'import "std/io";'
         + RES
         + """
         fn main() -> int32 {
             let r = res(5);
-            r.destructor();
+            res::destructor(r);
             return 0;
         }
         """

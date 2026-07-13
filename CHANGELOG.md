@@ -50,12 +50,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   return/break/continue/try-propagation; `@noreturn` exits run no
   destructors, as no defers). Destruction ignores a `const` view (scope
   teardown, not user mutation — a user-written call on a const value still
-  errors), returning or emitting the whole auto-destructed local is a hard
-  error (return the constructor expression directly, or construct manually
-  to own the cleanup; field escapes are not caught), and manually calling
-  `p.destructor()` beside the automatic call is undefined behavior, like a
-  C double-free. `destructor` was previously an unclaimed method name; any
-  existing family under it gains the automatic call. See
+  errors), and returning or emitting the whole auto-destructed local is a
+  hard error (return the constructor expression directly, or construct
+  manually to own the cleanup; field escapes are not caught). The pair is
+  **qualified-only**: `p.destructor()` / `p.constructor(args)` are compile
+  errors (`'destructor' cannot be called with method syntax; use
+  point::destructor(p)`) — `T::constructor(t, args)` and
+  `T::destructor(t)` are the only callable spellings, kept mainly for
+  chaining a base's from a derived body (a genuine *field* of either name
+  keeps its field behavior). Manually calling `T::destructor(p)` beside
+  the automatic call is undefined behavior, like a C double-free.
+  `destructor` was previously an unclaimed method name; any existing
+  family under it gains the automatic call. See
   [Destructors](docs/language.md#destructors) and
   [destructors.mc](examples/types/destructors.mc).
 
@@ -117,7 +123,10 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   into a hidden **const** local — so a mut-self method on a temporary stays
   an error — while a `mut`-returning receiver re-lends its carried lvalue
   (`b.ref().grow()` writes the caller's storage), and mut-returning
-  dot-calls are lvalues (`l.at(i) = v`, `a.view().at(2) = 7`). See
+  dot-calls are lvalues (`l.at(i) = v`, `a.view().at(2) = 7`). The two
+  semantic method names are excluded: `p.constructor(args)` and
+  `p.destructor()` error with a hint toward their qualified-only forms.
+  See
   [Calling methods: dot syntax](docs/language.md#calling-methods-dot-syntax).
 
 - **Constructor call sugar `S(args)`** — a method named `constructor` makes

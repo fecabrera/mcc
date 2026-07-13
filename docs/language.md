@@ -1276,6 +1276,12 @@ The rules:
   desugared family.
 - **Explicit type arguments at a dot-call do not parse** (`p.m<int32>(...)`)
   — method type parameters are inference-only, exactly as at a `::` call.
+- **The two semantic method names are excluded**: `p.constructor(args)` and
+  `p.destructor()` are compile errors (`'destructor' cannot be called with
+  method syntax; use point::destructor(p)`) — the qualified forms are their
+  only callable spellings, kept mainly for chaining. See
+  [Constructors](#constructors) and [Destructors](#destructors). A genuine
+  *field* of either name keeps its field behavior, as always.
 
 See [examples/types/method_calls.mc](../examples/types/method_calls.mc).
 
@@ -1378,7 +1384,13 @@ beside `struct point` keeps calling the function. `Type::` still enforces no
 by-value `self` "constructor" compiles and simply initializes nothing, and a
 non-void constructor's return value is discarded by `S(args)`. Explicit type
 arguments at the head are the struct's; a converting constructor's own
-parameters (`<U>` above) are inference-only, as at any `::` call.
+parameters (`<U>` above) are inference-only, as at any `::` call. The
+[dot spelling](#calling-methods-dot-syntax) is excluded:
+`p.constructor(args)` is a compile error (`'constructor' cannot be called
+with method syntax; use point::constructor(p, ...)`) — the qualified
+`S::constructor(p, args)` is the only callable spelling, kept mainly for
+**chaining** a base's constructor from a derived body
+([Inherited methods](#inherited-methods)).
 
 See [examples/types/constructors.mc](../examples/types/constructors.mc).
 
@@ -1432,6 +1444,16 @@ mutations after construction included.
 
 Details and sharp edges:
 
+- **The pair is qualified-only.** `constructor` and `destructor` cannot be
+  called with [dot syntax](#calling-methods-dot-syntax): `t.destructor()`
+  and `t.constructor(args)` are compile errors (`'destructor' cannot be
+  called with method syntax; use point::destructor(t)`). The fully
+  qualified forms `T::constructor(t, args)` / `T::destructor(t)` are the
+  only callable spellings, and their main intended use is **chaining** —
+  a derived body invoking its base's (below). Construction is the
+  [`S(args)` sugar](#constructors), destruction is automatic. A genuine
+  *field* of either name keeps its field behavior (fields shadow methods
+  before the ban is judged).
 - **Resolution is ordinary — a dumb desugar.** The scheduled call is the
   qualified `T::destructor(t)` over the family, so overload resolution,
   privacy, arity, and every diagnostic are the family call's own, reported
@@ -1440,20 +1462,17 @@ Details and sharp edges:
   argument(s), got 1` — positions count the receiver), and a cross-module
   `@private` destructor makes foreign constructor-lets error with the
   usual visibility diagnostic. Extra-parameter overloads stay manually
-  callable; they just cannot be automatic. Because the qualified call
-  never goes through dot syntax, a *field* named `destructor` cannot
-  shadow it (a user-written `t.destructor()` is field-first, as at any
-  dot call).
+  callable; they just cannot be automatic.
 - **A const view is still destroyed.** `let p: const T = T(...);` keeps
   the read-only view for user code, but destruction is scope teardown, not
   user mutation (the C++ stance): the synthesized call alone bypasses the
-  const view. A user-written `p.destructor()` on a const `p` keeps the
+  const view. A user-written `T::destructor(p)` on a const `p` keeps the
   ordinary mut-receiver error.
 - **Manually destroying an auto-destructed value is undefined behavior.**
-  `p.destructor()` (or a manual `defer p.destructor();`) beside the
-  automatic call compiles and destroys twice — like a C double-free: no
-  suppression magic, no warning. Destroy manually only what you
-  constructed manually.
+  A qualified `T::destructor(p)` (or a manual `defer T::destructor(p);`)
+  beside the automatic call compiles and destroys twice — like a C
+  double-free: no suppression magic, no warning. Destroy manually only
+  what you constructed manually.
 - **Copies are bitwise and alias.** `let b = a;` copies the fields, and
   only `a` (the constructed let) is destroyed — if the type owns a
   resource, both views name it, exactly C's problem. A future

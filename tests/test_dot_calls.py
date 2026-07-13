@@ -15,6 +15,8 @@ without a call is not a bound-method value, and explicit type arguments at a
 dot-call (``p.m<int32>(...)``) do not parse -- both as at ``::`` calls.
 """
 
+import re
+
 import pytest
 
 from mcc.driver import emit_interface
@@ -532,3 +534,215 @@ def test_inline_bodies_with_sugar_round_trip_through_mci(tmp_path):
         'import "lib";\nfn main() -> int32 { return diagsum(21) - 42; }\n'
     )
     assert run_path(main) == 0
+
+
+# --- constructor/destructor are qualified-only ------------------------------------
+
+# The two semantic method names cannot be called with method syntax: the
+# fully qualified forms `T::constructor(t, args)` / `T::destructor(t)` are
+# the only spellings, intended mainly for chaining a base's from a derived
+# body. Construction is the `S(args)` sugar and destruction is automatic
+# (see test_destructors.py); the dot forms are refused where the rewrite
+# would have happened -- a genuine FIELD of either name keeps its field
+# behavior, and a receiver with no such family keeps today's diagnostics.
+
+PAIR = """
+struct res { id: int32; }
+fn res::constructor(mut self: res, id: int32) { self.id = id; }
+fn res::destructor(mut self: res) { }
+"""
+
+
+def test_dot_constructor_is_refused_with_the_qualified_hint():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'constructor' cannot be called with method syntax; "
+            "use res::constructor(r, ...)"
+        ),
+    ):
+        compile_ir(
+            PAIR
+            + """
+            fn main() -> int32 {
+                let r: res;
+                r.constructor(1);
+                return 0;
+            }
+            """
+        )
+
+
+def test_dot_destructor_is_refused_with_the_qualified_hint():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'destructor' cannot be called with method syntax; "
+            "use res::destructor(r)"
+        ),
+    ):
+        compile_ir(
+            PAIR
+            + """
+            fn main() -> int32 {
+                let r = res(1);
+                r.destructor();
+                return 0;
+            }
+            """
+        )
+
+
+def test_dot_ban_on_a_generic_receiver_names_the_template():
+    # An instantiated generic receiver suggests the family's canonical
+    # (template) qualifier, exactly the name a chaining call would use.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'destructor' cannot be called with method syntax; "
+            "use point::destructor(p)"
+        ),
+    ):
+        compile_ir(
+            """
+            struct point<T> { x: T; y: T; }
+            fn point<T>::destructor(mut self: struct point<T>) { }
+            fn main() -> int32 {
+                let p: point<float64>;
+                p.destructor();
+                return 0;
+            }
+            """
+        )
+
+
+def test_dot_ban_through_an_alias_receiver():
+    # The alias-typed receiver resolves to the canonical family and the ban
+    # (with the canonical qualifier) applies the same.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'constructor' cannot be called with method syntax; "
+            "use point::constructor(p, ...)"
+        ),
+    ):
+        compile_ir(
+            """
+            struct point<T> { x: T; y: T; }
+            fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+                self.x = x; self.y = y;
+            }
+            type pointf = point<float64>;
+            fn main() -> int32 {
+                let p: pointf;
+                p.constructor(1.0, 2.0);
+                return 0;
+            }
+            """
+        )
+
+
+def test_dot_ban_on_a_builtin_receiver():
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'destructor' cannot be called with method syntax; "
+            "use int32::destructor(x)"
+        ),
+    ):
+        compile_ir(
+            """
+            fn int32::destructor(mut self: int32) { }
+            fn main() -> int32 {
+                let x: int32 = 1;
+                x.destructor();
+                return 0;
+            }
+            """
+        )
+
+
+def test_dot_ban_on_a_pointer_receiver_spells_the_deref():
+    # A pointer receiver's dot-call would auto-deref one hop; the suggestion
+    # spells that deref.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'destructor' cannot be called with method syntax; "
+            "use res::destructor(*q)"
+        ),
+    ):
+        compile_ir(
+            PAIR
+            + """
+            fn main() -> int32 {
+                let r = res(1);
+                let q = &r;
+                q.destructor();
+                return 0;
+            }
+            """
+        )
+
+
+def test_dot_ban_on_an_rvalue_receiver_does_not_leak_the_spill_name():
+    # A spilled receiver re-dispatches on a hidden local; the suggestion
+    # renders a generic `value`, never the unlexable spill name.
+    with pytest.raises(
+        LangError,
+        match=re.escape(
+            "'destructor' cannot be called with method syntax; "
+            "use res::destructor(value)"
+        ),
+    ):
+        compile_ir(
+            PAIR
+            + """
+            fn make() -> res { return res(1); }
+            fn main() -> int32 {
+                make().destructor();
+                return 0;
+            }
+            """
+        )
+
+
+def test_field_named_constructor_keeps_field_behavior():
+    # Fields shadow methods BEFORE the ban is judged: a fn-typed field named
+    # `constructor` stays an ordinary field call.
+    assert run(
+        """
+        struct odd { constructor: fn(int32) -> int32; }
+        fn double(v: int32) -> int32 { return v * 2; }
+        fn main() -> int32 {
+            let o: odd;
+            o.constructor = double;
+            return o.constructor(21) - 42;
+        }
+        """
+    ) == 0
+
+
+def test_qualified_chaining_spellings_stay_legal(capfd):
+    # The qualified forms remain first-class -- their main use, chaining a
+    # base's constructor and destructor from a derived body.
+    assert run(
+        'import "std/io";'
+        + PAIR
+        + """
+        struct tagged extends res { tag: int32; }
+        fn tagged::constructor(mut self: tagged, id: int32, tag: int32) {
+            res::constructor(self, id);
+            self.tag = tag;
+        }
+        fn tagged::destructor(mut self: tagged) {
+            println("drop tag {}", self.tag);
+            res::destructor(self);
+        }
+        fn main() -> int32 {
+            let t = tagged(3, 9);
+            return t.tag - 9;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "drop tag 9\n"

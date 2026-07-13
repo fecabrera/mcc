@@ -10321,6 +10321,10 @@ class CodeGen:
                     pass
             family = f"{pointee.template or pointee.name}::{method}"
             if self.method_family_exists(family):
+                self.reject_semantic_dot_call(
+                    method, pointee.template or pointee.name, recv, expr.line,
+                    deref=True,
+                )
                 return Call(
                     family,
                     [],
@@ -10339,6 +10343,7 @@ class CodeGen:
             qualifier = owner.template or owner.name
             family = f"{qualifier}::{method}"
             if self.method_family_exists(family):
+                self.reject_semantic_dot_call(method, qualifier, recv, expr.line)
                 return Call(family, [], [recv, *expr.args], expr.line)
             if self.lookup_struct_decl(qualifier) is None:
                 return None  # a builtin aggregate (slice, result): as before
@@ -10351,8 +10356,56 @@ class CodeGen:
         # e.g. `'C'.lower()` is `char::lower('C')`.
         family = f"{owner.template or owner.name}::{method}"
         if self.method_family_exists(family):
+            self.reject_semantic_dot_call(
+                method, owner.template or owner.name, recv, expr.line
+            )
             return Call(family, [], [recv, *expr.args], expr.line)
         return None
+
+    def reject_semantic_dot_call(
+        self, method: str, qualifier: str, recv, line: int, deref: bool = False
+    ) -> None:
+        """Refuse the dot spelling of the two semantic method names.
+
+        ``constructor`` and ``destructor`` are callable only in their fully
+        qualified form -- ``T::constructor(t, args)`` and
+        ``T::destructor(t)`` -- whose main intended use is chaining a
+        base's from a derived body. Construction is the ``S(args)`` sugar
+        and destruction is automatic (see
+        :meth:`schedule_auto_destructor`), so the dot spelling of either
+        name is refused where it would otherwise rewrite: a genuine FIELD
+        of the name keeps its field behavior (fields shadow methods before
+        this check is reached), and a receiver whose type registers no such
+        family keeps today's diagnostics.
+
+        Args:
+            method: The dot-call's method name.
+            qualifier: The canonical family qualifier, for the suggestion.
+            recv: The receiver expression (a named variable spells the
+                suggestion; anything else -- including a spill's hidden
+                local -- renders as ``value``).
+            line: Source line for the diagnostic.
+            deref: Whether the receiver is a pointer (the suggestion
+                spells the one-hop deref the sugar would have applied).
+
+        Raises:
+            LangError: When ``method`` is ``constructor`` or ``destructor``.
+        """
+        if method not in ("constructor", "destructor"):
+            return
+        value = (
+            recv.name
+            if isinstance(recv, Var) and not recv.name[0].isdigit()
+            else "value"
+        )
+        if deref:
+            value = f"*{value}"
+        args = ", ..." if method == "constructor" else ""
+        raise LangError(
+            f"{method!r} cannot be called with method syntax; use "
+            f"{qualifier}::{method}({value}{args})",
+            line,
+        )
 
     def gen_spilled_dot_call(self, expr: CallExpr) -> TypedValue:
         """Emit a dot-call whose receiver only types by evaluation.
@@ -13907,8 +13960,10 @@ class CodeGen:
         dot-call shadowing (a field named ``destructor`` cannot capture
         it). The hidden binding drops the let's const view: destruction is
         scope teardown, not user mutation, so a ``const``-viewed value is
-        still destroyed (a user-written ``t.destructor()`` on a const ``t``
-        keeps erroring like any other mut-receiver call). Resolution of the
+        still destroyed (a user-written ``T::destructor(t)`` on a const
+        ``t`` keeps erroring like any other mut-receiver call, and the dot
+        spelling is refused outright -- see
+        :meth:`reject_semantic_dot_call`). Resolution of the
         deferred call is otherwise ordinary, so a family whose members
         cannot take the lone receiver, or that is ``@private`` to another
         file, errors at this let's line exactly as the explicit ``defer``
