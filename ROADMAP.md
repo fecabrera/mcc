@@ -100,7 +100,11 @@ its reference section in the [language reference](docs/language.md).
 - [x] [Struct extension of a type parameter](docs/language.md#structs) — a bare
       type parameter in the `extends` slot (`struct wrapper<T> extends T`)
       embeds `T`'s fields as the layout prefix per instantiation (the
-      intrusive-container shape); single base by design
+      intrusive-container shape); single base by design, and the one
+      `extends` form the since-shipped method inheritance
+      ([Methods / OOP](#functions-and-methods)) leaves out: no declared
+      base family exists at the declaration, so a payload's methods are
+      reached through the explicit upcast (documented, deferred)
 - [x] [Nominal struct subtyping](docs/language.md#structs) — the struct
       subtype relation (value/pointer upcast and slice-borrow) follows the
       declared `extends` lineage, not a matching layout prefix, so a
@@ -1158,7 +1162,12 @@ already do).
         destructor on it. The since-shipped method-call sugar's receiver
         auto-deref landed as an explicit one-hop dereference riding the
         dereference machinery (`-Wunchecked-dereference` included) rather
-        than as an instance of this rule, while decay remains
+        than as an instance of this rule; decay composed with the
+        since-shipped method-inheritance receiver upcast is likewise
+        scoped out (a derived `pointf*` does not decay-and-upcast into a
+        base `mut self: point<float64>` slot in one step — a dot-call on
+        the derived pointer works via the sugar's auto-deref, the
+        explicit deref spelling stays available), while decay remains
         the mechanism that let the `libmc` container-self migration to
         `mut` receivers keep one call shape for stack containers and heap
         `T*`s alike before method syntax landed (the migration is the
@@ -1662,9 +1671,9 @@ already do).
       on the coerce path, not in viability or unification
 - [ ] Methods / OOP — `fn <type>::<method>(...)` definitions
       keyed to a type, structs foremost (the explicit qualified-call
-      foundation, the `recv.method(args)` dot-call sugar, and the `S(args)`
-      constructor sugar have shipped,
-      see the checked sub-items; the receiver is an ordinary parameter, not the
+      foundation, the `recv.method(args)` dot-call sugar, the `S(args)`
+      constructor sugar, and method inheritance through `extends` have
+      shipped, see the checked sub-items; the receiver is an ordinary parameter, not the
       raw `self: <struct>*` this line once sketched), including `@private`
       methods and the special
       constructor (call sugar shipped) / destructor (pending) below (the
@@ -2034,10 +2043,50 @@ already do).
         motivated the shipped subsumption ordering above. Provenance:
         this item as planned bundled heap `new <struct>(...)`
         construction and the implicit destructor-defer RAII with the
-        stack form; the stack-value `S(args)` half shipped, and the heap
-        and destructor halves stay open as the items nested below.
+        stack form; the stack-value `S(args)` half shipped (since
+        extended by the implicit empty constructor nested below), and
+        the heap and destructor halves stay open as the items nested
+        below. Adoption direction: the stdlib's containers are picking
+        up declared constructor families over this sugar (in progress).
         Implemented, see
         [Constructors](docs/language.md#constructors):
+    - [x] implicit empty constructors — every type has one: `T()` with no
+          arguments is exactly `let t: T;`, the slot default-initialized
+          as the bare declaration is (declared field defaults apply,
+          anything else starts uninitialized). USER SPEC, recorded
+          verbatim: "types have an implicit empty constructor" —
+          `char()` ≡ `let c: char;`, `point<float64>()` ≡
+          `let p: point<float64>;`, a derived `pointf()` ≡
+          `let p: pointf;` — for every head the sugar accepts (builtins,
+          structs, unions, aliases, fully-defaulted generics bare),
+          expression position and the let-elision included, and, un-C++,
+          declaring constructors does NOT suppress it: a family with only
+          argument-taking members leaves `T()` default-initializing, no
+          family instance emitted or called. USER RULING (reinforced): a
+          defined empty constructor
+          `fn my_type::constructor(mut self: my_type)` claims
+          `my_type()` — the defined body runs, no implicit one is
+          created. Shipped as an arity-judged claim over the visible
+          merged family: a member that accepts exactly the receiver (a
+          `(mut self)`-only constructor, or a collecting one whose fixed
+          prefix is only the receiver) claims the zero-argument call and
+          resolves normally — inherited members included, per the
+          method-inheritance item below (an inherited `(mut self)`-only
+          base constructor claims `derived()`) — and resolution errors
+          then PROPAGATE rather than falling back, so the implicit form
+          can never mask a broken declared constructor and no ambiguity
+          between the two can arise. A literal zero-PARAMETER member
+          (`fn s::constructor()`, legal since `Type::` enforces no
+          `self` convention) can never accept the hidden receiver, so it
+          never claims. The edges are all unchanged: calls WITH
+          arguments keep their behavior (`int32(5)` stays the
+          no-constructor error), same-named functions/variables/
+          constants/`@static` still win unconditionally, a bare generic
+          head keeps the cannot-infer error (no arguments to infer
+          from), a cross-module `@private` zero-arg member does not
+          claim, and `void()` errs
+          (`cannot construct a void value`). Implemented, see
+          [Constructors](docs/language.md#constructors)
     - [ ] destructor — `fn <struct>::destructor(mut self: <struct>)`, the
           cleanup counterpart: releases what the constructor acquired.
           Constructing a stack value implicitly `defer`s its destructor
@@ -2050,7 +2099,14 @@ already do).
           defer attaches to. The implicitly-deferred destructor of a
           stack value is exact by construction (a constructed value's
           type is statically known); for a heap `new`, the destructor
-          runs explicitly before the memory is freed. Destruction
+          runs explicitly before the memory is freed. Base-destructor
+          chaining now has a shipped precedent to build on: the
+          method-inheritance receiver upcast (the [x] item below)
+          already lets a derived destructor call
+          `point::destructor(self)` exactly as constructor chaining
+          does; whether the implicitly-deferred destructor of a derived
+          value also runs base destructors automatically (and in what
+          order) is a design point this item still owns. Destruction
           follows the dispatch boundary below: through a raw base-typed
           `T*` the call is static and runs the base type's destructor
           (the one-word C convention carries no dynamic identity), so
@@ -2080,6 +2136,74 @@ already do).
           admits only proven non-null — the emitted block guards or
           asserts (`tmp!`) at the allocation, or leans on a future
           non-null-returning `new`
+  - [x] method inheritance through `extends` — a derived struct exposes its
+        base chain's method families, constructors included: a family call
+        on the derived type (dot sugar or the qualified spelling) resolves
+        over the MERGED set of its own members and every base hop's, the
+        latter entering as resolution-only clones REBASED at the declared
+        base instantiation — on `pointf extends point<float64>`, the
+        inherited diagonal `fn point<T>::constructor` is a concrete
+        `(float64, float64)` member, so `pointf(1.0, 1.0)` prefers it over
+        a derived generic while `pointf(1, 1)` still picks the converting
+        `<U>`. USER RULING (merged set, no cascade): the rank key gains a
+        hop component — `(no-collect, tier, −hop, specificity, fixed)` —
+        with the TIER before the HOP before SPECIFICITY. The consequence
+        the user confirmed explicitly: an inherited exact/concrete match
+        beats a derived generic ("exactness beats genericity, wherever
+        declared" — a deliberate divergence from C++'s derived-hides-base),
+        while the hop beating specificity gives override semantics with no
+        marker: a derived same-shape member shadows an inherited one, a
+        nearer base's shadows a farther one, and a DIFFERENT signature
+        simply overloads the merged set (the Java-shaped merged surface;
+        never C++ name hiding). Constructors merge unconditionally (no
+        suppression), and membership filters by the declared
+        instantiation: a base specialization is inherited only where the
+        `extends` clause names its instantiation, a diagonal qualifier
+        only where the base arguments agree, a grouped/bounded member is
+        filtered where the instantiation violates the constraint (a
+        generic derivation carries it along instead); generic derivations
+        (`pd<T> extends point<T>`) stay generic, bare-head constructor
+        inference included. USER RULING (upcast surface, v1): the RECEIVER
+        position of ANY method-family call upcasts along the declared
+        lineage — dot AND explicit qualified calls, which is what enables
+        constructor chaining (`point::constructor(self, x, y)` from a
+        derived constructor). `mut`/`const` receivers lend the base prefix
+        in place (a `mut self`'s writes land in the derived value's
+        leading fields), a by-value receiver prefix-copies (the honest
+        DATA slicing the `as` upcast performs); every NON-receiver
+        argument keeps the explicit `as` — program-wide implicit base
+        coercion is deferred to the polymorphic base views item below.
+        Emission always instantiates the ORIGIN template: one instance per
+        base instantiation, SHARED across derived types (no
+        monomorphization bloat), with ambiguity notes attributing to the
+        origin (`candidate is here (inherited from point<float64>)`).
+        Return types stay spelled at the base. Out of scope, recorded: the
+        bare-parameter base (`extends T`) inherits NOTHING (no declared
+        family exists at the declaration; documented, deferred), a
+        file-scoped `@static` base member stays file-scoped, a
+        cross-module `@private` member filters per file as in any open
+        set, no override marker ships (deferred to the views item below,
+        where the question was already recorded), and pointer decay
+        COMPOSED with the upcast is scoped out (a derived `pointf*` does
+        not decay-and-upcast into a base `mut self: point<float64>` slot
+        in one step; dot-calls on a derived pointer work via the sugar's
+        existing one-hop auto-deref). USER PROCESS RULING (audit first):
+        the merge was gated on a stdlib audit, which found the stdlib's
+        inherited surface EMPTY today (its only `::` families are the nine
+        `char::` ones; `list`/`set_entry`/`dict_entry` gain capability
+        only) — the user reviewed the audit and approved the merge, with
+        two watch items recorded for the stdlib's future method-family
+        adoption: (a) never name future `slice::` methods
+        `data`/`length`/`capacity` (fields shadow methods, so `list`'s
+        fields would eclipse them), and (b) a derived type cannot LOOSEN
+        an inherited concrete signature with a generic override (the tier
+        beats the hop, by the ruling above). PROVENANCE: this ship
+        deliberately REVERSED two long-documented `extends` non-goals —
+        "no implicit upcast" (now: receiver-position only) and "no method
+        inheritance / no constructor chaining" — both by USER RULING;
+        docs/language.md's Structs non-goals are rewritten accordingly.
+        Implemented, see
+        [Inherited methods](docs/language.md#inherited-methods)
   - [ ] receiver kind — the shipped foundation already lets the receiver be any
         ordinary `const` / `mut` / by-value parameter with no enforced `self`
         convention; this item makes the three receiver flavors a formal, checked
@@ -2190,12 +2314,26 @@ already do).
         differ by fatness and is recorded as the disfavored option.
         (4) whether an override wants an explicit marker (the deleted
         lane diagnosed both typo directions: silent shadowing, and a
-        marker with no base method) is open, as is (5) whether the table
+        marker with no base method) is open — the shipped static method
+        inheritance above also went markerless, a derived same-shape
+        member shadowing by hop, so a marker would arrive here for both
+        the static and dynamic surfaces — as is (5) whether the table
         reserves a destructor slot so destroying through a base view runs
         the dynamic type's destructor (the destructor note above).
         Depends on the receiver kinds above (`const`/`mut self` is how a
         dispatching receiver travels) and the parent item's method
-        machinery
+        machinery, whose STATIC half is now in place: the shipped method
+        inheritance through `extends` (the [x] item above) supplies the
+        merged families, the hop-ranked resolution, and the
+        receiver-position upcast this item dynamizes — today that
+        conversion site binds statically (a derived receiver in a base
+        slot runs the base's member over the lent prefix), and this
+        item makes the same site form the fat view so the dynamic
+        type's override wins. Also deferred HERE by that ship's USER
+        RULING: whether a base-typed `const`/`mut` parameter accepts a
+        derived value at NON-receiver positions (program-wide implicit
+        coercion; today an explicit `as`), since that acceptance site
+        is exactly where the view would form
   - [ ] interfaces — cross-hierarchy contracts over the same view
         machinery: a named set of required operations
         (`interface writer { fn write(self, buf: slice<const uint8>) -> int64; }`)
