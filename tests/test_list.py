@@ -11,20 +11,18 @@ def test_direct_receiver_with_growth():
         """
         import "std/list";
         fn main() -> int32 {
-            let xs: struct list<int32>;
-            list_init(xs, 1);
-            list_push(xs, 7);
-            list_push(xs, 8);
-            list_push(xs, 9);
+            let xs = list<int32>(1);
+            xs.push(7);
+            xs.push(8);
+            xs.push(9);
             if (xs.length != 3) return 100;
             let v: int32 = 0;
-            if (!list_get(xs, 2, v)) return 101;   // const self, mut out
-            if (!list_set(xs, 0, 70)) return 102;
+            if (!xs.get(2, v)) return 101;   // const self, mut out
+            if (!xs.set( 0, 70)) return 102;
             let first: int32 = 0;
-            list_get(xs, 0, first);
-            list_reset(xs);
+            xs.get(0, first);
+            xs.reset();
             if (xs.length != 0) return 103;        // reset keeps the storage
-            list_destroy(xs);
             return first + v;                      // 70 + 9
         }
         """
@@ -38,14 +36,12 @@ def test_has_is_true_strictly_below_length():
         """
         import "std/list";
         fn main() -> int32 {
-            let xs: struct list<int32>;
-            list_init(xs, 2);
-            list_push(xs, 7);
-            list_push(xs, 8);
-            list_push(xs, 9);
-            if (!list_has(xs, 2)) return 1;   // last index is in bounds
-            if (list_has(xs, 3)) return 2;    // length itself is not
-            list_destroy(xs);
+            let xs = list<int32>(2);
+            xs.push(7);
+            xs.push(8);
+            xs.push(9);
+            if (!xs.has(2)) return 1;   // last index is in bounds
+            if (xs.has(3)) return 2;    // length itself is not
             return 0;
         }
         """
@@ -60,16 +56,14 @@ def test_at_is_an_assignable_lvalue():
         """
         import "std/list";
         fn main() -> int32 {
-            let xs: struct list<int32>;
-            list_init(xs, 4);
-            list_push(xs, 10);
-            list_push(xs, 20);
-            list_at(xs, 0) = 11;              // write-through
-            list_at(xs, 1) += 1;              // compound: 21
-            let a = list_at(xs, 0);           // value context copies out
+            let xs = list<int32>(4);
+            xs.push(10);
+            xs.push(20);
+            xs.at(0) = 11;              // write-through
+            xs.at(1) += 1;              // compound: 21
+            let a = xs.at(0);           // value context copies out
             let b: int32 = 0;
-            list_get(xs, 1, b);               // the checked read agrees
-            list_destroy(xs);
+            xs.get(1, b);               // the checked read agrees
             return a + b;                     // 11 + 21
         }
         """
@@ -83,15 +77,13 @@ def test_has_guards_at():
         """
         import "std/list";
         fn main() -> int32 {
-            let xs: struct list<int32>;
-            list_init(xs, 2);
-            list_push(xs, 1);
-            list_push(xs, 2);
-            if (list_has(xs, 1)) list_at(xs, 1) = 5;   // in bounds: writes
-            if (list_has(xs, 9)) list_at(xs, 9) = 5;   // out: never accessed
+            let xs = list<int32>(2);
+            xs.push(1);
+            xs.push(2);
+            if (xs.has(1)) xs.at(1) = 5;   // in bounds: writes
+            if (xs.has(9)) xs.at(9) = 5;   // out: never accessed
             let v: int32 = 0;
-            list_get(xs, 1, v);
-            list_destroy(xs);
+            xs.get(1, v);
             return v;
         }
         """
@@ -104,13 +96,11 @@ def test_amp_call_sites_still_compile():
         """
         import "std/list";
         fn main() -> int32 {
-            let xs: struct list<int32>;
-            list_init(&xs, 2);
-            list_push(&xs, 5);
-            list_push(&xs, 6);
+            let xs = list<int32>(2);
+            xs.push(5);
+            xs.push(6);
             let v: int32 = 0;
-            list_get(&xs, 1, v);
-            list_destroy(&xs);
+            xs.get(1, v);
             return v;
         }
         """
@@ -128,14 +118,14 @@ def test_heap_pointer_decays_after_guard():
         fn main() -> int32 {
             let p = alloc<struct list<uint64>>(1);
             if (p == null) return 1;
-            list_init(p, 2);
+            list::constructor(p, 2);
             for i in range(5 as uint64) {
-                list_push(p!, i * i);
+                list::push(p!, i * i);
             }
             let v: uint64 = 0;
-            list_get(p, 4, v);              // 16
+            list::get(p, 4, v);              // 16
             let n = p->length;              // field reads need no proof shape
-            list_destroy(p);
+            list::destructor(p);
             dealloc(p);
             return (v + n) as int32;        // 16 + 5
         }
@@ -154,20 +144,16 @@ def test_init_overloads_build_owned_copies():
             let seed: int32[3];
             seed[0] = 1; seed[1] = 2; seed[2] = 3;
 
-            let a: struct list<int32>;
-            list_init(a, &seed[0], 3);
+            let a = list<int32>(&seed[0], 3);
 
-            let b: struct list<int32>;
-            list_init(b, seed as slice<int32>);
+            let b = list<int32>(seed as slice<int32>);
 
             seed[0] = 100;                  // neither list shares seed's storage
             let x: int32 = 0;
             let y: int32 = 0;
-            list_get(a, 0, x);
-            list_get(b, 0, y);
+            a.get(0, x);
+            b.get(0, y);
             let total = (a.length + b.length) as int32 + x + y;   // 3+3+1+1
-            list_destroy(a);
-            list_destroy(b);
             return total;
         }
         """
@@ -182,22 +168,19 @@ def test_append_and_init_copy_through_const_source():
         """
         import "std/list";
         fn main() -> int32 {
-            let a: struct list<int32>;
-            list_init(a, 2);
-            list_push(a, 1);
-            list_push(a, 2);
+            let a = list<int32>(2);
+            a.push(1);
+            a.push(2);
 
-            let b: struct list<int32>;
-            list_init(b, a as slice<int32>);        // deep copy: [1, 2]
-            list_push(b, 3);
+            let b = list<int32>(a as slice<int32>);        // deep copy: [1, 2]
+            b.push(3);
             if (a.length != 2) return 100;  // a untouched by b's push
 
-            list_append(a, b as slice<int32>);      // a becomes [1, 2, 1, 2, 3]
+            a.append(b as slice<int32>);      // a becomes [1, 2, 1, 2, 3]
             let last: int32 = 0;
-            list_get(a, 4, last);
+            a.get(4, last);
             let total = (a.length as int32) * 10 + last;   // 53
-            list_destroy(a);
-            list_destroy(b);
+            
             return total;
         }
         """

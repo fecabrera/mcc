@@ -13,13 +13,11 @@ fn main() -> int32 {
     // container functions take const/mut receivers, so a local passes
     // directly: no & needed. (A list<T>* still works via pointer decay; see
     // examples/functions/pointer_decay.mc.)
-    let nums: struct list<int32>;
-    list_init(nums, 4);
-    defer list_destroy(nums);
+    let nums = list<int32>(4);           // ctor-sugar `let`: auto-defers cleanup
 
     let i: int32 = 1;
     while (i <= 6) {
-        list_push(nums, i * i);          // 1 4 9 16 25 36
+        nums.push(i * i);                // 1 4 9 16 25 36
         i += 1;
     }
 

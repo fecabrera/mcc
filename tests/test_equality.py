@@ -22,9 +22,7 @@ def test_char_slices_and_literals(capfd=None):
             PRELUDE
             + """
             fn main() -> int32 {
-                let s: struct string;
-                string_init(s, "hi");
-                defer string_destroy(s);
+                let s = string("hi");
                 if (!equals(s as slice<char>, "hi")) return 1;
                 if (equals(s as slice<char>, "ho"))  return 2;
                 return 0;
@@ -42,9 +40,7 @@ def test_different_lengths_never_equal():
             PRELUDE
             + """
             fn main() -> int32 {
-                let s: struct string;
-                string_init(s, "hip");
-                defer string_destroy(s);
+                let s = string("hip");
                 if (equals(s as slice<char>, "hi"))   return 1;
                 if (equals("hi", s as slice<char>))   return 2;
                 return 0;
@@ -61,9 +57,7 @@ def test_empty_slices_compare_equal():
             PRELUDE
             + """
             fn main() -> int32 {
-                let s: struct string;
-                string_init(s);
-                defer string_destroy(s);
+                let s = string();
                 if (!equals(s as slice<char>, "")) return 1;
                 if (equals(s as slice<char>, "x")) return 2;
                 return 0;

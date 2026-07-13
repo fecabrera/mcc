@@ -23,15 +23,13 @@ fn format_args(mut str: string, @format const fmt: slice<const char>, args...) {
     let bracket_open = false;
     let bracket_closed = false;
 
-    let modifier: string;
-    string_init(modifier);
-    defer string_destroy(modifier);
+    let modifier = string();
 
     for c in fmt {
         case (c) {
         when '{':
             if (bracket_open) {
-                string_push(str, c);
+                str.push(c);
                 bracket_open = false;
                 continue;
             }
@@ -39,7 +37,7 @@ fn format_args(mut str: string, @format const fmt: slice<const char>, args...) {
             bracket_open = true;
         when '}':
             if (bracket_closed) {
-                string_push(str, c);
+                str.push(c);
                 bracket_closed = false;
                 continue;
             }
@@ -56,14 +54,14 @@ fn format_args(mut str: string, @format const fmt: slice<const char>, args...) {
                     format(str, t, modifier as slice<char>);
                 }
 
-                string_reset(modifier);
+                modifier.reset();
                 i += 1;
             }
         else:
             if (bracket_open) {
-                string_push(modifier, c);
+                modifier.push(c);
             } else {
-                string_push(str, c);
+                str.push(c);
             }
         }
     }
@@ -129,9 +127,7 @@ fn print(@format const fmt: slice<const char>, args...) {
 }
 
 fn print(@nonnull f: FILE*, @format const fmt: slice<const char>, args...) {
-    let str: string;
-    string_init(str);
-    defer string_destroy(str);
+    let str = string();
     format_args(str, fmt, args);
     print(f, str);   // hand the finished string to the verbatim printer
 }
@@ -179,11 +175,9 @@ fn println(@format const fmt: slice<const char>, args...) {
 }
 
 fn println(@nonnull f: FILE*, @format const fmt: slice<const char>, args...) {
-    let str: string;
-    string_init(str);
-    defer string_destroy(str);
+    let str = string();
     format_args(str, fmt, args);
-    string_push(str, '\n');
+    str.push('\n');
     print(f, str);
 }
 
@@ -300,8 +294,7 @@ fn panic(const msg: slice<const char>) {
  */
 @noreturn
 fn panic(@format const fmt: slice<const char>, args...) {
-    let str: string;
-    string_init(str);   // never destroyed: the process is about to abort
+    let str = string();
     format_args(str, fmt, args);
     fail(str as slice<char>);
 }
@@ -333,8 +326,7 @@ fn assert(const cond: bool, const msg: slice<const char>) {
  */
 fn assert(const cond: bool, @format const fmt: slice<const char>, args...) {
     if (!cond) {
-        let str: string;
-        string_init(str);
+        let str = string();
         format_args(str, fmt, args);
         fail("assertion failed: ", str as slice<char>);
     }

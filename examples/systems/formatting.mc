@@ -34,11 +34,11 @@ struct point {
 // and its unbounded fallback, and the field calls re-enter the
 // whole-program set, so the caller's modifier steers the fields too.
 fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
-    string_push(str, '(');
+    str.push('(');
     format(str, value!->x, modifier);
-    string_append(str, ", ");
+    str.append(", ");
     format(str, value!->y, modifier);
-    string_push(str, ')');
+    str.push(')');
 }
 
 // A string is a growable list<char> ({data, length}, no NUL terminator);
@@ -46,13 +46,11 @@ fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
 // for the next line.
 fn show(label: char*, mut line: string) {
     printf("%-10s%.*s\n", label, line.length as int32, line.data);
-    string_reset(line);
+    line.reset();
 }
 
 fn main() -> int32 {
-    let line: string;
-    string_init(line);
-    defer string_destroy(line);
+    let line = string();
 
     // Mixed values into one string, one call per value. A bare "" is the
     // default modifier, adapting to the slice<char> parameter directly.

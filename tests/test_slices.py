@@ -51,14 +51,12 @@ def test_borrow_list_reads_data_and_length():
     source = """
     import "std/list";
     fn main() -> int32 {
-        let xs: struct list<int32>;
-        list_init(&xs, 4);
-        list_push(&xs, 7);
-        list_push(&xs, 8);
-        list_push(&xs, 9);
+        let xs = list<int32>(4);
+        xs.push(7);
+        xs.push(8);
+        xs.push(9);
         let s = xs as slice<int32>;
         let got = (s.length as int32) + s[0] + s[1] + s[2];   // 3 + 24
-        list_destroy(&xs);
         return got;
     }
     """
@@ -131,12 +129,10 @@ def test_empty_slice_iterates_zero_times():
     source = """
     import "std/list";
     fn main() -> int32 {
-        let xs: struct list<int32>;
-        list_init(&xs, 4);                 // length 0
+        let xs = list<int32>(4);                 // length 0
         let s = xs as slice<int32>;
         let count: int32 = 0;
         for v in s { count = count + 1; }
-        list_destroy(&xs);
         return count;
     }
     """
@@ -225,14 +221,12 @@ def test_list_borrows_to_both_mutable_and_const_slice():
     source = """
     import "std/list";
     fn main() -> int32 {
-        let xs: struct list<int32>;
-        list_init(&xs, 4);
-        list_push(&xs, 10);
-        list_push(&xs, 20);
+        let xs = list<int32>(4);
+        xs.push(10);
+        xs.push(20);
         let m = xs as slice<int32>;
         let c = xs as slice<const int32>;
         let got = m[0] + c[1];   // 10 + 20
-        list_destroy(&xs);
         return got;
     }
     """
@@ -417,8 +411,8 @@ def test_generic_infers_through_const_slice_element():
     source = """
     import "std/list";
     fn copy_first<T>(@nonnull self: struct list<T>*, const arr: slice<const T>) {
-        list_init(self, arr.length);
-        for el in arr { list_push(self, el); }
+        list<T>::constructor(self, arr.length);
+        for el in arr { self.push(el); }
     }
     fn main() -> int32 {
         let xs: int32[3];
@@ -427,7 +421,7 @@ def test_generic_infers_through_const_slice_element():
         copy_first(&dst, xs as slice<const int32>);   // T = int32, not const int32
         let view = dst as slice<int32>;
         let got = (view.length as int32) + view[0];
-        list_destroy(&dst);
+        list<int32>::destructor(&dst);
         return got;   // 3 + 4
     }
     """
@@ -1171,11 +1165,9 @@ def test_format_renders_adapted_literal(capfd):
         import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s = string();
             format(s, [0x10, 0x1F] as slice<const int32>, "");
             printf("|%.*s|\\n", s.length as int32, s.data);
-            string_destroy(s);
             return 0;
         }
         """
@@ -1358,12 +1350,10 @@ def test_format_renders_sub_slice(capfd):
         import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s = string();
             let nums = [1, 2, 3, 4] as slice<const int32>;
             format(s, nums[1:3], "");
             printf("|%.*s|\\n", s.length as int32, s.data);
-            string_destroy(s);
             return 0;
         }
         """
@@ -1655,8 +1645,7 @@ def test_destructure_list_source_rejected():
             """
             import "std/list";
             fn main() -> int32 {
-                let xs: list<int32>;
-                list_init(&xs, 4);
+                let xs = list<int32>(4);
                 let a, rst... = xs;
                 return 0;
             }

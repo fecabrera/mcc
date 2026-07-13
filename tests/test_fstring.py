@@ -215,7 +215,7 @@ def test_a_struct_literal_expression_in_a_hole(capfd):
         struct point { x: int32; y: int32; }
         fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
             format(str, value!->x, modifier);
-            string_push(str, ',');
+            str.push(',');
             format(str, value!->y, modifier);
         }
         fn main() -> int32 {

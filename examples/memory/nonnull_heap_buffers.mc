@@ -6,8 +6,8 @@ import "std/hashing/crc32";
 // annotates its data, source, key, and destination pointers @nonnull (see
 // functions/nonnull.mc): the memory copy/fill family (bytecopy, copy,
 // bytezero, zero, bytefill, fill), the hashing digests (md5, crc32,
-// murmur3), dict's string keys, and the raw-array source overloads of
-// list_init/string_init. Every such call must prove the
+// murmur3), dict's string keys, and the raw-array (T*, n) source overload
+// of the list<T> constructor (inherited by string). Every such call must prove the
 // pointer non-null. A stack buffer (&x, an array) or a string literal is
 // already a proof; a heap buffer comes back from alloc<T> as a plain,
 // possibly-null pointer, and the whole migration is one idiom: a single

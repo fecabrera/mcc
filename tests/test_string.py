@@ -17,18 +17,16 @@ def test_base_operations(capfd):
         import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
-            let s: struct string;
-            string_init(&s);
-            string_push(&s, 'h');
-            string_push(&s, 'i');
-            string_set(&s, 0, 'H');
+            let s = string();
+            s.push('h');
+            s.push('i');
+            s.set(0, 'H');
             let c: char;
-            string_get(&s, 1, c);
+            s.get(1, c);
             printf("len=%llu first_then_second=", s.length);   // inherited field
             let f: char;
-            string_get(&s, 0, f);
+            s.get(0, f);
             printf("%c%c\\n", f, c);
-            string_destroy(&s);
             return 0;
         }
         """
@@ -42,14 +40,12 @@ def test_for_in_iterates_characters(capfd):
         import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
-            let s: struct string;
-            string_init(&s);
-            string_push(&s, 'a');
-            string_push(&s, 'b');
-            string_push(&s, 'c');
-            for c in &s { printf("%c", c); }
+            let s = string();
+            s.push('a');
+            s.push('b');
+            s.push('c');
+            for c in s { printf("%c", c); }
             printf("\\n");
-            string_destroy(&s);
             return 0;
         }
         """
@@ -63,19 +59,15 @@ def test_string_append_concatenates(capfd):
         import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
-            let a: struct string;
-            string_init(&a);
-            string_push(&a, 'h');
-            string_push(&a, 'i');
-            let b: struct string;
-            string_init(&b);
-            string_push(&b, '!');
-            string_push(&b, '?');
-            string_append(&a, b as slice<char>);   // a becomes "hi!?"
+            let a = string();
+            a.push('h');
+            a.push('i');
+            let b = string();
+            b.push('!');
+            b.push('?');
+            a.append(b as slice<char>);   // a becomes "hi!?"
             for c in &a { printf("%c", c); }
             printf(" len=%llu\\n", a.length);
-            string_destroy(&a);
-            string_destroy(&b);
             return 0;
         }
         """
@@ -92,13 +84,11 @@ def test_string_append_cstr_copies_until_nul(capfd):
         import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s, "hey");
+            let s = string("hey");
             let p: char* = " you";
-            string_append(s, p);
+            s.append(p);
             for c in &s { printf("%c", c); }
             printf(" len=%llu\\n", s.length);
-            string_destroy(s);
             return 0;
         }
         """
@@ -112,12 +102,10 @@ def test_string_init_from_cstr_copies_until_nul(capfd):
         import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
-            let s: struct string;
             let p: char* = "hello";
-            string_init(&s, p);   // char* overload: copies bytes up to the NUL
-            for c in &s { printf("%c", c); }
+            let s = string(p);
+            for c in s { printf("%c", c); }
             printf(" len=%llu\\n", s.length);
-            string_destroy(&s);
             return 0;
         }
         """
@@ -134,17 +122,15 @@ def test_direct_receiver_through_the_alias(capfd):
         import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
-            string_push(s, 'h');
-            string_push(s, 'i');
-            string_set(s, 0, 'H');
+            let s = string();
+            s.push('h');
+            s.push('i');
+            s.set(0, 'H');
             let c: char;
-            string_get(s, 1, c);            // const self, mut out
+            s.get(1, c);            // const self, mut out
             printf("%c len=%llu\\n", c, s.length);
-            string_reset(s);
+            s.reset();
             printf("reset len=%llu\\n", s.length);
-            string_destroy(s);
             return 0;
         }
         """
@@ -161,15 +147,13 @@ def test_string_has_and_at_through_the_wrappers():
         """
         import "std/string";
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s, "abc");
-            if (!string_has(s, 2)) return 1;   // last byte is in bounds
-            if (string_has(s, 3)) return 2;    // length itself is not
-            string_at(s, 0) = '/';             // write through the wrapper
-            string_at(s, 2) += 1;              // compound: 'c' -> 'd'
-            if (!equals(s, "/bd")) return 3;
-            let c = string_at(s, 1);           // value context copies out
-            string_destroy(s);
+            let s = string("abc");
+            if (!s.has(2)) return 1;   // last byte is in bounds
+            if (s.has(3)) return 2;    // length itself is not
+            s.at(0) = '/';             // write through the wrapper
+            s.at(2) += 1;              // compound: 'c' -> 'd'
+            if (!s.equals("/bd")) return 3;
+            let c = s.at(1);           // value context copies out
             return (c == 'b') ? 0 : 4;
         }
         """
@@ -185,18 +169,14 @@ def test_string_equals_and_init_copy():
         """
         import "std/string";
         fn main() -> int32 {
-            let a: struct string;
-            string_init(a, "hi");
-            if (!equals(a, "hi")) return 4;      // a literal compares directly
-            let b: struct string;
-            string_init(b, a as slice<char>);
-            if (!equals(a, b)) return 1;         // string-vs-string, equal after the deep copy
-            string_push(b, '!');
-            if (equals(a, b)) return 2;          // lengths differ now
-            string_push(a, '?');                 // a = "hi?", b = "hi!"
-            if (equals(a, b)) return 3;          // same length, bytes differ
-            string_destroy(a);
-            string_destroy(b);
+            let a = string("hi");
+            if (!a.equals("hi")) return 4;      // a literal compares directly
+            let b = string(a as slice<char>);
+            if (!a.equals(b)) return 1;         // string-vs-string, equal after the deep copy
+            b.push('!');
+            if (a.equals(b)) return 2;          // lengths differ now
+            a.push('?');                 // a = "hi?", b = "hi!"
+            if (a.equals(b)) return 3;          // same length, bytes differ
             return 0;
         }
         """
@@ -213,22 +193,16 @@ def test_string_equals_over_char_slices():
         """
         import "std/string";
         fn main() -> int32 {
-            let a: struct string;
-            string_init(a, "hi");
-            let b: struct string;
-            string_init(b, "hi");
-            let c: struct string;
-            string_init(c, "hixyz");
-            if (!equals(a, b)) return 1;                        // string vs string (T = string)
-            if (!equals(a, (c as slice<char>)[0:2])) return 2;  // string vs slice<char> "hi"
-            if (equals(a, (c as slice<char>)[0:3]))  return 3;  // differ in length: "hi" != "hix"
-            if (equals(a, c as slice<char>))         return 4;  // "hi" != "hixyz"
-            string_reset(a);
-            string_append(a, "ho");                             // same length, bytes differ
-            if (equals(a, b)) return 5;                         // "ho" != "hi"
-            string_destroy(a);
-            string_destroy(b);
-            string_destroy(c);
+            let a = string("hi");
+            let b = string("hi");
+            let c = string("hixyz");
+            if (!a.equals(b)) return 1;                        // string vs string (T = string)
+            if (!a.equals((c as slice<char>)[0:2])) return 2;  // string vs slice<char> "hi"
+            if (a.equals((c as slice<char>)[0:3]))  return 3;  // differ in length: "hi" != "hix"
+            if (a.equals(c as slice<char>))         return 4;  // "hi" != "hixyz"
+            a.reset();
+            a.append("ho");                             // same length, bytes differ
+            if (a.equals(b)) return 5;                         // "ho" != "hi"
             return 0;
         }
         """
@@ -246,10 +220,9 @@ def test_string_equals_rejects_non_char_slice():
             """
             import "std/string";
             fn main() -> int32 {
-                let a: struct string;
-                string_init(a, "hi");
+                let a = string("hi");
                 let nums: int32[2] = [1, 2];
-                return equals(a, nums as slice<int32>) as int32;
+                return a.equals(nums as slice<int32>) as int32;
             }
             """
         )
@@ -263,10 +236,8 @@ def test_string_init_from_literal_drops_the_nul():
         """
         import "std/string";
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s, "hey");
+            let s = string("hey");
             let n = s.length as int32;
-            string_destroy(s);
             return n;
         }
         """
@@ -283,13 +254,13 @@ def test_heap_string_pointer_decays_after_guard():
         fn main() -> int32 {
             let p = alloc<struct string>(1);
             if (p == null) return 1;
-            string_init(p);
-            string_push(p, 'x');
-            string_push(p, 'y');
+            string::constructor(p);
+            p.push('x');
+            p.push('y');
             let c: char;
-            string_get(p, 1, c);
+            p.get(1, c);
             let n = p->length as int32;
-            string_destroy(p);
+            string::destructor(p);
             dealloc(p);
             return n * 10 + ((c == 'y') ? 1 : 0);   // 21
         }
@@ -478,9 +449,7 @@ def test_writestr_and_writeln_take_a_string_directly(capfd):
     import "std/io";
     import "std/string";
     fn main() -> int32 {
-        let s: string;
-        string_init(s, "owned");
-        defer string_destroy(s);
+        let s = string("owned");
         writestr(s);
         writechar(' ');
         writeln(s);

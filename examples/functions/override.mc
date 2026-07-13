@@ -36,7 +36,7 @@ struct point {
 // prototype-only target is a compile error.
 @override
 fn format(mut str: string, value: bool, const modifier: slice<char>) {
-    string_append(str, value ? "ON" : "OFF");
+    str.append(value ? "ON" : "OFF");
 }
 
 // Replace the unbounded `<typename>` fallback -- the member that renders any
@@ -46,7 +46,7 @@ fn format(mut str: string, value: bool, const modifier: slice<char>) {
 // (its concrete override above), slices, and the rest untouched.
 @override
 fn format<T>(mut str: string, value: T, const modifier: slice<char>) {
-    string_append(str, "<unprintable>");
+    str.append("<unprintable>");
 }
 
 fn main() -> int32 {

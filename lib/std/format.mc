@@ -59,9 +59,9 @@ enum float_fmt_state {
  * @param modifier: ignored
  */
 fn format<T>(mut str: string, value: T, const modifier: slice<char>) {
-    string_push(str, '<');
-    string_append(str, typename(T)!);
-    string_push(str, '>');
+    str.push('<');
+    str.append(typename(T)!);
+    str.push('>');
 }
 
 /**
@@ -209,13 +209,10 @@ fn _format(mut str: string, value: uint64, const modifier: slice<char>, neg: boo
         i += 1;
     }
 
-    let buf: string;
-    string_init(buf);
-    defer string_destroy(buf);
-
+    let buf = string();
     let num = value;
     while (true) {
-        string_push(buf, mayus ? _hexu![num % base] : _hex![num % base]);
+        buf.push(mayus ? _hexu![num % base] : _hex![num % base]);
         num = num / base;
         if (num == 0) break;
     }
@@ -223,35 +220,35 @@ fn _format(mut str: string, value: uint64, const modifier: slice<char>, neg: boo
     if (neg) {
         if (pointer) {
             if (zero) {
-                string_push(str, '-');
-                string_append(str, "0x");
+                str.push('-');
+                str.append("0x");
             } else {
-                string_append(buf, "x0");
-                string_push(buf, '-');
+                buf.append("x0");
+                buf.push('-');
             }
         } else {
             if (zero) {
-                string_push(str, '-');
+                str.push('-');
             } else {
-                string_push(buf, '-');
+                buf.push('-');
             }
         }
     } else if (pointer) {
         if (zero) {
-            string_append(str, "0x");
+            str.append("0x");
         } else {
-            string_append(buf, "x0");
+            buf.append("x0");
         }
     }
     
     if (padding > buf.length) {
         for i in range(padding - buf.length) {
-            string_push(str, zero ? '0' : ' ');
+            str.push(zero ? '0' : ' ');
         }
     }
 
     for i in range(buf.length) {
-        string_push(str, buf.data![buf.length - i - 1]);
+        str.push(buf.data![buf.length - i - 1]);
     }
 }
 
@@ -304,7 +301,7 @@ fn format(mut str: string, value: float64, const modifier: slice<char>) {
 
     let buf: char[MAX_BUF_LEN];
     snprintf(buf, MAX_BUF_LEN, "%*.*f", width, precision, value);
-    string_append(str, buf);
+    str.append(buf);
 }
 
 /**
@@ -317,11 +314,11 @@ fn format(mut str: string, value: float64, const modifier: slice<char>) {
  */
 fn format(mut str: string, value: bool, const modifier: slice<char>) {
     if (equals(modifier, "y"))
-        string_append(str, value ? "y" : "n");
+        str.append(value ? "y" : "n");
     else if (equals(modifier, "yes"))
-        string_append(str, value ? "yes" : "no");
+        str.append(value ? "yes" : "no");
     else
-        string_append(str, value ? "true" : "false");
+        str.append(value ? "true" : "false");
 }
 
 /**
@@ -339,12 +336,12 @@ fn format(mut str: string, value: bool, const modifier: slice<char>) {
  *                  integer as hex)
  */
 fn format<T>(mut str: string, const value: slice<T>, const modifier: slice<char>) {
-    string_push(str, '[');
+    str.push('[');
     for item in enumerate(value) {
-        if (item.index > 0) string_append(str, ", ");
+        if (item.index > 0) str.append(", ");
         format(str, item.value, modifier);
     }
-    string_push(str, ']');
+    str.push(']');
 }
 
 /**
@@ -394,15 +391,15 @@ fn format(mut str: string, const value: slice<const char>, const modifier: slice
 
     if(l_pad > value.length) {
         for i in range(l_pad - value.length) {
-            string_push(str, ' ');
+            str.push(' ');
         }
     }
 
-    string_append(str, value);
+    str.append(value);
 
     if(r_pad > value.length) {
         for i in range(r_pad - value.length) {
-            string_push(str, ' ');
+            str.push(' ');
         }
     }
 }
@@ -421,7 +418,7 @@ fn format(mut str: string, const value: slice<const char>, const modifier: slice
 @inline
 fn format(mut str: string, value: char*, const modifier: slice<char>) {
     if (value == null) {
-        string_append(str, "(null)");
+        str.append("(null)");
         return;
     }
 
@@ -444,14 +441,14 @@ fn format(mut str: string, value: char*, const modifier: slice<char>) {
  * @param modifier: ignored
  */
 fn format(mut str: string, const value: slice<char*>, const modifier: slice<char>) {
-    string_push(str, '[');
+    str.push('[');
     for item in enumerate(value) {
-        if (item.index > 0) string_append(str, ", ");
-        string_push(str, '"');
-        string_append(str, item.value!);
-        string_push(str, '"');
+        if (item.index > 0) str.append(", ");
+        str.push('"');
+        str.append(item.value!);
+        str.push('"');
     }
-    string_push(str, ']');
+    str.push(']');
 }
 
 /**
@@ -463,5 +460,5 @@ fn format(mut str: string, const value: slice<char*>, const modifier: slice<char
  */
 @inline
 fn format(mut str: string, value: char, const modifier: slice<char>) {
-    string_push(str, value);
+    str.push(value);
 }

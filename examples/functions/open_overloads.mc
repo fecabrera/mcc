@@ -6,11 +6,13 @@ import "libc/stdio";
 // every module's members at import merge, in any import order, and a call
 // resolves against that union under the unchanged rules (see
 // mixed_overloads.mc for the rank). This file joins the stdlib's
-// `string_append` set: string.mc declares three concrete members (a
-// slice<char>, a char* with a length, a NUL-terminated char*), and this
-// module, a different file, makes its own struct appendable by adding one
-// more. Before sets were open, this exact join was rejected as a duplicate
-// definition of 'string_append'; now declaring the overload is joining.
+// `string::append` set: the `append` member reachable on a string spans
+// three concrete members (list.mc's slice<char> and (char*, length), plus
+// string.mc's NUL-terminated char* -- `string` is a `list<char>`, so it
+// inherits list's members), and this module, a different file, makes its
+// own struct appendable by adding one more. Before sets were open, this
+// exact join was rejected as a duplicate definition; now declaring the
+// overload is joining.
 // The stdlib format protocol (the `format` set any module adds its own
 // types to; see systems/formatting.mc) is the headline use of this openness.
 // Builds on overloading.mc (concrete sets) and mixed_overloads.mc (mixed
@@ -23,30 +25,28 @@ struct point {
 }
 
 // The cross-module join: one concrete overload, declared here, becomes a
-// member of string.mc's `string_append` set. Same name, same receiver
+// member of the stdlib's `string::append` set. Same name, same receiver
 // shape as the stdlib members; the value parameter's type is what selects
 // it. No annotation, no registration: declaring it is joining.
-fn string_append(mut str: string, const value: struct point) {
+fn string::append(mut str: string, const value: struct point) {
     let buf: char[32];
     let n = snprintf(buf, 32, "(%d, %d)", value.x, value.y);
     // Appending the rendered text re-enters the same whole-program set and
-    // lands on string.mc's (char*, length) member: two modules' members,
+    // lands on list.mc's (char*, length) member: two modules' members,
     // one set, resolving side by side.
-    string_append(str, buf, n as uint64);
+    str.append(buf, n as uint64);
 }
 
 fn main() -> int32 {
-    let line: string;
-    string_init(line);
-    defer string_destroy(line);
+    let line = string();
 
     let p = point { x = 10, y = 31 };
 
     // Two calls, two members, two defining modules: the literal borrows to
-    // string.mc's slice<char> member, and `p` selects the point member
+    // list.mc's slice<char> member, and `p` selects the point member
     // declared above.
-    string_append(line, "origin moved to ");
-    string_append(line, p);
+    line.append("origin moved to ");
+    line.append(p);
 
     // A string is a growable list<char> ({data, length}); printf's %.*s
     // prints exactly length bytes of it.
@@ -56,7 +56,7 @@ fn main() -> int32 {
 }
 
 // The gates on an open set run cross-module too: a second
-// string_append(string, point) in yet another module is the same
+// string::append(string, point) in yet another module is the same
 // duplicate-definition error as within one file, with a note citing this
 // member's site. Resolution never silently rewires: adding an import can
 // only add candidates or collide loudly.

@@ -849,65 +849,65 @@ def test_emit_interface_honors_warning_classes(tmp_path):
 # Its own dereferences are all proven (array decay, `&elem`, string literals),
 # so the only sites that could warn are inside libmc -- the dogfooding probe
 # for the sweep that asserts every invariant-backed dereference with `!`.
-LIBMC_DEREF_EXERCISER = (
-    'import "libc/stdio";\n'
-    'import "std/list";\n'
-    'import "std/ring";\n'
-    'import "std/stack";\n'
-    'import "std/queue";\n'
-    'import "std/dict";\n'
-    'import "std/set";\n'
-    'import "std/equality";\n'
-    'import "std/hashing/md5";\n'
-    'import "std/hashing/murmur3";\n'
-    'import "std/hashing/fnv1a";\n'
-    "fn main() -> int32 {\n"
-    "    let xs: list<int32>;\n"
-    "    list_init(xs, 2);\n"
-    "    for i in range(6) { list_push(xs, i as int32); }\n"
-    "    list_at(xs, 0) = 9;\n"
-    "    let lo: int32; list_get(xs, 1, lo); list_set(xs, 1, 5);\n"
-    "    for v in &xs { lo += v; }\n"
-    "    let ys: list<int32>;\n"
-    "    list_init(ys, 2); list_push(ys, 9);\n"
-    "    let eq = equals(xs as slice<int32>, ys as slice<int32>);\n"
-    "    list_destroy(xs); list_destroy(ys);\n"
-    "    let r: ring<int32>;\n"
-    "    ring_init(r, 1);\n"
-    "    for i in range(5) { ring_push(r, i as int32); }\n"
-    "    ring_at(r, 0) = 3;\n"
-    "    let rr = ring_peek(r) + ring_pop(r); ring_destroy(r);\n"
-    "    let st: struct stack<int32>;\n"
-    "    stack_init(st, 1);\n"
-    "    for i in range(5) { stack_push(st, i as int32); }\n"
-    "    let ss = stack_peek(st) + stack_pop(st); stack_destroy(st);\n"
-    "    let q: queue<int32>;\n"
-    "    queue_init(q);\n"
-    "    for i in range(4) { queue_push(q, i as int32); }\n"
-    "    let qq: int32 = queue_peek(q);\n"
-    "    for v in &q { qq += v; }\n"
-    "    queue_destroy(q);\n"
-    "    let d: dict<int32>;\n"
-    "    dict_init(d, 2);\n"
-    "    dict_set(d, \"a\", 1); dict_set(d, \"b\", 2); dict_set(d, \"c\", 3);\n"
-    "    let dv: int32; dict_get(d, \"b\", dv); dict_remove(d, \"a\");\n"
-    "    for p in &d { dv += p.value; }\n"
-    "    dict_destroy(d);\n"
-    "    let m: struct set<int32, int32>;\n"
-    "    set_init(m, 2);\n"
-    "    for i in range(6) { set_set(m, i as int32, (i * i) as int32); }\n"
-    "    let mv: int32; set_get(m, 3, mv); set_remove(m, 1);\n"
-    "    for p in &m { mv += p.value; }\n"
-    "    set_destroy(m);\n"
-    "    let buf: uint8[5] = [104, 101, 108, 108, 111];\n"
-    "    let digest: uint8[16];\n"
-    "    md5(buf, 5, digest);\n"
-    "    let mm = murmur3(buf, 5, 0);\n"
-    "    let fv = fnv1a(\"hi\");\n"
-    "    return (rr + ss + qq + dv + mv + eq as int32\n"
-    "            + digest[0] as int32 + mm as int32 + fv as int32) * 0;\n"
-    "}\n"
-)
+LIBMC_DEREF_EXERCISER = """\
+import "libc/stdio";
+import "std/list";
+import "std/ring";
+import "std/stack";
+import "std/queue";
+import "std/dict";
+import "std/set";
+import "std/equality";
+import "std/hashing/md5";
+import "std/hashing/murmur3";
+import "std/hashing/fnv1a";
+fn main() -> int32 {
+    let xs = list<int32>();
+    for i in range(6) { xs.push(i as int32); }
+    xs.at(0) = 9;
+    let lo: int32;
+    xs.get(1, lo);
+    xs.set(1, 5);
+    for v in xs { lo += v; }
+    let ys = list<int32>(2);
+    ys.push(9);
+    let eq = equals(xs as slice<int32>, ys as slice<int32>);
+    let r: ring<int32>;
+    ring_init(r, 1);
+    for i in range(5) { ring_push(r, i as int32); }
+    ring_at(r, 0) = 3;
+    let rr = ring_peek(r) + ring_pop(r); ring_destroy(r);
+    let st: struct stack<int32>;
+    stack_init(st, 1);
+    for i in range(5) { stack_push(st, i as int32); }
+    let ss = stack_peek(st) + stack_pop(st); stack_destroy(st);
+    let q: queue<int32>;
+    queue_init(q);
+    for i in range(4) { queue_push(q, i as int32); }
+    let qq: int32 = queue_peek(q);
+    for v in &q { qq += v; }
+    queue_destroy(q);
+    let d: dict<int32>;
+    dict_init(d, 2);
+    dict_set(d, "a", 1); dict_set(d, "b", 2); dict_set(d, "c", 3);
+    let dv: int32; dict_get(d, "b", dv); dict_remove(d, "a");
+    for p in &d { dv += p.value; }
+    dict_destroy(d);
+    let m: struct set<int32, int32>;
+    set_init(m, 2);
+    for i in range(6) { set_set(m, i as int32, (i * i) as int32); }
+    let mv: int32; set_get(m, 3, mv); set_remove(m, 1);
+    for p in &m { mv += p.value; }
+    set_destroy(m);
+    let buf: uint8[5] = [104, 101, 108, 108, 111];
+    let digest: uint8[16];
+    md5(buf, 5, digest);
+    let mm = murmur3(buf, 5, 0);
+    let fv = fnv1a("hi");
+    return (rr + ss + qq + dv + mv + eq as int32
+            + digest[0] as int32 + mm as int32 + fv as int32) * 0;
+}
+"""
 
 
 def test_libmc_compiles_clean_under_unchecked_dereference(tmp_path):
@@ -917,7 +917,7 @@ def test_libmc_compiles_clean_under_unchecked_dereference(tmp_path):
     src = tmp_path / "exerciser.mc"
     src.write_text(LIBMC_DEREF_EXERCISER)
     result = mcc(src, "-Wunchecked-dereference", "--emit-llvm")
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stderr
     assert "lib/" not in result.stderr  # no stdlib site warns
     assert result.stderr == ""          # nor does the exerciser itself
 
@@ -929,7 +929,7 @@ def test_libmc_stays_clean_under_werror_unchecked_dereference(tmp_path):
     src = tmp_path / "exerciser.mc"
     src.write_text(LIBMC_DEREF_EXERCISER)
     result = mcc(src, "-Werror=unchecked-dereference", "--emit-llvm")
-    assert result.returncode == 0
+    assert result.returncode == 0, result.stderr
     assert result.stderr == ""
 
 

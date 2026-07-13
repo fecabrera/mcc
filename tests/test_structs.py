@@ -260,16 +260,16 @@ def test_list_lib(tmp_path, capfd):
         fn main() -> int32 {
             let floats = alloc<struct list<float64>>(1);
             if (floats == null) { return 1; }  // proves floats for the receivers
-            list_init(floats, 1);
+            list::constructor(floats, 1);
             let i: int32 = 0;
             while (i < 5) {
-                list_push(floats!, i as float64 / 2.0);  // mut receiver in a loop
+                list::push(floats!, i as float64 / 2.0);  // mut receiver in a loop
                 i = i + 1;                               // drops the fact, so !
             }
             let v: float64 = 0.0;
-            list_get(floats, 3, v);
+            list::get(floats, 3, v);
             printf("%f %llu\\n", v, floats->length);
-            list_destroy(floats);
+            list::destructor(floats);
             dealloc(floats);
             return 0;
         }
@@ -289,12 +289,10 @@ def test_list_iterator(tmp_path, capfd):
         """
         import \"libc/stdio\";
         fn main() -> int32 {
-            let xs: struct list<int32>;
-            list_init(&xs, 2);
-            list_push(&xs, 10);
-            list_push(&xs, 20);
-            list_push(&xs, 30);          // grows past the initial capacity
-            defer list_destroy(&xs);
+            let xs = list<int32>(2);
+            xs.push(10);
+            xs.push(20);
+            xs.push(30);          // grows past the initial capacity
 
             let sum: int32 = 0;
             {
@@ -323,15 +321,13 @@ def test_for_in_loop(tmp_path, capfd):
         """
         import \"libc/stdio\";
         fn main() -> int32 {
-            let xs: struct list<int32>;
-            list_init(&xs, 2);
-            list_push(&xs, 10);
-            list_push(&xs, 20);
-            list_push(&xs, 30);
-            defer list_destroy(&xs);
+            let xs = list<int32>(2);
+            xs.push(10);
+            xs.push(20);
+            xs.push(30);
 
             let sum: int32 = 0;
-            for v in &xs {               // element type inferred from next
+            for v in xs {               // element type inferred from next
                 if (v == 30) { break; }  // break/continue work in a for
                 sum = sum + v;
             }
@@ -350,20 +346,16 @@ def test_list_append_concatenates(capfd):
         import "std/list";
         import "libc/stdio";
         fn main() -> int32 {
-            let a: struct list<int32>;
-            list_init(&a, 2);
-            list_push(&a, 1);
-            list_push(&a, 2);
-            let b: struct list<int32>;
-            list_init(&b, 2);
-            list_push(&b, 3);
-            list_push(&b, 4);
-            list_append(&a, b as slice<int32>);     // a becomes [1, 2, 3, 4]
+            let a = list<int32>(2);
+            a.push(1);
+            a.push(2);
+            let b = list<int32>(2);
+            b.push(3);
+            b.push(4);
+            a.append(b as slice<int32>);     // a becomes [1, 2, 3, 4]
             let sum: int32 = 0;
-            for v in &a { sum = sum + v; }
+            for v in a { sum = sum + v; }
             printf("%d %llu\\n", sum, a.length);    // 10 4
-            list_destroy(&a);
-            list_destroy(&b);
             return 0;
         }
         """
@@ -377,18 +369,14 @@ def test_list_init_from_slice_deep_copies(capfd):
         import "std/list";
         import "libc/stdio";
         fn main() -> int32 {
-            let a: struct list<int32>;
-            list_init(&a, 4);
-            list_push(&a, 7);
-            list_push(&a, 8);
-            let b: struct list<int32>;
-            list_init(&b, a as slice<int32>);       // independent copy
-            list_set(&a, 0, 99);                    // mutate the original
+            let a = list<int32>(4);
+            a.push(7);
+            a.push(8);
+            let b = list<int32>(a as slice<int32>);       // independent copy
+            a.set(0, 99);                    // mutate the original
             let first: int32 = 0;
-            list_get(&b, 0, first);                // copy is unaffected
+            b.get(0, first);                // copy is unaffected
             printf("%d %llu\\n", first, b.length);  // 7 2
-            list_destroy(&a);
-            list_destroy(&b);
             return 0;
         }
         """
@@ -404,13 +392,11 @@ def test_list_init_from_array_builds_a_private_copy(capfd):
         fn main() -> int32 {
             let raw: int32[3];
             raw[0] = 5; raw[1] = 6; raw[2] = 7;
-            let xs: struct list<int32>;
-            list_init(&xs, &raw[0], 3);
+            let xs = list<int32>(&raw[0], 3);
             raw[0] = 0;                             // the list owns its own copy
             let sum: int32 = 0;
             for v in &xs { sum = sum + v; }
             printf("%d %llu\\n", sum, xs.length);   // 18 3
-            list_destroy(&xs);
             return 0;
         }
         """

@@ -1,10 +1,17 @@
 import "std/memory";
 
+@private
+const DEFAULT_LIST_CAPACITY = 2;
+
 /**
  * A growable, heap-backed list of T.
  */
 struct list<T> extends slice<T> {
     capacity: uint64;
+}
+
+fn list<T>::constructor(mut self: list<T>) {
+    list<T>::constructor(self, DEFAULT_LIST_CAPACITY);
 }
 
 /**
@@ -13,25 +20,25 @@ struct list<T> extends slice<T> {
  * @param self:     list to initialize
  * @param capacity: initial number of elements to reserve space for
  */
-fn list_init<T>(mut self: list<T>, capacity: uint64) {
+fn list<T>::constructor(mut self: list<T>, capacity: uint64) {
     self.data = alloc<T>(capacity);
     self.length = 0;
     self.capacity = capacity;
 }
 
 /**
- * Deep-copies src into a fresh list: initializes dst to src's length and
- * appends every element, so the two share no storage afterward. dst must be
+ * Deep-copies src into a fresh list: initializes self to src's length and
+ * appends every element, so the two share no storage afterward. self must be
  * uninitialized (or already destroyed) -- duplicating into a live list leaks
  * its buffer.
  *
- * @param dst: uninitialized list to copy src into
- * @param src: elements to copy from -- any borrowed run, so a source list
- *             (`a as slice<T>`) or an array's borrow both work
+ * @param self: uninitialized list to copy src into
+ * @param src:  elements to copy from -- any borrowed run, so a source list
+ *              (`a as slice<T>`) or an array's borrow both work
  */
-fn list_init<T>(mut dst: list<T>, const src: slice<T>) {
-    list_init(dst, src.length);
-    list_append(dst, src);
+fn list<T>::constructor(mut self: list<T>, const src: slice<T>) {
+    list<T>::constructor(self, src.length);
+    self.append(src);
 }
 
 /**
@@ -44,18 +51,18 @@ fn list_init<T>(mut dst: list<T>, const src: slice<T>) {
  * @param arr:  source array to copy from
  * @param n:    number of elements to copy from arr
  */
-fn list_init<T>(mut self: list<T>, @nonnull arr: T*, n: uint64) {
-    list_init(self, n);
-    list_append(self, arr, n);
+fn list<T>::constructor(mut self: list<T>, @nonnull arr: T*, n: uint64) {
+    list<T>::constructor(self, n);
+    self.append(arr, n);
 }
 
 /**
- * Releases the list's storage. The list must be re-initialized with
- * list_init before being used again.
+ * Releases the list's storage. The list must be re-initialized with the
+ * `list<T>` constructor before being used again.
  *
  * @param self: list to destroy
  */
-fn list_destroy<T>(mut self: list<T>) {
+fn list<T>::destructor(mut self: list<T>) {
     dealloc(self.data);
 
     self.data = null;
@@ -68,27 +75,27 @@ fn list_destroy<T>(mut self: list<T>) {
  *
  * @param self: list to reset
  */
-fn list_reset<T>(mut self: list<T>) {
+fn list<T>::reset(mut self: list<T>) {
     self.length = 0;
 }
 
 /**
- * Reports whether index is in bounds — whether list_at is defined for it.
+ * Reports whether index is in bounds — whether `.at` is defined for it.
  *
  * @param self:  list to test against
  * @param index: zero-based index
  *
  * @return true if index < self.length
  */
-fn list_has<T>(const self: list<T>, index: uint64) -> bool {
+fn list<T>::has(const self: list<T>, index: uint64) -> bool {
     return index < self.length;
 }
 
 /**
  * Unchecked mutable access: returns the element at index as an lvalue, so
- * `list_at(xs, i) = v` writes in place and `let x = list_at(xs, i)` copies
- * out. Undefined if index is out of bounds — guard with list_has, or use
- * list_get for the checked read. The lvalue points into the list's storage:
+ * `xs.at(i) = v` writes in place and `let x = xs.at(i)` copies
+ * out. Undefined if index is out of bounds — guard with `.has`, or use
+ * `.get` for the checked read. The lvalue points into the list's storage:
  * consume it before any call that can grow the list.
  *
  * @param self:  list to access
@@ -96,7 +103,7 @@ fn list_has<T>(const self: list<T>, index: uint64) -> bool {
  *
  * @return the element at index, as an assignable lvalue
  */
-fn list_at<T>(mut self: list<T>, index: uint64) -> mut T {
+fn list<T>::at(mut self: list<T>, index: uint64) -> mut T {
     return self.data![index];
 }
 
@@ -109,8 +116,8 @@ fn list_at<T>(mut self: list<T>, index: uint64) -> mut T {
  *
  * @return true on success, false if index is out of bounds
  */
-fn list_get<T>(const self: list<T>, index: uint64, mut out: T) -> bool {
-    if (!list_has(self, index))
+fn list<T>::get(const self: list<T>, index: uint64, mut out: T) -> bool {
+    if (!self.has(index))
         return false;
 
     out = self.data![index];
@@ -126,8 +133,8 @@ fn list_get<T>(const self: list<T>, index: uint64, mut out: T) -> bool {
  *
  * @return true on success, false if index is out of bounds
  */
-fn list_set<T>(mut self: list<T>, index: uint64, value: T) -> bool {
-    if (!list_has(self, index))
+fn list<T>::set(mut self: list<T>, index: uint64, value: T) -> bool {
+    if (!self.has(index))
         return false;
 
     self.data![index] = value;
@@ -140,9 +147,9 @@ fn list_set<T>(mut self: list<T>, index: uint64, value: T) -> bool {
  * @param self:  list to append to
  * @param value: value to append
  */
-fn list_push<T>(mut self: list<T>, value: T) {
+fn list<T>::push(mut self: list<T>, value: T) {
     if (self.length == self.capacity)
-        list_grow<T>(self);
+        self.grow();
 
     self.data![self.length] = value;
     self.length += 1;
@@ -155,9 +162,9 @@ fn list_push<T>(mut self: list<T>, value: T) {
  * @param items: elements to append -- any borrowed run, so a source list
  *               (`b as slice<T>`) or an array's borrow both work
  **/
-fn list_append<T>(mut self: list<T>, const items: slice<const T>) {
+fn list<T>::append(mut self: list<T>, const items: slice<const T>) {
     for value in items {
-        list_push(self, value);
+        self.push(value);
     }
 }
 
@@ -169,20 +176,20 @@ fn list_append<T>(mut self: list<T>, const items: slice<const T>) {
  * @param items: source array to copy from
  * @param n:     number of elements to append from items
  **/
-fn list_append<T>(mut self: list<T>, @nonnull items: T*, n: uint64) {
+fn list<T>::append(mut self: list<T>, @nonnull items: T*, n: uint64) {
     for i in range(n) {
-        list_push(self, items[i]);
+        self.push(items[i]);
     }
 }
 
 /**
  * Doubles the list's capacity, moving the existing elements.
- * Internal; called by list_push when storage runs out.
+ * Internal; called by `.push` when storage runs out.
  *
  * @param self: list to grow
  */
 @private
-fn list_grow<T>(mut self: list<T>) {
+fn list<T>::grow(mut self: list<T>) {
     let new_capacity: uint64 = self.capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;

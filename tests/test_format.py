@@ -35,15 +35,13 @@ def test_signed_integers_render_decimal(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
-            format(s, -4 as int8, "");   string_push(s, ' ');
-            format(s, -4 as int16, "");  string_push(s, ' ');
-            format(s, -4 as int32, "");  string_push(s, ' ');
-            format(s, -4 as int64, "");  string_push(s, ' ');
+            let s = string();
+            format(s, -4 as int8, "");   s.push(' ');
+            format(s, -4 as int16, "");  s.push(' ');
+            format(s, -4 as int32, "");  s.push(' ');
+            format(s, -4 as int64, "");  s.push(' ');
             format(s, 123456789 as int32, "");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -58,13 +56,13 @@ def test_unsigned_integers_render_decimal(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
-            format(s, 250 as uint8, "");   string_push(s, ' ');
-            format(s, 65535 as uint16, ""); string_push(s, ' ');
+            let s = string();
+            format(s, 250 as uint8, "");
+            s.push(' ');
+            format(s, 65535 as uint16, "");
+            s.push(' ');
             format(s, 18446744073709551615 as uint64, "");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -81,15 +79,13 @@ def test_integer_modifiers(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
-            format(s, 255 as uint8, "x");   string_push(s, ' ');
-            format(s, 255 as int64, "X"); string_push(s, ' ');
-            format(s, -4 as int32, "x");    string_push(s, ' ');
-            format(s, 5 as int32, "b");     string_push(s, ' ');
+            let s = string();
+            format(s, 255 as uint8, "x");   s.push(' ');
+            format(s, 255 as int64, "X");   s.push(' ');
+            format(s, -4 as int32, "x");    s.push(' ');
+            format(s, 5 as int32, "b");     s.push(' ');
             format(s, 42 as int64, "p");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -107,15 +103,13 @@ def test_integer_width_and_zero_padding(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
-            format(s, 255 as int32, "8x");    string_push(s, '/');
-            format(s, 255 as int32, "08x");   string_push(s, '/');
-            format(s, -42 as int32, "08p");   string_push(s, '/');
-            format(s, -42 as int64, "8");     string_push(s, '/');
+            let s = string();
+            format(s, 255 as int32, "8x");    s.push('/');
+            format(s, 255 as int32, "08x");   s.push('/');
+            format(s, -42 as int32, "08p");   s.push('/');
+            format(s, -42 as int64, "8");     s.push('/');
             format(s, -9223372036854775807 as int64 - 1, "x");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -134,15 +128,13 @@ def test_string_field_widths_and_null(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
-            format(s, "hi", "6s");         string_push(s, '/');
-            format(s, "hi", "s6");         string_push(s, '/');
-            format(s, "hi", "6");          string_push(s, '/');
-            format(s, "hi", "1s");         string_push(s, '/');
+            let s = string();
+            format(s, "hi", "6s");         s.push('/');
+            format(s, "hi", "s6");         s.push('/');
+            format(s, "hi", "6");          s.push('/');
+            format(s, "hi", "1s");         s.push('/');
             format(s, null as char*, "");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -157,14 +149,10 @@ def test_modifier_from_a_string_borrows_in(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let m: struct string;
-            string_init(m, "x");
-            let s: struct string;
-            string_init(s);
+            let m = string("x");
+            let s = string();
             format(s, 255 as int32, m as slice<char>);
             show(s);
-            string_destroy(s);
-            string_destroy(m);
             return 0;
         }
         """
@@ -177,11 +165,9 @@ def test_float64_renders_fixed_point(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s = string();
             format(s, 3.5, "");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -197,15 +183,13 @@ def test_float_precision_modifiers(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
-            format(s, 3.567, ".2f");   string_push(s, '/');
-            format(s, 2.71828, ".3f"); string_push(s, '/');
-            format(s, 3.7, ".0f");     string_push(s, '/');
-            format(s, 0.5, ".10f");    string_push(s, '/');
+            let s = string();
+            format(s, 3.567, ".2f");   s.push('/');
+            format(s, 2.71828, ".3f"); s.push('/');
+            format(s, 3.7, ".0f");     s.push('/');
+            format(s, 0.5, ".10f");    s.push('/');
             format(s, 0.5, "f");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -221,13 +205,11 @@ def test_float_width_and_precision(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
-            format(s, 3.5, "8.2f");    string_push(s, '/');
-            format(s, -3.5, "8.2f");   string_push(s, '/');
+            let s = string();
+            format(s, 3.5, "8.2f");    s.push('/');
+            format(s, -3.5, "8.2f");   s.push('/');
             format(s, 3.5, "3.2f");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -246,12 +228,10 @@ def test_float_width_without_precision_is_tolerated(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
-            format(s, 3.5, "12f");   string_push(s, '/');
+            let s = string();
+            format(s, 3.5, "12f");   s.push('/');
             format(s, 3.5, "12q");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -266,12 +246,10 @@ def test_float_modifier_applies_per_slice_element(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s = string();
             let a: float64[2] = [3.567, 0.5];
             format(s, a as slice<float64>, ".1f");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -302,16 +280,14 @@ def test_bool_modifiers(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
-            format(s, true, "");  string_push(s, ' ');
-            format(s, false, ""); string_push(s, ' ');
-            format(s, true, "y");     string_push(s, ' ');
-            format(s, false, "y");    string_push(s, ' ');
-            format(s, true, "yes");   string_push(s, ' ');
+            let s = string();
+            format(s, true, "");      s.push(' ');
+            format(s, false, "");     s.push(' ');
+            format(s, true, "y");     s.push(' ');
+            format(s, false, "y");    s.push(' ');
+            format(s, true, "yes");   s.push(' ');
             format(s, false, "yes");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -327,13 +303,11 @@ def test_char_and_c_string(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s = string();
             format(s, 'Z', "");
             format(s, "-hello" as char*, "");
             format(s, "-lit", "");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -348,13 +322,11 @@ def test_slice_renders_bracketed_list(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s = string();
             let a: int32[3] = [10, 255, 3];
-            format(s, a as slice<int32>, ""); string_push(s, ' ');
+            format(s, a as slice<int32>, ""); s.push(' ');
             format(s, a as slice<int32>, "x");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -369,14 +341,12 @@ def test_nested_slices_render_nested_lists(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s = string();
             let a: int32[3] = [1, 2, 3];
             let b: int32[2] = [4, 5];
             let rows: slice<int32>[2] = [a as slice<int32>, b as slice<int32>];
             format(s, rows as slice<slice<int32>>, "");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -391,12 +361,10 @@ def test_slice_of_char_renders_as_text(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s = string();
             let word = "hi";
             format(s, word as slice<char>, "");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -413,15 +381,13 @@ def test_slice_of_c_strings_renders_quoted_list(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s = string();
             let cmds: char*[2] = ["ls", "cat"];
-            format(s, cmds as slice<char*>, ""); string_push(s, ' ');
-            format(s, cmds as slice<char*>, "x");  string_push(s, ' ');
+            format(s, cmds as slice<char*>, "");    s.push(' ');
+            format(s, cmds as slice<char*>, "x");   s.push(' ');
             let one: char*[1] = ["rm"];
             format(s, one as slice<char*>, "");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -438,14 +404,12 @@ def test_nested_c_string_slices_compose_with_generic_renderer(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s = string();
             let a: char*[2] = ["ls", "cat"];
             let b: char*[1] = ["rm"];
             let rows: slice<char*>[2] = [a as slice<char*>, b as slice<char*>];
             format(s, rows as slice<slice<char*>>, "");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -461,12 +425,10 @@ def test_typename_fallback_for_unformattable_types(capfd):
         PRELUDE
         + """
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s =string();
             let p: uint8* = null;
             format(s, p, "");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """
@@ -483,8 +445,7 @@ def test_untyped_integer_literal_is_ambiguous():
             PRELUDE
             + """
             fn main() -> int32 {
-                let s: struct string;
-                string_init(s);
+                let s = string();
                 format(s, 42, "");
                 return 0;
             }
@@ -505,11 +466,11 @@ def test_user_overload_joins_the_set_cross_module(tmp_path, capfd):
         struct point { x: int32; y: int32; }
 
         fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
-            string_push(str, '(');
+            str.push('(');
             format(str, value->x, modifier);
-            string_append(str, ", ");
+            str.append(", ");
             format(str, value->y, modifier);
-            string_push(str, ')');
+            str.push(')');
         }
         """
     )
@@ -526,13 +487,11 @@ def test_user_overload_joins_the_set_cross_module(tmp_path, capfd):
         }
 
         fn main() -> int32 {
-            let s: struct string;
-            string_init(s);
+            let s = string();
             let p = struct point { x = 3, y = 255 };
-            format(s, &p, ""); string_push(s, ' ');
+            format(s, &p, ""); s.push(' ');
             format(s, &p, "x");
             show(s);
-            string_destroy(s);
             return 0;
         }
         """

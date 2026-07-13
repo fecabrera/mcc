@@ -20,6 +20,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **`std/list` and `std/string` are now method families** — the free-function
+  APIs (`list_init`/`list_push`/`list_destroy`/…, `string_init`/`string_append`/…)
+  become the `list<T>::` and `string::` member families. Construct with
+  ctor-sugar — `let xs = list<int32>(8)` — which also auto-defers
+  `list<T>::destructor` at scope end, retiring the paired
+  `defer list_destroy(xs)`; access through dot-calls (`xs.push(v)`,
+  `xs.at(i) = v`, `s.append("hi")`). Because `type string = list<char>`,
+  `string` inherits list's constructor, destructor, and accessors and keeps
+  only its own NUL-terminated `char*` constructor/`append` and `equals`
+  members; the old `DEFAULT_STRING_CAPACITY` (10) is gone, so a fresh string
+  starts at the list default. Iteration (`list_it`/`list_next`,
+  `string_it`/`string_next`) is unchanged. Migration: `list_init(xs, n)` →
+  `let xs = list<T>(n)`, `list_push(xs, v)` → `xs.push(v)`, drop the explicit
+  `defer list_destroy(xs)`, and `string_append(s, …)` → `s.append(…)`.
+
 - **A bare alias qualifier at a call now injects the instantiation it
   names** — with `type pointf = point<float64>`, `pointf::sum(q)` means
   exactly `point<float64>::sum(q)`. Previously the call qualifier chased the

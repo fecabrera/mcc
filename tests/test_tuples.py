@@ -463,12 +463,10 @@ def test_mut_return_projects_a_tuple_element():
     source = """
     import "std/list";
     fn main() -> int32 {
-        let l: list<tuple<int32, int32>>;
-        list_init(l, 2);
-        list_push(l, (1, 2));
-        list_at(l, 0)[0] = 40;
-        let r = list_at(l, 0)[0] + list_at(l, 0)[1];
-        list_destroy(l);
+        let l = list<tuple<int32, int32>>(2);
+        l.push((1, 2));
+        l.at(0)[0] = 40;
+        let r = l.at(0)[0] + l.at(0)[1];
         return r;
     }
     """

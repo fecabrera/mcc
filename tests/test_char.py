@@ -75,9 +75,8 @@ def test_char_is_distinct_from_uint8_in_generics():
             """
             import "std/list";
             fn main() -> int32 {
-                let xs: struct list<uint8>;
-                list_init(&xs, 2);
-                list_push(&xs, 'a');   // 'a' is char, xs holds uint8
+                let xs = list<uint8>(2);
+                xs.push('a');   // 'a' is char, xs holds uint8
                 return 0;
             }
             """

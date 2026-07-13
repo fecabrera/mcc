@@ -249,7 +249,7 @@ match the definition exactly.
 One programmer's-problem caveat, the same one [container
 cursors](#control-flow) have: a `mut` return that points into a
 container's heap storage is a borrow of that storage — an operation that
-reallocates it (a growing `list_push`, `string_cat`, ...) within the same
+reallocates it (a growing `xs.push`, `s.append`, ...) within the same
 full expression, or between forming the reference and the surrounding
 statement's store, invalidates the reference. The formation rule prevents
 frame escapes, not heap staleness; keep the access and the mutation in
@@ -629,7 +629,8 @@ destination pointer parameters of the stdlib declare their contracts with
 `@nonnull`: the `memory` copy/fill family (`bytecopy`, `copy`, `bytezero`,
 `zero`, `bytefill`, `fill`), the `hashing/` digests (`md5`, `crc32`,
 `murmur3`), `dict`'s string keys (`dict_set`/`dict_get`/`dict_remove`),
-and the raw-array source overloads of `list_init` and `string_init`.
+and the raw-array `(T*, n)` source overload of the `list<T>` constructor
+(which `string` inherits).
 Passing an unproven pointer to any of them is a compile error instead of
 a latent crash. A stack buffer (`&x`, an array) or a string literal is
 already a proof; a heap buffer needs a one-line diverging guard after the
@@ -3895,8 +3896,7 @@ owned value:
 let arr: int32[4];                 // a fixed array...
 let view = arr as slice<int32>;    // ...borrowed as { &arr[0], 4 }
 
-let nums: struct list<int32>;      // ...or an owned list<T>
-list_init(nums, 8);
+let nums = list<int32>(8);         // ...or an owned list<T>
 let s = nums as slice<int32>;      // reads { data, length }, drops capacity
 ```
 
@@ -5522,14 +5522,14 @@ file (however it was imported) is a compile error naming the owning file:
 
 ```c
 /**
- * Doubles the list's capacity. Internal; called by list_push.
+ * Doubles the list's capacity. Internal; called by list<T>::push.
  */
 @private
-fn list_grow<T>(mut self: struct list<T>) { ... }
+fn list<T>::grow(mut self: list<T>) { ... }
 ```
 
 ```
-error: line 5: function 'list_grow' is private to list.mc
+error: line 5: function 'list::grow' is private to list.mc
 ```
 
 `@static` goes further, like C's `static`: the name is file-scoped rather
@@ -5904,8 +5904,7 @@ The baseline members cover the built-in types:
 import "std/format";
 import "std/string";
 
-let s: struct string;
-string_init(s);
+let s = string();
 format(s, 255 as int32, "x");    // s is now "ff" — the literal adapts
 ```
 
@@ -5922,11 +5921,11 @@ back into the set for its fields:
 struct point { x: int32; y: int32; }
 
 fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
-    string_push(str, '(');
+    str.push('(');
     format(str, value->x, modifier);
-    string_append(str, ", ");
+    str.append(", ");
     format(str, value->y, modifier);
-    string_push(str, ')');
+    str.push(')');
 }
 ```
 

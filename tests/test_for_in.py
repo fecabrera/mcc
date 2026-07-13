@@ -87,12 +87,10 @@ def test_container_by_value(capfd):
         import "std/list";
         import "libc/stdio";
         fn main() -> int32 {
-            let xs: struct list<int32>;
-            list_init(&xs, 4);
-            defer list_destroy(&xs);
-            list_push(&xs, 1);
-            list_push(&xs, 2);
-            list_push(&xs, 3);
+            let xs = list<int32>(4);
+            xs.push(1);
+            xs.push(2);
+            xs.push(3);
             let sum: int32 = 0;
             for x in xs { sum += x; }
             printf("%d\\n", sum);
