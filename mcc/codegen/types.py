@@ -74,6 +74,16 @@ class LangType:
             ``-> mut`` function. Spelled into the ``name`` (identity) and
             reflected in the LLVM return type (a pointer); excluded from
             equality/hash like ``nonnull``.
+        ownret: ``True`` for a function-pointer type with an ``own`` return
+            (``fn(...) -> own T``) -- a call through the value hands the
+            caller the cleanup obligation, so an adopting let vouches
+            through the type exactly as through a direct call's
+            declaration. Pure policy: spelled into the ``name`` but no ABI
+            change (the LLVM type is the plain form's); excluded from
+            equality/hash like ``nonnull``, with the coercion paths
+            checking it explicitly (dropping the marker would silently
+            leak the obligation, fabricating it would destroy a value the
+            callee never handed over).
         element: Element type of a fixed-size array, else ``None``.
         count: Length of a fixed-size array, else ``None``.
         const: ``True`` for a read-only ``const T`` view -- IR-identical to
@@ -107,6 +117,7 @@ class LangType:
     mutref: frozenset = field(default=frozenset(), compare=False)
     constref: frozenset = field(default=frozenset(), compare=False)
     mutret: bool = field(default=False, compare=False)
+    ownret: bool = field(default=False, compare=False)
     element: "LangType | None" = None
     count: int | None = None
     const: bool = False
@@ -336,6 +347,7 @@ def function_type(
     mutref: frozenset = frozenset(),
     constref: frozenset = frozenset(),
     mutret: bool = False,
+    ownret: bool = False,
 ) -> LangType:
     """Build a function-pointer type, e.g. ``fn(int32, int32) -> int32``.
 
@@ -368,6 +380,9 @@ def function_type(
             pointer to the returned storage (never erased: a ``mut`` return
             always changes the return convention), spelled into the name and
             reflected in the LLVM return type.
+        ownret: ``True`` for an ``-> own`` return -- the call hands the
+            caller the cleanup obligation. Spelled into the name only (no
+            ABI change).
 
     Returns:
         A ``LangType`` for the function-pointer type.
@@ -400,6 +415,7 @@ def function_type(
     name = (
         "fn(" + ", ".join(parts) + ") -> "
         + ("mut " if mutret else "")
+        + ("own " if ownret else "")
         + ret.name
     )
     return LangType(
@@ -411,6 +427,7 @@ def function_type(
         mutref=mutref,
         constref=constref,
         mutret=mutret,
+        ownret=ownret,
     )
 
 

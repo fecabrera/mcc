@@ -1856,6 +1856,17 @@ mismatch. `@extern` functions cannot be `own` (C hands over no destructor
 obligation), and neither can `@property`/`@accessor` methods (reads
 through field or index syntax never transfer).
 
+**Function-pointer types carry the marker too**: `fn(int32) -> own res`
+spells an own return the way `fn(...) -> mut T` spells a mut one, so a
+call through the value — a factory local, a field-held callback, an
+inferred `let factory = make;` (the function value derives the bit from
+its declaration) — vouches for adoption exactly like a direct call.
+Unlike `mut`, `own` changes no calling convention; it is a **contract**,
+so implicit retyping is rejected in *both* directions (dropping the
+marker would silently leak the handed-over obligation, fabricating it
+would destroy a value the callee never handed over), and an explicit
+`as` cast is the hatch when you mean it.
+
 See [examples/types/own_returns.mc](../examples/types/own_returns.mc).
 
 #### Inherited methods

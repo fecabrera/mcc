@@ -130,6 +130,20 @@ fn main() -> int32 {
         println("  got {}", c.id);       // 0: the fallback literal
     }                                    // close 0
 
+    // The marker rides function-pointer TYPES too: `fn(int32) -> own conn`
+    // spells the contract the way `fn(...) -> mut T` spells a mut return,
+    // so a call through a value -- here a factory local; a field-held
+    // callback works the same -- still vouches for adoption. (Assigning an
+    // own function to a PLAIN fn type, or the reverse, is a compile error
+    // in both directions: `own` is a contract, and only an explicit `as`
+    // retypes across it.)
+    println("factory:");
+    {
+        let factory: fn(int32) -> own conn = dial;
+        let c = factory(4);
+        println("  made {}", c.id);
+    }                                    // close 4 -- adopted through the type
+
     // Every other consumption of an own call is INERT -- the obligation
     // is dropped (a leak, documented and yours), consistent with
     // expression-position temporaries owning no cleanup: discarding the

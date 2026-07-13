@@ -2370,10 +2370,25 @@ already do).
             argument-position temporary gap that remains. Implemented,
             see
             [Move-out returns](docs/language.md#move-out-returns-own):
-        - [ ] fn-pointer-type `own` parity — a `fn() -> own T` TYPE
-              does not carry the bit, so an indirect call never
-              vouches for the obligation and adoption is lost through
-              a pointer: exactly the gap `mut` had during its rollout
+        - [x] fn-pointer-type `own` parity — `fn(int32) -> own res`
+              now parses and carries an `ownret` bit on the function
+              type, spelled into the type name. Unlike `mut` (a
+              calling convention), `own` is pure policy: NO ABI/LLVM
+              change. The bit is fed from a new `own_ret` registry at
+              the same four sites as `mut_ret`, so a function VALUE
+              derives it from its declaration and an inferred
+              `let factory = make;` adopts. Indirect calls through such
+              a value vouch for adoption — a typed factory local, a
+              field-held callback, and the inferred let all schedule
+              the caller's destructor (`known_own_call` reads the
+              type's `ownret` bit instead of refusing). Because `own`
+              is a contract, not a convention, implicit retyping across
+              the marker rejects in BOTH directions (dropping it leaks
+              the handed-over obligation, fabricating it destroys a
+              value never handed over), with an explicit `as` cast as
+              the hatch — a deliberate divergence from how `mut`
+              fn-type mismatches are framed. Rides `.mci` stubs for
+              free (`fn take(cb: fn(int32) -> own res) -> int32;`)
         - [ ] `-Wdiscarded-own` — warn when an own call's obligation
               is dropped (discard, argument position, assignment), the
               diagnostic direction the documented-leak stance above

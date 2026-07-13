@@ -481,6 +481,149 @@ def test_own_on_a_property_is_rejected():
         )
 
 
+# --- fn-pointer-type parity --------------------------------------------------------
+
+def test_indirect_call_through_an_own_typed_value_adopts():
+    # `fn(int32) -> own res` carries the bit, so a call through the value
+    # vouches for adoption exactly like a direct call.
+    ir = compile_ir(
+        RES
+        + """
+        fn make(v: int32) -> own res {
+            let r = res(v);
+            return r;
+        }
+        fn main() -> int32 {
+            let factory: fn(int32) -> own res = make;
+            let r = factory(1);
+            return 0;
+        }
+        """
+    )
+    assert dtor_calls_by_function(ir).get("main") == 1
+
+
+def test_inferred_function_value_carries_the_own_bit():
+    # `let factory = make;` infers the fn type WITH ownret (the function
+    # value derives it from the declaration), so adoption survives
+    # inference too.
+    ir = compile_ir(
+        RES
+        + """
+        fn make(v: int32) -> own res {
+            let r = res(v);
+            return r;
+        }
+        fn main() -> int32 {
+            let factory = make;
+            let r = factory(1);
+            return 0;
+        }
+        """
+    )
+    assert dtor_calls_by_function(ir).get("main") == 1
+
+
+def test_field_held_own_callback_adopts():
+    assert run(
+        RES
+        + """
+        fn make(v: int32) -> own res {
+            let r = res(v);
+            return r;
+        }
+        struct maker { build: fn(int32) -> own res; }
+        fn main() -> int32 {
+            let m = maker { build = make };
+            let r = m.build(42);
+            return r.h;         // alive: adopted, destroyed at scope end
+        }
+        """
+    ) == 42
+
+
+def test_dropping_the_own_marker_implicitly_is_rejected():
+    with pytest.raises(
+        LangError,
+        match=r"an own return is a contract, not a convention",
+    ):
+        compile_ir(
+            RES
+            + """
+            fn make(v: int32) -> own res {
+                let r = res(v);
+                return r;
+            }
+            fn main() -> int32 {
+                let f: fn(int32) -> res = make;
+                return 0;
+            }
+            """
+        )
+
+
+def test_fabricating_the_own_marker_implicitly_is_rejected():
+    with pytest.raises(
+        LangError,
+        match=r"an own return is a contract, not a convention",
+    ):
+        compile_ir(
+            RES
+            + """
+            fn plain(v: int32) -> res { return res(v); }
+            fn main() -> int32 {
+                let f: fn(int32) -> own res = plain;
+                return 0;
+            }
+            """
+        )
+
+
+def test_cast_is_the_explicit_marker_hatch():
+    # `as` retypes across the own contract explicitly (dropping adoption
+    # is then a documented leak, the C stance).
+    assert run(
+        RES
+        + """
+        fn make(v: int32) -> own res {
+            let r = res(v);
+            return r;
+        }
+        fn main() -> int32 {
+            let f = make as fn(int32) -> res;
+            let r = f(42);      // no adoption: the plain type says so
+            return r.h;
+        }
+        """
+    ) == 42
+
+
+def test_own_void_fn_type_is_rejected():
+    with pytest.raises(
+        LangError, match=r"an own return needs a value to hand over"
+    ):
+        compile_ir(
+            "fn main() -> int32 { let f: fn() -> own void; return 0; }"
+        )
+
+
+def test_own_fn_type_renders_in_interface_stubs():
+    source = (
+        RES
+        + """
+        fn take(cb: fn(int32) -> own res) -> int32 {
+            let r = cb(1);
+            return r.h;
+        }
+        """
+    )
+    program = Parser(tokenize(source)).parse_program()
+    cg = CodeGen(program, "test")
+    cg.generate()
+    out = render_interface(cg, source, list(program.imports))
+    assert "fn take(cb: fn(int32) -> own res) -> int32;" in out
+
+
 # --- the signature travels ------------------------------------------------------------
 
 def test_own_renders_in_interface_stubs():

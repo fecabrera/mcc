@@ -107,7 +107,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   drop the obligation (documented leaks). `own` is a flag beside `mut`
   (mutually exclusive, no ABI change), a no-op on destructor-less types
   (generic `-> own T` stays writable), rides `.mci` stubs, and is barred
-  from `@extern`, `@asm`, and `@property`/`@accessor` methods. Also
+  from `@extern`, `@asm`, and `@property`/`@accessor` methods.
+  Function-pointer types carry it too — `fn(int32) -> own res` spells the
+  contract like `fn(...) -> mut T` spells a mut return, so indirect calls
+  (a factory local, a field-held callback, an inferred `let f = make;`)
+  still vouch for adoption; implicit retyping across the marker rejects
+  in both directions (dropping it leaks, fabricating it double-frees),
+  with an explicit `as` cast as the hatch. Also
   closes a shipped escape hole in *every* function: `return ok(local)` of
   an auto-destructed local is now the same hard error as the bare
   `return local`. `emit` keeps its whole-value error (a block expression

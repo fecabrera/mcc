@@ -37,6 +37,11 @@ class TypeRef:
             type: in a parameter position it spells a by-reference writable
             parameter, as in ``fn(mut char) -> void``; on the ``ret`` type it
             spells a ``mut`` return, as in ``fn(uint64) -> mut char``.
+        own: A leading ``own`` keyword -- meaningful only on the ``ret``
+            type of a ``fn(...)`` type, spelling an ``own`` return
+            (``fn() -> own res``): a call through the value hands the
+            caller the cleanup obligation, so an adopting let vouches
+            through the type exactly as it does through a declaration.
     """
 
     name: str
@@ -49,6 +54,7 @@ class TypeRef:
     variadic: bool = False  # a trailing `...` in a fn(...) type's parameters
     nonnull: bool = False  # a leading `@nonnull` (fn-type parameter position)
     mut: bool = False  # a leading `mut` (fn-type parameter or return position)
+    own: bool = False  # a leading `own` (fn-type return position)
 
     def __str__(self) -> str:
         """Render the type back to its source spelling.
@@ -71,6 +77,7 @@ class TypeRef:
         return (
             ("@nonnull " if self.nonnull else "")
             + ("mut " if self.mut else "")
+            + ("own " if self.own else "")
             + ("const " if self.const else "")
             + text
             + "*" * self.stars

@@ -977,9 +977,27 @@ class Parser:
         if self.accept("->"):
             # `-> mut T`: the type spells a mut return (a call through the
             # value is an lvalue expression), riding on the return TypeRef's
-            # `mut` flag exactly as a parameter's does.
+            # `mut` flag exactly as a parameter's does. `-> own T` likewise
+            # spells an own return (a call through the value hands the
+            # caller the cleanup obligation); the two never combine.
             mut_tok = self.cur if self.cur.kind == "mut" else None
             is_mut = bool(self.accept("mut"))
+            own_tok = self.cur if self.cur.kind == "own" else None
+            is_own = bool(self.accept("own"))
+            if is_mut and is_own:
+                raise LangError(
+                    "a return cannot be both mut and own (mut lends the "
+                    "caller a view of existing storage, own hands it an "
+                    "owned value)",
+                    own_tok.line,
+                )
+            if is_own and self.cur.kind == "mut":
+                raise LangError(
+                    "a return cannot be both own and mut (mut lends the "
+                    "caller a view of existing storage, own hands it an "
+                    "owned value)",
+                    self.cur.line,
+                )
             ret = self.parse_type_ref()
             if is_mut and ret.const:
                 raise LangError(
@@ -987,7 +1005,16 @@ class Parser:
                     "(a mut return must be writable)",
                     mut_tok.line,
                 )
+            if is_own and (
+                ret.name == "void" and not ret.stars and not ret.dims
+            ):
+                raise LangError(
+                    "an own return needs a value to hand over; void owns "
+                    "nothing",
+                    own_tok.line,
+                )
             ret.mut = is_mut
+            ret.own = is_own
         return TypeRef(
             "fn",
             [],

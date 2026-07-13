@@ -645,6 +645,12 @@ class CodeGen:
         # the same four registration sites as mut_ref: @static, overload-set
         # member, plain concrete, and generic instance.
         self.mut_ret: set[str] = set()
+        # Symbols declared `-> own T`: a call hands the caller the cleanup
+        # obligation (no ABI change -- pure policy). Fed by the same four
+        # registration sites as mut_ret, and spelled into a function
+        # VALUE's type (`fn() -> own T`) so an indirect call still vouches
+        # for adoption (see known_own_call).
+        self.own_ret: set[str] = set()
         # Names of the current function's const (read-only) parameters.
         self.const_locals: set[str] = set()
         # Names of the current function's mut (write-through) parameters.
@@ -3127,6 +3133,7 @@ class CodeGen:
             nonnull = frozenset(i for i, p in enumerate(ref.params) if p.nonnull)
             mutref = frozenset(i for i, p in enumerate(ref.params) if p.mut)
             mutret = ref.ret is not None and ref.ret.mut
+            ownret = ref.ret is not None and getattr(ref.ret, "own", False)
             if mutret:
                 # Per use, like the @nonnull rule below, so a generic alias
                 # like `type getter<T> = fn() -> mut T` is validated against
@@ -3146,6 +3153,22 @@ class CodeGen:
                         "(a mut return must be writable)",
                         line,
                     )
+            if ownret:
+                # Per use, like mut above: a generic alias binding could
+                # resolve the return to void or an error-only result.
+                if ret is VOID:
+                    raise LangError(
+                        "a function type cannot return own void (there is "
+                        "nothing to hand over)",
+                        line,
+                    )
+                if is_result(ret) and len(ret.args) == 1:
+                    raise LangError(
+                        f"a function type cannot return own {ret}: an own "
+                        "return hands over the ok payload, and an "
+                        "error-only result has none",
+                        line,
+                    )
             # Checked per use, so a generic alias like `type cb<T> =
             # fn(@nonnull T*)` is validated against each binding (mirrors
             # mark_nonnull's declaration-site rule).
@@ -3159,7 +3182,8 @@ class CodeGen:
             # drops -- per use, so `type cmp<T> = fn(const T, const T)` gets
             # the right convention at each binding.
             base = function_type(
-                ret, params, ref.variadic, nonnull, mutref, mutret=mutret
+                ret, params, ref.variadic, nonnull, mutref,
+                mutret=mutret, ownret=ownret,
             )
             for _ in range(ref.stars):
                 base = pointer_to(base)
@@ -5279,6 +5303,8 @@ class CodeGen:
                     self.format_syms.add(symbol)
                 if func.mut_return:
                     self.mut_ret.add(symbol)
+                if func.own_return:
+                    self.own_ret.add(symbol)
                 self.static_funcs[key] = symbol
                 self.static_func_decls[key] = func
                 if func.deprecated_msg is not None:
@@ -5521,6 +5547,8 @@ class CodeGen:
                 self.nonnull_ref[symbol] = self.nonnull_indices(func)
                 if func.mut_return:
                     self.mut_ret.add(symbol)
+                if func.own_return:
+                    self.own_ret.add(symbol)
                 members = self.overloads.setdefault(func.name, [])
                 if plain_member is not None and not any(
                     m is plain_member for m in members
@@ -5628,6 +5656,8 @@ class CodeGen:
                 self.format_syms.add(func.name)
             if func.mut_return:
                 self.mut_ret.add(func.name)
+            if func.own_return:
+                self.own_ret.add(func.name)
             if func.deprecated_msg is not None:
                 # A proto registers too: @deprecated on an interface stub's
                 # prototype warns the importer's call sites.
@@ -7322,6 +7352,7 @@ class CodeGen:
             and tv.type.mutref == expected.mutref
             and tv.type.constref == expected.constref
             and tv.type.mutret == expected.mutret
+            and tv.type.ownret == expected.ownret
             and tv.type.nonnull <= expected.nonnull
         ):
             return TypedValue(tv.value, expected)
@@ -7399,6 +7430,16 @@ class CodeGen:
                     "return is passed as a pointer to the returned storage, "
                     "a different calling convention; the types are not "
                     "convertible)",
+                    line,
+                )
+            if src.ownret != expected.ownret:
+                raise LangError(
+                    f"{context}: expected {expected}, got {src} (an own "
+                    "return is a contract, not a convention: dropping the "
+                    "marker would silently leak the handed-over cleanup "
+                    "obligation, adding it would destroy a value the "
+                    "callee never handed over; cast with `as` to assert "
+                    "the retyping)",
                     line,
                 )
             raise LangError(
@@ -10589,9 +10630,10 @@ class CodeGen:
         Judged by name, before overload resolution, exactly like
         :meth:`known_mut_return_call`: every candidate behind the name must
         carry ``-> own`` (a mixed set is conservatively rejected). A
-        variable or const shadowing the name is an indirect call through a
-        function-pointer value, whose type does not carry the own bit
-        (yet) -- it never vouches.
+        variable or const shadowing the name is an indirect call: it
+        vouches exactly when its function-pointer type spells ``-> own``
+        (the type's ``ownret`` bit is the same trust channel a direct
+        call's registry bit is).
 
         Args:
             call: The ``Call`` node.
@@ -10599,8 +10641,12 @@ class CodeGen:
         Returns:
             ``True`` when the call is certainly an ``own`` return.
         """
-        if self.var_type_of(call.name) is not None or call.name in self.consts:
-            return False
+        var_type = self.var_type_of(call.name)
+        if var_type is None and call.name in self.consts:
+            var_type = self.consts[call.name].type
+        if var_type is not None:
+            var_type = strip_const(var_type)
+            return is_function(var_type) and var_type.ownret
         key = (self.current_source, call.name)
         static_template = self.static_templates.get(key)
         if static_template is not None:
@@ -10656,16 +10702,21 @@ class CodeGen:
             return self.own_call_initializer(expr.value)
         if isinstance(expr, Call):
             return self.known_own_call(expr)
-        if (
-            isinstance(expr, CallExpr)
-            and isinstance(expr.callee, Member)
-            and not expr.callee.arrow
-        ):
-            base_t = self.dot_receiver_type(expr.callee.base)
-            if base_t is not None:
-                plan = self.plan_dot_call(expr, base_t)
-                if plan is not None:
-                    return self.known_own_call(plan)
+        if isinstance(expr, CallExpr):
+            if isinstance(expr.callee, Member) and not expr.callee.arrow:
+                base_t = self.dot_receiver_type(expr.callee.base)
+                if base_t is not None:
+                    plan = self.plan_dot_call(expr, base_t)
+                    if plan is not None:
+                        return self.known_own_call(plan)
+            # A call through a function-pointer expression (a field-held
+            # callback, an indexed table entry): the value's spelled type
+            # vouches -- `fn(...) -> own T` -- exactly as a named
+            # candidate's declaration does.
+            callee_t = self.dot_receiver_type(expr.callee)
+            if callee_t is not None:
+                callee_t = strip_const(callee_t)
+                return is_function(callee_t) and callee_t.ownret
         return False
 
     def lvalue_type(self, expr) -> "LangType | None":
@@ -13343,6 +13394,7 @@ class CodeGen:
             and tv.type.mutref == expected.mutref
             and tv.type.constref == expected.constref
             and tv.type.mutret == expected.mutret
+            and tv.type.ownret == expected.ownret
             and tv.type.nonnull <= expected.nonnull
         ):
             return TypedValue(tv.value, expected)
@@ -15182,6 +15234,7 @@ class CodeGen:
                 mutref,
                 self.hidden_ref.get(symbol, frozenset()) - mutref,
                 mutret=symbol in self.mut_ret,
+                ownret=symbol in self.own_ret,
             ),
         )
 
@@ -18485,6 +18538,8 @@ class CodeGen:
             self.nonnull_ref[mangled] = self.nonnull_indices(func)
             if func.mut_return:
                 self.mut_ret.add(mangled)
+            if func.own_return:
+                self.own_ret.add(mangled)
             self.instances[key] = mangled
             self.gen_function(func, fn, ret, params)
         except LangError as err:
