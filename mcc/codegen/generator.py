@@ -9628,6 +9628,19 @@ class CodeGen:
         if isinstance(expr, Call):
             return self.gen_call(expr)
         if isinstance(expr, CallExpr):
+            # A dot-shaped call may be method sugar: `p.m(args)` rewrites to
+            # `Type::m(p, args)` when the receiver's type registers the
+            # family and no field shadows it. An unprobeable receiver (a
+            # call result) evaluates once and re-dispatches on a hidden
+            # local; everything else falls through to the function-pointer
+            # call it always was.
+            if isinstance(expr.callee, Member) and not expr.callee.arrow:
+                base_t = self.dot_receiver_type(expr.callee.base)
+                if base_t is None:
+                    return self.gen_spilled_dot_call(expr)
+                plan = self.plan_dot_call(expr, base_t)
+                if plan is not None:
+                    return self.gen_call(plan)
             callee = self.gen_expr(expr.callee)
             return self.gen_indirect_call(
                 callee, expr.args, f"call to {callee.type}", expr.line
@@ -10007,6 +10020,25 @@ class CodeGen:
             # exactly as a named candidate's declaration does.
             if top:
                 return
+            # Method sugar in chain position judges by its family, exactly
+            # as a named call does (`return self.items.ref(i).x`); an
+            # unprobeable receiver stays conservative and falls through to
+            # the indirect-call rejection below.
+            if isinstance(expr.callee, Member) and not expr.callee.arrow:
+                base_t = self.dot_receiver_type(expr.callee.base)
+                plan = (
+                    self.plan_dot_call(expr, base_t)
+                    if base_t is not None
+                    else None
+                )
+                if plan is not None:
+                    if self.known_mut_return_call(plan):
+                        return
+                    raise LangError(
+                        f"{base}; the chain passes through a call to "
+                        f"{plan.name!r} that does not return mut",
+                        line,
+                    )
             callee_t = self.lvalue_type(expr.callee)
             if callee_t is not None:
                 callee_t = strip_const(callee_t)
@@ -10108,6 +10140,171 @@ class CodeGen:
                     return None
                 return self.struct_field(strip_const(base_t), fname, 0)[1]
         return None
+
+    def dot_receiver_type(self, expr) -> "LangType | None":
+        """Best-effort static type of a dot-call receiver, without IR.
+
+        :meth:`lvalue_type` extended with cheap receiver-only arms (a char
+        literal, a string literal, a cast, a dereference, a ``!``
+        assertion). ``None`` -- an rvalue receiver like a call result --
+        routes the dot-call through the evaluate-once spill instead (see
+        :meth:`gen_spilled_dot_call`).
+
+        Args:
+            expr: The receiver expression (a ``Member``'s base).
+
+        Returns:
+            The receiver's ``LangType``, or ``None``.
+        """
+        t = self.lvalue_type(expr)
+        if t is not None:
+            return t
+        if isinstance(expr, CharLit):
+            return CHAR
+        if isinstance(expr, StrLit) and not isinstance(expr, FStrLit):
+            return self.string_array_type(expr.value)
+        if isinstance(expr, Cast):
+            try:
+                return self.lang_type(expr.type_name, expr.line)
+            except LangError:
+                return None
+        if isinstance(expr, Unary) and expr.op == "*":
+            base = self.dot_receiver_type(expr.operand)
+            if base is not None and is_pointer(strip_const(base)):
+                return strip_const(base).pointee
+            return None
+        if isinstance(expr, NonnullAssert):
+            return self.dot_receiver_type(expr.operand)
+        return None
+
+    def plan_dot_call(self, expr: CallExpr, base_t: LangType) -> "Call | None":
+        """Rewrite a dot-call ``recv.m(args)`` to its method-family ``Call``.
+
+        Fields shadow methods: when the receiver type declares a field of
+        the name, ``None`` keeps today's field-call behavior (the method
+        stays reachable as ``Type::m(recv, args)``). Otherwise a registered
+        ``Type::m`` family rewrites to ``Call("Type::m", [recv, *args])``,
+        passing the receiver expression verbatim -- so ``mut``-receiver
+        legality, evaluate-once addressing, and every diagnostic are the
+        desugared call's own. A pointer receiver auto-derefs one hop
+        (``q.m()`` is ``S::m(*q, ...)``; ``.`` on a pointer was an error, so
+        the space is free -- but a *field* of the pointee still needs ``->``
+        as before). A struct or union with neither field nor method is the
+        call-shape error; every other miss returns ``None`` and keeps
+        today's diagnostics.
+
+        Args:
+            expr: The ``CallExpr`` whose callee is a non-arrow ``Member``.
+            base_t: The receiver's probed (or spilled) type.
+
+        Returns:
+            The rewritten ``Call``, or ``None`` to keep the existing path.
+
+        Raises:
+            LangError: When a struct/union receiver has neither a field nor
+                a method of the name.
+        """
+        method = expr.callee.field
+        recv = expr.callee.base
+        owner = strip_const(base_t)
+        if is_pointer(owner):
+            if owner is NULLT or owner.pointee is None:
+                return None
+            pointee = strip_const(owner.pointee)
+            if is_aggregate(pointee):
+                try:
+                    self.struct_field(pointee, method, expr.line)
+                    return None  # a field of the pointee: `->` as before
+                except LangError:
+                    pass
+            family = f"{pointee.template or pointee.name}::{method}"
+            if self.method_family_exists(family):
+                return Call(
+                    family,
+                    [],
+                    [Unary("*", recv, expr.callee.line), *expr.args],
+                    expr.line,
+                )
+            return None
+        if is_aggregate(owner) and not is_any(owner):
+            if is_tuple(owner):
+                return None  # positional fields only; today's diagnostics
+            try:
+                self.struct_field(owner, method, expr.line)
+                return None  # field-first: fields shadow methods
+            except LangError:
+                pass
+            qualifier = owner.template or owner.name
+            family = f"{qualifier}::{method}"
+            if self.method_family_exists(family):
+                return Call(family, [], [recv, *expr.args], expr.line)
+            if self.lookup_struct_decl(qualifier) is None:
+                return None  # a builtin aggregate (slice, result): as before
+            kind = "union" if is_union(owner) else "struct"
+            raise LangError(
+                f"{kind} {qualifier!r} has no field or method {method!r}",
+                expr.line,
+            )
+        # A builtin scalar (or `any`): the family is the canonical type name,
+        # e.g. `'C'.lower()` is `char::lower('C')`.
+        family = f"{owner.template or owner.name}::{method}"
+        if self.method_family_exists(family):
+            return Call(family, [], [recv, *expr.args], expr.line)
+        return None
+
+    def gen_spilled_dot_call(self, expr: CallExpr) -> TypedValue:
+        """Emit a dot-call whose receiver only types by evaluation.
+
+        A chained receiver (``p.upper().lower()``) is a call result: evaluate
+        it once, bind it to a hidden local, and re-dispatch the dot-call on
+        the local. A plain rvalue spills to a **const** slot -- const is
+        load-bearing: a writable temporary would launder rvalue-ness and let
+        a mut-self method silently mutate a value about to be discarded, so
+        ``mk().bump()`` must keep erroring. A ``mut``-returning receiver
+        instead re-lends its carried lvalue (the callee's formation rule
+        vouched for the storage), so ``p.ref().bump()`` writes the caller's
+        storage, exactly as ``point::bump(p.ref())`` does.
+
+        Args:
+            expr: The ``CallExpr`` whose callee is a non-arrow ``Member``
+                with an unprobeable receiver.
+
+        Returns:
+            The dot-call's result as a ``TypedValue``.
+
+        Raises:
+            LangError: When the receiver has no methods to attach (void,
+                null, a pending result) -- the canonical no-fields error.
+        """
+        callee = expr.callee
+        tv = self.gen_expr(callee.base)
+        if tv.type is VOID or tv.type is NULLT or tv.result_pending is not None:
+            # Nothing can attach; raise the canonical no-fields error.
+            self.struct_field(strip_const(tv.type), callee.field, expr.line)
+        if tv.lvalue is not None:
+            # A mut return re-lends: the hidden local IS the caller-reachable
+            # storage, writable through the reference.
+            slot, held = tv.lvalue, strip_const(tv.type)
+        else:
+            slot = self.builder.alloca(tv.type.ir)
+            if over_aligned(tv.type):
+                slot.align = type_align(tv.type)
+            self.builder.store(tv.value, slot)
+            held = const_of(strip_const(tv.type))
+        hidden = f"0recv{self.hidden_seq}"
+        self.hidden_seq += 1
+        self.locals[hidden] = (slot, held)
+        try:
+            return self.gen_expr(
+                CallExpr(
+                    Member(Var(hidden, callee.line), callee.field, False,
+                           callee.line),
+                    expr.args,
+                    expr.line,
+                )
+            )
+        finally:
+            del self.locals[hidden]
 
     def sizeof_operand(self, ref: TypeRef, line: int) -> LangType:
         """Resolve a ``sizeof`` operand to the type whose size is wanted.
@@ -10212,6 +10409,26 @@ class CodeGen:
                 )
             return tv.lvalue, tv.type, None, False
         if isinstance(expr, CallExpr):
+            # Method sugar first: a dot-call that rewrites to a family call
+            # is addressed through the Call arm above -- `p.ref(i) = v` is
+            # `point::ref(p, i) = v`, with the same mut-return rule. An
+            # unprobeable receiver (a chained call, `a.view().at(i) = v`)
+            # evaluates once through the spill path, whose mut-return
+            # result carries the address exactly as the Call arm's does.
+            if isinstance(expr.callee, Member) and not expr.callee.arrow:
+                base_t = self.dot_receiver_type(expr.callee.base)
+                if base_t is None:
+                    tv = self.gen_spilled_dot_call(expr)
+                    if tv.lvalue is None:
+                        raise LangError(
+                            f"the call to {expr.callee.field!r} does not "
+                            "return mut, so its result is not assignable",
+                            line,
+                        )
+                    return tv.lvalue, tv.type, None, False
+                plan = self.plan_dot_call(expr, base_t)
+                if plan is not None:
+                    return self.gen_addr(plan, line)
             # A call through a function-pointer expression (a field-held
             # callback table, a parenthesized value): the value's type
             # spells the mut return, so the same lvalue rule applies --

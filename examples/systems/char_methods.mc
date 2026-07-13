@@ -16,8 +16,10 @@ import "std/char";
 // the `as slice<char>` borrow the scans below iterate.
 
 // One row of the classification table: every predicate applied to one
-// character. The receiver is an ordinary `const self` argument, so the
-// calls read `char::is_alpha(c)` -- no `.method()` sugar yet.
+// character. The receiver is an ordinary `const self` argument; this file
+// keeps the explicit `char::is_alpha(c)` spelling, and the `.method()`
+// sugar (`c.is_alpha()`, see types/method_calls.mc) dispatches the same
+// family either way.
 fn describe(c: char) {
     println("  '{}'  alpha={} digit={} alnum={} hex={} space={} upper={} lower={}",
             c, char::is_alpha(c), char::is_digit(c), char::is_alnum(c),
@@ -67,6 +69,8 @@ fn main() -> int32 {
             char::upper('q'), char::lower('Q'));
     println("  upper('7') = '{}', upper('!') = '{}'  (non-letters unchanged)",
             char::upper('7'), char::upper('!'));
+    // The dot spelling calls the same method (types/method_calls.mc).
+    println("  'q'.upper() = '{}'  (dot-call sugar)", 'q'.upper());
 
     // Folding case per character gives case-insensitive comparison.
     println("eq_ignore_case:");
@@ -109,6 +113,8 @@ fn main() -> int32 {
 }
 
 // See also: types/method_alias.mc for the builtin-qualifier language
-// feature these nine methods are declared with; systems/formatting.mc for
+// feature these nine methods are declared with; types/method_calls.mc for
+// the `.method()` sugar that makes them read `c.is_alpha()`;
+// systems/formatting.mc for
 // the other stdlib overload set println leans on here; types/strings.mc
 // for the char[N] text arrays the scans borrow from.

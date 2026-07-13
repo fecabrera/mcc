@@ -234,6 +234,8 @@ fn main() -> int32 {
 // type_aliases.mc / generic_alias.mc
 // for alias transparency itself; constructors.mc for the `S(args)` sugar,
 // whose alias and builtin heads ride this same qualifier chase;
+// method_calls.mc for the `.method()` sugar, whose alias and builtin
+// RECEIVERS ('c'.upper(), xs.first()) dispatch these same families;
 // memory/slices.mc for the `as slice<T>`
 // borrow feeding slice::first; systems/char_methods.mc for the stdlib
 // module (std/char) built on the builtin-qualifier form shown here.

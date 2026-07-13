@@ -922,7 +922,8 @@ and [examples/functions/override.mc](../examples/functions/override.mc).
 ### Methods
 
 A function may be **namespaced to a struct** by writing its name as
-`Type::method`, and is called by that same explicit qualified name:
+`Type::method`, and is called by that explicit qualified name — or through
+the [dot-call sugar](#calling-methods-dot-syntax), `p.magnitude()`:
 
 ```c
 struct point { x: float64; y: float64; }
@@ -1016,9 +1017,10 @@ monomorphized per element type, so `point::magnitude` over `point<int32>` and
   struct's — a name that appears in both lists is the error
   `method type parameter 'T' shadows a type parameter of struct 'point'`.
 
-Call sugar (`p.magnitude()`), constructors/destructors, dynamic dispatch,
-and explicit type arguments at a `::` call are **not** part of this slice —
-every call spells out its qualifier. See
+[Dot-call sugar](#calling-methods-dot-syntax) (`p.magnitude()`) and
+[constructors](#constructors) (`point(1, 2)`) build on this form; destructors,
+dynamic dispatch, and explicit type arguments at a `::` call remain future
+work — a method's own type parameters are always inferred. See
 [examples/types/methods.mc](../examples/types/methods.mc).
 
 ##### Specializing a method for one instantiation
@@ -1214,6 +1216,65 @@ See [examples/types/method_alias.mc](../examples/types/method_alias.mc) for
 the feature and
 [examples/systems/char_methods.mc](../examples/systems/char_methods.mc) for
 the `std/char` module.
+
+#### Calling methods: dot syntax
+
+`recv.method(args)` is sugar for `Type::method(recv, args)`, where `Type` is
+the receiver's type. The receiver expression passes **verbatim** as the first
+argument, so overload resolution (specializations, partials, subsumption),
+`mut`-receiver legality, evaluate-once addressing, and every diagnostic are
+the desugared call's own:
+
+```c
+struct counter { n: int32; }
+fn counter::bump(mut self: counter) { self.n += 1; }
+fn counter::get(const self: counter) -> int32 { return self.n; }
+
+fn main() -> int32 {
+    let c: counter;
+    c.n = 0;
+    c.bump();                  // counter::bump(c) -- mut self writes c
+    counter::bump(c);          // the qualified spelling stays valid
+    let q = &c;
+    q.bump();                  // a pointer receiver auto-derefs one hop:
+    return q.get() - 3;        // counter::bump(*q), counter::get(*q)
+}
+```
+
+The rules:
+
+- **Fields shadow methods.** When the receiver's type declares a field of
+  the name, `s.name(args)` keeps today's field-call behavior (calling the
+  fn-typed field, or the usual not-callable error) — the method stays
+  reachable as `Type::name(s, args)`. Only the call shape with *neither* a
+  field nor a method gets the combined error, `struct 'point' has no field
+  or method 'name'`; a bare member access `p.name` keeps the exact field
+  diagnostics — there are no bound-method values.
+- **A pointer receiver auto-derefs exactly one hop.** `q.m()` on a `S*` is
+  `S::m(*q, ...)` — `.` on a pointer was an error, so the space is free —
+  and inherits the dereference machinery (including
+  [`-Wunchecked-dereference`](#-wunchecked-dereference)). Fields of the
+  pointee still need `->`, and `->` stays fields-only: `q->m()` where `m`
+  is not a field errors as before. A `S**` receiver is an error, as today.
+- **Builtin and alias receivers dispatch their canonical family.** With
+  `import "std/char";`, `'c'.upper()` is `char::upper('c')`; a
+  `slice<int32>` receiver dispatches `fn slice<T>::first`, an alias-typed
+  receiver its target's family.
+- **An rvalue receiver evaluates once.** A chained receiver
+  (`p.get().upper().lower()`) is a call result: it evaluates once into a
+  hidden local. A plain rvalue spills to a **const** slot, so a mut-self
+  method on a temporary is an error (`mk().bump()` rejects — the mutation
+  would vanish with the temporary); a [`mut`-returning](#mut-returns)
+  receiver re-lends its carried lvalue instead, so `b.ref().grow()` writes
+  the caller's storage.
+- **A `mut`-returning method call is an lvalue** through the dot spelling
+  too: `l.at(i) = v`, `l.at(i) += 1`, chained store targets
+  (`a.view().at(2) = 7`), and the mut-return formation walk all judge the
+  desugared family.
+- **Explicit type arguments at a dot-call do not parse** (`p.m<int32>(...)`)
+  — method type parameters are inference-only, exactly as at a `::` call.
+
+See [examples/types/method_calls.mc](../examples/types/method_calls.mc).
 
 #### Constructors
 

@@ -6,9 +6,11 @@ import "std/io";
 // ordinary parameter: `Type::` is purely a namespace here, so mcc enforces NO
 // `self` convention (no required receiver, no required name, no required first
 // type) -- the ONLY rule is that the qualifier (`rect`, `point`) is a declared
-// struct. Call sugar (`r.area()`) and dynamic dispatch are still to come; a
-// method named `constructor` already makes its type callable (`rect(2, 3)`,
-// see constructors.mc). For now every call spells out its qualifier.
+// struct. The `.method()` call sugar has shipped -- `r.area()` desugars to
+// exactly the calls written here (see method_calls.mc) -- and a method named
+// `constructor` makes its type callable (`rect(2, 3)`, see constructors.mc);
+// dynamic dispatch is still to come. This file sticks to the explicit
+// qualified form, the one every dot call desugars into.
 
 struct rect {
     w: int32;
@@ -75,6 +77,6 @@ fn main() -> int32 {
 // (`fn point<T>::name`), the next slice built directly on this one; structs.mc
 // for structs, pointers, and generics; overloading.mc (under functions/) for
 // the overload resolution these methods reuse; constructors.mc for the
-// `constructor` method family that makes the type itself callable. The
-// qualified call form here is the foundation for the `.method()` call sugar
-// still on the roadmap.
+// `constructor` method family that makes the type itself callable;
+// method_calls.mc for the `.method()` call sugar built on the qualified call
+// form here (`r.area()` is `rect::area(r)`, receiver passed verbatim).

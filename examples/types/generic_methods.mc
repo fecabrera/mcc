@@ -3,7 +3,8 @@ import "std/io";
 // Generic-struct methods: a method may be namespaced to a GENERIC struct, with
 // the struct's type parameters written BEFORE the `::` -- `fn point<T>::name`.
 // Everything from methods.mc carries over (the receiver is an ordinary
-// parameter, and the call spells out its qualifier), with one addition: the
+// parameter; this file keeps the explicit qualified calls), with one
+// addition: the
 // method belongs to the struct TEMPLATE, so it monomorphizes to one function
 // per element type, exactly like a generic function does.
 //
@@ -72,12 +73,14 @@ fn main() -> int32 {
     return 0;
 }
 
-// Still to come, as in methods.mc: the `.method()` call sugar, destructors,
-// dynamic dispatch, non-struct receivers, and explicit type args at a `::`
-// call (`point<float64>::sum(...)`) are all future work; today every call
-// spells out its qualifier and infers its type arguments. Constructors have
-// shipped: a method named `constructor` makes the type itself callable
-// (`point<float64>(1.5, 2.5)`, see constructors.mc).
+// Much of what was future work here has shipped: the `.method()` call sugar
+// (`pi.sum()` is `point::sum(pi)`, with T inferred from the receiver exactly
+// as at the qualified calls above -- see method_calls.mc), constructors
+// (`point<float64>(1.5, 2.5)`, see constructors.mc), and non-struct
+// qualifiers (builtins and aliases, see method_alias.mc). Destructors and
+// dynamic dispatch remain future work, and a `::` CALL still never spells
+// type arguments (`point<float64>::sum(...)` does not parse; that spelling
+// in a DECLARATION is a specialization, method_specialization.mc).
 //
 // See also: method_specialization.mc, which builds on this file to give ONE
 // instantiation (`fn point<float64>::name`) its own concrete body that outranks

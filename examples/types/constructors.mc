@@ -165,7 +165,9 @@ fn main() -> int32 {
 // return value is discarded by `S(args)`.
 //
 // See also: methods.mc and generic_methods.mc for the method families the
-// sugar calls into; method_alias.mc for the alias chasing behind the pointf
+// sugar calls into; method_calls.mc for `recv.method(args)`, the call-side
+// sibling of this head-side sugar (both are exact desugars into the same
+// families); method_alias.mc for the alias chasing behind the pointf
 // head and for builtin qualifiers like `char::`; struct_literals.mc for the
 // no-constructor spelling and the field defaults the slot starts from;
 // functions/overloading.mc and mixed_overloads.mc for the ranking that picks

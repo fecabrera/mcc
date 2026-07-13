@@ -37,6 +37,22 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Method call sugar `recv.method(args)`** — a dot-shaped call whose
+  receiver type registers a `Type::method` family desugars to
+  `Type::method(recv, args)`, the receiver passing verbatim so overload
+  resolution, `mut`-receiver legality, and every diagnostic are the
+  desugared call's own. Fields shadow methods (a fn-typed field keeps
+  today's field-call behavior; only a call with *neither* gets the new
+  `struct 'point' has no field or method 'name'` error), `->` stays
+  fields-only, and a pointer receiver auto-derefs one hop (`q.m()` is
+  `Type::m(*q, ...)`). Builtin and alias receivers dispatch their canonical
+  family (`'c'.upper()` with `std/char`). An rvalue receiver evaluates once
+  into a hidden **const** local — so a mut-self method on a temporary stays
+  an error — while a `mut`-returning receiver re-lends its carried lvalue
+  (`b.ref().grow()` writes the caller's storage), and mut-returning
+  dot-calls are lvalues (`l.at(i) = v`, `a.view().at(2) = 7`). See
+  [Calling methods: dot syntax](docs/language.md#calling-methods-dot-syntax).
+
 - **Constructor call sugar `S(args)`** — a method named `constructor` makes
   its type callable: `let s = S(args);` is exactly `let s: S;
   S::constructor(s, args);`, with `let` binding the constructed slot
