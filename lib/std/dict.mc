@@ -30,7 +30,9 @@ struct dict_entry<V> extends set_entry<char*, V>;
  * Keys are content-hashed and compared by bytes; the dict owns private copies
  * (allocated on insert, freed on remove/destroy). Callers keep ownership of
  * the strings they pass in and may free or reuse them immediately.
- * Grows automatically when the load factor reaches 70%.
+ * Grows automatically when the load factor reaches 70%. The `[]` operator
+ * indexes by key: `d[key]` reads (unchecked -- guard with `.has`) and
+ * `d[key] = v` inserts or updates, through the `.at` accessor pair.
  *
  * @field entries:  heap-allocated slot array of length capacity
  * @field length:   number of live (OCCUPIED) entries
@@ -179,6 +181,75 @@ fn dict<V>::get(const self: dict<V>, @nonnull key: char*, mut out: V) -> bool {
     }
 
     return false;
+}
+
+/**
+ * Reports whether key is present — whether `.at` is defined for it.
+ *
+ * @param self: dict to test against
+ * @param key:  string key to look up
+ *
+ * @return true if key has an entry
+ */
+fn dict<V>::has(const self: dict<V>, @nonnull key: char*) -> bool {
+    let slot = hash(key) % self.capacity;
+
+    while (self.entries![slot].state != dict_entry_state::EMPTY) {
+        if (self.entries![slot].state == dict_entry_state::OCCUPIED) {
+            // OCCUPIED slots always hold an owned key copy
+            if (str_eq(self.entries![slot].key!, key))
+                return true;
+        }
+        slot = (slot + 1) % self.capacity;
+    }
+
+    return false;
+}
+
+/**
+ * Unchecked keyed read, the getter of the dict's `[]` operator: `d[key]`
+ * looks key up by content and returns its value. The result is undefined
+ * (a garbage value) if key is absent — guard with `.has`, or use `.get`
+ * for the checked read.
+ *
+ * @param self: dict to read from
+ * @param key:  string key to look up; should be present
+ *
+ * @return the value associated with key
+ */
+@accessor("get")
+fn dict<V>::at(const self: dict<V>, @nonnull key: char*) -> V {
+    let slot = hash(key) % self.capacity;
+
+    while (self.entries![slot].state != dict_entry_state::EMPTY) {
+        if (self.entries![slot].state == dict_entry_state::OCCUPIED) {
+            // OCCUPIED slots always hold an owned key copy
+            if (str_eq(self.entries![slot].key!, key))
+                return self.entries![slot].value;
+        }
+        slot = (slot + 1) % self.capacity;
+    }
+
+    // Absent key: the probe ended on an EMPTY slot; its value field is
+    // in-bounds storage but has never been written (the documented
+    // undefined result).
+    return self.entries![slot].value;
+}
+
+/**
+ * Keyed write, the setter of the dict's `[]` operator: `d[key] = v` inserts
+ * or updates the entry for key (and `d[key] op= v` reads through the getter
+ * first, so the key must then be present). Delegates to `.set`, growth and
+ * key copying included.
+ *
+ * @param self:  dict to write into
+ * @param key:   string key; the caller keeps ownership
+ * @param value: value to associate with key
+ */
+@inline
+@accessor("set")
+fn dict<V>::at(mut self: dict<V>, @nonnull key: char*, value: V) {
+    self.set(key, value);
 }
 
 /**

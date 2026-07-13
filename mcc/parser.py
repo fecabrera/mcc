@@ -452,6 +452,7 @@ class Parser:
         removed = None
         override = False
         prop = None
+        acc = None
         clobbers = []
         while self.cur.kind == "ANNOT":
             annot = self.advance()
@@ -531,6 +532,23 @@ class Parser:
                     prop = kind
                 else:
                     prop = "bare"
+            elif annot.text == "@accessor":
+                # A bare @accessor is the mut-return-lvalue form of the
+                # type's `[]` operator; the parenthesized kind picks the
+                # explicit pair form: @accessor("get") / @accessor("set").
+                if self.cur.kind == "(":
+                    self.advance()
+                    kind = _unescape(self.expect("STRING").text[1:-1])
+                    self.expect(")")
+                    if kind not in ("get", "set"):
+                        raise LangError(
+                            '@accessor takes "get" or "set" '
+                            f"(not {kind!r}), or no argument",
+                            annot.line,
+                        )
+                    acc = kind
+                else:
+                    acc = "bare"
             else:
                 raise LangError(f"unknown annotation {annot.text!r}", annot.line)
         if extern and static:
@@ -561,6 +579,21 @@ class Parser:
             if extern or asm:
                 raise LangError(
                     "@property only applies to a method with a body "
+                    "(not @extern or @asm)",
+                    self.cur.line,
+                )
+        if acc:
+            if prop:
+                raise LangError(
+                    "@property and @accessor cannot be combined "
+                    "(field syntax and `[]` are separate surfaces)",
+                    self.cur.line,
+                )
+            if self.cur.kind != "fn":
+                raise LangError("@accessor only applies to methods", self.cur.line)
+            if extern or asm:
+                raise LangError(
+                    "@accessor only applies to a method with a body "
                     "(not @extern or @asm)",
                     self.cur.line,
                 )
@@ -746,7 +779,7 @@ class Parser:
             )
         return self.parse_function(
             private, static, extern, symbol, inline, asm, clobbers, deprecated,
-            removed, noreturn, override, prop,
+            removed, noreturn, override, prop, acc,
         )
 
     # Tokens that can begin an expression; used to settle the `as T * x`
@@ -1493,6 +1526,7 @@ class Parser:
         noreturn: bool = False,
         override: bool = False,
         prop: str | None = None,
+        acc: str | None = None,
     ) -> Func:
         """Parse a function definition, an ``@extern`` declaration, or a proto.
 
@@ -1844,6 +1878,12 @@ class Parser:
                     "has none to call)",
                     line,
                 )
+            if acc:
+                raise LangError(
+                    "an @accessor method needs a body (a bodyless prototype "
+                    "has none to call)",
+                    line,
+                )
             if type_params and removed is None:
                 # An @removed tombstone is the one generic that may go
                 # bodyless: it never instantiates, so no body needs to travel.
@@ -1934,6 +1974,45 @@ class Parser:
                         '@property("set") the explicit write path',
                         line,
                     )
+        if acc:
+            if "::" not in name:
+                raise LangError(
+                    "@accessor only applies to a method "
+                    "(a qualified `fn Type::name`)",
+                    line,
+                )
+            if variadic:
+                raise LangError("an @accessor method cannot be variadic", line)
+            if acc == "set":
+                # The setter: (self, indices..., value). Its return, if any,
+                # is ignored at the assignment that calls it.
+                if len(params) < 3:
+                    raise LangError(
+                        'an @accessor("set") method takes its receiver, at '
+                        "least one index, and the assigned value last "
+                        "(at least three parameters)",
+                        line,
+                    )
+            else:
+                # A bare @accessor or @accessor("get"): receiver plus the
+                # indices, value-returning.
+                if len(params) < 2:
+                    raise LangError(
+                        "an @accessor method takes its receiver and at "
+                        "least one index (at least two parameters)",
+                        line,
+                    )
+                if ret_type.name == "void" and not ret_type.stars and not ret_type.dims:
+                    raise LangError(
+                        "an @accessor method must return a value", line
+                    )
+                if acc == "get" and mut_return:
+                    raise LangError(
+                        'an @accessor("get") method cannot return mut; a bare '
+                        "@accessor is the mut-lvalue form, "
+                        '@accessor("set") the explicit write path',
+                        line,
+                    )
         return Func(
             name,
             type_params,
@@ -1956,6 +2035,7 @@ class Parser:
             removed_msg=removed,
             override=override,
             property=prop,
+            accessor=acc,
             type_param_defaults=type_param_defaults,
             type_param_groups=type_param_groups,
             type_param_bounds=type_param_bounds,
@@ -2219,7 +2299,7 @@ class Parser:
             if isinstance(expr, Unary) and expr.op == "*":
                 return StoreDeref(expr.operand, value, tok.line)
             if isinstance(expr, Index):
-                return StoreIndex(expr.base, expr.index, value, tok.line)
+                return StoreIndex(expr.base, expr.indices, value, tok.line)
             if isinstance(expr, Member):
                 return StoreMember(expr.base, expr.field, expr.arrow, value, tok.line)
             if isinstance(expr, (Call, CallExpr)):
@@ -2746,10 +2826,13 @@ class Parser:
                 # binds its own `:` greedily -- `s[flag ? 1 : 2 : 3]` is
                 # `start = flag ? 1 : 2` with `end = 3`, deterministic. There
                 # is no step form: `::` lexes as one token, so `s[::2]` never
-                # reads as two slice colons.
+                # reads as two slice colons. A `,` decision point instead
+                # makes it a multi-index, `base[i, j, ...]` (an @accessor
+                # call form); a slice bound never follows a comma.
                 line = self.advance().line
                 sliced = False
                 start = end = None
+                indices = []
                 with self._struct_literals(True):
                     if self.cur.kind != ":":
                         start = self.parse_expr()
@@ -2758,11 +2841,15 @@ class Parser:
                         self.advance()
                         if self.cur.kind != "]":
                             end = self.parse_expr()
+                    elif start is not None:
+                        indices.append(start)
+                        while self.accept(","):
+                            indices.append(self.parse_expr())
                 self.expect("]")
                 if sliced:
                     expr = Slice(expr, start, end, line)
                 else:
-                    expr = Index(expr, start, line)
+                    expr = Index(expr, indices, line)
             elif self.cur.kind in (".", "->"):
                 arrow = self.advance()
                 field = self.expect("IDENT").text

@@ -84,6 +84,26 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`@accessor` methods — overloading the `[]` operator** — a method
+  annotated `@accessor` is the type's `[]`: `xs[i]` calls `list<T>::at(xs,
+  i)`, `@property`'s indexed sibling with the same bare-vs-pair split. The
+  bare form's `-> mut` return makes the element an assignable lvalue
+  (`xs[i] = v` is `Type::at(xs, i) = v`, `op=` compounds through it);
+  `@accessor("get")`/`@accessor("set")` declare the explicit pair for
+  write-path logic — indices first, the assigned value last, `op=` as
+  read-modify-write through both, the setter's return discarded. The indices
+  are ordinary arguments: any number (the grammar gains multi-index
+  `m[r, c]`, accessor-only — native indexing stays single) of any type
+  (`d["key"]`), dispatched as overloads within the family. All `@accessor`
+  methods of one type share one name (`[]` carries none to pick by); a
+  derived type inherits through `extends`; natively indexable bases (a
+  pointer, array, slice, or tuple) keep native `[]` untouched. The stdlib
+  adopts both forms: `list<T>::at` is bare (so `xs[i]` and — inherited —
+  `string`'s `s[0] = 'H'` work), and `dict<V>::at` is a new get/set pair
+  (`d[key]` reads unchecked — guard with the new `dict<V>::has` — and
+  `d[key] = v` inserts or updates through `.set`). See
+  [Accessors](docs/language.md#accessors-overloading-).
+
 - **Dependent `extends` bounds — a bound target may reference type
   parameters** — `fn list<T>::equals<U extends slice<T>>(const self, const
   lst: U)` constrains `U` by the *enclosing qualifier's* `T`, and

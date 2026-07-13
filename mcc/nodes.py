@@ -448,6 +448,19 @@ class Func:
             mechanisms are separate: one family cannot mix ``"bare"`` with
             ``"get"``/``"set"``. A real field of the name shadows any
             property, and the call spelling stays valid.
+        accessor: The ``@accessor`` kind, or ``None`` -- the method behind
+            the type's ``[]`` operator. Mirrors ``property``, indexed instead
+            of named: ``"bare"`` (a plain ``@accessor``) takes its receiver
+            plus the indices and returns a value; ``xs[i]`` calls
+            ``T::at(xs, i)``, and a ``-> mut`` return makes the element an
+            assignable lvalue (``xs[i] = v`` is ``T::at(xs, i) = v``).
+            ``"get"``/``"set"`` are the explicit pair -- the getter is
+            value-returning (never ``-> mut``), the setter takes the
+            receiver, the indices, and the assigned value last (its return,
+            if any, is ignored); ``d[k]`` calls the getter, ``d[k] = v`` the
+            setter, ``d[k] op= v`` is read-modify-write through both. All
+            ``@accessor`` methods of one type must share one name (one
+            family per type), and bare cannot mix with ``"get"``/``"set"``.
         type_param_defaults: ``{type parameter: TypeRef}`` for parameters
             declared ``<T = type>``. The default fills a parameter that is
             neither given explicitly nor inferred from a *typed* argument.
@@ -543,6 +556,7 @@ class Func:
     removed_msg: str | None = None
     override: bool = False
     property: str | None = None
+    accessor: str | None = None
     type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
     type_param_groups: dict[str, list[TypeRef]] = field(default_factory=dict)
     type_param_bounds: dict[str, TypeRef] = field(default_factory=dict)
@@ -1015,17 +1029,17 @@ class StoreDeref:
 
 @dataclass
 class StoreIndex:
-    """An indexed store: ``base[index] = value;``.
+    """An indexed store: ``base[i] = value;`` or ``base[i, j, ...] = value;``.
 
     Attributes:
-        base: The array or pointer expression.
-        index: The index expression.
+        base: The indexed expression (see :class:`Index`).
+        indices: The index expressions, in order; always at least one.
         value: The expression to store.
         line: Source line for diagnostics.
     """
 
     base: object
-    index: object
+    indices: list
     value: object
     line: int
 
@@ -1672,16 +1686,18 @@ class Len:
 
 @dataclass
 class Index:
-    """An index expression: ``base[index]``.
+    """An index expression: ``base[i]`` or ``base[i, j, ...]``.
 
     Attributes:
-        base: The array or pointer expression.
-        index: The index expression.
+        base: The indexed expression -- an array, pointer, slice, or tuple
+            (exactly one index), or a struct whose type declares an
+            ``@accessor`` (any number of indices, of any type).
+        indices: The index expressions, in order; always at least one.
         line: Source line for diagnostics.
     """
 
     base: object
-    index: object
+    indices: list
     line: int
 
 

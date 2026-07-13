@@ -6,7 +6,8 @@ import "std/equality";
  *
  * `string` is `list<char>` (same fields and layout), so it inherits list's
  * constructors, destructor, and element accessors (`.push`, `.at`, `.get`,
- * `.set`, `.append`, `.reset`, `.has`) directly -- no wrappers. string adds
+ * `.set`, `.append`, `.reset`, `.has`, and the `[]` operator `s[i]` /
+ * `s[i] = c` behind `.at`) directly -- no wrappers. string adds
  * only what is text-specific: a NUL-terminated `char*` constructor and
  * `append`, and the `equals` members of the equality protocol below.
  */

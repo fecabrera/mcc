@@ -1470,6 +1470,70 @@ The dispatch is the dot-call's:
 
 See [examples/types/properties.mc](../examples/types/properties.mc).
 
+#### Accessors: overloading `[]`
+
+A method annotated `@accessor` is the type's **`[]` operator**: `xs[i]` calls
+`list<T>::at(xs, i)`. The annotation is `@property`'s indexed sibling — the
+method is otherwise ordinary (the call spellings `xs.at(i)` and
+`list<int32>::at(xs, i)` stay valid beside `[]`, and generics, inheritance,
+and overload dispatch carry through), and the same bare-vs-pair split
+applies. **Natively indexable types keep native `[]`**: a pointer, array,
+slice, or tuple base never consults an accessor.
+
+The indices are ordinary arguments: **any number, of any type** — `m[r, c]`
+passes both, `d["key"]` indexes a dict by string. Overloads within the
+family dispatch over them like any call.
+
+The bare form returns the element, and a `-> mut` return makes `xs[i]` an
+assignable lvalue — `xs[i] = v` is exactly `Type::at(xs, i) = v` through the
+[mut return](#mut-returns):
+
+```c
+struct grid { cells: int32[16]; }
+
+@accessor
+fn grid::at(mut self: grid, r: uint64, c: uint64) -> mut int32 {
+    return self.cells[r * 4 + c];
+}
+
+let g: grid;
+g[1, 2] = 40;    // grid::at(g, 1, 2) = 40
+g[1, 2] += 2;    // 42
+```
+
+For write-path logic, `@accessor("get")` / `@accessor("set")` declare the
+explicit pair: `d[k]` calls the getter, `d[k] = v` the setter — the indices
+first, the assigned value **last** — and `d[k] op= v` is read-modify-write
+through both (the receiver and index expressions are evaluated for each,
+both reaching the same storage). The pair's rules are the property pair's:
+the getter never returns `mut`, a setter's return is discarded, getter-only
+rejects writes (`accessor 'dict::at' is read-only`), setter-only rejects
+reads (`write-only`) and `op=`, and one family cannot mix the bare form with
+the pair.
+
+Two rules are `[]`'s own:
+
+- **One family per type**: `xs[i]` carries no method name to pick by, so all
+  `@accessor` methods of one type must share one name — declaring
+  `@accessor` on two differently named methods of a type is a compile error.
+  A derived type reaches a base's accessor through `extends`, its own
+  declaration winning the family name.
+- Only an accessor takes **more than one index**; multi-index on a native
+  base (`arr[0, 1]`) is a compile error.
+
+Declaring one is checked like a property: `@accessor` applies only to a
+**method** with a **body**; the bare/`("get")` forms take the receiver plus
+at least one index and return a value, a `("set")` takes the receiver, at
+least one index, and the assigned value. The receiver must be probeable at
+the use site (an rvalue base like `f()[i]` is unsupported — bind it first).
+
+The stdlib adopts both forms: `list<T>::at` is a bare `@accessor` (so list
+elements — and `string`'s bytes, by inheritance — read and write like array
+slots), and `dict<V>::at` is a get/set pair (`d[key]` reads **unchecked** —
+guard with `.has` — and `d[key] = v` inserts or updates through `.set`).
+
+See [examples/types/accessors.mc](../examples/types/accessors.mc).
+
 #### Constructors
 
 A method named `constructor` makes its type callable: `S(args)` is sugar for

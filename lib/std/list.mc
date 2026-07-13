@@ -98,11 +98,15 @@ fn list<T>::has(const self: list<T>, index: uint64) -> bool {
  * `.get` for the checked read. The lvalue points into the list's storage:
  * consume it before any call that can grow the list.
  *
+ * The list's `[]` operator: `xs[i]` reads through this accessor and
+ * `xs[i] = v` (or `xs[i] += v`) writes through its lvalue.
+ *
  * @param self:  list to access
  * @param index: zero-based index; must be < self.length
  *
  * @return the element at index, as an assignable lvalue
  */
+@accessor
 fn list<T>::at(mut self: list<T>, index: uint64) -> mut T {
     return self.data![index];
 }

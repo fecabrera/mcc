@@ -580,6 +580,11 @@ class CodeGen:
         # {"get", "set"}), consulted by property_kinds for field-syntax
         # dispatch. Built once, with the bare-vs-pair mixing check.
         self._property_registry: "dict[str, dict[str, int]] | None" = None
+        # Lazily-built map of `@accessor` owners (e.g. "list") to their one
+        # `[]` method family: (method basename, {kind: line}). Consulted by
+        # accessor_kinds for `[]` dispatch. Built once, with the
+        # one-family-per-type and bare-vs-pair mixing checks.
+        self._accessor_registry: "dict[str, tuple[str, dict[str, int]]] | None" = None
         # Warning classes promoted to error level (the strict posture); see
         # the constructor doc. Consulted by mark_nonnull and check_nonnull_arg.
         self.error_classes = error_classes
@@ -8146,20 +8151,51 @@ class CodeGen:
             # pointer may alias one): every projection fact dies.
             self.narrowed_paths.clear()
         elif isinstance(stmt, StoreIndex):
-            base_t = self.lvalue_type(stmt.base)
-            # An array or tuple element lives in the base's own storage, so a
-            # const parameter's read-only-ness extends to it; a pointer or
-            # slice element sits behind a pointer hop the const does not cover.
-            in_storage = base_t is not None and (
-                is_array(base_t) or is_tuple(strip_const(base_t))
-            )
-            if in_storage and self.writes_const(stmt.base):
-                raise LangError(
-                    "cannot assign to an element of a const parameter", stmt.line
+            acc = self.accessor_access(stmt.base, stmt.line)
+            if acc is not None and "set" in acc[1]:
+                # `d[k] = v` is `T::at(d, k, v)`: the indices and the
+                # assigned value pass as the setter's arguments (overload
+                # dispatch, literal adaptation, and coercion are the call's
+                # own), and the setter's return, if any, is discarded.
+                self.gen_call(
+                    Call(
+                        acc[0], [], [stmt.base, *stmt.indices, stmt.value],
+                        stmt.line,
+                    )
                 )
-            addr, element, align, volatile = self.gen_index_addr(
-                stmt.base, stmt.index, stmt.line, store=True
-            )
+                self.narrowed_paths.clear()
+                return
+            if acc is not None and "bare" not in acc[1]:
+                raise LangError(
+                    f"accessor {acc[0]!r} is read-only "
+                    '(only @accessor("get") is declared)',
+                    stmt.line,
+                )
+            if acc is not None:
+                # A bare @accessor: address its mut return -- `xs[i] = v` is
+                # `T::at(xs, i) = v` (a non-`mut` bare accessor rejects
+                # here, like any non-mut-returning call target).
+                call = self.as_accessor_call(
+                    Index(stmt.base, stmt.indices, stmt.line)
+                )
+                addr, element, align, volatile = self.gen_addr(call, stmt.line)
+            else:
+                base_t = self.lvalue_type(stmt.base)
+                # An array or tuple element lives in the base's own storage,
+                # so a const parameter's read-only-ness extends to it; a
+                # pointer or slice element sits behind a pointer hop the
+                # const does not cover.
+                in_storage = base_t is not None and (
+                    is_array(base_t) or is_tuple(strip_const(base_t))
+                )
+                if in_storage and self.writes_const(stmt.base):
+                    raise LangError(
+                        "cannot assign to an element of a const parameter",
+                        stmt.line,
+                    )
+                addr, element, align, volatile = self.gen_index_addr(
+                    stmt.base, stmt.indices, stmt.line, store=True
+                )
             if element.const:
                 raise LangError(
                     "cannot assign through a read-only slice<const T>", stmt.line
@@ -8722,6 +8758,40 @@ class CodeGen:
                 )
                 self.narrowed_paths.clear()
                 return
+        if isinstance(stmt.target, Index):
+            acc = self.accessor_access(stmt.target.base, stmt.line)
+            if acc is not None and ("get" in acc[1] or "set" in acc[1]):
+                # A get/set accessor compound-assigns by read-modify-write:
+                # `d[k] op= v` is `T::at(d, k, T::at(d, k) op v)` -- one
+                # get, the operator, one set (so the receiver and index
+                # expressions are evaluated twice; both reach the same
+                # storage).
+                family, kinds = acc
+                if "set" not in kinds:
+                    raise LangError(
+                        f"accessor {family!r} is read-only "
+                        '(only @accessor("get") is declared)',
+                        stmt.line,
+                    )
+                if "get" not in kinds:
+                    raise LangError(
+                        f"accessor {family!r} has no getter: "
+                        f"'{stmt.op}=' needs to read the current value",
+                        stmt.line,
+                    )
+                current = Index(
+                    stmt.target.base, list(stmt.target.indices), stmt.line
+                )
+                combined = Binary(stmt.op, current, stmt.value, stmt.line)
+                self.gen_call(
+                    Call(
+                        family, [],
+                        [stmt.target.base, *stmt.target.indices, combined],
+                        stmt.line,
+                    )
+                )
+                self.narrowed_paths.clear()
+                return
         addr, elem_type, align, volatile = self.compound_target_addr(
             stmt.target, stmt.line
         )
@@ -8803,6 +8873,15 @@ class CodeGen:
             self.narrowed_paths.clear()
             return ptr.value, ptr.type.pointee, None, ptr.type.pointee.volatile
         if isinstance(target, Index):
+            call = self.as_accessor_call(target)
+            if call is not None:
+                # A bare @accessor: `xs[i] op= v` addresses the mut return,
+                # exactly as a plain assignment through it (a get/set pair
+                # was already rewritten to read-modify-write by
+                # gen_compound_assign).
+                entry = self.gen_addr(call, line)
+                self.narrowed_paths.clear()
+                return entry
             base_t = self.lvalue_type(target.base)
             # In-storage elements (array or tuple) inherit a const
             # parameter's read-only-ness, as in a plain element assignment.
@@ -8814,7 +8893,7 @@ class CodeGen:
                     "cannot assign to an element of a const parameter", line
                 )
             addr, element, align, volatile = self.gen_index_addr(
-                target.base, target.index, line, store=True
+                target.base, target.indices, line, store=True
             )
             if element.const:
                 raise LangError(
@@ -9941,8 +10020,14 @@ class CodeGen:
                 )
             return TypedValue(ir.Constant(UINT64.ir, count), UINT64, adaptable=True)
         if isinstance(expr, Index):
+            call = self.as_accessor_call(expr)
+            if call is not None:
+                # An @accessor base: `xs[i]` reads as the dot-call
+                # `xs.at(i)` (bare loads through the mut return, a getter
+                # returns the value directly).
+                return self.gen_expr(call)
             addr, element, align, volatile = self.gen_index_addr(
-                expr.base, expr.index, expr.line
+                expr.base, expr.indices, expr.line
             )
             return self.value_at(addr, element, align=align, volatile=volatile)
         if isinstance(expr, Slice):
@@ -10368,6 +10453,10 @@ class CodeGen:
                 return None
             return ftype
         if isinstance(expr, Index):
+            if len(expr.indices) != 1:
+                # A multi-index is an @accessor call; its type is the call's,
+                # so it types as nothing here (like any call result).
+                return None
             base_t = self.lvalue_type(expr.base)
             if base_t is None:
                 return None
@@ -10380,7 +10469,9 @@ class CodeGen:
                 # (or out-of-bounds) one types as nothing here and gets its
                 # precise error at code generation.
                 try:
-                    fname = self.tuple_element(strip_const(base_t), expr.index, 0)
+                    fname = self.tuple_element(
+                        strip_const(base_t), expr.indices[0], 0
+                    )
                 except LangError:
                     return None
                 return self.struct_field(strip_const(base_t), fname, 0)[1]
@@ -10676,10 +10767,17 @@ class CodeGen:
             self.warn_unchecked_deref(expr.operand, line)
             return tv.value, tv.type.pointee, None, tv.type.pointee.volatile
         if isinstance(expr, Index):
+            call = self.as_accessor_call(expr)
+            if call is not None:
+                # An @accessor base: address the rewritten dot-call. A bare
+                # accessor's mut return is the address; a getter-only pair
+                # rejects in the CallExpr arm, like any non-mut-returning
+                # call target.
+                return self.gen_addr(call, line)
             # store=True: an address may feed a write (assignment through a
             # member of the element, or &), so an rvalue tuple base must
             # reject rather than hand out a spilled temporary's address.
-            return self.gen_index_addr(expr.base, expr.index, line, store=True)
+            return self.gen_index_addr(expr.base, expr.indices, line, store=True)
         if isinstance(expr, Member):
             prop = self.as_property_call(expr)
             if prop is not None:
@@ -10749,15 +10847,18 @@ class CodeGen:
         raise LangError("expression is not addressable", line)
 
     def gen_index_addr(
-        self, base_expr, index_expr, line: int, *, store: bool = False
+        self, base_expr, indices, line: int, *, store: bool = False
     ) -> tuple[ir.Value, LangType, int | None, bool]:
-        """Compute the address of ``base[index]``.
+        """Compute the address of a natively indexed ``base[index]``.
+
+        The ``@accessor`` rewrite happens in the callers, so a base landing
+        here indexes natively -- and native indexing takes exactly one index.
 
         Args:
             base_expr: The indexed base expression (a pointer, array, slice,
                 or tuple).
-            index_expr: The index expression (an integer; a compile-time
-                constant for a tuple base).
+            indices: The index expressions; exactly one (an integer; a
+                compile-time constant for a tuple base).
             line: Source line for diagnostics.
             store: Whether the address receives a write. An rvalue tuple base
                 (a call result) then rejects instead of spilling to a
@@ -10768,9 +10869,17 @@ class CodeGen:
             volatile)`` tuple, as in :meth:`gen_addr`.
 
         Raises:
-            LangError: When the base is not indexable, the index is not an
-                integer, or a tuple index is not a constant in bounds.
+            LangError: When the base is not indexable, more than one index is
+                given, the index is not an integer, or a tuple index is not
+                a constant in bounds.
         """
+        if len(indices) != 1:
+            raise LangError(
+                f"cannot index with {len(indices)} indices: only a type "
+                "with an @accessor method takes more than one",
+                line,
+            )
+        index_expr = indices[0]
         base_t = self.lvalue_type(base_expr)
         if base_t is not None and is_tuple(strip_const(base_t)):
             # A tuple element is a struct field in disguise (positional
@@ -11154,7 +11263,7 @@ class CodeGen:
         src = Var(hidden, stmt.line)
         for i, name in enumerate(names[:fixed]):
             self.gen_statement(
-                Let(name, None, Index(src, IntLit(i, stmt.line), stmt.line), stmt.line)
+                Let(name, None, Index(src, [IntLit(i, stmt.line)], stmt.line), stmt.line)
             )
         if stmt.rest:
             start = IntLit(fixed, stmt.line) if fixed else None
@@ -13499,6 +13608,121 @@ class CodeGen:
         raise LangError(
             f"property {family!r} is write-only "
             '(only @property("set") is declared)',
+            expr.line,
+        )
+
+    def accessor_kinds(
+        self, owner: LangType, line: int
+    ) -> "tuple[str, set[str]] | None":
+        """The ``(family, kinds)`` behind ``owner[...]`` when the type
+        declares an ``@accessor`` method, else ``None``.
+
+        ``kinds`` is the set of declared accessor kinds for the family:
+        ``{"bare"}`` for the mut-return-lvalue form, a non-empty subset of
+        ``{"get", "set"}`` for the explicit pair. All ``@accessor`` methods
+        of one type must share one name (``[...]`` carries none to pick by),
+        and the two mechanisms are separate; both violations are compile
+        errors. A derived type reaches a base's ``@accessor`` through its
+        ``extends`` chain, its own declaration winning the family name.
+        Natively indexable types (a pointer, array, slice, or tuple) never
+        get here: native ``[]`` wins, so the caller excludes them.
+        """
+        owner = strip_const(owner)
+        if not is_aggregate(owner) or is_any(owner) or is_tuple(owner):
+            return None
+        if self._accessor_registry is None:
+            registry: "dict[str, tuple[str, dict[str, int]]]" = {}
+            for f in self.program.functions:
+                kind = getattr(f, "accessor", None)
+                if kind is None or f.removed_msg is not None:
+                    continue
+                fam_owner, method = f.name.split("::", 1)
+                entry = registry.get(fam_owner)
+                if entry is not None and entry[0] != method:
+                    raise LangError(
+                        f"type {fam_owner!r} declares @accessor on two "
+                        f"method names ({entry[0]!r} and {method!r}); a "
+                        "type has one `[]` family",
+                        f.line,
+                    )
+                if entry is None:
+                    entry = (method, {})
+                    registry[fam_owner] = entry
+                entry[1].setdefault(kind, f.line)
+            for fam_owner, (method, kinds) in registry.items():
+                if "bare" in kinds and ("get" in kinds or "set" in kinds):
+                    raise LangError(
+                        f"accessor '{fam_owner}::{method}' mixes a bare "
+                        '@accessor with @accessor("get")/@accessor("set"); '
+                        "the two forms are separate mechanisms -- pick one",
+                        max(kinds.values()),
+                    )
+            self._accessor_registry = registry
+        qualifier = owner.template or owner.name
+        method = None
+        kinds: set[str] = set()
+        entry = self._accessor_registry.get(qualifier)
+        if entry is not None:
+            method = entry[0]
+            kinds |= set(entry[1])
+        for base_name, _, _, _ in self.base_chain(qualifier):
+            base_entry = self._accessor_registry.get(base_name)
+            if base_entry is None:
+                continue
+            if method is None:
+                method = base_entry[0]
+            if base_entry[0] == method:
+                kinds |= set(base_entry[1])
+        if method is None:
+            return None
+        if "bare" in kinds and ("get" in kinds or "set" in kinds):
+            raise LangError(
+                f"accessor {method!r} mixes a bare @accessor with "
+                '@accessor("get")/@accessor("set") across the extends '
+                "chain; the two forms are separate mechanisms -- pick one",
+                line,
+            )
+        return f"{qualifier}::{method}", kinds
+
+    def accessor_access(
+        self, base_expr, line: int
+    ) -> "tuple[str, set[str]] | None":
+        """The ``(family, kinds)`` behind ``base_expr[...]`` when it is an
+        accessor index; ``None`` when it is native indexing (a pointer,
+        array, slice, or tuple base -- native ``[]`` wins) or the base is
+        unprobeable (an rvalue like ``f()[i]``: unsupported for now)."""
+        base_t = self.dot_receiver_type(base_expr)
+        if base_t is None:
+            return None
+        base_t = strip_const(base_t)
+        if is_pointer(base_t) or is_array(base_t) or is_slice(base_t):
+            return None
+        return self.accessor_kinds(base_t, line)
+
+    def as_accessor_call(self, expr: Index) -> "CallExpr | None":
+        """Rewrite a readable accessor index ``xs[i]`` to its dot-call
+        ``xs.at(i)``; ``None`` when ``expr`` is native indexing.
+
+        Both spellings reach the same method, so the rewrite re-enters the
+        ordinary dot-call machinery -- mut-return lvalue, inheritance, and
+        overload dispatch over the index types all come for free. A
+        write-only accessor (``@accessor("set")`` with no getter) has no
+        readable or addressable form, so it rejects here.
+        """
+        acc = self.accessor_access(expr.base, expr.line)
+        if acc is None:
+            return None
+        family, kinds = acc
+        if "bare" in kinds or "get" in kinds:
+            method = family.split("::", 1)[1]
+            return CallExpr(
+                Member(expr.base, method, False, expr.line),
+                list(expr.indices),
+                expr.line,
+            )
+        raise LangError(
+            f"accessor {family!r} is write-only "
+            '(only @accessor("set") is declared)',
             expr.line,
         )
 

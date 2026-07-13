@@ -1389,13 +1389,26 @@ already do).
           resolves to the
           one `mut self` overload and is an assignable mut-returning
           dot-call, `l.at(i) = v`; a `const` receiver simply cannot call
-          it). `dict` settles as guard-then-access: `dict_has` then
+          it), and the since-shipped `@accessor` annotation on
+          `list<T>::at` only adds the bracket spelling over that same
+          one overload (`l[i] = v`). `dict` settles as guard-then-access: `dict_has` then
           `dict_at`, UB on a missing key, and **no insert-if-missing**
           (C++ `operator[]`'s implicit insert means a hidden allocation
           plus a default-constructed `V`, neither of which exists here);
           the honest cost is that the guarded idiom hashes twice where
           `operator[]` hashes once, accepted for v1 with a find/entry-style
           API lending the slot as the recorded future escape valve.
+          Since SHIPPED with the `@accessor` adoption:
+          `dict<V>::has` plus a `dict<V>::at` get/set pair, the read
+          half exactly as settled here (`d[key]` unchecked, guard with
+          `.has`) and the write half reshaped from a `-> mut` `_at`
+          into the pair's explicit setter, `d[key] = v` inserting or
+          updating through `.set` — the no-insert-if-missing ruling
+          holds on the READ path (a read never allocates or
+          default-constructs a `V`; the setter's insert is the declared
+          write, not C++'s hidden lvalue insert), and the twice-hashing
+          cost stands, `op=` through the pair hashing for the get and
+          the set both.
           `ring` reconciles in the same pass: `ring_at` was the naming
           precedent (unchecked, documented UB) but carried the pre-triad
           signature (`const self -> T` by value), so it flipped to
@@ -1409,8 +1422,10 @@ already do).
             the `list` pair), `ring_has`, and the `ring_at` flip to
             `mut self -> mut T`, the first live `mut` returns in `libmc`
       - [ ] stage 2: keyed containers and the `const`-ring read —
-            `dict_has`/`set_has` (the load-bearing membership case) with
-            `dict_at`, plus `ring_get` to close the `const`-ring read
+            the `dict` half shipped with the `@accessor` adoption
+            (`dict<V>::has`, the load-bearing membership case, plus the
+            `dict<V>::at` get/set pair above); remaining are `set_has`
+            and `ring_get` to close the `const`-ring read
             gap the stage-1 flip opened
   - [ ] motivating use case: method receivers — `const`/`mut`/by-value on
         `self` express read-only / mutating / consuming methods directly,
@@ -1484,8 +1499,11 @@ already do).
       Iteration is the protocol family's second member: the
       `for … in` protocol sub-item above is slated to desugar into
       `iterate`/`get_next` overloads riding this same mechanism; the
-      indexing and slicing protocol nested below is the third, `c[i]`
-      and `c[a:b]` desugaring to accessor and slicer overload sets. The
+      slicing protocol nested below is the third, `c[a:b]` desugaring
+      to a slicer overload set (the third member's indexing half,
+      `c[i]` desugaring to an accessor overload set, was since
+      SUPERSEDED by the shipped `@accessor` methods of the
+      Methods / OOP item below). The
       family is free-function overload sets rather than per-struct
       member rules deliberately: a protocol built as an overload set
       is joinable by any type (builtins, pointers, enums, slices,
@@ -1495,7 +1513,10 @@ already do).
       overload-set protocol family is the language's protocol story,
       and the Methods / OOP item below is checked against it rather
       than the reverse: methods must not become the privileged
-      mechanism for protocols
+      mechanism for protocols (a tenet since breached for indexing,
+      where the `@accessor` ship settled the brackets as method
+      dispatch; formatting, iteration, and slicing keep the
+      free-function shape)
   - [x] `@override` — replace a same-pattern member of an open set.
         With open sets, replacing group-covered or generic-covered
         behavior already falls out of the shipped ranking with no
@@ -1572,27 +1593,39 @@ already do).
           A distinct mechanism from the shipped global replacement,
           which is why the shipped compiler rejects the combination
           rather than approximating it
-  - [ ] indexing and slicing protocol — the family's third member: `c[i]`
-        and `c[a:b]` on a user-defined struct desugar to overloadable
-        free-function calls resolved through ordinary whole-program
-        overload resolution, so containers index and slice without
+  - [ ] slicing protocol — the family's third member, RE-SCOPED by the
+        shipped `@accessor` methods (the Methods / OOP item below): this
+        item sketched `c[i]` and `c[a:b]` both desugaring to
+        free-function overload sets, and the indexing half is
+        SUPERSEDED — `c[i]`, the store and compound forms through it,
+        and multi-index `c[r, c]` now dispatch the receiver type's
+        `@accessor` method family, settling indexing as a method affair
+        against this item's free-function premise (the sketch was
+        recorded as direction, not settled design, and its open
+        question, whether the accessor half is the triad's `_at` set or
+        a dedicated protocol name, resolved as the `_at` set itself,
+        annotated `@accessor`). What remains is the bracket slicer:
+        `c[a:b]` on a user-defined struct desugars to an overloadable
+        free-function call resolved through ordinary whole-program
+        overload resolution, so containers slice without
         compiler-blessed types and any type opts in by writing overloads
         in its own module (direction, not settled design):
     ```c
-    let lst: list<int32>;
-    list_init(lst, 10);
-    lst[1];     // the item at 1: the accessor overload set
-    lst[1:];    // the sublist from 1 on: the slicer overload set
+    let lst = list<int32>(10);
+    lst[1];     // shipped: the item at 1, list<T>'s @accessor family
+    lst[1:];    // this item: the sublist from 1 on, the slicer overload set
     ```
-        Today `lst[1]` is a hard "cannot index" rejection and `lst[1:]`
+        Today `lst[1]` dispatches the shipped accessor family while
+        `lst[1:]` remains
         the sub-slicing item's borrow-suggesting non-slice-receiver
         rejection, a single site deliberately shaped as this protocol's
-        dispatch point; the protocol turns those rejection paths
-        (indexing, the store and compound forms through it, and the
+        dispatch point; the protocol turns that rejection path (the
         bracket slice) into overload-set dispatch, while builtin receivers keep their primitive lowerings
         and never route through the protocol, the same builtins
         carve-out the [`for … in` protocol](#functions-and-methods)
-        item records for its lowerings. The split is the design, not an
+        item records for its lowerings and the `@accessor` ship
+        confirmed for indexing (a natively indexable base never
+        consults an accessor). The split is the design, not an
         optimization: `slice<T>`'s static `{ data, length }` layout
         fully describes the view, so a compiler-constructed sub-view
         cannot misrepresent anything and slices stay primitive (the
@@ -1603,35 +1636,36 @@ already do).
         knows how to rebuild, so the overload is where that knowledge
         lives, and a direct `arr[a:b]`/`p[a:b]`, if it ever lands, is
         the sub-slicing item's recorded primitive extension, not a
-        protocol overload. No syntax of its own: `c[i]` already
-        parses, and the `[a:b]` grammar and the primitive slice
+        protocol overload. No syntax of its own: the `[a:b]` grammar
+        and the primitive slice
         lowering shipped with the sub-slicing item, so the build
         dependency this strictly sat on is satisfied (a slicer
         overload body is typically one primitive sub-slice over the
-        container's storage). The write
-        path rides the shipped
-        [`mut` returns](docs/language.md#mut-returns): an accessor
-        overload returning `mut T` is what makes `lst[i] = v`, compound
-        assignment, and projections work through the brackets, one
-        overload serving both sides of `=` with no separate setter
-        protocol, and the accessor triad's `_at` members above
-        (`fn list_at<T>(mut self: list<T>, i: uint64) -> mut T`) read as
-        the natural overload bodies or even the direct desugar target.
+        container's storage). The write path through the index
+        brackets shipped with the accessor half exactly as predicted
+        here, one `-> mut` return serving both sides of `=` over the
+        shipped [`mut` returns](docs/language.md#mut-returns)
+        (`list<T>::at`, usable as `lst[i] = v`), with the
+        `@accessor("get")`/`("set")` pair form covering the write-path
+        logic a raw-storage return cannot.
         Sequencing, not dependency, with the `for … in` protocol: the
         two share the desugar-to-overloads mechanism, whichever ships
         first establishes the pattern (builtin carve-outs, stdlib
         baseline overloads, `.mci` travel), and this one is the simpler
         pilot, a single call per bracket form with no iteration-state
-        pair. Genuinely open: the overload spelling the brackets desugar
-        to, and whether the accessor half **is** the triad's `_at` set
-        or a dedicated protocol name; the slicer's return type, which is
+        pair. Genuinely open: the slicer overload spelling the brackets
+        desugar to, and whether the slicer stays a free-function set at
+        all or follows indexing into a method annotation (the
+        `@accessor` ship is precedent squarely against this item's
+        premise); the slicer's return type, which is
         the overload author's freedom (a `list<int32>` slicer may return
         a genuine sub-list or a `slice<int32>` view; the sub-slicing
         item's lying-`capacity` concern becomes the author's
         responsibility, the protocol constrains nothing); `const`
         receivers (the triad settled `_at` as `mut self` only and
         overloads differing only in markers are banned, so whether
-        `c[i]` has a read-only target on a `const` container, via a
+        `c[a:b]`, or a read-only `c[i]` spelling, has a target on a
+        `const` container, via a
         distinct read spelling or not at all, is unresolved); and the
         bounds posture, presumably each overload's own contract with
         `_at`-style documented UB as the stdlib baseline. Collision and
@@ -1711,8 +1745,8 @@ already do).
 - [ ] Methods / OOP — `fn <type>::<method>(...)` definitions
       keyed to a type, structs foremost (the explicit qualified-call
       foundation, the `recv.method(args)` dot-call sugar, the `S(args)`
-      constructor sugar, method inheritance through `extends`, and
-      `@property` field-syntax access have
+      constructor sugar, method inheritance through `extends`,
+      `@property` field-syntax access, and `@accessor` `[]` indexing have
       shipped, see the checked sub-items; the receiver is an ordinary parameter, not the
       raw `self: <struct>*` this line once sketched), including `@private`
       methods and the special
@@ -1728,11 +1762,13 @@ already do).
       never carries hidden state), and code that never forms a view pays
       nothing. A settled scope boundary
       from the open overload
-      sets item above: protocols (formatting, iteration, indexing/slicing)
-      are free-function
+      sets item above, since NARROWED by the shipped `@accessor`
+      sub-item below (indexing moved to methods, `c[i]` dispatching the
+      receiver type's accessor family): protocols (formatting,
+      iteration, slicing) are free-function
       overload sets, not methods; methods must not become the privileged
-      mechanism for protocols, and this item is checked against that family
-      rather than the reverse:
+      mechanism for those protocols, and this item is checked against that
+      family rather than the reverse:
   ```c
   struct point { x: int32; y: int32; }
   fn point::length2(const self: point) -> int32 { ... }   // shipped: var.length2() or point::length2(var)
@@ -2433,6 +2469,47 @@ already do).
         `stack<T>::length` `@property`, the pattern for the stdlib's
         receiver-only getters. Implemented, see
         [Properties](docs/language.md#properties)
+  - [x] `@accessor` methods — overloading `[]`: a method annotated
+        `@accessor` is the type's `[]` operator, `xs[i]` calling
+        `list<T>::at(xs, i)`. It is `@property`'s indexed sibling, and
+        the method stays ordinary (the `xs.at(i)` and `Type::at(...)`
+        spellings remain valid beside the brackets; generics,
+        inheritance, and overload dispatch carry through), with the
+        same bare-vs-pair split: the bare form's `-> mut` return makes
+        `xs[i]` an assignable lvalue through the shipped
+        [mut returns](docs/language.md#mut-returns) (`xs[i] = v` is
+        `Type::at(xs, i) = v`, and `op=` compounds through it), while
+        `@accessor("get")` / `@accessor("set")` declare the explicit
+        pair for write-path logic (indices first, the assigned value
+        last, `op=` as read-modify-write through both, the setter's
+        declared return discarded), under the property pair's rules
+        (the getter never returns `mut`; getter-only is read-only,
+        setter-only write-only; one family cannot mix the bare form
+        with the pair, directly or across `extends`). Indices are
+        ordinary arguments: any number (the grammar gained multi-index
+        `m[r, c]`, accessor-only; native indexing stays single) of any
+        type (`d["key"]`), dispatched as overloads within the family.
+        Two rules are `[]`'s own: ONE FAMILY PER TYPE (`[]` carries no
+        method name to pick by, so all of a type's `@accessor` methods
+        must share one name; a derived type reaches a base's family
+        through `extends`, its own declaration winning the name), and
+        natively indexable bases (pointer, array, slice, tuple) keep
+        their primitive `[]`, an accessor never competing with a
+        native lowering (the builtins carve-out the protocol items
+        record, confirmed here). Deliberate parity gaps shared with
+        `@property`: an rvalue base (`f()[i]`) is unsupported (bind it
+        first), and concrete accessor methods do not travel through
+        `.mci` interface stubs. This ship SUPERSEDES the accessor half
+        of the indexing-and-slicing protocol sketch under the open
+        overload sets item above: `c[i]` on a user type settled as a
+        method affair, and that item is re-scoped to the bracket
+        slicer `c[a:b]`. Adoption: `list<T>::at` is a bare `@accessor`
+        (list elements, and `string`'s bytes by inheritance, read and
+        write like array slots), and `dict<V>` gained `has` plus an
+        `at` get/set pair (`d[key]` reads unchecked, guarded with
+        `.has`; `d[key] = v` inserts or updates through `.set`).
+        Implemented, see
+        [Accessors](docs/language.md#accessors-overloading-)
   - [ ] receiver kind — the shipped foundation already lets the receiver be any
         ordinary `const` / `mut` / by-value parameter with no enforced `self`
         convention; this item makes the three receiver flavors a formal, checked
@@ -2531,7 +2608,9 @@ already do).
         the receiver) dispatch through a fat view where an override chain
         exists; free-function calls stay statically overload-resolved.
         The protocol tenet survives through that split: protocols
-        (formatting, iteration, indexing/slicing) remain compile-time
+        (formatting, iteration, slicing; indexing since shipped as the
+        `@accessor` methods above, already a receiver-keyed affair)
+        remain compile-time
         free-function overload sets, dynamic dispatch is a
         receiver-method affair, and neither becomes the other's
         privileged mechanism. (3) **copy-on-read of a fat view**: a
@@ -2589,7 +2668,8 @@ already do).
         set), which makes interfaces the **runtime** counterpart of the
         compile-time
         [overload-set protocol family](#functions-and-methods)
-        (formatting shipped, iteration and indexing/slicing planned)
+        (formatting shipped, iteration and slicing planned; indexing
+        since shipped as `@accessor` methods)
         rather than a rival method-privileged mechanism, preserving the
         standing rule that methods must not become the privileged
         mechanism for protocols. Open points under that direction:
@@ -2599,7 +2679,7 @@ already do).
         deterministic signature-to-slot mapping, the discipline concrete
         overloading's symbol mangling already set); receiver-marker
         handling (`const`/`mut self` slots, the same `const`-receiver
-        tension the indexing protocol item records); and the fat-to-fat
+        tension the slicing protocol item records); and the fat-to-fat
         conversion, since boxing an already-fat base view (a `const A`
         holding a dynamic `B`) into an interface at a site that only
         knows the static type either needs the dynamic answer reachable
