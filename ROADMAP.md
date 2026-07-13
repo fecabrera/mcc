@@ -22,12 +22,15 @@ its reference section in the [language reference](docs/language.md).
 - [x] [Function overloading](docs/language.md#function-overloading) — one name,
       several parameter lists, resolved at the call site by arity and argument
       types: generic, concrete, and mixed sets (a concrete overload beats a
-      generic on an exact match), signature-derived mangled symbols (a single
+      generic on an exact match; rank-tied templates are partially ordered by
+      [subsumption](docs/language.md#rank-tied-templates-subsumption), the
+      strictly more constrained pattern winning), signature-derived mangled
+      symbols (a single
       definition keeps its plain C-linkable name), `.mci` support, and
       [order-independent template symbol bases](docs/language.md#template-symbols);
-      all overloads of a name currently live in one defining module, a
-      rule slated to be lifted by the planned open overload sets item
-      in [Functions and methods](#functions-and-methods)
+      overload sets are open across modules, the original
+      one-defining-module rule since lifted by the open overload sets
+      item in [Functions and methods](#functions-and-methods)
 - [x] [Variables](docs/language.md#variables) — `let` with type inference
 - [x] [Constants](docs/language.md#constants) — `const`, folded at compile time
 - [x] [Conditional compilation](docs/language.md#conditional-compilation) — structured `@if`,
@@ -1375,7 +1378,10 @@ already do).
       generic beats unbounded), so adding an import can only add
       candidates or collide loudly, never silently rewire a call
       except by supplying a better-ranked candidate, which is the
-      intended protocol behavior. Non-overloadable functions stay
+      intended protocol behavior (deliberately extended by the
+      subsumption ordering below: an imported equal-rank but strictly
+      more specialized candidate now wins what was formerly a tie).
+      Non-overloadable functions stay
       non-overloadable exactly as shipped: `main`, variadic (`...`)
       functions, and collecting (`args...`) functions. The two
       per-name liabilities were resolved as per-overload semantics: an
@@ -1574,6 +1580,60 @@ already do).
         `_at`-style documented UB as the stdlib baseline. Collision and
         ambiguity posture is inherited wholesale from the open sets
         above, `@override` included
+- [x] Subsumption ordering of rank-tied generic overloads — a rank-tied
+      cohort (same tier, same specificity) is no longer automatically
+      ambiguous: the cohort resolves to its unique MAXIMUM, the candidate
+      whose parameter pattern maps into EVERY other member's under a
+      one-way match (the other's type params are wildcards binding
+      consistently, so repeated names count; the candidate's own params
+      stay opaque; patterns are dealias-normalized, so an alias-spelled
+      diagonal participates like its target spelling; `const` markers and
+      return types are ignored; arity, the collecting flag, and `mut`
+      positions must agree outright). The motivating case, whose argument
+      IS the rule (USER RULING, explicitly confirmed 2026-07-12): a
+      diagonal `fn point<T>::constructor(self, x: T, y: T)` beside the
+      converting `fn point<T>::constructor<U>(self, x: U, y: U)` really
+      is not ambiguous, because the first is the second with `U = T`,
+      strictly more constrained. USER RULING on uniqueness: the winner is
+      the unique maximum, not merely maximal
+      (maximal-but-not-unique leaves no winner), so ambiguity remains
+      exactly for incomparable patterns, two rank-tied partial
+      specializations included. Constraints participate in the relation
+      (USER RULING, choosing the deeper option over pattern-only):
+      implication is judged per wildcard, type groups imply by subset,
+      `extends` bounds by the nominal chain, either implies unbounded,
+      group-vs-extends is incomparable, and an unconstrained parameter
+      implies nothing; the recorded consequence is that a looser-bounded
+      diagonal beside a tighter-bounded open pattern is incomparable and
+      stays ambiguous (while same-pattern tighter-group-wins is
+      unreachable: overlapping groups collide at declaration, and
+      disjoint groups are never co-viable at one call). Tiers stay
+      supreme: the tie-break runs within a rank-tied cohort only, so
+      resolution reads viability, then rank tier, then specificity, then
+      subsumption (pattern plus constraint implication), then ambiguity.
+      It covers free functions and qualified `Type::method` sets alike
+      (the trigger was the constructor pair above, on a generic struct).
+      Shipped alongside a viability fix that had been manufacturing
+      phantom ties: an adaptable integer literal no longer satisfies a
+      bare type-param slot whose deduced binding is non-integer (mcc has
+      no int-to-float literal adaptation), so the non-emittable candidate
+      drops from the trial; that fix alone resolved the motivating
+      `float64` case (the converting constructor wins outright), while
+      subsumption is load-bearing for genuinely tied cases (an integer
+      receiver: the diagonal wins). Deliberate v1 conservatisms, prose
+      limits rather than commitments: a function-pointer pattern matches
+      only its exact spelling (differently-spelled fn types are
+      incomparable, keeping the ambiguity), array dimensions must spell
+      equally, and the literal-viability policing covers bare type-param
+      slots only. This SUPERSEDES the diagonal-beside-open-sibling
+      ambiguity ruling recorded in the alias/builtin qualifiers item
+      below, rewrites the tied-partials rationale there (incomparability
+      under the ordering, not the absence of one), and gives the
+      open-sets doctrine above one deliberate edge: an imported
+      equal-rank but strictly more specialized candidate now wins what
+      was formerly a tie, exactly the supplying-a-better-candidate
+      behavior open sets intend. Implemented, see
+      [rank-tied templates: subsumption](docs/language.md#rank-tied-templates-subsumption)
 - [ ] `fn` types in overload viability and generic unification — close a
       pre-existing resolver gap the callback story sits behind: a
       concrete overload with a fn-typed parameter is never viable today
@@ -1700,10 +1760,16 @@ already do).
             positions bind, `U` stays a free method type param, and the
             template matches only `pair<int32, X>` receivers. Classification
             stayed in codegen (a mixed arm in `normalize_struct_method_args`);
-            dispatch is the pre-existing overload ranking — full specialization
-            beats partial beats fully generic — and two rank-tied partials are
-            the standard ambiguity error (USER RULING: keep it, no C++-style
-            partial ordering). BOUNDED partials shipped in the same slice
+            dispatch is the pre-existing overload ranking (full specialization
+            beats partial beats fully generic), and two rank-tied partials
+            remain the standard ambiguity error (USER RULING kept that
+            outcome; its recorded rationale, "no C++-style partial
+            ordering", is superseded by the shipped subsumption ordering
+            above: mcc now DOES partially order a rank-tied cohort, and
+            tied partials like `pair<int32, U>` vs `pair<T, int8>` stay
+            ambiguous because each holds a concrete type where the other
+            holds a wildcard, incomparable patterns the ordering never
+            rescues). BOUNDED partials shipped in the same slice
             (USER RULING): `fn pair<int32, U: int8|int16>::m` works — the
             parser's speculative pre-`::` capture now carries decorations
             (`: group`, `extends`, `= default`) into codegen classification,
@@ -1827,9 +1893,16 @@ already do).
         `type diag<T> = pair<T, T>` with `fn diag<U>::m` dedupes the
         repeated fresh name into a template matching only `pair<X, X>`,
         unification enforcing consistency (a `pair<int32, float64>`
-        receiver is the conflicting-types error); a diagonal beside an open
-        generic sibling on an agreeing receiver is the standard ambiguity
-        error, the same no-partial-ordering rule as two tied partials.
+        receiver is the conflicting-types error). As first shipped, this
+        slice also ruled a diagonal beside an open generic sibling on an
+        agreeing receiver the standard ambiguity error; that ruling is
+        SUPERSEDED (USER RULING, explicitly confirmed 2026-07-12) by the
+        subsumption ordering above, under which the diagonal wins: its
+        pattern is the open sibling's with the wildcards identified,
+        strictly more constrained (the constructor argument that
+        motivated the ordering is exactly this rule), and the
+        dealias-normalization this slice built is what lets the
+        alias-spelled diagonal participate in it.
         Bonus: generic-alias spellings in signatures are now transparent to
         template inference (`dealias_pattern` in unify / shape_matches), a
         pre-existing gap the diagonal ruling forced closed. This SUBSUMED
