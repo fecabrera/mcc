@@ -80,6 +80,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`@property` methods, reachable through field syntax** — a method annotated
+  `@property` reads like a field: `s.length` calls `stack<T>::length(s)`,
+  dropping the parentheses a dot-call needs (the call spelling `s.length()`
+  stays valid too). A `@property` takes only its receiver and returns a value;
+  a `-> mut` return makes the access an assignable lvalue, so `s.value = v` is
+  `T::value(s) = v` (plain and compound assignment) through the existing
+  mut-return machinery, while a read-only property rejects assignment. A real
+  field of the name shadows a property (field-first, as at a dot-call), and
+  inheritance, generic receivers, and one-hop pointer auto-deref all carry
+  through. Declaring one is checked: it must be a method with a body, taking
+  only its receiver and returning a value. `std/stack` adopts it for
+  `stack<T>::length`. See
+  [Properties](docs/language.md#properties).
+
 - **Explicit type arguments at a qualified call —
   `point<float64>::magnitude(p)`** — a qualified method call's qualifier may
   spell the receiver instantiation. The written reference resolves as an

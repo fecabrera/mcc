@@ -84,6 +84,7 @@ fn stack<T>::peek(const self: stack<T>) -> T {
  *
  * @return the live element count
  */
+@property
 fn stack<T>::length(const self: stack<T>) -> uint64 {
     return self.top;
 }

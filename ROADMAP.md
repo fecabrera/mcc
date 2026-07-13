@@ -1674,7 +1674,8 @@ already do).
 - [ ] Methods / OOP — `fn <type>::<method>(...)` definitions
       keyed to a type, structs foremost (the explicit qualified-call
       foundation, the `recv.method(args)` dot-call sugar, the `S(args)`
-      constructor sugar, and method inheritance through `extends` have
+      constructor sugar, method inheritance through `extends`, and
+      `@property` field-syntax access have
       shipped, see the checked sub-items; the receiver is an ordinary parameter, not the
       raw `self: <struct>*` this line once sketched), including `@private`
       methods and the special
@@ -2000,7 +2001,10 @@ already do).
         method reachable as `Type::m(s, args)`; only a call shape with
         NEITHER gets the new `struct '...' has no field or method '...'`
         error, and a bare member access `p.m` keeps the exact field
-        diagnostics — there are no bound-method values), and `->` stays
+        diagnostics — there are no bound-method values; since AMENDED
+        by the shipped `@property` item below, whose annotation makes a
+        bare access CALL the method, the one field-shaped method
+        access), and `->` stays
         fields-only (the language keeps C's `.`/`->` distinction for
         FIELDS, so `p->x` and `p.method()` coexist on one pointer, the
         Go/Rust/Swift receiver-adaptation model; `q->m()` where `m` is
@@ -2346,6 +2350,30 @@ already do).
         docs/language.md's Structs non-goals are rewritten accordingly.
         Implemented, see
         [Inherited methods](docs/language.md#inherited-methods)
+  - [x] `@property` methods — field-syntax access to a method: a method
+        annotated `@property` is reachable without parentheses,
+        `s.length` calling `stack<T>::length(s)` (the call spelling
+        `s.length()` stays valid beside it; the annotation only adds
+        the field spelling). A `@property` takes ONLY its receiver and
+        returns a value, checked at the declaration: it applies to a
+        qualified method (`fn Type::name`) with a body, never
+        `@extern`/`@asm`/a bodyless prototype, and a void return or an
+        extra parameter rejects. A `-> mut` return makes the access an
+        assignable lvalue through the shipped
+        [mut returns](docs/language.md#mut-returns): `s.value = v` is
+        `T::value(s) = v`, plain and compound assignment both, while a
+        read-only (non-`mut`) property rejects assignment with the
+        standard does-not-return-mut error. Dispatch is the dot-call's
+        own (the sugar item above, which this AMENDS at its bare-access
+        clause): a real struct field of the name shadows the property
+        (field-first, the property then reachable only as
+        `Type::name(s)`), inheritance through `extends` carries
+        properties along the merged family, a generic receiver binds
+        the struct's type params, and a pointer receiver auto-derefs
+        exactly one hop. Adoption: `std/stack` marks
+        `stack<T>::length` `@property`, the pattern for the stdlib's
+        receiver-only getters. Implemented, see
+        [Properties](docs/language.md#properties)
   - [ ] receiver kind — the shipped foundation already lets the receiver be any
         ordinary `const` / `mut` / by-value parameter with no enforced `self`
         convention; this item makes the three receiver flavors a formal, checked
@@ -2369,7 +2397,9 @@ already do).
         and in the dispatch table the receiver is anyway already behind
         the view's `object*`, so the table slot's first param is a
         genuine `T*` under an ABI the compiler controls internally. A `mut` return formed from `self` is then
-        the natural spelling for a mutable accessor method
+        the natural spelling for a mutable accessor method (and the
+        shipped `@property` item above already gives such an accessor
+        its field spelling, `s.value = v`)
   - [ ] polymorphic base views — dynamic dispatch, built on the language's
         one data type kind: there is no `class`, everything falls under
         `struct`, and polymorphism arrives through dispatch tables that

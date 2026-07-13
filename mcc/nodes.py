@@ -434,6 +434,12 @@ class Func:
             cross-module target of the same pattern; no target, a same-file
             target, or a second ``@override`` of one pattern is a compile
             error.
+        property: ``@property`` -- a method reachable through field syntax:
+            ``s.length`` calls ``T::length(s)``. The method takes only its
+            receiver and returns a value; a ``-> mut`` return makes
+            ``s.length`` an assignable lvalue (``s.length = v`` is
+            ``T::length(s) = v``). A real field of the name shadows it, and
+            ``s.length()`` still calls it too.
         type_param_defaults: ``{type parameter: TypeRef}`` for parameters
             declared ``<T = type>``. The default fills a parameter that is
             neither given explicitly nor inferred from a *typed* argument.
@@ -528,6 +534,7 @@ class Func:
     deprecated_msg: str | None = None
     removed_msg: str | None = None
     override: bool = False
+    property: bool = False
     type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
     type_param_groups: dict[str, list[TypeRef]] = field(default_factory=dict)
     type_param_bounds: dict[str, TypeRef] = field(default_factory=dict)

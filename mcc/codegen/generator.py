@@ -575,6 +575,9 @@ class CodeGen:
                 or warned one (see :meth:`check_nonnull_arg`).
         """
         self.program = program
+        # Lazily-built set of `@property` method families (e.g. "stack::length"),
+        # consulted by property_family for the field-syntax dispatch.
+        self._property_families: "set[str] | None" = None
         # Warning classes promoted to error level (the strict posture); see
         # the constructor doc. Consulted by mark_nonnull and check_nonnull_arg.
         self.error_classes = error_classes
@@ -8100,13 +8103,22 @@ class CodeGen:
             self.gen_store(value.value, addr, align=align, volatile=volatile)
             self.narrowed_paths.clear()  # an element store may alias a field
         elif isinstance(stmt, StoreMember):
-            if not stmt.arrow and self.writes_const(stmt.base):
-                raise LangError(
-                    "cannot assign to a field of a const parameter", stmt.line
-                )
-            addr, ftype, align, volatile = self.gen_member_addr(
-                stmt.base, stmt.field, stmt.arrow, stmt.line
+            prop = self.as_property_call(
+                Member(stmt.base, stmt.field, stmt.arrow, stmt.line)
             )
+            if prop is not None:
+                # `s.length = v` is `T::length(s) = v`: address the property's
+                # mut return (a non-`mut` property rejects here, like any
+                # non-mut-returning call target).
+                addr, ftype, align, volatile = self.gen_addr(prop, stmt.line)
+            else:
+                if not stmt.arrow and self.writes_const(stmt.base):
+                    raise LangError(
+                        "cannot assign to a field of a const parameter", stmt.line
+                    )
+                addr, ftype, align, volatile = self.gen_member_addr(
+                    stmt.base, stmt.field, stmt.arrow, stmt.line
+                )
             if (
                 self.struct_literal_adapts(stmt.value, ftype)
                 or self.str_literal_adapts(stmt.value, ftype)
@@ -8696,6 +8708,14 @@ class CodeGen:
             self.narrowed_paths.clear()
             return addr, element, align, volatile
         if isinstance(target, Member):
+            prop = self.as_property_call(target)
+            if prop is not None:
+                # `s.length = v` is `T::length(s) = v`: a read-only property
+                # (non-`mut` return) rejects here, exactly as a plain
+                # mut-returning call would.
+                entry = self.gen_addr(prop, line)
+                self.narrowed_paths.clear()
+                return entry
             if not target.arrow and self.writes_const(target.base):
                 raise LangError(
                     "cannot assign to a field of a const parameter", line
@@ -9813,6 +9833,9 @@ class CodeGen:
         if isinstance(expr, Slice):
             return self.gen_slice(expr)
         if isinstance(expr, Member):
+            prop = self.as_property_call(expr)
+            if prop is not None:
+                return self.gen_expr(prop)
             if not expr.arrow and not isinstance(
                 expr.base, (Var, Member, Index, Unary)
             ):
@@ -10543,6 +10566,9 @@ class CodeGen:
             # reject rather than hand out a spilled temporary's address.
             return self.gen_index_addr(expr.base, expr.index, line, store=True)
         if isinstance(expr, Member):
+            prop = self.as_property_call(expr)
+            if prop is not None:
+                return self.gen_addr(prop, line)
             return self.gen_member_addr(expr.base, expr.field, expr.arrow, line)
         if isinstance(expr, StrLit):
             # A string literal is a uint8[N] array (NUL included) living in a
@@ -13266,6 +13292,62 @@ class CodeGen:
             return True
         # A derived struct exposes its base chain's families.
         return bool(self.inherited_candidates(family))
+
+    def property_family(self, owner: LangType, field: str) -> "str | None":
+        """The family ``T::field`` when ``field`` names a ``@property`` method
+        on ``owner`` and no real field shadows it, else ``None``.
+
+        A ``@property`` is reached through field syntax (``s.length``); this
+        backs that read/lvalue/store fallback. A struct field of the name wins
+        (the method stays reachable as ``s.length()`` / ``T::length(s)``). A
+        pointer receiver auto-derefs, like the dot-call ``q.length()``.
+        """
+        owner = strip_const(owner)
+        if is_pointer(owner):
+            if owner is NULLT or owner.pointee is None:
+                return None
+            owner = strip_const(owner.pointee)
+        if is_aggregate(owner):
+            if is_any(owner) or is_tuple(owner):
+                return None
+            try:
+                self.struct_field(owner, field, 0)
+                return None  # field-first: a real field shadows a property
+            except LangError:
+                pass
+        family = f"{owner.template or owner.name}::{field}"
+        if self._property_families is None:
+            self._property_families = {
+                f.name
+                for f in self.program.functions
+                if getattr(f, "property", False)
+            }
+        if family in self._property_families:
+            return family
+        # A derived type reaches a base's @property through its extends chain.
+        if any(
+            getattr(m, "property", False)
+            for m in self.inherited_candidates(family)
+        ):
+            return family
+        return None
+
+    def as_property_call(self, expr: Member) -> "CallExpr | None":
+        """Rewrite a ``@property`` field access ``s.length`` to its call
+        ``s.length()``; ``None`` when ``expr`` is not a property access.
+
+        Both spellings reach the same method, so the rewrite re-enters the
+        ordinary dot-call machinery -- mut-return lvalue, ``StoreCall``,
+        inheritance, and field-first shadowing all come for free.
+        """
+        if expr.arrow:
+            return None
+        base_t = self.dot_receiver_type(expr.base)
+        if base_t is None:
+            return None  # an rvalue receiver (f().length): unsupported for now
+        if self.property_family(base_t, expr.field) is None:
+            return None
+        return CallExpr(Member(expr.base, expr.field, False, expr.line), [], expr.line)
 
     def struct_base_ref(self, decl) -> "TypeRef | None":
         """A struct declaration's ``extends`` target, alias-normalized.

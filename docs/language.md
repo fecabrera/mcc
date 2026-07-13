@@ -1371,6 +1371,58 @@ The rules:
 
 See [examples/types/method_calls.mc](../examples/types/method_calls.mc).
 
+#### Properties
+
+A method annotated `@property` is reachable through **field syntax**: `s.length`
+calls `stack<T>::length(s)`, dropping the parentheses a dot-call would need.
+The annotation says "read me like a field"; the method is otherwise ordinary,
+so the call spelling `s.length()` stays valid beside the field spelling, and
+overload machinery, inheritance, and pointer auto-deref all carry through.
+
+```c
+struct temperature { celsius: int32; }
+
+@property
+fn temperature::fahrenheit(const self: temperature) -> int32 {
+    return self.celsius * 9 / 5 + 32;
+}
+
+let t = temperature { celsius = 100 };
+println(f"{t.fahrenheit}");   // 212 -- s.field, no parentheses
+let f = t.fahrenheit();       // the call spelling still works
+```
+
+A `@property` takes **only its receiver** and **returns a value**. A `-> mut`
+return makes the access an assignable lvalue — `s.field = v` is exactly
+`Type::field(s) = v` through the [mut return](#mut-returns), so plain and
+compound assignment write straight through the accessor:
+
+```c
+struct cell { n: int32; }
+
+@property
+fn cell::value(mut self: cell) -> mut int32 { return self.n; }
+
+let c = cell { n = 5 };
+c.value = 40;    // cell::value(c) = 40
+c.value += 2;    // 42
+```
+
+A read-only (non-`mut`) property rejects assignment, exactly as a
+non-mut-returning call target does. The dispatch is the dot-call's:
+
+- **A real field of the name shadows a property** (field-first, as at a
+  dot-call): `s.field` reads the field, and the property is then reachable
+  only through its qualified form `Type::field(s)`.
+- **A `@property` inherits through `extends`** and **binds `T` on a generic
+  receiver**, like any method; a pointer receiver auto-derefs one hop
+  (`p.value` is `(*p).value`).
+- Declaring one is checked: `@property` applies only to a **method** (a
+  qualified `fn Type::name`) with a **body**, taking **only its receiver** and
+  returning a **value** — otherwise a compile error.
+
+See [examples/types/properties.mc](../examples/types/properties.mc).
+
 #### Constructors
 
 A method named `constructor` makes its type callable: `S(args)` is sugar for

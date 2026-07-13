@@ -15,7 +15,7 @@ def test_lifo_with_direct_receiver():
             s.push(1);
             s.push(2);
             s.push(3);
-            if (s.length() != 3) return 100;
+            if (s.length != 3) return 100;        // @property: field syntax
             if (s.peek() != 3) return 101;
             let last = s.pop();               // LIFO: most recent first
             let mid = s.pop();

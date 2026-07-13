@@ -451,6 +451,7 @@ class Parser:
         deprecated = None
         removed = None
         override = False
+        prop = False
         clobbers = []
         while self.cur.kind == "ANNOT":
             annot = self.advance()
@@ -513,6 +514,8 @@ class Parser:
                     )
             elif annot.text == "@override":
                 override = True
+            elif annot.text == "@property":
+                prop = True
             else:
                 raise LangError(f"unknown annotation {annot.text!r}", annot.line)
         if extern and static:
@@ -537,6 +540,15 @@ class Parser:
         if noreturn and self.cur.kind != "fn":
             # Functions only: definitions, @extern/@asm declarations, protos.
             raise LangError("@noreturn only applies to functions", self.cur.line)
+        if prop:
+            if self.cur.kind != "fn":
+                raise LangError("@property only applies to methods", self.cur.line)
+            if extern or asm:
+                raise LangError(
+                    "@property only applies to a method with a body "
+                    "(not @extern or @asm)",
+                    self.cur.line,
+                )
         if deprecated is not None and self.cur.kind != "fn":
             # v1 scope: functions only (types, enums, and globals later).
             raise LangError("@deprecated only applies to functions", self.cur.line)
@@ -719,7 +731,7 @@ class Parser:
             )
         return self.parse_function(
             private, static, extern, symbol, inline, asm, clobbers, deprecated,
-            removed, noreturn, override,
+            removed, noreturn, override, prop,
         )
 
     # Tokens that can begin an expression; used to settle the `as T * x`
@@ -1473,6 +1485,7 @@ class Parser:
         removed: str | None = None,
         noreturn: bool = False,
         override: bool = False,
+        prop: bool = False,
     ) -> Func:
         """Parse a function definition, an ``@extern`` declaration, or a proto.
 
@@ -1818,6 +1831,12 @@ class Parser:
             # function of the signature, so the prototype carries everything a
             # caller needs. Interface stubs are the usual writer.
             self.advance()
+            if prop:
+                raise LangError(
+                    "a @property method needs a body (a bodyless prototype "
+                    "has none to call)",
+                    line,
+                )
             if type_params and removed is None:
                 # An @removed tombstone is the one generic that may go
                 # bodyless: it never instantiates, so no body needs to travel.
@@ -1872,6 +1891,23 @@ class Parser:
                 struct_arg_bounds=struct_arg_bounds,
                 struct_arg_defaults=struct_arg_defaults,
             )
+        if prop:
+            if "::" not in name:
+                raise LangError(
+                    "@property only applies to a method "
+                    "(a qualified `fn Type::name`)",
+                    line,
+                )
+            if len(params) != 1:
+                raise LangError(
+                    "a @property method takes only its receiver "
+                    "(no other parameters)",
+                    line,
+                )
+            if variadic:
+                raise LangError("a @property method cannot be variadic", line)
+            if ret_type.name == "void" and not ret_type.stars and not ret_type.dims:
+                raise LangError("a @property method must return a value", line)
         return Func(
             name,
             type_params,
@@ -1893,6 +1929,7 @@ class Parser:
             deprecated_msg=deprecated,
             removed_msg=removed,
             override=override,
+            property=prop,
             type_param_defaults=type_param_defaults,
             type_param_groups=type_param_groups,
             type_param_bounds=type_param_bounds,
