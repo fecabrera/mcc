@@ -1747,7 +1747,9 @@ already do).
         bare-`point`-means-`point<T>` sugar (a bare `self: point` keeps the
         existing missing-type-argument error), and qualified calls infer the
         type args from the receiver and value args (`point::magnitude(p)` with
-        `p: point<float64>`), no explicit type args at the call. The qualified
+        `p: point<float64>`) — this slice allowed no explicit type args at
+        the call, since extended by the shipped explicit-type-args sub-item
+        below (the qualifier may now spell the instantiation). The qualified
         name stays a single string registered as an ordinary generic template,
         so monomorphization, argument-driven inference, overloading, `@private`,
         and `@override` all ride the existing generic machinery — codegen needed
@@ -1809,6 +1811,65 @@ already do).
             concrete arg is a compile error. Bonus fix: a parser speculation
             bug where backtracking left `>>` token splits applied, corrupting
             nested-generic declarations
+    - [x] explicit type args at a `::` call —
+          `point<float64>::method(args)`, the qualifier of a qualified call
+          spelling the receiver instantiation (previously
+          `unexpected token '::'`). USER RULING (2026-07-13), closing this
+          item's deliberately deferred (a)/(b)/(c) trio: option (a) — the
+          list is the STRUCT FRAME's only. The written qualifier resolves
+          ONCE as an ordinary type use through `lang_type`, so arity checks,
+          trailing-default fill, enclosing type parameters at
+          monomorphization (a `point<T>` spelled inside a generic body
+          resolves at the live `T`), and generic-alias substitution with
+          permutation honored (`swap<int32, float64>::first(p)` over
+          `type swap<X, Y> = pair<Y, X>` pins `pair<float64, int32>`) all
+          come free; the resolved instantiation then PINS dispatch by a
+          per-candidate frame match against each member's classified
+          qualifier annotation (`Func.qualifier_args`, the `rebase_member`
+          discipline applied at the call site): a fresh position seeds that
+          parameter's binding, a concrete (specialized) position must agree
+          or the member does not apply. So full AND partial specializations
+          DISPATCH under explicit args, a no-receiver member becomes
+          callable at a chosen instantiation (`point<float64>::origin()`),
+          builtin generic families take the form (`slice<int32>::first(s)`),
+          and a pin no member matches reports it (`'box::get' has no member
+          for box<float64>: the qualifier's type arguments pin the receiver
+          instantiation`; a set-level miss appends `the qualifier pins ...`
+          too). Method-own type params stay inference-only at BOTH
+          spellings: a second list after the member name
+          (`point<float64>::map<int32>(...)`) is a parse error mirroring the
+          dot-call limit — so option (a) governs mixed methods
+          (`fn box<T>::wrap<U>`: the list fixes `T`, `U` still infers) and
+          option (c)'s second list is closed. Provenance, superseding this
+          item's planned sketch: the "minimal parser-only" approach once
+          recorded here (thread the list positionally into the merged
+          type-param list, struct params leading) PREDATED shipped method
+          specializations and exploration proved it WRONG — a specialization
+          registers as a concrete overload with an EMPTY type-param list, so
+          positional threading would have silently SKIPPED every
+          specialization the pin should reach; the shipped qualifier-frame
+          binding replaces it. SECOND USER RULING: a bare alias of a
+          COMPLETE type INJECTS the instantiation it names — `pointf::sum(q)`
+          IS `point<float64>::sum(q)` — deliberately flipping a
+          working-but-unsound program: a cross-instantiation receiver
+          through a complete alias (`pointf::get(q)` with `q: point<int32>`)
+          previously compiled via name-only chasing and is now the
+          receiver-mismatch error; a generic/incomplete alias still
+          canonicalizes name-only and infers. This satisfies the
+          type-arg-injection deferral recorded at the alias/builtin
+          qualifiers item below. Motivating use, now real: constructor and
+          destructor CHAINING — the pair's only callable spelling is
+          qualified (the corrective slice at the constructor item below),
+          and `point<T>::constructor(self, x as T, y as T)` inside a
+          converting constructor (or `inner<T>::destructor(self.i)` inside
+          an owner's destructor) now monomorphizes correctly through the
+          enclosing frame. Drive-bys shipped alongside: `try_type_args` now
+          undoes its in-place `>>` angle splits on backtrack (a latent
+          hazard of the speculative parse, the same family as the partial
+          specialization slice's fix above), and inherited-member clones
+          carry a qualifier annotation respelled over the deriving struct's
+          parameters, so pins reach inherited methods. Implemented, see
+          [Explicit type arguments at a qualified call](docs/language.md#explicit-type-arguments-at-a-qualified-call)
     - [ ] bare-`point` receiver sugar — inside `fn point<T>::method(...)` a
           bare `point` (no type args) means `point<T>`, the qualifier struct
           applied to its own type params — a sugar for type USES in the
@@ -1834,35 +1895,9 @@ already do).
           has `test_bare_generic_receiver_still_requires_type_args` asserting the
           arity error, and `docs/language.md` (the "#### Methods on a generic
           struct" area) states there is no such sugar; both must be updated when
-          it lands. Independent of the explicit-type-args refinement below
-          (parser-only, no shared prerequisite — either can ship first)
-    - [ ] explicit type args at a `::` call — allow
-          `point<float64>::method(args)` (today errors `unexpected token '::'`,
-          because `try_type_args` only commits a `<...>` when it is followed by
-          `(` or `{`, not `::`). Minimal approach is parser-only: let
-          `try_type_args` also commit a list before `::` and thread the parsed
-          args into the `Call(f"{Type}::{method}", type_args, ...)`; because a
-          method's struct type params are the LEADING entries of its merged
-          type-param list, the existing explicit-type-args binding path then
-          binds the struct params for free. This works cleanly for a method with
-          NO own type params. USER RULING — the binding semantics WHEN THE METHOD
-          ALSO HAS ITS OWN TYPE PARAMS (e.g. `fn box<T>::wrap<U>`) is an OPEN
-          decision, deliberately deferred; the implementer must choose among:
-          (a) the `<...>` binds only the struct params and the method's own
-          params still infer (intuitive, but needs a small `Func` field
-          remembering the struct/method type-param split plus relaxing the arity
-          check for `::` calls); (b) minimal — allow explicit args only when the
-          method has no own type params and keep erroring otherwise (pure parser,
-          zero codegen); (c) a second type-arg list
-          `point<float64>::map<int32>(...)` (a bigger parser change). No option
-          is chosen. Independent of the bare-`point` sugar above (parser-only,
-          no shared prerequisite — either can ship first). The since-shipped
-          dot-call sugar below records the sibling limit (explicit type args
-          at a dot call, `p.m<int32>(...)`, do not parse; method type params
-          are inference-only at both spellings), and the shipped constructor
-          sugar already binds the STRUCT params from an explicit head
-          (`point<float64>(1, 1)`), so this item's decision sets the pattern
-          the dot spelling would follow
+          it lands. Independent of the since-shipped explicit-type-args item
+          above (parser-only here, no shared prerequisite — that item
+          shipping first confirms the recorded either-can-ship-first claim)
   - [x] methods on type aliases and builtin types — the qualifier left of
         `::` may be ANY nameable type, not just a struct. USER RULING, the
         governing principle: methods register to a TYPE; an alias is just an
@@ -1877,9 +1912,13 @@ already do).
         generic aliases (`type swap<X, Y> = pair<Y, X>` canonicalizes to a
         partial), and defaulted alias args all compose via substitution;
         inert alias params (`type always<T> = point<float64>`) vanish per
-        alias transparency. Call sites canonicalize name-only
-        (`pointf::m(p)` is `point::m(p)`; no type-arg injection at the call,
-        which stays with the explicit-type-args refinement above). Builtin
+        alias transparency. Call sites as this slice shipped canonicalized
+        name-only (`pointf::m(p)` as `point::m(p)`, the type-arg injection
+        deferred to the explicit-type-args refinement above — since SHIPPED
+        and SATISFIED there, USER RULING: a bare alias of a complete type
+        now INJECTS its instantiation, `pointf::m(p)` IS
+        `point<float64>::m(p)`, and only a generic/incomplete alias still
+        chases name-only and infers). Builtin
         qualifiers (USER RULING: any type) are legal the same way:
         `fn char::lower`, `fn int32::m`, and aliases to builtins
         (`type myint = int32;` then `fn myint::m`) register one family per
@@ -1985,8 +2024,11 @@ already do).
         assignment (`l.at(i) = v`), compound assignment, chained store
         targets, and the mut-return formation walk. Explicit type
         arguments at a dot call do not parse (`p.m<int32>(...)`) —
-        method type params stay inference-only, the documented limit
-        mirroring the open explicit-type-args-at-`::` refinement above.
+        method type params stay inference-only at both spellings, the
+        pattern since SET by the shipped explicit-type-args-at-`::` item
+        above (USER RULING, option (a): a type-arg list belongs to the
+        struct frame only, and a dot receiver already fixes that frame,
+        so the dot spelling takes no list at all).
         Sugared bodies round-trip `.mci` verbatim, and the explicit
         `Type::method(...)` spelling stays valid alongside. AMENDED by
         the qualified-only corrective slice (the USER RULING recorded
