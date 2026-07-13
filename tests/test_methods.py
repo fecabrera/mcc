@@ -16,7 +16,9 @@ and that a GENERIC qualifier annotates its type parameters: a declaration's
 bare ``fn point::m`` / ``fn pf::m`` over a generic struct or generic alias is
 an error (only a complete type -- non-generic, or fully defaulted so the bare
 name is a complete type use -- may be named bare). Calls are unchanged: a bare
-``point::m(p)`` looks the family up and infers from the arguments.
+``point::m(p)`` looks the family up and infers from the arguments; the
+qualifier may also spell the receiver instantiation
+(``point<float64>::m(p)``, see test_explicit_type_args.py).
 Call sugar (``.method()``), constructors, and dynamic dispatch are future work.
 """
 

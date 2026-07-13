@@ -22,8 +22,13 @@ import "libc/math";
 //     parameter(s), e.g. 'fn pt<T>::m' or 'fn pt<float64>::m'". The one
 //     exception is a FULLY-DEFAULTED alias, whose bare name is already a
 //     complete type use: with `type pt<T = float64> = point<T>`, `fn pt::m`
-//     IS `fn point<float64>::m`. CALLS may stay bare either way; `pt::m(...)`
-//     chases the name and calls the `point::m` family.
+//     IS `fn point<float64>::m`. CALLS may stay bare either way, but what a
+//     bare call MEANS follows the same completeness line: an alias that is
+//     NOT a complete type (`pt::m(...)`) chases the name and infers from
+//     the arguments, while a COMPLETE alias (plain, or fully-defaulted)
+//     INJECTS the instantiation it names -- `pointf::m(p)` is exactly
+//     `point<float64>::m(p)`, pinning the receiver (docs/language.md
+//     "Explicit type arguments at a qualified call").
 //   - BUILTIN types are qualifiers too: `fn int32::clamp`, or with fresh type
 //     parameters `fn slice<T>::first`. A builtin cannot be SPECIALIZED,
 //     though; `fn slice<int32>::first` is the error "cannot specialize
@@ -164,7 +169,13 @@ fn main() -> int32 {
     println(f"  |pi| = {point::magnitude(pi):.2f}");    // 5.00, via [generic]
 
     // A pointf receiver runs the alias-declared specialization, through
-    // EITHER call spelling: sqrt(2.25 + 4) = 2.50 both times.
+    // EITHER call spelling: sqrt(2.25 + 4) = 2.50 both times. The alias
+    // spelling is more than a rename, though: pointf is a COMPLETE type, so
+    // the qualifier injects the instantiation it names and PINS the
+    // receiver as point<float64>. Handing it `pi` from above would be the
+    // error "argument 1 of 'point::magnitude': expected point<float64>,
+    // got point<int64>" -- the bare `point::` spelling, pure namespace plus
+    // inference, is the one that would route pi to the generic.
     let pf: pointf = { x = 1.5, y = 2.0 };
     println("pointf magnitude, canonical call spelling:");
     println(f"  |pf| = {point::magnitude(pf):.2f}");    // 2.50, via [via alias]
@@ -179,7 +190,9 @@ fn main() -> int32 {
     println("  m1 = ({}, {}), m2 = ({}, {})", m1.x, m1.y, m2.x, m2.y);
 
     // float64 arguments select the specialization the fully-defaulted alias
-    // declared; the canonical and alias spellings call the same body.
+    // declared; the canonical and alias spellings call the same body. (ptd
+    // is complete -- its defaults fill -- so the bare `ptd::` qualifier
+    // also pins point<float64>, exactly like `pointf::` above.)
     println("point::mk / ptd::mk, float64:");
     let m3 = point::mk(0.5, 1.5);
     let m4 = ptd::mk(2.5, 3.5);
@@ -191,6 +204,15 @@ fn main() -> int32 {
     println("pair<float64, int32> pick:");
     println(f"  a = {pair::pick(sw):.2f}");             // 2.50, via [via alias]
 
+    // A CALL qualifier may spell the alias with written type arguments too:
+    // full type resolution substitutes them through the target, permutation
+    // included, so `swap<int32, float64>` pins pair<float64, int32> -- sw's
+    // exact type -- and dispatch picks the partial again. (Name-only chasing
+    // could not do this; the pin is what makes the permuted spelling mean
+    // the right instantiation.)
+    println("swap<int32, float64> pick, written-args alias call:");
+    println(f"  a = {swap<int32, float64>::pick(sw):.2f}");     // 2.50 again
+
     // Second position float64: the partial is filtered out, the generic runs.
     let ge: pair<int32, float64> = { a = 7, b = 2.5 };
     println("pair<int32, float64> pick:");
@@ -198,7 +220,9 @@ fn main() -> int32 {
 
     // The diagonal: a pair<int32, int32> receiver binds U = int32 through the
     // alias spelling in the signature. The bare `diag::` spelling is fine at
-    // a CALL: call qualifiers chase by name; only declarations must annotate.
+    // a CALL: diag is generic, NOT a complete type, so the qualifier chases
+    // by name and infers from the argument (nothing is pinned); only
+    // declarations must annotate.
     let dd: pair<int32, int32> = { a = 21, b = 21 };
     println("pair<int32, int32> same:");
     println("  a + b = {}", pair::same(dd));            // 42, via [diagonal]
@@ -219,10 +243,14 @@ fn main() -> int32 {
     println("  int32::clamp(15, 0, 10) = {}", int32::clamp(15, 0, 10));   // 10
     println("  myint::clamp(-3, 0, 10) = {}", myint::clamp(-3, 0, 10));   // 0
 
-    // A generic builtin qualifier, T inferred from the borrowed slice.
+    // A generic builtin qualifier, T inferred from the borrowed slice -- or
+    // pinned: builtin families take a written instantiation at a CALL just
+    // like user structs (only the DECLARATION-side specialization ban from
+    // the header stands).
     let arr: int32[4] = [11, 22, 33, 44];
     println("slice<int32> first:");
     println("  first = {}", slice::first(arr as slice<int32>));           // 11
+    println("  pinned = {}", slice<int32>::first(arr as slice<int32>));   // 11
 
     return 0;
 }
@@ -238,4 +266,7 @@ fn main() -> int32 {
 // RECEIVERS ('c'.upper(), xs.first()) dispatch these same families;
 // memory/slices.mc for the `as slice<T>`
 // borrow feeding slice::first; systems/char_methods.mc for the stdlib
-// module (std/char) built on the builtin-qualifier form shown here.
+// module (std/char) built on the builtin-qualifier form shown here;
+// generic_methods.mc and docs/language.md "Explicit type arguments at a
+// qualified call" for the pinned call spelling behind the complete-alias
+// injection and the written-args `swap<int32, float64>::pick` call.

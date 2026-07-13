@@ -17,13 +17,23 @@ struct point<T> {
 }
 
 // The receiver type is EXPLICIT: `self: point<T>` must name its type argument.
-// That is how `T` enters the picture -- it is inferred from the call argument,
-// never spelled at the call site (`point::sum(pi)` binds `T` from `pi`; an
-// explicit `point<int32>::sum(...)` does not parse). A bare `self: point`
-// would leave `T` mentioned nowhere in the signature, so the call could not
-// infer it. Here `const self` reads the receiver without copying it.
+// That is how `T` enters the picture -- a bare call infers it from the
+// argument (`point::sum(pi)` binds `T` from `pi`), while a call whose
+// qualifier spells the instantiation PINS it: `point<float64>::sum(pf)` fixes
+// the receiver type up front, and a receiver of another instantiation is the
+// ordinary coercion error ("argument 1 of 'point::sum': expected point<int32>,
+// got point<float64>"). A bare `self: point` would leave `T` mentioned
+// nowhere in the signature, so a bare call could not infer it. Here
+// `const self` reads the receiver without copying it.
 fn point<T>::sum(const self: point<T>) -> T {
     return self.x + self.y;
+}
+
+// A method need not take the receiver at all -- but then a bare call has no
+// argument to infer `T` from, so the WRITTEN qualifier is its only callable
+// spelling: `point<float64>::origin()` supplies T by pinning it.
+fn point<T>::origin() -> point<T> {
+    return { x = 0 as T, y = 0 as T };
 }
 
 // `mut self` works the same as in methods.mc: the write lands back in the
@@ -42,7 +52,12 @@ struct box<T> {
 // struct's `<T>` and the method's `<U>` merge into a single template, and BOTH
 // are inferred from the call arguments (`T` from the receiver, `U` from
 // `label`). A method type parameter may NOT shadow one of the struct's:
-// `fn box<T>::labeled<T>(...)` is a compile error.
+// `fn box<T>::labeled<T>(...)` is a compile error. And while a CALL may pin
+// the struct's list (`box<int32>::labeled(b, 9.5)`), the method's own
+// parameters stay inference-only: `box<int32>::labeled<float64>(...)` is the
+// parse error "type arguments after 'labeled' are not supported; the
+// qualifier's list names the struct instantiation and a method's own type
+// parameters are inferred".
 fn box<T>::labeled<U>(const self: box<T>, label: U) -> tuple<U, T> {
     return (label, self.value);
 }
@@ -57,6 +72,16 @@ fn main() -> int32 {
     // `:.2f` specifier keeps the output clean.)
     let pf: point<float64> = { x = 1.5, y = 2.0 };
     println("float sum = {:.2f}", point::sum(pf));      // 3.50
+
+    // Or spell the instantiation instead of inferring it: the qualifier's
+    // type arguments PIN the receiver, and the call reaches the same
+    // point<float64> instance as the inferred call above.
+    println("pinned sum = {:.2f}", point<float64>::sum(pf));   // 3.50
+
+    // The no-receiver member: nothing to infer from, so the pin is the only
+    // way to call it.
+    let o = point<float64>::origin();
+    println("origin = ({:.2f}, {:.2f})", o.x, o.y);     // 0.00, 0.00
 
     // `mut self` mutates each instance in place, through its own instantiation.
     point::scale(pi, 10);
@@ -75,15 +100,22 @@ fn main() -> int32 {
 
 // Much of what was future work here has shipped: the `.method()` call sugar
 // (`pi.sum()` is `point::sum(pi)`, with T inferred from the receiver exactly
-// as at the qualified calls above -- see method_calls.mc), constructors
-// (`point<float64>(1.5, 2.5)`, see constructors.mc), and non-struct
-// qualifiers (builtins and aliases, see method_alias.mc). Destructors and
-// dynamic dispatch remain future work, and a `::` CALL still never spells
-// type arguments (`point<float64>::sum(...)` does not parse; that spelling
-// in a DECLARATION is a specialization, method_specialization.mc).
+// as at the bare qualified calls above -- see method_calls.mc), constructors
+// and destructors (`point<float64>(1.5, 2.5)`, see constructors.mc and
+// destructors.mc), and non-struct qualifiers (builtins and aliases, see
+// method_alias.mc). Only dynamic dispatch remains future work. Note the two
+// meanings of a written qualifier: at a CALL, `point<float64>::sum(pf)` pins
+// the receiver instantiation of the generic member (as above); in a
+// DECLARATION, `fn point<float64>::name` is a specialization with its own
+// body (method_specialization.mc) -- and a pinned call that matches a
+// declared specialization dispatches to it through the ordinary ranking.
 //
 // See also: method_specialization.mc, which builds on this file to give ONE
 // instantiation (`fn point<float64>::name`) its own concrete body that outranks
 // the generic; methods.mc for the non-generic foundation these build on;
 // structs.mc and generics.mc for generic structs and inference; tuples.mc for
-// the `tuple<U, T>` that `box::labeled` returns and its destructuring.
+// the `tuple<U, T>` that `box::labeled` returns and its destructuring;
+// constructors.mc and destructors.mc for the pinned spelling's driving use
+// case, chaining a generic constructor or destructor at the enclosing T;
+// docs/language.md "Explicit type arguments at a qualified call" for the
+// full pinning rules.

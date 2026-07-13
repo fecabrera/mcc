@@ -998,17 +998,19 @@ monomorphized per element type, so `point::magnitude` over `point<int32>` and
   `fn box::tag` *is* the specialization `fn box<int32>::tag`, the tail filling
   from the defaults exactly as in a type use). The method's own type parameters
   (`fn point::m<W>`) sit after the name and never satisfy the requirement.
-  **Calls are different**: a call qualifier is a pure namespace — bare
+  **Calls are different**: a *bare* call qualifier is a pure namespace —
   `point::magnitude(p)` looks the registered family up and infers from the
-  arguments.
+  arguments — while an annotated one
+  [pins the instantiation](#explicit-type-arguments-at-a-qualified-call).
 - **The receiver is explicit.** There is no `point`-means-`point<T>` sugar:
   inside a `point<T>::` method the receiver (and every parameter and the return
   type) must name its type arguments — `self: point<T>`. A bare `self: point`
   keeps the ordinary generic arity error
   (`struct 'point' expects 1 type argument(s), got 0`). Type arguments are
   **inferred** from the call arguments as usual (`point::magnitude(p)` binds
-  `T` from `p`); explicit type arguments at a `::` call
-  (`point<float64>::magnitude(...)`) are not part of this slice.
+  `T` from `p`) — or the call qualifier may
+  [spell the instantiation](#explicit-type-arguments-at-a-qualified-call)
+  (`point<float64>::magnitude(p)`), pinning the receiver instantiation.
 - **A method may declare its own type parameters**, written *after* `::method`:
   `fn box<T>::combine<U>(const self: box<T>, extra: U) -> U`. The struct's
   parameters and the method's own parameters merge into one uniform template
@@ -1017,10 +1019,12 @@ monomorphized per element type, so `point::magnitude` over `point<int32>` and
   struct's — a name that appears in both lists is the error
   `method type parameter 'T' shadows a type parameter of struct 'point'`.
 
-[Dot-call sugar](#calling-methods-dot-syntax) (`p.magnitude()`) and
-[constructors](#constructors) (`point(1, 2)`) build on this form; destructors,
-dynamic dispatch, and explicit type arguments at a `::` call remain future
-work — a method's own type parameters are always inferred. See
+[Dot-call sugar](#calling-methods-dot-syntax) (`p.magnitude()`),
+[constructors](#constructors) (`point(1, 2)`),
+[destructors](#destructors), and
+[explicit type arguments at the call qualifier](#explicit-type-arguments-at-a-qualified-call)
+(`point<float64>::magnitude(p)`) build on this form; dynamic dispatch remains
+future work, and a method's **own** type parameters are always inferred. See
 [examples/types/methods.mc](../examples/types/methods.mc).
 
 ##### Specializing a method for one instantiation
@@ -1151,11 +1155,15 @@ fn main() -> int32 {
 
 The qualifier is chased through the alias (chains included) to the type it
 names, and the method registers under the **canonical** name. The same holds
-at a call: `pointf::magnitude(p)` canonicalizes *by name* to
-`point::magnitude(p)` — a pure namespace hop, no type arguments are injected;
-dispatch still infers from the arguments. Each hop is access-checked, so a
-cross-file `@private` alias qualifier errors like any other use of it. The
-rules:
+at a call — with the alias's type arguments **honored**: `pointf::magnitude(p)`
+resolves the alias as a type use, so it means exactly
+`point<float64>::magnitude(p)` — the complete alias
+[pins the receiver instantiation](#explicit-type-arguments-at-a-qualified-call),
+and a receiver of another instantiation is an error, not a silent
+re-dispatch. Only an alias that is *not* a complete type (`type pf = point`
+over a generic `point`) canonicalizes by name alone and leaves dispatch to
+infer. Each hop is access-checked, so a cross-file `@private` alias qualifier
+errors like any other use of it. The rules:
 
 - **A plain alias contributes its target's type arguments.**
   `fn pointf::m` is `fn point<float64>::m` — a
@@ -1185,8 +1193,11 @@ rules:
   annotate its type parameter(s), e.g. 'fn pf<T>::m' or 'fn pf<float64>::m'`.
   A **fully-defaulted** alias is complete, so its bare name works: with
   `type pf<T = float64> = point<T>`, `fn pf::m` *is* `fn point<float64>::m`.
-  Calls stay bare-friendly either way — `pf::m(p)` chases the name and calls
-  the `point::m` family. An alias parameter its target never uses is *inert*:
+  Calls through an **incomplete** alias stay bare-friendly — `pf::m(p)` over
+  `type pf<T> = point<T>` chases the name and infers — while a *complete*
+  spelling (written arguments, `pf<int32>::m(p)`, or a bare fully-defaulted
+  alias) [pins its instantiation](#explicit-type-arguments-at-a-qualified-call).
+  An alias parameter its target never uses is *inert*:
   written arguments for it vanish with the substitution, so a signature
   naming that parameter fails as an unknown type — alias transparency, not a
   special case.
@@ -1216,6 +1227,75 @@ See [examples/types/method_alias.mc](../examples/types/method_alias.mc) for
 the feature and
 [examples/systems/char_methods.mc](../examples/systems/char_methods.mc) for
 the `std/char` module.
+
+#### Explicit type arguments at a qualified call
+
+A qualified call's qualifier may spell the receiver instantiation —
+`point<float64>::magnitude(p)`. The written reference resolves as an
+ordinary **type use**: a wrong count is the type-use arity error, a
+fully-defaulted tail fills from the defaults, and a
+[generic alias](#methods-on-type-aliases-and-builtin-types) substitutes
+through its target, permutation included (`swap<int32, float64>::first(p)`
+over `type swap<X, Y> = pair<Y, X>` pins `pair<float64, int32>`). Inside a
+generic method body the enclosing type parameters resolve through the live
+instantiation — the same channel `x as T` uses — which is what makes
+**constructor and destructor chaining** expressible (their qualified form is
+their only callable spelling):
+
+```c
+struct point<T> { x: T; y: T; }
+
+fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+    self.x = x; self.y = y;
+}
+
+// A converting constructor chains to the direct member at the enclosing T.
+fn point<T>::constructor<U>(mut self: point<T>, x: U, y: U) {
+    point<T>::constructor(self, x as T, y as T);
+}
+
+fn main() -> int32 {
+    let p = point<float64>(1, 2);   // converting ctor -> chains at T = float64
+    return (p.x + p.y) as int32;    // 3
+}
+```
+
+The resolved instantiation **pins the receiver**: dispatch matches it
+against each member's declared qualifier annotation — a fresh-parameter
+position fixes that parameter's binding, and a concrete
+([specialized](#specializing-a-method-for-one-instantiation)) position must
+agree or the member does not apply. In particular:
+
+- **The pin is authoritative.** `point<int32>::magnitude(p)` with
+  `p: point<float64>` is the ordinary coercion error (`argument 1 of
+  'point::magnitude': expected point<int32>, got point<float64>`), and a
+  pin no member matches reports it (`'box::get' has no member for
+  box<float64>: the qualifier's type arguments pin the receiver
+  instantiation`).
+- **Specializations dispatch.** A pin matching a declared
+  [full specialization](#specializing-a-method-for-one-instantiation) (or a
+  [partial](#partial-specialization)'s concrete positions) reaches it
+  through the ordinary rank tiers; ranking and
+  [subsumption](#rank-tied-templates-subsumption) are otherwise
+  unperturbed.
+- **A no-receiver member becomes callable** at a chosen instantiation with
+  nothing to infer from: `point<float64>::origin()`.
+- **Builtin generic families take the form too**: `slice<int32>::first(s)`
+  (the *declaration*-side ban on specializing a builtin is unchanged).
+- **The list is the struct's only.** A method's own type parameters stay
+  inference-only, so a second list after the member name
+  (`point<float64>::map<int32>(...)`) is a parse error — exactly the
+  [dot-call rule](#calling-methods-dot-syntax). And `Type<args>::member`
+  not followed by `(` is a parse error too: enum members fold to constants
+  and enums are never generic, so only a call can follow.
+- **Bare complete aliases pin.** `pointf::sum(q)` over
+  `type pointf = point<float64>` means `point<float64>::sum(q)` — see
+  [methods on type aliases](#methods-on-type-aliases-and-builtin-types).
+- **Bare struct qualifiers are unchanged**: `point::magnitude(p)` stays
+  pure namespace + inference.
+
+See [examples/types/constructors.mc](../examples/types/constructors.mc) for
+the chaining form.
 
 #### Calling methods: dot syntax
 
@@ -1384,7 +1464,11 @@ beside `struct point` keeps calling the function. `Type::` still enforces no
 by-value `self` "constructor" compiles and simply initializes nothing, and a
 non-void constructor's return value is discarded by `S(args)`. Explicit type
 arguments at the head are the struct's; a converting constructor's own
-parameters (`<U>` above) are inference-only, as at any `::` call. The
+parameters (`<U>` above) are inference-only, as at any `::` call — where the
+*qualifier's* list is writable
+([explicit type arguments](#explicit-type-arguments-at-a-qualified-call)):
+inside a generic constructor, `point<T>::constructor(self, x as T, y as T)`
+chains to the direct member at the enclosing `T`. The
 [dot spelling](#calling-methods-dot-syntax) is excluded:
 `p.constructor(args)` is a compile error (`'constructor' cannot be called
 with method syntax; use point::constructor(p, ...)`) — the qualified
@@ -1493,7 +1577,10 @@ Details and sharp edges:
   the whole-value restriction.
 - **Base cleanup chains manually**, mirroring constructor chaining: a
   derived destructor that wants it ends its body with
-  `base::destructor(self);`. A derived type that declares **no**
+  `base::destructor(self);` — and a generic owner destroys a generic
+  member's field at the enclosing instantiation with
+  [explicit type arguments](#explicit-type-arguments-at-a-qualified-call)
+  (`inner<T>::destructor(self.i);`). A derived type that declares **no**
   destructor of its own inherits the base's through the
   [merged family](#inherited-methods), and the automatic call resolves it
   (receiver-only upcast, as at any inherited call).

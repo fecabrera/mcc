@@ -61,11 +61,17 @@ fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
 }
 
 // A CONVERTING constructor coexists in the same family: its own per-call
-// type parameter <U> accepts any argument type and casts into place.
+// type parameter <U> accepts any argument type and CHAINS to the diagonal,
+// casting on the way. A constructor's only callable spelling is the
+// qualified one, and inside this generic body `point<T>::constructor(...)`
+// pins the family at the ENCLOSING T (the live instantiation resolves it,
+// the same channel `x as T` uses) -- explicit type arguments at a `::` call
+// are exactly what makes this chain expressible. The pinned call ranks the
+// family as usual: both arguments are T, so the diagonal wins over
+// re-entering this member, and BOTH markers print when it runs.
 fn point<T>::constructor<U>(mut self: point<T>, x: U, y: U) {
-    println("  [converting] point<T>::constructor<U>");
-    self.x = x as T;
-    self.y = y as T;
+    println("  [converting] point<T>::constructor<U>, chaining at T");
+    point<T>::constructor(self, x as T, y as T);
 }
 
 type pointf = point<float64>;   // aliases are transparent at the head too
@@ -130,7 +136,8 @@ fn main() -> int32 {
     // Explicit type arguments type the receiver up front: T = float64 is
     // pinned, so the diagonal is NON-VIABLE for int literals (an int
     // literal does not adapt to a float64 slot) and the converting ctor
-    // wins, casting 1 to 1.0.
+    // wins, casting 1 to 1.0 -- then its body chains into the diagonal at
+    // T = float64, so both markers print.
     println("point<float64>(1, 1):");
     let a = point<float64>(1, 1);
     println("  a = ({:.2f}, {:.2f})", a.x, a.y);
@@ -173,10 +180,14 @@ fn main() -> int32 {
     let ch = char(65);
     println("  ch = {}", ch);                             // A
 
-    // The desugared spelling stays first-class alongside the sugar.
+    // The desugared spelling stays first-class alongside the sugar -- bare,
+    // inferring the instantiation from the arguments, or with the qualifier
+    // pinning it explicitly, the spelling the chaining body above relies on.
     println("point::constructor(d, 7, 9):");
     let d: point<int32>;
     point::constructor(d, 7, 9);
+    println("point<int32>::constructor(d, 5, 6):");
+    point<int32>::constructor(d, 5, 6);
     println("  d = ({}, {})", d.x, d.y);
 
     // The implicit empty constructor. point's declared family is
@@ -234,4 +245,7 @@ fn main() -> int32 {
 // between the diagonal and converting constructors; method_inheritance.mc
 // for constructors merging into a derived type's family through `extends`
 // (this diagonal/converting pair returns there, split across a base and its
-// extender).
+// extender); generic_methods.mc and docs/language.md "Explicit type
+// arguments at a qualified call" for the pinned `point<T>::` spelling the
+// converting constructor chains through (destructors.mc chains the same
+// way, an owner's destructor destroying a generic member field).

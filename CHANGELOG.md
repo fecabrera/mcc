@@ -20,6 +20,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **A bare alias qualifier at a call now injects the instantiation it
+  names** — with `type pointf = point<float64>`, `pointf::sum(q)` means
+  exactly `point<float64>::sum(q)`. Previously the call qualifier chased the
+  alias *by name only*, so a `point<int32>` receiver silently re-dispatched
+  under the bare family — a soundness gap, now a receiver-mismatch error
+  (`argument 1 of 'point::sum': expected point<float64>, got point<int32>`).
+  An alias that is not a complete type (`type pf = point` over a generic
+  `point`) still canonicalizes by name and infers; a fully-defaulted generic
+  alias used bare is a complete type and pins its defaults' instantiation.
+
 - **A `@deprecated` function may call other deprecated functions without
   warning** — a deprecation warning is now suppressed when the call is made
   from inside the body of a function that is itself `@deprecated`. A
@@ -36,6 +46,29 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and writing families only.
 
 ### Added
+
+- **Explicit type arguments at a qualified call —
+  `point<float64>::magnitude(p)`** — a qualified method call's qualifier may
+  spell the receiver instantiation. The written reference resolves as an
+  ordinary type use (arity checks, trailing-default fill, generic-alias
+  substitution with permutation honored — `swap<int32, float64>::first(p)`
+  over `type swap<X, Y> = pair<Y, X>` pins `pair<float64, int32>`), and
+  inside a generic method body the enclosing type parameters resolve through
+  the live instantiation, so **constructor and destructor chaining** is now
+  expressible: `point<T>::constructor(self, x as T, y as T)` inside a
+  converting constructor, `inner<T>::destructor(self.i)` inside an owner's
+  destructor (the qualified form is the pair's only callable spelling). The
+  resolved instantiation *pins* the receiver — dispatch matches it against
+  each member's declared qualifier annotation, so a matching full or partial
+  specialization is reached, a mismatching receiver is the ordinary coercion
+  error, a pin no member matches reports `'box::get' has no member for
+  box<float64>: the qualifier's type arguments pin the receiver
+  instantiation`, and a no-receiver member (`point<float64>::origin()`)
+  becomes callable with nothing to infer from. Builtin generic families take
+  the form too (`slice<int32>::first(s)`). The list belongs to the struct
+  frame only: a method's own type parameters stay inference-only (a second
+  list after the member name is a parse error, mirroring the dot-call rule),
+  and bare struct qualifiers (`point::m(p)`) are unchanged.
 
 - **Destructors: automatic cleanup of stack-constructed values** — a method
   named `destructor` completes the constructor pair: when a type declares
@@ -188,8 +221,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `type pointf = point<float64>;` **is** declaring
   `fn point<float64>::magnitude` (a specialization, outranking the generic
   for a `point<float64>` receiver), and both spellings call **one family** —
-  `pointf::magnitude(p)` canonicalizes by name to `point::magnitude(p)`, a
-  pure namespace hop that injects no type arguments. The chase follows alias
+  `pointf::magnitude(p)` calls the `point::magnitude` family (and, since the
+  explicit-type-argument entry above, a complete alias pins the
+  instantiation it names rather than hopping by name). The chase follows alias
   chains, is access-checked per hop (`@private`/`@static` aliases behave as
   everywhere else), and composes through a generic alias's substitution:
   written pre-`::` arguments check arity against the *alias* (trailing

@@ -3062,6 +3062,36 @@ class Parser:
                     )
                 return EnumAccess(tok.text, member, tok.line)
             type_args = self.try_type_args() if self.cur.kind == "<" else []
+            if type_args and self.cur.kind == "::":
+                # `Type<args>::method(...)`: a qualified method call whose
+                # qualifier spells the receiver instantiation. The one
+                # type-argument list belongs to the STRUCT; a method's own
+                # type parameters stay inference-only (as at a dot call), so
+                # a second list after the member name is a parse error -- as
+                # is anything but a call (enum members fold to integer
+                # constants, so a generic-annotated `::` member can only be
+                # a method call).
+                self.advance()
+                member = self.expect("IDENT").text
+                if self.cur.kind == "<":
+                    raise LangError(
+                        f"type arguments after {member!r} are not supported; "
+                        "the qualifier's list names the struct instantiation "
+                        "and a method's own type parameters are inferred",
+                        tok.line,
+                    )
+                if self.cur.kind != "(":
+                    raise LangError(
+                        f"expected '(' after '{tok.text}<...>::{member}': a "
+                        "qualifier with type arguments forms a method call",
+                        tok.line,
+                    )
+                return Call(
+                    f"{tok.text}::{member}",
+                    type_args,
+                    self.parse_call_args(),
+                    tok.line,
+                )
             if self.cur.kind == "{" and self.struct_lit_ok:
                 return self.parse_struct_lit_fields(tok.text, type_args, tok.line)
             if self.cur.kind != "(":
@@ -3178,25 +3208,36 @@ class Parser:
     def try_type_args(self) -> list[TypeRef]:
         """Speculatively parse ``<type, ...>`` generic arguments at a call site.
 
-        Only commits when the closing ``>`` is immediately followed by ``(``;
-        otherwise the ``<`` was a comparison and the cursor is restored.
+        Only commits when the closing ``>`` is immediately followed by ``(``
+        (a call), ``::`` (a qualified method call whose qualifier spells its
+        instantiation, ``point<float64>::magnitude(p)``), or a struct
+        literal's ``{``; otherwise the ``<`` was a comparison and the cursor
+        is restored.
 
         Returns:
             The parsed type arguments (e.g. for ``sum<int32>(...)``), or an
             empty list when the ``<`` was not a generic-argument list.
         """
         saved = self.pos
-        self.advance()  # '<'
+        # Log the in-place `>>` splits this speculation performs, so a
+        # backtrack can undo them (a committed nested `slice<char>>` mutates
+        # the token stream; re-parsing the span as comparisons would
+        # otherwise run one `>` short).
+        outer_splits = self.angle_splits
+        splits = self.angle_splits = []
         args = []
         try:
+            self.advance()  # '<'
             while True:
                 args.append(self.parse_type_ref())
-                # Commit when the `>` closes onto a call `(` -- or, for a
-                # keyword-free struct literal `Box<int32> { ... }`, onto a `{`
-                # in a context where such a literal is allowed.
+                # Commit when the `>` closes onto a call `(`, onto a
+                # qualified-call `::`, or -- for a keyword-free struct
+                # literal `Box<int32> { ... }` -- onto a `{` in a context
+                # where such a literal is allowed.
                 after = self.tokens[self.pos + 1].kind
                 if self.cur.kind == ">" and (
-                    after == "(" or (after == "{" and self.struct_lit_ok)
+                    after in ("(", "::")
+                    or (after == "{" and self.struct_lit_ok)
                 ):
                     self.advance()
                     return args
@@ -3204,5 +3245,9 @@ class Parser:
                     break
         except LangError:
             pass
+        finally:
+            self.angle_splits = outer_splits
+        for pos, tok in splits:
+            self.tokens[pos] = tok
         self.pos = saved
         return []

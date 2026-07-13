@@ -696,6 +696,10 @@ class CodeGen:
         self.resolving_bases: set[str] = set()
         # @static declarations: file-scoped names, keyed by (source, name)
         self.static_funcs: dict[tuple[str | None, str], str] = {}  # -> symbol
+        # The declaration behind each concrete @static, for the checks that
+        # need the Func itself (a qualified call's written instantiation
+        # matches against its qualifier_args).
+        self.static_func_decls: dict[tuple[str | None, str], Func] = {}
         self.static_templates: dict[tuple[str | None, str], Func] = {}
         self.static_structs: dict[tuple[str | None, str], "StructDecl | UnionDecl"] = {}
         self.symbol_bases: dict[
@@ -5159,6 +5163,7 @@ class CodeGen:
                 if func.mut_return:
                     self.mut_ret.add(symbol)
                 self.static_funcs[key] = symbol
+                self.static_func_decls[key] = func
                 if func.deprecated_msg is not None:
                     self.deprecated_syms[symbol] = func.deprecated_msg
                 continue
@@ -13089,6 +13094,153 @@ class CodeGen:
             name = target.name
         return name
 
+    def resolve_call_qualifier(self, expr: Call) -> "tuple[Call, LangType | None]":
+        """Canonicalize a qualified call's qualifier, resolving any written pin.
+
+        Three spellings arrive here:
+
+          * ``point<float64>::magnitude(p)`` -- the qualifier spells the
+            receiver instantiation. The written reference resolves as a
+            type use (``lang_type``), so arity checks, trailing-default
+            fill, an enclosing method's live type bindings (``point<T>::``
+            inside a ``point<T>`` method body -- the constructor-chaining
+            form), and generic-alias substitution (permutation included)
+            all apply for free. The resolved instantiation is returned as
+            the call's **frame**: dispatch matches it against each
+            candidate's declared ``qualifier_args``, pinning the receiver
+            instantiation.
+          * ``pointf::sum(q)`` over ``type pointf = point<float64>`` -- a
+            bare alias of a COMPLETE type injects the instantiation it
+            names: the alias resolves as the same type use, so the call
+            pins ``point<float64>`` exactly as the written form does (a
+            cross-instantiation receiver is an error, not a silent
+            re-dispatch). A bare alias that is not a complete type (``type
+            pf = point`` with ``point`` generic) still canonicalizes by
+            name only and leaves dispatch to infer.
+          * ``point::magnitude(p)`` -- a bare struct/builtin qualifier is
+            pure namespace: no frame, inference from the arguments, exactly
+            as before.
+
+        Args:
+            expr: The qualified ``Call`` (its name contains ``::``).
+
+        Returns:
+            The call (name canonicalized, written type arguments consumed)
+            and the pinned instantiation, or ``None`` when nothing pins.
+
+        Raises:
+            LangError: When the written reference does not resolve (unknown
+                type, arity, a private alias), or resolves to a type that
+                is not a struct or builtin family.
+        """
+        qualifier, method = expr.name.split("::", 1)
+        pinned: "LangType | None" = None
+        if expr.type_args:
+            pinned = self.lang_type(
+                TypeRef(qualifier, args=list(expr.type_args)), expr.line
+            )
+        elif (
+            self.lookup_struct_decl(qualifier) is None
+            and qualifier not in TYPES
+            and qualifier not in RESERVED_TYPE_NAMES
+            and self.lookup_alias(qualifier) is not None
+        ):
+            # A bare alias qualifier: when it names a complete type the
+            # resolution injects its instantiation; otherwise (a bare
+            # generic target, a cycle, an unnameable target) fall back to
+            # the name-only chase and let dispatch infer or report.
+            try:
+                pinned = self.lang_type(TypeRef(qualifier), expr.line)
+            except LangError:
+                canonical = self.chase_alias_qualifier(qualifier, expr.line)
+                if canonical is not None and canonical != qualifier:
+                    expr = dataclasses_replace(
+                        expr, name=f"{canonical}::{method}"
+                    )
+                return expr, None
+        if pinned is None:
+            return expr, None
+        family = pinned.template
+        if family is None:
+            if (
+                is_struct(pinned)
+                or pinned.name in TYPES
+                or pinned.name in RESERVED_TYPE_NAMES
+            ):
+                family = pinned.name
+            elif not expr.type_args:
+                # A bare alias of a type with no bare-name family (a
+                # pointer, array, or function type): no injection applies,
+                # and the call keeps resolving -- and reporting -- under
+                # its written name, as the name-only chase always did.
+                return expr, None
+            else:
+                raise LangError(
+                    f"no struct type {qualifier!r} for method call "
+                    f"{expr.name!r}",
+                    expr.line,
+                )
+        expr = dataclasses_replace(
+            expr, name=f"{family}::{method}", type_args=[]
+        )
+        # A resolved qualifier with no type arguments (an alias of a
+        # non-generic struct or a builtin scalar) pins nothing: the name
+        # canonicalization above is the whole effect.
+        return expr, (pinned if pinned.args else None)
+
+    def qualifier_seeds(
+        self, func: Func, qframe: LangType
+    ) -> "dict[str, LangType] | None":
+        """Match a call's pinned instantiation against one candidate's frame.
+
+        The written qualifier's resolved type arguments align positionally
+        with the candidate's classified ``qualifier_args`` -- the
+        :meth:`rebase_member` discipline, applied at the call site: a fresh
+        type-parameter position SEEDS its binding from the pinned argument
+        (a repeated fresh name -- the diagonal a generic alias expands to --
+        must agree with itself), while a concrete (specialized) position
+        must equal the pinned argument or the member simply does not apply
+        to this instantiation. A bare name that is neither a parameter of
+        the candidate nor a resolvable type (an inherited clone's derived
+        parameter that nothing in the signature uses) constrains nothing.
+
+        Args:
+            func: The candidate family member.
+            qframe: The pinned instantiation (the resolved qualifier type).
+
+        Returns:
+            The ``{type parameter: type}`` seed bindings (possibly empty for
+            a matching specialization), or ``None`` when the member does not
+            apply at the pinned instantiation -- including a member whose
+            qualifier carries no annotation at all (a bare-qualifier builtin
+            member makes no claim the pin could match).
+        """
+        qargs = func.qualifier_args
+        if qargs is None or len(qargs) != len(qframe.args):
+            return None
+        seeds: "dict[str, LangType]" = {}
+        for qa, pin in zip(qargs, qframe.args):
+            bare = (
+                qa.params is None
+                and not qa.args
+                and not qa.stars
+                and not qa.dims
+            )
+            if bare and qa.name in func.type_params:
+                prior = seeds.get(qa.name)
+                if prior is not None and prior != pin:
+                    return None  # a diagonal position the pin breaks
+                seeds[qa.name] = pin
+                continue
+            theirs = self.resolve_concrete_pattern(qa, func)
+            if theirs is None:
+                if bare:
+                    continue  # an unused leftover name: constrains nothing
+                return None
+            if theirs != pin:
+                return None  # specialized for another instantiation
+        return seeds
+
     def method_family_exists(self, family: str) -> bool:
         """Whether a qualified method name has any registered member.
 
@@ -13456,6 +13608,16 @@ class CodeGen:
                 type_param_defaults=defaults,
                 type_param_groups=group_refs,
                 type_param_bounds=bound_refs,
+                # The clone's frame is the DERIVED struct's own parameter
+                # list: a written instantiation at the call
+                # (`derived<float64>::m(d)`) matches an inherited member
+                # against the deriving struct, not the base the origin was
+                # declared on. None for a concrete derivation -- its
+                # qualifier carries no annotation, like any non-generic
+                # struct's.
+                qualifier_args=(
+                    [TypeRef(p) for p in derived_params] or None
+                ),
             )
             if clone_groups:
                 self.group_types[id(clone)] = clone_groups
@@ -14016,16 +14178,16 @@ class CodeGen:
             LangError: When the name is not callable, is undefined, or misuses
                 generic type arguments.
         """
-        # A method call through an alias qualifier canonicalizes by name --
-        # `pointf::magnitude(p)` is `point::magnitude(p)` -- and re-enters
-        # under the family every spelling registered to.
+        # A method call's qualifier canonicalizes first: an alias rewrites to
+        # the family every spelling registered to, and a qualifier that
+        # spells its instantiation -- written type arguments
+        # (`point<float64>::magnitude(p)`) or a bare alias of a complete
+        # type (`pointf::sum(q)`) -- resolves to the call's pinned FRAME,
+        # matched against each candidate's declared qualifier annotation
+        # during dispatch below.
+        qframe: "LangType | None" = None
         if "::" in expr.name:
-            qualifier, method = expr.name.split("::", 1)
-            canonical = self.chase_alias_qualifier(qualifier, expr.line)
-            if canonical is not None and canonical != qualifier:
-                return self.gen_call(
-                    dataclasses_replace(expr, name=f"{canonical}::{method}")
-                )
+            expr, qframe = self.resolve_call_qualifier(expr)
         # va_start/va_end are builtins, not real functions: they lower to LLVM
         # intrinsics over the va_list's address.
         if expr.name in ("va_start", "va_end") and not expr.type_args:
@@ -14060,8 +14222,20 @@ class CodeGen:
         # File-scoped (@static) names shadow the global namespace.
         key = (self.current_source, expr.name)
         if key in self.static_templates:
-            return self.gen_generic_call(expr, [self.static_templates[key]])
+            return self.gen_generic_call(
+                expr, [self.static_templates[key]], qframe
+            )
         if key in self.static_funcs:
+            if qframe is not None and (
+                self.qualifier_seeds(self.static_func_decls[key], qframe)
+                is None
+            ):
+                raise LangError(
+                    f"{expr.name!r} has no member for {qframe}: the "
+                    "qualifier's type arguments pin the receiver "
+                    "instantiation",
+                    expr.line,
+                )
             return self.gen_direct_call(expr, self.static_funcs[key])
         # An @removed tombstone errors before any resolution or dispatch: the
         # name is dead even though nothing resolvable remains behind it, and an
@@ -14076,7 +14250,16 @@ class CodeGen:
             self.inherited_candidates(expr.name) if "::" in expr.name else []
         )
         generic = self.templates.get(expr.name)
-        if generic is not None or expr.name in self.overloads or inherited:
+        if (
+            generic is not None
+            or expr.name in self.overloads
+            or inherited
+            # A pinned call to a family of one plain concrete member (a lone
+            # specialization) resolves through the set path too: the pin
+            # must match the member's declared instantiation, which the
+            # direct path never checks.
+            or (qframe is not None and expr.name in self.concrete_decls)
+        ):
             # An overload set -- generic, concrete, or mixed -- resolves in
             # one order (viability, group filter, then the
             # (tier, specificity) rank) through the same pre-evaluate path.
@@ -14117,11 +14300,14 @@ class CodeGen:
                 )
             if expr.type_args and not any(f.type_params for f in visible):
                 # Explicit type arguments select among the generic
-                # candidates; a purely concrete set has none.
+                # candidates; a purely concrete set has none. (A qualified
+                # call's written instantiation never reaches here: the
+                # qualifier resolution consumed it into the frame, which
+                # legitimately selects among concrete specializations.)
                 raise LangError(
                     f"{expr.name!r} is not a generic function", expr.line
                 )
-            return self.gen_generic_call(expr, visible)
+            return self.gen_generic_call(expr, visible, qframe)
         if expr.name not in self.funcs:
             # Name resolution's last resort: a leftover name that names a
             # type is constructor sugar -- `point<float64>(1, 1)` desugars
@@ -15919,7 +16105,12 @@ class CodeGen:
                     line,
                 )
 
-    def gen_generic_call(self, expr: Call, candidates: list[Func]) -> TypedValue:
+    def gen_generic_call(
+        self,
+        expr: Call,
+        candidates: list[Func],
+        qframe: "LangType | None" = None,
+    ) -> TypedValue:
         """Resolve and emit a call to a generic function or overload set.
 
         Infers type-parameter bindings from the arguments; with several
@@ -15930,6 +16121,12 @@ class CodeGen:
         Args:
             expr: The ``Call`` node.
             candidates: The generic overload set to dispatch over.
+            qframe: A qualified call's pinned receiver instantiation (see
+                :meth:`resolve_call_qualifier`), or ``None``. Threaded into
+                every binding resolution: a candidate whose qualifier
+                annotation does not match the pin is not viable, and a
+                matching candidate's struct-side type parameters are fixed
+                by the pin instead of inferred.
 
         Returns:
             The call's result as a ``TypedValue``.
@@ -16045,13 +16242,15 @@ class CodeGen:
         if len(candidates) == 1:
             func = candidates[0]
             try:
-                bindings = self.resolve_bindings(func, expr, arg_tvs, lenient=False)
+                bindings = self.resolve_bindings(
+                    func, expr, arg_tvs, lenient=False, qframe=qframe
+                )
             except LangError:
                 # Direct inference failed; a pointer argument at a const/mut
                 # slot may still bind through its pointee (the decay
                 # reading). Re-raise the direct error when it does not.
                 bindings = self.resolve_bindings(
-                    func, expr, arg_tvs, lenient=True, decay=True
+                    func, expr, arg_tvs, lenient=True, decay=True, qframe=qframe
                 )
                 if bindings is None:
                     raise
@@ -16087,7 +16286,8 @@ class CodeGen:
                     if i < fixed
                 ):
                     decayed_bindings = self.resolve_bindings(
-                        func, expr, arg_tvs, lenient=True, decay=True
+                        func, expr, arg_tvs, lenient=True, decay=True,
+                        qframe=qframe,
                     )
                     if decayed_bindings is not None:
                         bindings = decayed_bindings
@@ -16098,7 +16298,8 @@ class CodeGen:
                         # conflict, not a missing address); re-resolve
                         # strictly to raise it.
                         self.resolve_bindings(
-                            func, expr, arg_tvs, lenient=False, decay=True
+                            func, expr, arg_tvs, lenient=False, decay=True,
+                            qframe=qframe,
                         )
         else:
             # Overload set: keep the viable candidates and pick the one with
@@ -16108,7 +16309,9 @@ class CodeGen:
             # out, so a same-shape mut/non-mut pair stays ambiguous.
             viable, mut_failures, group_failures, bound_failures = [], [], [], []
             for func in candidates:
-                bindings = self.resolve_bindings(func, expr, arg_tvs, lenient=True)
+                bindings = self.resolve_bindings(
+                    func, expr, arg_tvs, lenient=True, qframe=qframe
+                )
                 if bindings is None:
                     continue
                 # The post-deduction group filter: a candidate whose group
@@ -16146,7 +16349,9 @@ class CodeGen:
                 # Two-tier viability: decay readings enter resolution only
                 # when no candidate matched the pointer type directly, so
                 # `f(x: T*)` beside `f(mut x: T)` stays unambiguous.
-                viable = self.decay_viable(candidates, expr, arg_tvs, addrs)
+                viable = self.decay_viable(
+                    candidates, expr, arg_tvs, addrs, qframe
+                )
             if not viable:
                 if len(mut_failures) == 1:
                     # Exactly one candidate matched but for an rvalue in a
@@ -16175,9 +16380,14 @@ class CodeGen:
                         self.bound_error(expr.name, offender, target), expr.line
                     )
                 arg_types = ", ".join(str(tv.type) for tv in arg_tvs)
+                pin = (
+                    f"; the qualifier pins {qframe}"
+                    if qframe is not None
+                    else ""
+                )
                 raise LangError(
                     f"no overload of {expr.name!r} with signature "
-                    f"{expr.name}({arg_types})",
+                    f"{expr.name}({arg_types}){pin}",
                     expr.line,
                 )
             viable.sort(key=lambda entry: entry[0], reverse=True)
@@ -16608,7 +16818,12 @@ class CodeGen:
         )
 
     def decay_viable(
-        self, candidates: list[Func], expr: Call, arg_tvs: list[TypedValue], addrs
+        self,
+        candidates: list[Func],
+        expr: Call,
+        arg_tvs: list[TypedValue],
+        addrs,
+        qframe: "LangType | None" = None,
     ) -> list:
         """Second-tier overload viability: pointer-decay readings.
 
@@ -16626,6 +16841,8 @@ class CodeGen:
             arg_tvs: The already-evaluated argument values.
             addrs: The pre-formed ``{position: (addr, type, align, volatile)}``
                 map for maybe-``mut`` lvalue arguments.
+            qframe: A qualified call's pinned receiver instantiation, or
+                ``None`` (see :meth:`gen_generic_call`).
 
         Returns:
             ``(specificity, func, bindings)`` entries for the viable decay
@@ -16634,7 +16851,7 @@ class CodeGen:
         viable = []
         for func in candidates:
             bindings = self.resolve_bindings(
-                func, expr, arg_tvs, lenient=True, decay=True
+                func, expr, arg_tvs, lenient=True, decay=True, qframe=qframe
             )
             if bindings is None:
                 continue
@@ -16784,6 +17001,7 @@ class CodeGen:
         arg_tvs: list[TypedValue],
         lenient: bool,
         decay: bool = False,
+        qframe: "LangType | None" = None,
     ) -> dict[str, LangType] | None:
         """Determine the type-parameter bindings for calling a generic function.
 
@@ -16811,6 +17029,17 @@ class CodeGen:
                 ``mut self: list<T>`` binds ``T = int32``; the pointee of a
                 ``T**`` is itself a pointer, so a double pointer never sheds
                 two levels).
+            qframe: A qualified call's pinned receiver instantiation, or
+                ``None``. Matched against the candidate's ``qualifier_args``
+                frame (:meth:`qualifier_seeds`) **before** any positional
+                logic: a non-matching member is not viable (never the
+                explicit-type-argument arity gate below, which would
+                silently drop a matching specialization -- its
+                ``type_params`` are empty by design), and a matching one
+                enters inference with its struct-side parameters already
+                bound. Like parameters fixed by explicit type arguments,
+                pinned parameters never conflict with a typed argument --
+                the argument must coerce, so the error points at it.
 
         Returns:
             The ``{type parameter: type}`` bindings, or ``None`` when lenient and
@@ -16843,6 +17072,18 @@ class CodeGen:
                 expr.line,
             )
         bindings: dict[str, LangType] = {}
+        if qframe is not None:
+            seeds = self.qualifier_seeds(func, qframe)
+            if seeds is None:
+                if lenient:
+                    return None
+                raise LangError(
+                    f"{expr.name!r} has no member for {qframe}: the "
+                    "qualifier's type arguments pin the receiver "
+                    "instantiation",
+                    expr.line,
+                )
+            bindings.update(seeds)
         if expr.type_args:
             # A shorter list is allowed only when the omitted tail is entirely
             # defaulted (defaults are trailing, so the count check suffices);
@@ -16894,7 +17135,11 @@ class CodeGen:
             # so a default beats an untyped literal's int32 leaning and the
             # literal adapts to it.
             for adaptable_pass in (False, True):
-                strict = not adaptable_pass and not expr.type_args
+                strict = (
+                    not adaptable_pass
+                    and not expr.type_args
+                    and qframe is None
+                )
                 for (_, ptype), tv, actual in zip(
                     func.params[:n_fixed], arg_tvs, actuals
                 ):

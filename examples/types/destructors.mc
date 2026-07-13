@@ -81,6 +81,43 @@ fn logfile::destructor(mut self: logfile) {
 // upcast included, so a constructed pipe still closes its fd.
 struct pipe extends file;
 
+// ---- Generic owners: a MEMBER FIELD's cleanup chains the same way,
+// ---- pinned at the enclosing T
+
+struct handle<T> {
+    v: T;
+}
+
+fn handle<T>::constructor(mut self: handle<T>, v: T) {
+    println("  grab {}", v);
+    self.v = v;
+}
+
+fn handle<T>::destructor(mut self: handle<T>) {
+    println("  drop {}", self.v);
+}
+
+// The automatic schedule covers the constructed LET value only: a member
+// field is the owner's job on both ends, so wrap constructs and destroys
+// its handle explicitly. The pair's only callable spelling is the
+// qualified one, and inside these generic bodies `handle<T>::...` pins the
+// member's instantiation through the ENCLOSING T (the live instantiation
+// resolves it, the same channel `x as T` uses) -- explicit type arguments
+// at a `::` call are what make the chain expressible. Constructors chain
+// identically; see the converting constructor in constructors.mc.
+struct wrap<T> {
+    h: handle<T>;
+}
+
+fn wrap<T>::constructor(mut self: wrap<T>, v: T) {
+    handle<T>::constructor(self.h, v);
+}
+
+fn wrap<T>::destructor(mut self: wrap<T>) {
+    println("  wrap down");
+    handle<T>::destructor(self.h);
+}
+
 fn main() -> int32 {
     // The RAII payoff. Both calls print their own open/close trace.
     println("transfer(true):");
@@ -122,6 +159,13 @@ fn main() -> int32 {
         let lg = logfile(7, 120);
         let p = pipe(5);
     }                           // close 5, then flush 120 lines + close 7
+
+    // The generic owner: only wrap's own destructor is scheduled (one let,
+    // one defer), and IT chains into the member handle's at the same T.
+    println("generic member field:");
+    {
+        let w = wrap<int32>(9);
+    }                           // wrap down, then drop 9
 
     // ---- The opt-outs: everything that is NOT the constructor-sugar
     // ---- let schedules nothing
@@ -181,8 +225,11 @@ fn main() -> int32 {
 // lets only: globals, @static values, parameters, heap values, and
 // expression-position temporaries are never destroyed automatically.
 //
-// See also: constructors.mc for the sugar and its head forms;
+// See also: constructors.mc for the sugar and its head forms (and the
+// converting constructor that chains like wrap's destructor does);
 // control-flow/defer.mc for the shared machinery and its @noreturn edge;
 // extends.mc and method_inheritance.mc for the merged family the derived
-// destructors resolve through; docs/language.md "Destructors" for the
-// full rules.
+// destructors resolve through; generic_methods.mc and docs/language.md
+// "Explicit type arguments at a qualified call" for the pinned
+// `handle<T>::` spelling wrap's chain rides on; docs/language.md
+// "Destructors" for the full rules.

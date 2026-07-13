@@ -12,7 +12,10 @@ result) evaluates once into a hidden local: a plain rvalue spills to a
 *const* slot, so a mut-self method on a temporary stays an error, while a
 ``mut``-returning receiver re-lends its carried lvalue. Bare ``p.method``
 without a call is not a bound-method value, and explicit type arguments at a
-dot-call (``p.m<int32>(...)``) do not parse -- both as at ``::`` calls.
+dot-call (``p.m<int32>(...)``) do not parse -- the qualified spelling takes
+the STRUCT's on the qualifier (``point<float64>::m(p)``, see
+test_explicit_type_args.py), but a method's own type parameters are
+inference-only in both spellings.
 """
 
 import re
