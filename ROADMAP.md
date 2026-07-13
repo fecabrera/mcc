@@ -2370,7 +2370,29 @@ already do).
         `Type::name(s)`), inheritance through `extends` carries
         properties along the merged family, a generic receiver binds
         the struct's type params, and a pointer receiver auto-derefs
-        exactly one hop. Adoption: `std/stack` marks
+        exactly one hop. The `-> mut` form hands out raw storage, so it
+        cannot run logic on the write path; for accessors that must —
+        validation, clamping, bookkeeping — the same annotation takes an
+        argument: `@property("get")` / `@property("set")` declare an
+        explicit pair. The getter is receiver-only and value-returning
+        like the bare form but may NOT return `mut` (rejected at the
+        declaration); the setter takes exactly `(self, value)`, and a
+        declared return type is legal but the value is discarded
+        (assignment is a statement). `g.level` calls the getter,
+        `g.level = v` the setter, and `g.level op= v` is
+        read-modify-write — `gauge::level(g, gauge::level(g) op v)`,
+        one get, the operator, one set, the receiver expression
+        evaluated twice. A pair may be partial: getter-only rejects
+        writes with the standard does-not-return-mut error; setter-only
+        is write-only — reads reject with
+        `property 'T::f' is write-only`, and `op=` with a bespoke
+        has-no-getter error. USER RULING: the bare mut-return-lvalue
+        form and the pair form are SEPARATE mechanisms — one family
+        mixing them, directly or across the `extends` chain, is a
+        compile error. Pair members remain ordinary overloads at the
+        call spelling (`g.level()` / `g.level(v)` dispatch by arity),
+        generic receivers bind `T`, and inheritance through `extends`
+        reaches the pair like any method. Adoption: `std/stack` marks
         `stack<T>::length` `@property`, the pattern for the stdlib's
         receiver-only getters. Implemented, see
         [Properties](docs/language.md#properties)

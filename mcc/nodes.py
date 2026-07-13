@@ -434,12 +434,20 @@ class Func:
             cross-module target of the same pattern; no target, a same-file
             target, or a second ``@override`` of one pattern is a compile
             error.
-        property: ``@property`` -- a method reachable through field syntax:
-            ``s.length`` calls ``T::length(s)``. The method takes only its
-            receiver and returns a value; a ``-> mut`` return makes
-            ``s.length`` an assignable lvalue (``s.length = v`` is
-            ``T::length(s) = v``). A real field of the name shadows it, and
-            ``s.length()`` still calls it too.
+        property: The ``@property`` kind, or ``None`` -- a method reachable
+            through field syntax. ``"bare"`` (a plain ``@property``): takes
+            only its receiver and returns a value; ``s.length`` calls
+            ``T::length(s)``, and a ``-> mut`` return makes it an assignable
+            lvalue (``s.length = v`` is ``T::length(s) = v``).
+            ``"get"``/``"set"`` (``@property("get")`` / ``@property("set")``):
+            an explicit accessor pair -- the getter is receiver-only and
+            value-returning (never ``-> mut``), the setter takes exactly
+            ``(self, value)`` (its return, if any, is ignored);
+            ``t.field`` calls the getter, ``t.field = v`` calls the setter,
+            and ``t.field op= v`` is read-modify-write through both. The two
+            mechanisms are separate: one family cannot mix ``"bare"`` with
+            ``"get"``/``"set"``. A real field of the name shadows any
+            property, and the call spelling stays valid.
         type_param_defaults: ``{type parameter: TypeRef}`` for parameters
             declared ``<T = type>``. The default fills a parameter that is
             neither given explicitly nor inferred from a *typed* argument.
@@ -534,7 +542,7 @@ class Func:
     deprecated_msg: str | None = None
     removed_msg: str | None = None
     override: bool = False
-    property: bool = False
+    property: str | None = None
     type_param_defaults: dict[str, TypeRef] = field(default_factory=dict)
     type_param_groups: dict[str, list[TypeRef]] = field(default_factory=dict)
     type_param_bounds: dict[str, TypeRef] = field(default_factory=dict)

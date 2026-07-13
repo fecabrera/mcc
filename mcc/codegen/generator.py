@@ -575,9 +575,11 @@ class CodeGen:
                 or warned one (see :meth:`check_nonnull_arg`).
         """
         self.program = program
-        # Lazily-built set of `@property` method families (e.g. "stack::length"),
-        # consulted by property_family for the field-syntax dispatch.
-        self._property_families: "set[str] | None" = None
+        # Lazily-built map of `@property` method families (e.g.
+        # "stack::length") to their declared kinds ({"bare"} or a subset of
+        # {"get", "set"}), consulted by property_kinds for field-syntax
+        # dispatch. Built once, with the bare-vs-pair mixing check.
+        self._property_registry: "dict[str, dict[str, int]] | None" = None
         # Warning classes promoted to error level (the strict posture); see
         # the constructor doc. Consulted by mark_nonnull and check_nonnull_arg.
         self.error_classes = error_classes
@@ -8103,13 +8105,25 @@ class CodeGen:
             self.gen_store(value.value, addr, align=align, volatile=volatile)
             self.narrowed_paths.clear()  # an element store may alias a field
         elif isinstance(stmt, StoreMember):
-            prop = self.as_property_call(
+            acc = self.property_access(
                 Member(stmt.base, stmt.field, stmt.arrow, stmt.line)
             )
-            if prop is not None:
-                # `s.length = v` is `T::length(s) = v`: address the property's
-                # mut return (a non-`mut` property rejects here, like any
-                # non-mut-returning call target).
+            if acc is not None and "set" in acc[1]:
+                # `t.field = v` is `T::field(t, v)`: the assigned value passes
+                # as the setter's second argument (overload dispatch, literal
+                # adaptation, and coercion are the call's own), and the
+                # setter's return, if any, is discarded.
+                self.gen_call(Call(acc[0], [], [stmt.base, stmt.value], stmt.line))
+                self.narrowed_paths.clear()
+                return
+            if acc is not None:
+                # A bare @property: address its mut return -- `s.length = v`
+                # is `T::length(s) = v` (a non-`mut` bare property or a
+                # getter-only pair rejects here, like any non-mut-returning
+                # call target).
+                prop = self.as_property_call(
+                    Member(stmt.base, stmt.field, stmt.arrow, stmt.line)
+                )
                 addr, ftype, align, volatile = self.gen_addr(prop, stmt.line)
             else:
                 if not stmt.arrow and self.writes_const(stmt.base):
@@ -8607,6 +8621,29 @@ class CodeGen:
             LangError: On a read-only target or operands the operator does not
                 support.
         """
+        if isinstance(stmt.target, Member):
+            acc = self.property_access(stmt.target)
+            if acc is not None and "set" in acc[1]:
+                # A get/set property compound-assigns by read-modify-write:
+                # `t.field op= v` is `T::field(t, T::field(t) op v)` -- one
+                # get, the operator, one set (so the receiver expression is
+                # evaluated twice; both reach the same storage).
+                family, kinds = acc
+                if "get" not in kinds:
+                    raise LangError(
+                        f"property {family!r} has no getter: "
+                        f"'{stmt.op}=' needs to read the current value",
+                        stmt.line,
+                    )
+                current = Member(
+                    stmt.target.base, stmt.target.field, False, stmt.line
+                )
+                combined = Binary(stmt.op, current, stmt.value, stmt.line)
+                self.gen_call(
+                    Call(family, [], [stmt.target.base, combined], stmt.line)
+                )
+                self.narrowed_paths.clear()
+                return
         addr, elem_type, align, volatile = self.compound_target_addr(
             stmt.target, stmt.line
         )
@@ -13293,14 +13330,19 @@ class CodeGen:
         # A derived struct exposes its base chain's families.
         return bool(self.inherited_candidates(family))
 
-    def property_family(self, owner: LangType, field: str) -> "str | None":
-        """The family ``T::field`` when ``field`` names a ``@property`` method
-        on ``owner`` and no real field shadows it, else ``None``.
+    def property_kinds(
+        self, owner: LangType, field: str, line: int
+    ) -> "tuple[str, set[str]] | None":
+        """The ``(family, kinds)`` behind ``owner.field`` when ``field`` names
+        a ``@property`` method and no real field shadows it, else ``None``.
 
-        A ``@property`` is reached through field syntax (``s.length``); this
-        backs that read/lvalue/store fallback. A struct field of the name wins
-        (the method stays reachable as ``s.length()`` / ``T::length(s)``). A
-        pointer receiver auto-derefs, like the dot-call ``q.length()``.
+        ``kinds`` is the set of declared property kinds for the family:
+        ``{"bare"}`` for the mut-return-lvalue form, a non-empty subset of
+        ``{"get", "set"}`` for the explicit accessor pair. The two mechanisms
+        are separate; a family declaring both is a compile error. A struct
+        field of the name wins (the method stays reachable as ``s.length()``
+        / ``T::length(s)``). A pointer receiver auto-derefs, like the
+        dot-call ``q.length()``.
         """
         owner = strip_const(owner)
         if is_pointer(owner):
@@ -13316,38 +13358,71 @@ class CodeGen:
             except LangError:
                 pass
         family = f"{owner.template or owner.name}::{field}"
-        if self._property_families is None:
-            self._property_families = {
-                f.name
-                for f in self.program.functions
-                if getattr(f, "property", False)
-            }
-        if family in self._property_families:
-            return family
+        if self._property_registry is None:
+            registry: dict[str, dict[str, int]] = {}
+            for f in self.program.functions:
+                kind = getattr(f, "property", None)
+                if kind is None or f.removed_msg is not None:
+                    continue
+                registry.setdefault(f.name, {}).setdefault(kind, f.line)
+            for fam, kinds in registry.items():
+                if "bare" in kinds and ("get" in kinds or "set" in kinds):
+                    raise LangError(
+                        f"property {fam!r} mixes a bare @property with "
+                        '@property("get")/@property("set"); the two forms '
+                        "are separate mechanisms -- pick one",
+                        max(kinds.values()),
+                    )
+            self._property_registry = registry
+        kinds = set(self._property_registry.get(family, ()))
         # A derived type reaches a base's @property through its extends chain.
-        if any(
-            getattr(m, "property", False)
-            for m in self.inherited_candidates(family)
-        ):
-            return family
-        return None
+        for m in self.inherited_candidates(family):
+            if getattr(m, "property", None) is not None:
+                kinds.add(m.property)
+        if not kinds:
+            return None
+        if "bare" in kinds and ("get" in kinds or "set" in kinds):
+            raise LangError(
+                f"property {field!r} mixes a bare @property with "
+                '@property("get")/@property("set") across the extends chain; '
+                "the two forms are separate mechanisms -- pick one",
+                line,
+            )
+        return family, kinds
 
-    def as_property_call(self, expr: Member) -> "CallExpr | None":
-        """Rewrite a ``@property`` field access ``s.length`` to its call
-        ``s.length()``; ``None`` when ``expr`` is not a property access.
-
-        Both spellings reach the same method, so the rewrite re-enters the
-        ordinary dot-call machinery -- mut-return lvalue, ``StoreCall``,
-        inheritance, and field-first shadowing all come for free.
-        """
+    def property_access(self, expr: Member) -> "tuple[str, set[str]] | None":
+        """The ``(family, kinds)`` behind a ``Member`` when it is a property
+        access; ``None`` when it is a plain field (or unprobeable) access."""
         if expr.arrow:
             return None
         base_t = self.dot_receiver_type(expr.base)
         if base_t is None:
             return None  # an rvalue receiver (f().length): unsupported for now
-        if self.property_family(base_t, expr.field) is None:
+        return self.property_kinds(base_t, expr.field, expr.line)
+
+    def as_property_call(self, expr: Member) -> "CallExpr | None":
+        """Rewrite a readable ``@property`` access ``s.length`` to its call
+        ``s.length()``; ``None`` when ``expr`` is not a property access.
+
+        Both spellings reach the same method, so the rewrite re-enters the
+        ordinary dot-call machinery -- mut-return lvalue, ``StoreCall``,
+        inheritance, and field-first shadowing all come for free. A
+        write-only property (``@property("set")`` with no getter) has no
+        readable or addressable form, so it rejects here.
+        """
+        acc = self.property_access(expr)
+        if acc is None:
             return None
-        return CallExpr(Member(expr.base, expr.field, False, expr.line), [], expr.line)
+        family, kinds = acc
+        if "bare" in kinds or "get" in kinds:
+            return CallExpr(
+                Member(expr.base, expr.field, False, expr.line), [], expr.line
+            )
+        raise LangError(
+            f"property {family!r} is write-only "
+            '(only @property("set") is declared)',
+            expr.line,
+        )
 
     def struct_base_ref(self, decl) -> "TypeRef | None":
         """A struct declaration's ``extends`` target, alias-normalized.

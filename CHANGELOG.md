@@ -91,7 +91,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   inheritance, generic receivers, and one-hop pointer auto-deref all carry
   through. Declaring one is checked: it must be a method with a body, taking
   only its receiver and returning a value. `std/stack` adopts it for
-  `stack<T>::length`. See
+  `stack<T>::length`. For accessors that need logic on the write path,
+  **`@property("get")` / `@property("set")` declare an explicit pair**:
+  `t.field` calls the getter (receiver-only, value-returning, never
+  `-> mut`), `t.field = v` calls the setter (exactly `(self, value)`; a
+  declared return is discarded — assignment is a statement), and
+  `t.field op= v` is read-modify-write (one get, the operator, one set).
+  Getter-only rejects writes, setter-only rejects reads (write-only), and a
+  family mixing a bare `@property` with the pair form is a compile error —
+  the two mechanisms are separate. See
   [Properties](docs/language.md#properties).
 
 - **Explicit type arguments at a qualified call —

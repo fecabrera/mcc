@@ -1409,7 +1409,52 @@ c.value += 2;    // 42
 ```
 
 A read-only (non-`mut`) property rejects assignment, exactly as a
-non-mut-returning call target does. The dispatch is the dot-call's:
+non-mut-returning call target does.
+
+##### Explicit get/set pairs
+
+The `-> mut` form hands out raw storage, so it cannot run logic on the write
+path. For accessors that must — validation, clamping, bookkeeping —
+`@property("get")` / `@property("set")` declare an explicit pair:
+
+```c
+struct gauge { raw: int32; }
+
+@property("get")
+fn gauge::level(const self: gauge) -> int32 { return self.raw; }
+
+@property("set")
+fn gauge::level(mut self: gauge, value: int32) {
+    self.raw = value < 0 ? 0 : (value > 100 ? 100 : value);
+}
+
+let g = gauge { raw = 10 };
+let n = g.level;    // gauge::level(g)         -- the getter
+g.level = 999;      // gauge::level(g, 999)    -- the setter (clamps to 100)
+g.level += 5;       // gauge::level(g, gauge::level(g) + 5) -- read-modify-write
+```
+
+- **The getter** is receiver-only and value-returning, like a bare
+  `@property` — but it may **not** return `mut` (the bare form is the
+  mut-lvalue mechanism; the pair is the call mechanism, and they do not mix).
+- **The setter** takes exactly `(self, value)`; the assigned expression
+  passes as its second argument with the call's own overload dispatch,
+  literal adaptation, and coercion. A setter may declare a return type, but
+  assignment is a statement, so the value is **discarded**.
+- **Compound assignment is read-modify-write**: `t.field op= v` is one get,
+  the operator, one set — the receiver expression is evaluated for each, both
+  reaching the same storage.
+- **A pair may be partial**: getter-only rejects assignment (the standard
+  "does not return mut" error); setter-only is **write-only** and rejects
+  reads (`property 'gauge::level' is write-only`), including `op=` (which
+  needs the getter).
+- **One family, one mechanism**: declaring both a bare `@property` and a
+  `("get")`/`("set")` member on the same `Type::name` is a compile error.
+- Both members stay ordinary overloads at the call spelling: `g.level()` is
+  the getter and `g.level(v)` the setter, dispatched by arity like any
+  dot-call.
+
+The dispatch is the dot-call's:
 
 - **A real field of the name shadows a property** (field-first, as at a
   dot-call): `s.field` reads the field, and the property is then reachable
@@ -1418,8 +1463,10 @@ non-mut-returning call target does. The dispatch is the dot-call's:
   receiver**, like any method; a pointer receiver auto-derefs one hop
   (`p.value` is `(*p).value`).
 - Declaring one is checked: `@property` applies only to a **method** (a
-  qualified `fn Type::name`) with a **body**, taking **only its receiver** and
-  returning a **value** — otherwise a compile error.
+  qualified `fn Type::name`) with a **body** — a bare `@property` or a
+  `("get")` takes **only its receiver** and returns a **value**, a `("set")`
+  takes exactly **its receiver and the assigned value** — otherwise a compile
+  error.
 
 See [examples/types/properties.mc](../examples/types/properties.mc).
 

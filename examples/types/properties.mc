@@ -41,6 +41,32 @@ struct labelled_cell extends cell {
     label: char;
 }
 
+// For accessors that need LOGIC on the write path -- validation, clamping,
+// bookkeeping -- the mut-return form is not enough: it hands out raw storage.
+// @property("get") / @property("set") declare an explicit pair instead:
+// `g.level` calls the getter, `g.level = v` calls the setter, and
+// `g.level += v` is read-modify-write through both --
+// gauge::level(g, gauge::level(g) + v). The two forms are separate
+// mechanisms: one family cannot mix a bare @property with the pair.
+struct gauge {
+    raw: int32;
+}
+
+@property("get")
+fn gauge::level(const self: gauge) -> int32 {
+    return self.raw;
+}
+
+// The setter takes exactly (self, value); this one clamps writes into
+// [0, 100]. It may return a value (here the old level), but assignment is a
+// statement, so the return is discarded.
+@property("set")
+fn gauge::level(mut self: gauge, value: int32) -> int32 {
+    let old = self.raw;
+    self.raw = value < 0 ? 0 : (value > 100 ? 100 : value);
+    return old;
+}
+
 // A generic property resolves per instantiation, exactly as a generic method.
 struct pair<T> {
     a: T;
@@ -82,6 +108,21 @@ fn main() -> int32 {
     // A generic property binds T from the receiver.
     let q = pair<int32> { a = 9, b = 3 };
     println("q.first = {}", q.first);                   // 9
+
+    // An explicit get/set pair: writes run the setter's logic, so the clamp
+    // is unbypassable through the field syntax.
+    let g = gauge { raw = 10 };
+    println("g.level = {}", g.level);                   // 10 (the getter)
+    g.level = 50;                                       // the setter
+    g.level = 999;                                      // clamps to 100
+    println("after clamped write: {}", g.level);        // 100
+    g.level = -3;                                       // clamps to 0
+    g.level += 7;                                       // RMW: set(get() + 7)
+    println("after RMW: {}", g.level);                  // 7
+    // Both members stay ordinary overloads at the call spelling too:
+    // g.level() is the getter, g.level(v) the setter, dispatched by arity.
+    g.level(25);
+    println("call spellings: {}", g.level());           // 25
 
     // A stdlib property: std/stack marks stack<T>::length @property, so a
     // stack's element count reads like a field.

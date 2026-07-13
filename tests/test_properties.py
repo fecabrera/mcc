@@ -4,6 +4,13 @@
 same method. A `-> mut` property is an assignable lvalue, so `s.length = v`
 is `T::length(s) = v`. A real field of the name shadows a property, and the
 usual method machinery (inheritance, pointer auto-deref) carries through.
+
+For accessors that need logic on the write path, `@property("get")` /
+`@property("set")` declare an explicit pair: `t.field` calls the getter
+(receiver-only, value-returning, never `-> mut`), `t.field = v` calls the
+setter (exactly `(self, value)`; its return is ignored), and `t.field op= v`
+is read-modify-write through both. The two mechanisms are separate: one
+family cannot mix a bare `@property` with the pair form.
 """
 
 import pytest
@@ -181,6 +188,226 @@ def test_unknown_field_still_errors_normally():
                 let x = b { v = 1 };
                 return x.nope;
             }
+            """
+        )
+
+
+# --- explicit get/set pairs -----------------------------------------------------
+
+GAUGE = """
+struct gauge { raw: int32; }
+@property("get")
+fn gauge::level(const self: gauge) -> int32 { return self.raw; }
+@property("set")
+fn gauge::level(mut self: gauge, value: int32) -> int32 {
+    let old = self.raw;
+    self.raw = value < 0 ? 0 : (value > 100 ? 100 : value);
+    return old;    // a setter may return; the assignment discards it
+}
+"""
+
+
+def test_get_set_pair_reads_and_writes():
+    # `g.level` calls the getter; `g.level = v` calls the setter -- here one
+    # that clamps, so the observable behavior proves the write went through
+    # the method, not through storage.
+    assert run(
+        GAUGE
+        + """
+        fn main() -> int32 {
+            let g = gauge { raw = 10 };
+            let before = g.level;      // get -> 10
+            g.level = 999;             // set clamps to 100
+            return before + g.level;   // 110
+        }
+        """
+    ) == 110
+
+
+def test_compound_assignment_is_read_modify_write():
+    # `g.level += v` is gauge::level(g, gauge::level(g) + v): one get, the
+    # operator, one set (the clamp applies to the combined value).
+    assert run(
+        GAUGE
+        + """
+        fn main() -> int32 {
+            let g = gauge { raw = 98 };
+            g.level += 5;              // set(get() + 5) -> clamps to 100
+            g.level = -3;              // clamps to 0
+            g.level += 7;              // 0 + 7
+            return g.level * 100 + {
+                let h = gauge { raw = 98 };
+                h.level += 1;          // 99: RMW below the clamp
+                emit h.level;
+            };                          // 700 + 99
+        }
+        """
+    ) == 799
+
+
+def test_setter_return_value_is_ignored():
+    # The clamping setter above returns the OLD value; `g.level = v` is a
+    # statement, so nothing observes it -- and the program still compiles
+    # and runs (the discard is silent by ruling).
+    assert run(
+        GAUGE
+        + """
+        fn main() -> int32 {
+            let g = gauge { raw = 1 };
+            g.level = 42;
+            return g.level;            // 42
+        }
+        """
+    ) == 42
+
+
+def test_both_call_spellings_reach_the_pair():
+    # The pair members stay ordinary overloads: `g.level()` calls the getter,
+    # `g.level(v)` the setter, dispatched by arity like any dot-call.
+    assert run(
+        GAUGE
+        + """
+        fn main() -> int32 {
+            let g = gauge { raw = 10 };
+            g.level(50);               // the setter, called explicitly
+            return g.level();          // the getter, called explicitly
+        }
+        """
+    ) == 50
+
+
+def test_generic_pair_and_inheritance():
+    # A generic get/set pair binds T from the receiver, and a derived type
+    # reaches the pair through its extends chain.
+    assert run(
+        """
+        struct wrap<T> { inner: T; }
+        @property("get")
+        fn wrap<T>::value(const self: wrap<T>) -> T { return self.inner; }
+        @property("set")
+        fn wrap<T>::value(mut self: wrap<T>, v: T) { self.inner = v; }
+        struct tagged extends wrap<int32> { tag: char; }
+        fn main() -> int32 {
+            let w = wrap<int32> { inner = 3 };
+            w.value = 40;
+            w.value += 2;              // generic RMW -> 42
+            let t = tagged { inner = 1, tag = 'x' };
+            t.value = 7;               // inherited setter
+            return w.value * 10 + t.value;   // 427
+        }
+        """
+    ) == 427
+
+
+def test_read_of_write_only_property_is_rejected():
+    with pytest.raises(
+        LangError, match=r"property 'b::v' is write-only"
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            @property("set") fn b::v(mut self: b, x: int32) { self.n = x; }
+            fn main() -> int32 {
+                let t = b { n = 1 };
+                return t.v;
+            }
+            """
+        )
+
+
+def test_compound_on_write_only_property_is_rejected():
+    with pytest.raises(
+        LangError,
+        match=r"property 'b::v' has no getter: '\+=' needs to read",
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            @property("set") fn b::v(mut self: b, x: int32) { self.n = x; }
+            fn main() -> int32 {
+                let t = b { n = 1 };
+                t.v += 2;
+                return 0;
+            }
+            """
+        )
+
+
+def test_write_to_get_only_property_is_rejected():
+    # A getter-only pair rejects assignment with the standard non-mut error.
+    with pytest.raises(
+        LangError, match=r"the call to 'b::v' does not return mut"
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            @property("get") fn b::v(const self: b) -> int32 { return self.n; }
+            fn main() -> int32 {
+                let t = b { n = 1 };
+                t.v = 5;
+                return 0;
+            }
+            """
+        )
+
+
+def test_mixing_bare_with_pair_is_rejected():
+    with pytest.raises(
+        LangError, match=r"mixes a bare @property with"
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            @property fn b::v(mut self: b) -> mut int32 { return self.n; }
+            @property("set") fn b::v(mut self: b, x: int32) { self.n = x; }
+            fn main() -> int32 {
+                let t = b { n = 1 };
+                return t.v;
+            }
+            """
+        )
+
+
+def test_get_returning_mut_is_rejected():
+    with pytest.raises(
+        LangError, match=r'a @property\("get"\) method cannot return mut'
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            @property("get") fn b::v(mut self: b) -> mut int32 {
+                return self.n;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_setter_arity_is_checked():
+    with pytest.raises(
+        LangError,
+        match=r'a @property\("set"\) method takes its receiver and',
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            @property("set") fn b::v(mut self: b) { }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_unknown_property_kind_is_rejected():
+    with pytest.raises(
+        LangError, match=r'@property takes "get" or "set"'
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            @property("fetch") fn b::v(const self: b) -> int32 {
+                return self.n;
+            }
+            fn main() -> int32 { return 0; }
             """
         )
 

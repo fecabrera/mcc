@@ -451,7 +451,7 @@ class Parser:
         deprecated = None
         removed = None
         override = False
-        prop = False
+        prop = None
         clobbers = []
         while self.cur.kind == "ANNOT":
             annot = self.advance()
@@ -515,7 +515,22 @@ class Parser:
             elif annot.text == "@override":
                 override = True
             elif annot.text == "@property":
-                prop = True
+                # A bare @property is the mut-return-lvalue form; the
+                # parenthesized kind picks the explicit accessor-pair form:
+                # @property("get") / @property("set").
+                if self.cur.kind == "(":
+                    self.advance()
+                    kind = _unescape(self.expect("STRING").text[1:-1])
+                    self.expect(")")
+                    if kind not in ("get", "set"):
+                        raise LangError(
+                            '@property takes "get" or "set" '
+                            f"(not {kind!r}), or no argument",
+                            annot.line,
+                        )
+                    prop = kind
+                else:
+                    prop = "bare"
             else:
                 raise LangError(f"unknown annotation {annot.text!r}", annot.line)
         if extern and static:
@@ -1485,7 +1500,7 @@ class Parser:
         removed: str | None = None,
         noreturn: bool = False,
         override: bool = False,
-        prop: bool = False,
+        prop: str | None = None,
     ) -> Func:
         """Parse a function definition, an ``@extern`` declaration, or a proto.
 
@@ -1898,16 +1913,35 @@ class Parser:
                     "(a qualified `fn Type::name`)",
                     line,
                 )
-            if len(params) != 1:
-                raise LangError(
-                    "a @property method takes only its receiver "
-                    "(no other parameters)",
-                    line,
-                )
             if variadic:
                 raise LangError("a @property method cannot be variadic", line)
-            if ret_type.name == "void" and not ret_type.stars and not ret_type.dims:
-                raise LangError("a @property method must return a value", line)
+            if prop == "set":
+                # The setter: exactly (self, value). Its return, if any, is
+                # ignored at the assignment that calls it.
+                if len(params) != 2:
+                    raise LangError(
+                        'a @property("set") method takes its receiver and '
+                        "the assigned value (exactly two parameters)",
+                        line,
+                    )
+            else:
+                # A bare @property or @property("get"): a receiver-only,
+                # value-returning accessor.
+                if len(params) != 1:
+                    raise LangError(
+                        "a @property method takes only its receiver "
+                        "(no other parameters)",
+                        line,
+                    )
+                if ret_type.name == "void" and not ret_type.stars and not ret_type.dims:
+                    raise LangError("a @property method must return a value", line)
+                if prop == "get" and mut_return:
+                    raise LangError(
+                        'a @property("get") method cannot return mut; a bare '
+                        "@property is the mut-lvalue form, "
+                        '@property("set") the explicit write path',
+                        line,
+                    )
         return Func(
             name,
             type_params,
