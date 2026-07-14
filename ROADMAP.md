@@ -2340,9 +2340,12 @@ already do).
           views item's open point below. Copies are bitwise and alias
           (the C stance, documented — two views naming one resource,
           only the constructed let destroyed); globals, `@static`s,
-          parameters, heap values, and expression-position temporaries
-          are never destroyed automatically (heap destruction travels
-          with the `new` sugar sibling below). `destructor` was an
+          parameters, heap values, and constructor-expression
+          temporaries are never destroyed automatically (heap
+          destruction travels with the `new` sugar sibling below; an
+          unadopted `-> own` CALL's temporary, by contrast, now IS
+          destroyed at statement end — the move-out drop sub-item
+          below). `destructor` was an
           unclaimed method name, now semantic: any existing family under
           it gains the automatic call. Implemented, see
           [Destructors](docs/language.md#destructors):
@@ -2417,10 +2420,69 @@ already do).
               the hatch — a deliberate divergence from how `mut`
               fn-type mismatches are framed. Rides `.mci` stubs for
               free (`fn take(cb: fn(int32) -> own res) -> int32;`)
-        - [ ] `-Wdiscarded-own` — warn when an own call's obligation
-              is dropped (discard, argument position, assignment), the
-              diagnostic direction the documented-leak stance above
-              points at; `-Wdestructor-copy` below is its sibling
+        - [x] expression-position own temporaries destroyed at
+              statement end — a receiverless own call now DROPS (the
+              Rust sense: the consumer adopts the return for the
+              chain's duration and cleans it up once it is consumed
+              entirely). The item began life as a `-Wdiscarded-own`
+              warning and briefly shipped as one; the user superseded
+              it same-day (2026-07-13) with real destruction
+              semantics, and the warning class was removed entirely
+              — nothing leaks at those sites anymore, so the
+              diagnostic lost its subject. USER RULING: all FIVE
+              receiverless consumption forms — discard (`f();`,
+              `try f();`), argument position (`g(f())`), chaining
+              (`f().m()`), assignment to an existing lvalue (plain
+              variable, field, element, pointee, mut-return target,
+              compound), and `try f() ?? fallback` — auto-destroy
+              the temporary after the full call chain / statement
+              ends; `let` receivers keep adoption (scope-end
+              destruction) unchanged. USER RULING: `try f() ??
+              fallback` mirrors the bare call exactly — receiverless
+              it drops after the statement, and under a let it now
+              ADOPTS (closing the shipped never-adopts gap; whichever
+              value fills the slot, unwrapped payload or built
+              fallback, destroys at scope end). USER RULING (the
+              `return g(f());` pseudocode): the temp survives through
+              the outer call, the return value computes FIRST into
+              its own storage, THEN the temp drops, then the function
+              returns — and wherever a statement's result outlives
+              the chain the same compute-result / drop-temps /
+              use-result order holds, the destructor running on the
+              temporary's dedicated copy so it can never clobber the
+              computed result. Assignment stands WITH its documented
+              aliasing consequence (the variable's bitwise copy names
+              a destroyed resource; an adopted variable destroys it
+              AGAIN at scope end; the overwritten old value is never
+              destroyed — `-Wdestructor-copy` below is the
+              diagnostic direction). Inferences (mine, not rulings):
+              several temps in one statement destroy in reverse
+              creation order; statement temps die before the scope's
+              defers run; a temp is destroyed only when its call
+              actually executed — ternary arms and short-circuit
+              right operands drop inside their own arm, and
+              `break`/`continue`/`return` (bare-`try` propagation
+              included) abandoning an in-flight expression destroys
+              its already-constructed temps on the way out; a raw
+              `own result` consumed receiverless destroys its payload
+              under the ok-tag test only; and the ??-mirror extends
+              `return try f() ?? fb;` to a valid own-transfer source
+              in own functions. Detection stays adoption's own
+              conservative predicate (`own_call_initializer`, now
+              spanning TryFallback), so a mixed own/plain overload
+              set neither adopts nor drops — a plain copy, the
+              consistent silence; the destructor-existence gate is
+              the extracted `type_owns_cleanup` predicate
+              (destructor-less `own` stays the documented no-op),
+              shared with RAII scheduling and ready for
+              `-Wdestructor-copy` below. Mechanism: a per-function
+              pending-drop queue with statement/arm scope marks,
+              flushed when the outermost expression ends. Still plain
+              copies, follow-up work: struct-literal field inits,
+              `emit f();`, non-own `return f();`, f-string hole
+              temporaries, and field projection (`f().field`).
+              Implemented, see
+              [Move-out returns](docs/language.md#move-out-returns-own)
       - [ ] `-Wdestructor-copy` — warn on a bitwise copy of a value
             whose type declares a destructor (two views naming one
             resource, C's aliasing problem), the direction the shipped
@@ -2453,8 +2515,11 @@ already do).
           stack-lets-only by ruling, so a heap construction owns its
           cleanup explicitly — the destructor runs before the memory is
           freed, the delete-shaped counterpart this item designs — and
-          expression-position temporary lifetimes (`f(T(args))` owns no
-          automatic cleanup in the shipped v1) are deferred here with it
+          constructor-expression temporary lifetimes (`f(T(args))` owns
+          no automatic cleanup in the shipped v1) are deferred here
+          with it — own-CALL temporaries no longer wait (the shipped
+          statement-end drop covers `f(make())`); what remains is the
+          bare `T(args)` temporary
   - [x] method inheritance through `extends` — a derived struct exposes its
         base chain's method families, constructors included: a family call
         on the derived type (dot sugar or the qualified spelling) resolves
@@ -3630,10 +3695,12 @@ already do).
         at the end of that scope (RAII over
         [`defer`](docs/language.md#defer), the same discipline the destructor
         item establishes). What remains is ARGUMENT position:
-        `println("{}", f"{x}")` produces an expression temporary, and
-        temporaries own no cleanup (the shipped inert-consumption stance), so
-        the rendered `string` would leak; end-of-statement temporary
-        destruction is machinery no item owns yet. The shipped `@format`-only
+        `println("{}", f"{x}")` produces an expression temporary — and the
+        machinery this deferral was waiting for now exists: the shipped
+        statement-end drop destroys an unadopted own call in argument
+        position, so a desugar emitting `format(...)` calls inherits the
+        cleanup for free (f-string HOLE temporaries themselves remain the
+        drop item's recorded follow-up). The shipped `@format`-only
         rule above (an f-string anywhere but a format-string argument is a
         compile error) is exactly this deferral, and lifts to the desugar
         position by position as the lifecycle allows

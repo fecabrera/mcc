@@ -1757,8 +1757,11 @@ Details and sharp edges:
   [merged family](#inherited-methods), and the automatic call resolves it
   (receiver-only upcast, as at any inherited call).
 - **Scope: stack `let`s only.** Globals and `@static` values, function
-  parameters, heap values, and expression-position temporaries
+  parameters, heap values, and constructor-expression temporaries
   (`f(T(args))`, `return T(args);`) are never destroyed automatically.
+  The one expression-position exception is an unadopted
+  [`-> own`](#move-out-returns-own) call, whose handed-over temporary
+  *is* destroyed when its statement ends — see the drop rule there.
 
 See [examples/types/destructors.mc](../examples/types/destructors.mc).
 
@@ -1821,11 +1824,51 @@ risky case visible, never silent.
 **At the caller**, a `let` bound to an own call **adopts**: it schedules
 `T::destructor` on its scope exactly like a constructor-sugar let (a
 `const`-viewed binding adopts and is still destroyed, same stance). Every
-other consumption is inert, consistent with expression-position
-temporaries owning no cleanup: discarding the call (`f();`), passing it as
-an argument (`g(f())`), chaining off it, assigning it to an existing
-variable, and a `try f() ?? fallback` mix all drop the obligation — a
-documented leak, yours to manage.
+**receiverless** consumption instead **drops**: discarding the call
+(`f();`), passing it as an argument (`g(f())`), chaining off it
+(`f().m()`), assigning it to an existing variable, and a
+`try f() ?? fallback` mix each receive a temporary that is destroyed
+automatically **when the full call chain — the statement — ends**. The
+value stays alive through every call that consumes it
+(`println("{}".format(test()))` destroys the value `test()` handed over
+only after `println` returns), the statement's computed result lands in
+its own storage first, and only then do the temporaries drop, newest
+first — so for `return g(f());` the shape is exactly
+
+```
+mov  $tmp, f()
+mov  $out, g($tmp)
+drop $tmp        ; before the function returns, on the return path
+ret  $out
+```
+
+and the destructor, running on the temporary's dedicated copy, can never
+clobber the result flowing onward. A temporary is destroyed only when its
+call actually executed: a ternary arm or short-circuit right operand
+drops inside its own arm, and a `break`/`continue`/`return` (bare-`try`
+propagation included) that abandons an in-flight expression destroys the
+temporaries it had already constructed on the way out. Statement
+temporaries die before the scope's `defer`s run.
+
+Two consequences are yours to reason about. **Assignment aliases**: the
+temporary drops after the statement, so the assigned variable's bitwise
+copy names an already-destroyed resource — and if that variable was
+itself adopted by its `let`, its scope-end destructor runs on the same
+resource again (the overwritten old value, meanwhile, is never
+destroyed). This is the copies-are-bitwise stance doing what it says;
+`-Wdestructor-copy` on the roadmap is the diagnostic direction for it.
+And **the `?? fallback` mix now mirrors the bare call in let position
+too**: `let v = try f() ?? fallback;` adopts — whichever value fills the
+slot, the unwrapped payload or the built fallback, is destroyed at scope
+end.
+
+A **mixed overload set** (own and plain members behind one name) never
+certainly hands over, so it neither adopts nor drops — the call stays a
+plain copy, the same conservative judgment a `let` applies. Still plain
+copies (no automatic destruction, follow-up work): an own call in a
+struct-literal field initializer, `emit f();`, `return f();` from a
+non-own function, f-string hole temporaries, and field projection
+(`f().field`).
 
 **With a result return** the ownership rides the **ok payload**:
 
@@ -1867,7 +1910,9 @@ marker would silently leak the handed-over obligation, fabricating it
 would destroy a value the callee never handed over), and an explicit
 `as` cast is the hatch when you mean it.
 
-See [examples/types/own_returns.mc](../examples/types/own_returns.mc).
+See [examples/types/own_returns.mc](../examples/types/own_returns.mc) for
+the feature, and [examples/types/own_drops.mc](../examples/types/own_drops.mc)
+for the drop rule walked form by form with print-stamped destruction.
 
 #### Inherited methods
 

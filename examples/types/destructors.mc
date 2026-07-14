@@ -214,8 +214,9 @@ fn main() -> int32 {
 // The first hatch is the move-out lift (see own_returns.mc): an `-> own`
 // function cancels the local's schedule on the moving return and the
 // caller's let adopts the cleanup. Without `own`: `return file(9);`
-// directly is legal -- an expression-position temporary owns no automatic
-// cleanup, only the let form schedules -- and so is a field escape like
+// directly is legal -- a constructor-expression temporary owns no
+// automatic cleanup, only the let form schedules -- and so is a field
+// escape like
 // `return src.fd;` (interior ownership is yours to reason about); binding
 // a non-own call, `let f = make();`, is a COPY let, not constructor
 // sugar, so the caller schedules nothing either -- a returned resource is
@@ -226,7 +227,10 @@ fn main() -> int32 {
 // not user mutation (a user-written file::destructor(f) on the const
 // value keeps the ordinary mut-receiver error). And the scope is stack
 // lets only: globals, @static values, parameters, heap values, and
-// expression-position temporaries are never destroyed automatically.
+// constructor-expression temporaries (`f(file(1))`, `return file(9);`)
+// are never destroyed automatically -- with one expression-position
+// exception: an unadopted `-> own` CALL's handed-over temporary IS
+// destroyed when its statement ends (own_drops.mc).
 //
 // See also: constructors.mc for the sugar and its head forms (and the
 // converting constructor that chains like wrap's destructor does);

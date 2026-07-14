@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 import struct
+from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from dataclasses import fields as dataclass_fields
@@ -409,6 +410,9 @@ class GenContext:
     defer_stack: list = dataclass_field(metadata={"fork": _fork_defer_stack})
     defer_marks: list = dataclass_field(metadata={"fork": list})
     auto_destroyed: dict = dataclass_field(metadata={"fork": dict})
+    pending_drops: list = dataclass_field(metadata={"fork": list})
+    drop_marks: list = dataclass_field(metadata={"fork": list})
+    expr_depth: int = dataclass_field(metadata={})
     block_exprs: list = dataclass_field(metadata={"fork": list})
     const_locals: set = dataclass_field(metadata={"fork": set})
     mut_locals: set = dataclass_field(metadata={"fork": set})
@@ -890,6 +894,15 @@ class CodeGen:
         # slot, not the name, so a shadowing let is unaffected and stale
         # entries for out-of-scope slots are unreachable.
         self.auto_destroyed: dict = {}
+        # Expression-position own temporaries awaiting their statement-end
+        # destructor call: (slot, type, ok-tag condition or None, line)
+        # entries, drained by flush_own_drops. drop_marks scopes the list
+        # (statement blocks and conditionally-executed expression arms push
+        # a base index), and expr_depth tracks gen_expr nesting so the
+        # outermost evaluation -- the full chain -- is the flush point.
+        self.pending_drops: list = []
+        self.drop_marks: list[int] = []
+        self.expr_depth = 0
         self.str_count = 0
         # One rodata global per distinct string contents; identical literals
         # (source strings and `typename` results alike) share bytes.
@@ -2684,7 +2697,7 @@ class CodeGen:
         ``slice<const any>``, which the ``args...`` sugar desugars to. A call
         to such a function boxes each extra argument into a caller-stack
         ``any`` and passes a read-only slice over the run (see
-        :meth:`collect_variadic_args`). Function-pointer types carry no
+        :meth:`collect_from_values`). Function-pointer types carry no
         marker, so calls through ``fn(...)`` values stay explicit-slice.
 
         Args:
@@ -5837,6 +5850,9 @@ class CodeGen:
         self.block_exprs = []  # emit cannot escape into a caller's block-expr
         self.defer_marks = []  # a body instantiated mid-defer is not "in" it
         self.auto_destroyed = {}  # per body, like the defer stack it mirrors
+        self.pending_drops = []  # per body, like the defer stack
+        self.drop_marks = []
+        self.expr_depth = 0  # a body instantiated mid-expression starts fresh
         hidden = self.hidden_ref_indices(func, params)
         self.const_locals = set(func.const_params)
         self.mut_locals = set(func.mut_params)
@@ -5917,6 +5933,15 @@ class CodeGen:
         outer_paths = set(self.narrowed_paths)
         self.scope_names = set()
         self.defer_stack.append([])
+        # Statement context: each statement's expressions flush their own
+        # temporaries at their roots, so expression nesting restarts here
+        # (a block expression's body runs mid-expression), and the drop
+        # mark fences those flushes off the enclosing expression's
+        # still-live temporaries. Entries above the mark at exit exist
+        # only on error/diverged paths; they are discarded, never emitted.
+        outer_depth, self.expr_depth = self.expr_depth, 0
+        drop_base = len(self.pending_drops)
+        self.drop_marks.append(drop_base)
         try:
             prev = None
             for stmt in statements:
@@ -5932,6 +5957,9 @@ class CodeGen:
             if not self.builder.block.is_terminated:
                 self.run_deferred_scope(self.defer_stack[-1])
         finally:
+            self.drop_marks.pop()
+            del self.pending_drops[drop_base:]
+            self.expr_depth = outer_depth
             self.defer_stack.pop()
             self.locals, self.scope_names = outer_locals, outer_names
             # Narrowed facts established inside the block (early-guard
@@ -6461,6 +6489,17 @@ class CodeGen:
         """
         result_t, payload_addr, is_err = self.spill_result(expr)
         self.gen_try_propagate(expr, result_t, payload_addr, is_err)
+        # The builder sits on the ok arm now: an own call's unwrapped
+        # payload, dropped in statement position, is destroyed like any
+        # other discard (the error arm returned above and never held a
+        # payload; an error-only result cannot be own to begin with).
+        if len(result_t.args) == 2 and self.own_call_initializer(expr):
+            payload_t = strip_const(result_t.args[0])
+            if self.type_owns_cleanup(payload_t):
+                ptr = self.builder.bitcast(
+                    payload_addr, payload_t.ir.as_pointer()
+                )
+                self.emit_own_destructor(ptr, payload_t, expr.line)
 
     def gen_try_fallback(self, expr: TryFallback) -> TypedValue:
         """Lower ``try g() ?? fallback``: discard the error and default.
@@ -6535,10 +6574,14 @@ class CodeGen:
             ):
                 tv = self.gen_adapted_literal(expr.fallback, ok_t, expr.line)
             else:
-                tv = self.coerce(
-                    self.gen_expr(expr.fallback), ok_t, expr.line,
-                    "'??' fallback",
-                )
+                # The fallback runs only on the error arm, so own
+                # temporaries queued inside it must be destroyed inside
+                # the arm (their calls may never execute on the ok path).
+                with self.own_drop_scope():
+                    tv = self.coerce(
+                        self.gen_expr(expr.fallback), ok_t, expr.line,
+                        "'??' fallback",
+                    )
             self.builder.store(tv.value, slot)
             if not self.builder.block.is_terminated:
                 self.builder.branch(join_bb)
@@ -7554,6 +7597,14 @@ class CodeGen:
                     f"{self.current_noreturn!r} (it promises never to return)",
                     stmt.line,
                 )
+            # A return abandons every in-flight enclosing expression (this
+            # includes the bare-try propagation arm, which routes through
+            # here): their queued own temporaries get their destructors now
+            # -- each was registered on an already-executed straight-line
+            # path, so the calls dominate this exit. The return value's own
+            # temporaries are handled by its own root flush below, after
+            # the value is computed.
+            self.flush_own_drops(0)
             if isinstance(stmt.value, Except) or (
                 isinstance(stmt.value, Move)
                 and isinstance(stmt.value.value, Except)
@@ -8090,11 +8141,13 @@ class CodeGen:
                 kill_target_facts()
                 tv = self.gen_adapted_literal(stmt.value, var_type, stmt.line)
             else:
+                tv = self.gen_expr(stmt.value)
+                # Assignment never adopts an own call's obligation (only a
+                # fresh let does): the computed value is in hand, so the
+                # temporary drops here and the untouched bits store below.
+                self.drop_own_temp(stmt.value, tv)
                 tv = self.coerce(
-                    self.gen_expr(stmt.value),
-                    var_type,
-                    stmt.line,
-                    f"assignment to {stmt.name}",
+                    tv, var_type, stmt.line, f"assignment to {stmt.name}"
                 )
                 kill_target_facts()
             self.gen_store(tv.value, slot, volatile=volatile)
@@ -8195,7 +8248,10 @@ class CodeGen:
             )
             added = self.narrow_nonnull(header)
             # Record the defer depth so break/continue unwind the body's defers.
-            self.loops.append((cond_bb, end_bb, len(self.defer_stack)))
+            self.loops.append(
+                (cond_bb, end_bb, len(self.defer_stack),
+                 len(self.pending_drops))
+            )
             try:
                 self.gen_block(stmt.body)
             finally:
@@ -8253,6 +8309,11 @@ class CodeGen:
                     "enclosing loop",
                     stmt.line,
                 )
+            # The jump abandons any in-flight expression opened inside the
+            # loop (a `?? { break; }` arm mid-argument-list): destroy its
+            # queued own temporaries. Entries below the loop's mark belong
+            # to expressions that resume after the loop and stay live.
+            self.flush_own_drops(self.loops[-1][3])
             self.run_defers_through(self.loops[-1][2])  # the loop body and inner
             if not self.builder.block.is_terminated:
                 self.builder.branch(self.loops[-1][1])
@@ -8265,6 +8326,9 @@ class CodeGen:
                     "enclosing loop",
                     stmt.line,
                 )
+            # As at break: temporaries of an expression abandoned by the
+            # jump are destroyed; pre-loop entries stay live.
+            self.flush_own_drops(self.loops[-1][3])
             self.run_defers_through(self.loops[-1][2])
             if not self.builder.block.is_terminated:
                 self.builder.branch(self.loops[-1][0])
@@ -8335,10 +8399,10 @@ class CodeGen:
                     stmt.value, ptr.type.pointee, stmt.line
                 )
             else:
+                value = self.gen_expr(stmt.value)
+                self.drop_own_temp(stmt.value, value)
                 value = self.coerce(
-                    self.gen_expr(stmt.value),
-                    ptr.type.pointee,
-                    stmt.line,
+                    value, ptr.type.pointee, stmt.line,
                     "assignment through pointer",
                 )
             self.gen_store(value.value, ptr.value, volatile=ptr.type.pointee.volatile)
@@ -8405,11 +8469,10 @@ class CodeGen:
                 # stores the built struct into the element.
                 value = self.gen_adapted_literal(stmt.value, element, stmt.line)
             else:
+                value = self.gen_expr(stmt.value)
+                self.drop_own_temp(stmt.value, value)
                 value = self.coerce(
-                    self.gen_expr(stmt.value),
-                    element,
-                    stmt.line,
-                    "assignment to element",
+                    value, element, stmt.line, "assignment to element"
                 )
             self.gen_store(value.value, addr, align=align, volatile=volatile)
             self.narrowed_paths.clear()  # an element store may alias a field
@@ -8453,10 +8516,10 @@ class CodeGen:
                 # writes a nested struct into the field.
                 value = self.gen_adapted_literal(stmt.value, ftype, stmt.line)
             else:
+                value = self.gen_expr(stmt.value)
+                self.drop_own_temp(stmt.value, value)
                 value = self.coerce(
-                    self.gen_expr(stmt.value),
-                    ftype,
-                    stmt.line,
+                    value, ftype, stmt.line,
                     f"assignment to field {stmt.field!r}",
                 )
             self.gen_store(value.value, addr, align=align, volatile=volatile)
@@ -8478,11 +8541,10 @@ class CodeGen:
                 # `f(...) = { ... };` stores the built struct through it.
                 value = self.gen_adapted_literal(stmt.value, t, stmt.line)
             else:
+                value = self.gen_expr(stmt.value)
+                self.drop_own_temp(stmt.value, value)
                 value = self.coerce(
-                    self.gen_expr(stmt.value),
-                    t,
-                    stmt.line,
-                    "assignment through a mut return",
+                    value, t, stmt.line, "assignment through a mut return"
                 )
             self.gen_store(value.value, addr)
             # A store through a returned reference can land in any guarded
@@ -8515,6 +8577,12 @@ class CodeGen:
                 # truly-dropped result (`f();`) reaches here.
                 if is_result(strip_const(value.type)):
                     self.warn_unused_result(stmt.line)
+                # A discarded `-> own` call's temporary is destroyed here,
+                # at statement end (an own result destroys its payload on
+                # the ok arm only -- and still warns above: the error it
+                # may carry was dropped regardless).
+                if not self.builder.block.is_terminated:
+                    self.drop_own_temp(stmt.expr, value)
         else:
             raise LangError(f"cannot compile statement {stmt!r}", stmt.line)
 
@@ -8995,6 +9063,7 @@ class CodeGen:
             strip_const(elem_type),
         )
         rhs = self.gen_expr(stmt.value)
+        self.drop_own_temp(stmt.value, rhs)
         result = self.apply_binary(current, rhs, stmt.op, stmt.line)
         stored = self.coerce(
             result, elem_type, stmt.line, f"{stmt.op}= assignment"
@@ -9219,7 +9288,10 @@ class CodeGen:
             more = self.emit_call(next_fn, [it_slot, x_slot], preserves=preserves)
             self.builder.cbranch(more, body_bb, end_bb)
             self.builder.position_at_end(body_bb)
-            self.loops.append((cond_bb, end_bb, len(self.defer_stack)))
+            self.loops.append(
+                (cond_bb, end_bb, len(self.defer_stack),
+                 len(self.pending_drops))
+            )
             try:
                 self.gen_block(stmt.body)
             finally:
@@ -9385,7 +9457,10 @@ class CodeGen:
             self.builder.store(self.gen_load(elem_addr), value_ptr)
             # `continue` lands on the step block, so it advances `i` like a
             # normal iteration; `break` exits to the end.
-            self.loops.append((step_bb, end_bb, len(self.defer_stack)))
+            self.loops.append(
+                (step_bb, end_bb, len(self.defer_stack),
+                 len(self.pending_drops))
+            )
             try:
                 self.gen_block(stmt.body)
             finally:
@@ -9502,7 +9577,10 @@ class CodeGen:
             self.builder.store(idx, x_slot)  # fresh copy of the counter
             # `continue` lands on the step block, so it still advances the
             # counter; `break` exits to the end.
-            self.loops.append((step_bb, end_bb, len(self.defer_stack)))
+            self.loops.append(
+                (step_bb, end_bb, len(self.defer_stack),
+                 len(self.pending_drops))
+            )
             try:
                 self.gen_block(stmt.body)
             finally:
@@ -9646,7 +9724,10 @@ class CodeGen:
             self.builder.store(
                 self.builder.add(idx, ir.Constant(UINT64.ir, 1)), counter_slot
             )
-            self.loops.append((cond_bb, end_bb, len(self.defer_stack)))
+            self.loops.append(
+                (cond_bb, end_bb, len(self.defer_stack),
+                 len(self.pending_drops))
+            )
             try:
                 self.gen_block(stmt.body)
             finally:
@@ -9861,11 +9942,14 @@ class CodeGen:
         self.builder.position_at_end(rhs_block)
         # The rhs only runs when the lhs was true (`and`) / false (`or`), so
         # the lhs's null-check facts hold while it evaluates:
-        # `p != null and use(p)` proves p for the call.
+        # `p != null and use(p)` proves p for the call. Own temporaries
+        # queued inside the rhs drop inside its arm, before the merge --
+        # the short-circuit path never executed their calls.
         added = self.narrow_nonnull(
             self.narrowable_guard_names(expr.lhs, "!=" if expr.op == "and" else "==")
         )
-        rhs = self.gen_cond(expr.rhs)
+        with self.own_drop_scope():
+            rhs = self.gen_cond(expr.rhs)
         self.retract_narrowed(added)
         rhs_block = self.builder.block  # the rhs may have added blocks of its own
         self.builder.branch(end_block)
@@ -9902,12 +9986,16 @@ class CodeGen:
         end_bb = self.builder.append_basic_block("ternary.end")
         self.builder.cbranch(cond, then_bb, else_bb)
         # Evaluate both arms (each may append blocks of its own) before deciding
-        # the result type, since the unification looks at both.
+        # the result type, since the unification looks at both. Each arm's
+        # own temporaries drop inside its own block: only the selected
+        # path executed their calls.
         self.builder.position_at_end(then_bb)
-        then_tv = self.gen_expr(expr.then)
+        with self.own_drop_scope():
+            then_tv = self.gen_expr(expr.then)
         then_end = self.builder.block
         self.builder.position_at_end(else_bb)
-        else_tv = self.gen_expr(expr.otherwise)
+        with self.own_drop_scope():
+            else_tv = self.gen_expr(expr.otherwise)
         else_end = self.builder.block
         result_type = self.unify_branches(then_tv, else_tv, expr.line)
         # Coerce each arm to the shared type at the end of its own block, so any
@@ -10058,11 +10146,44 @@ class CodeGen:
         return self.builder.icmp_unsigned("==", subject.value, value.value)
 
     def gen_expr(self, expr) -> TypedValue:
+        """Evaluate an expression, destroying its own temporaries at the root.
+
+        The thin wrapper over :meth:`gen_expr_value` that implements
+        statement-end destruction of expression-position ``-> own``
+        temporaries: nested evaluation registers each receiverless own call
+        on ``pending_drops`` (see :meth:`register_own_drop`), and when the
+        *outermost* evaluation -- the full chain -- completes, the pending
+        temporaries are destroyed (so in ``println("{}".format(test()))``
+        the value ``test()`` handed over lives through ``format`` and
+        ``println`` and is destroyed after ``println`` returns, before the
+        enclosing statement proceeds). ``expr_depth`` tracks the nesting;
+        ``drop_marks`` keeps an inner statement context (a block
+        expression's body) or a conditionally-executed expression arm from
+        draining an enclosing expression's still-live temporaries.
+
+        Args:
+            expr: The expression AST node.
+
+        Returns:
+            The evaluated value paired with its type.
+        """
+        self.expr_depth += 1
+        try:
+            tv = self.gen_expr_value(expr)
+        finally:
+            self.expr_depth -= 1
+        if self.expr_depth == 0:
+            self.flush_own_drops(self.drop_marks[-1] if self.drop_marks else 0)
+        return tv
+
+    def gen_expr_value(self, expr) -> TypedValue:
         """Evaluate an expression to a ``TypedValue``.
 
         Dispatches on the expression type: literals, variables (and names that
         resolve to a constant or a function value), calls, unary/binary/logical
         operators, casts, ``sizeof``/``len``, indexing, and member access.
+        Always reached through :meth:`gen_expr`, which owns the
+        own-temporary drop bookkeeping.
 
         Args:
             expr: The expression AST node.
@@ -10689,8 +10810,11 @@ class CodeGen:
 
         The caller-side twin of :meth:`own_transfer_source`: a let bound to
         such an initializer adopts the cleanup obligation the callee handed
-        over (``let s = f();``, ``let s = try f();``, and the except form
-        through :meth:`gen_let_except`).
+        over (``let s = f();``, ``let s = try f();``,
+        ``let s = try f() ?? fallback;``, and the except form through
+        :meth:`gen_let_except`), and every receiverless consumption
+        destroys the temporary when its chain ends
+        (:meth:`register_own_drop`).
 
         Args:
             expr: The initializer (or return-value) expression.
@@ -10698,7 +10822,10 @@ class CodeGen:
         Returns:
             ``True`` when the expression is certainly an ``own`` call.
         """
-        if isinstance(expr, Try):
+        if isinstance(expr, (Try, TryFallback)):
+            # `try f()` unwraps the own ok payload; `try f() ?? v` yields
+            # either that payload or the fallback standing in for it --
+            # both carry the obligation the way the bare call does.
             return self.own_call_initializer(expr.value)
         if isinstance(expr, Call):
             return self.known_own_call(expr)
@@ -10718,6 +10845,177 @@ class CodeGen:
                 callee_t = strip_const(callee_t)
                 return is_function(callee_t) and callee_t.ownret
         return False
+
+    def register_own_drop(self, expr, tv: TypedValue) -> None:
+        """Queue a receiverless own call's temporary for chain-end destruction.
+
+        Every consumption of an ``-> own`` call other than an adopting
+        ``let`` -- discarding it, passing it as an argument, chaining off
+        it, assigning it over an existing lvalue, the ``?? fallback`` mix
+        -- receives a value nothing else will clean up. Each such site
+        funnels the (already evaluated) candidate through here: a
+        certainly-own expression (:meth:`own_call_initializer`, the same
+        conservative judgment adoption uses, so a mixed overload set stays
+        a plain copy) whose type carries a destructor
+        (:meth:`type_owns_cleanup`; ``own`` over a destructor-less type
+        stays the documented no-op) is copied to a slot of its own and
+        queued on ``pending_drops``. The queue drains when the full chain
+        ends (see :meth:`gen_expr` / :meth:`flush_own_drops`), so the
+        value outlives every call that consumes it, and the destructor
+        runs on the dedicated copy -- it can never clobber the computed
+        result flowing onward.
+
+        A result-typed value owns its payload only on the ok arm, so the
+        queued entry carries the tag test and the flush emits the
+        destructor under it; the bare-``try`` and ``?? fallback`` forms
+        hand an already-unwrapped payload through and queue unguarded.
+
+        Args:
+            expr: The consumed expression, judged as written.
+            tv: Its evaluated value (pre-coercion, so the type is the
+                callee's return type).
+        """
+        if self.builder.block.is_terminated:
+            return  # a @noreturn callee ended the path; nothing to destroy
+        if not self.own_call_initializer(expr):
+            return
+        t = strip_const(tv.type)
+        if is_result(t):
+            if len(t.args) == 1:
+                return  # an error-only result cannot be own: nothing rides
+            payload_t = strip_const(t.args[0])
+            if not self.type_owns_cleanup(payload_t):
+                return
+            slot = self.entry_alloca(t.ir)
+            if over_aligned(t):
+                slot.align = type_align(t)
+            self.builder.store(tv.value, slot)
+            indices = t.elem_indices
+            tag_addr = self.builder.gep(
+                slot, [I32_ZERO, ir.Constant(ir.IntType(32), indices[0])],
+                inbounds=True,
+            )
+            payload_addr = self.builder.gep(
+                slot, [I32_ZERO, ir.Constant(ir.IntType(32), indices[1])],
+                inbounds=True,
+            )
+            tag = self.builder.load(tag_addr)
+            cond = self.builder.icmp_unsigned(
+                "==", tag, ir.Constant(UINT8.ir, 0)
+            )
+            drop_slot = self.builder.bitcast(
+                payload_addr, payload_t.ir.as_pointer()
+            )
+            self.pending_drops.append((drop_slot, payload_t, cond, expr.line))
+            return
+        if not self.type_owns_cleanup(t):
+            return
+        slot = self.entry_alloca(t.ir)
+        if over_aligned(t):
+            slot.align = type_align(t)
+        self.builder.store(tv.value, slot)
+        self.pending_drops.append((slot, t, None, expr.line))
+
+    def drop_own_temp(self, expr, tv: TypedValue) -> None:
+        """Destroy a statement-consumed own temporary right here.
+
+        The statement-level twin of :meth:`register_own_drop`, for the
+        forms whose chain has already ended when the site runs -- the
+        discarding expression statement and the assignment family (the
+        right-hand side is fully evaluated; per the ruling the computed
+        value is in hand, the temporary drops, and the store proceeds with
+        the untouched result).
+
+        Args:
+            expr: The consumed expression, judged as written.
+            tv: Its evaluated value.
+        """
+        base = len(self.pending_drops)
+        self.register_own_drop(expr, tv)
+        self.flush_own_drops(base)
+
+    def flush_own_drops(self, base: int) -> None:
+        """Destroy the queued own temporaries above ``base``, newest first.
+
+        Drains before emitting, so the destructor calls themselves (which
+        re-enter expression generation) cannot re-trigger the flush. On a
+        path already terminated (a ``@noreturn`` call ended the chain) the
+        entries are dropped unemitted -- nothing runs after the
+        terminator. A tag-guarded entry (a raw ``own result`` value)
+        destroys its payload only on the ok arm.
+
+        Args:
+            base: The queue index to drain down to -- the enclosing
+                scope's mark, or a site-recorded length.
+        """
+        entries = self.pending_drops[base:]
+        if not entries:
+            return
+        del self.pending_drops[base:]
+        if self.builder is None or self.builder.block.is_terminated:
+            return
+        for slot, t, cond, line in reversed(entries):
+            if cond is None:
+                self.emit_own_destructor(slot, t, line)
+                continue
+            drop_bb = self.builder.append_basic_block("owndrop")
+            cont_bb = self.builder.append_basic_block("owndrop.end")
+            self.builder.cbranch(cond, drop_bb, cont_bb)
+            self.builder.position_at_end(drop_bb)
+            self.emit_own_destructor(slot, t, line)
+            if not self.builder.block.is_terminated:
+                self.builder.branch(cont_bb)
+            self.builder.position_at_end(cont_bb)
+
+    def emit_own_destructor(self, slot, t: LangType, line: int) -> None:
+        """Call ``T::destructor`` on the temporary held at ``slot``.
+
+        The qualified family call over a hidden rebinding of the slot --
+        the exact synthesis :meth:`schedule_auto_destructor` defers, run
+        immediately. Resolution is ordinary, so arity or privacy problems
+        report at the consuming line like the explicit spelling would.
+
+        Args:
+            slot: A pointer to the temporary's storage.
+            t: The temporary's (const-stripped) type.
+            line: The consuming expression's source line.
+        """
+        hidden = f"0drop{self.hidden_seq}"
+        self.hidden_seq += 1
+        self.locals[hidden] = (slot, t)
+        try:
+            self.gen_call(
+                Call(
+                    f"{t.template or t.name}::destructor",
+                    [],
+                    [Var(hidden, line)],
+                    line,
+                )
+            )
+        finally:
+            del self.locals[hidden]
+
+    @contextmanager
+    def own_drop_scope(self):
+        """Scope a conditionally-executed expression arm's own drops.
+
+        A ternary arm, a short-circuit right operand, or a ``??``
+        fallback expression runs in a block the chain may never reach, so
+        its queued temporaries must be destroyed *inside the arm* (a drop
+        may only run when its call actually executed) -- and the enclosing
+        expression's still-live temporaries must be left alone. On a
+        compile error the entries are discarded with the failed build.
+        """
+        base = len(self.pending_drops)
+        self.drop_marks.append(base)
+        try:
+            yield
+        except BaseException:
+            del self.pending_drops[base:]
+            raise
+        finally:
+            self.drop_marks.pop()
+        self.flush_own_drops(base)
 
     def lvalue_type(self, expr) -> "LangType | None":
         """Best-effort static type of a simple lvalue, without emitting code.
@@ -10984,6 +11282,11 @@ class CodeGen:
         """
         callee = expr.callee
         tv = self.gen_expr(callee.base)
+        # A chained own receiver is a temporary destroyed when the full
+        # chain ends (a mut-returning receiver re-lends instead, and
+        # mut/own are mutually exclusive, so the lvalue path below never
+        # carries an obligation).
+        self.register_own_drop(callee.base, tv)
         if tv.type is VOID or tv.type is NULLT or tv.result_pending is not None:
             # Nothing can attach; raise the canonical no-fields error.
             self.struct_field(strip_const(tv.type), callee.field, expr.line)
@@ -14877,6 +15180,24 @@ class CodeGen:
             del self.locals[hidden]
         return slot, built
 
+    def type_owns_cleanup(self, t: LangType) -> bool:
+        """Whether owning a value of ``t`` carries a destructor obligation.
+
+        The vacuous-``own`` gate, shared by RAII scheduling
+        (:meth:`schedule_auto_destructor`) and the statement-end drop of
+        receiverless own temporaries (:meth:`register_own_drop`): a type
+        with no declared-or-inherited ``destructor`` family has nothing to
+        schedule, cancel, adopt, or drop, so ``own`` over it is the
+        documented no-op.
+
+        Args:
+            t: The candidate type (const-stripped).
+
+        Returns:
+            ``True`` when a ``T::destructor`` family answers for the type.
+        """
+        return self.method_family_exists(f"{t.template or t.name}::destructor")
+
     def schedule_auto_destructor(
         self, stmt: Let, slot, built: LangType, final: LangType
     ) -> None:
@@ -14916,9 +15237,9 @@ class CodeGen:
         """
         if strip_const(final) != built:
             return  # annotation mismatch: the slot bound is a coerced copy
-        family = f"{built.template or built.name}::destructor"
-        if not self.method_family_exists(family):
+        if not self.type_owns_cleanup(built):
             return
+        family = f"{built.template or built.name}::destructor"
         hidden = f"0dtor{self.hidden_seq}"
         self.hidden_seq += 1
         # Not bind_local: no scope_names entry (the name is unlexable, so
@@ -15613,7 +15934,7 @@ class CodeGen:
         ``int32``) past a variadic tail, and hands a ``va_list`` over in its
         platform-specific passed form. For a collecting callee, every
         argument past the fixed parameters is instead boxed into the trailing
-        ``slice<const any>`` (see :meth:`collect_variadic_args`).
+        ``slice<const any>`` (see :meth:`collect_from_values`).
 
         Args:
             arg_exprs: The argument expressions.
@@ -15764,6 +16085,10 @@ class CodeGen:
                 args.append(self.valist_arg(arg_expr, line))
                 continue
             tv = self.gen_expr(arg_expr)
+            # Argument position never adopts an own call's obligation: the
+            # temporary is queued and destroyed when the full chain ends,
+            # after the callee returns.
+            self.register_own_drop(arg_expr, tv)
             if i < len(params):
                 if receiver_upcast and i == 0:
                     # A by-value receiver prefix-copies into a declared base
@@ -15789,28 +16114,26 @@ class CodeGen:
             args.append(value)
         if collecting:
             extras = arg_exprs[fixed:]
+            tvs = [self.gen_expr(e) for e in extras]
+            if not isinstance(fmt, FStrLit):
+                # Collected extras are argument position too. An f-string's
+                # spliced hole expressions are exempt: the holes are the
+                # format call's own consumption, not a written argument
+                # list (their temporaries are a separate design question).
+                for e, tv in zip(extras, tvs):
+                    self.register_own_drop(e, tv)
             if slot_map is not None:
-                # Positional desugar: evaluate each extra once, in source
-                # order, then map values and expressions by slot -- a
-                # duplicated slot re-boxes the same TypedValue, never
+                # Positional desugar: the extras were evaluated once, in
+                # source order, above; map values and expressions by slot
+                # -- a duplicated slot re-boxes the same TypedValue, never
                 # re-evaluates its expression.
-                tvs = [self.gen_expr(e) for e in extras]
-                args.append(
-                    self.collect_from_values(
-                        [tvs[s] for s in slot_map],
-                        [extras[s] for s in slot_map],
-                        params[-1],
-                        fixed in hidden,
-                        label,
-                        line,
-                    )
+                tvs = [tvs[s] for s in slot_map]
+                extras = [extras[s] for s in slot_map]
+            args.append(
+                self.collect_from_values(
+                    tvs, extras, params[-1], fixed in hidden, label, line
                 )
-            else:
-                args.append(
-                    self.collect_variadic_args(
-                        extras, params[-1], fixed in hidden, label, line
-                    )
-                )
+            )
         return args
 
     def lower_abi_arg(self, arg_expr, ptype: LangType, cls, line: int, context: str):
@@ -15836,7 +16159,9 @@ class CodeGen:
         Returns:
             The LLVM value (a coerced register value, or a pointer to a copy).
         """
-        tv = self.coerce(self.gen_expr(arg_expr), ptype, line, context)
+        tv = self.gen_expr(arg_expr)
+        self.register_own_drop(arg_expr, tv)
+        tv = self.coerce(tv, ptype, line, context)
         if isinstance(cls, Indirect):
             return self.spill_to_temp(tv, ptype, line, context)
         # Direct: store the struct into a coercion-typed slot (large enough and
@@ -15869,38 +16194,6 @@ class CodeGen:
         self.builder.store(raw, slot)
         return self.builder.load(self.builder.bitcast(slot, ret.ir.as_pointer()))
 
-    def collect_variadic_args(
-        self, extras: list, ptype: LangType, hidden: bool, label: str, line: int
-    ) -> ir.Value:
-        """Gather a call's extra arguments into the trailing ``slice<const any>``.
-
-        The native variadic model: each extra boxes into a caller-stack
-        ``any`` -- entry allocas with function lifetime, so ``defer`` bodies
-        and calls inside loops are safe -- and a read-only slice over the run
-        is what travels, allocation-free. The pass-through rule keeps
-        explicit-slice calls meaning what they always did: a lone extra that
-        is already exactly ``slice<const any>`` (or ``slice<any>``, which
-        widens) hands over uncollected, so it never double-boxes. Zero extras
-        synthesize an empty ``{ null, 0 }`` slice. An extra that is already
-        an ``any`` copies in as-is (an ``any`` never nests); everything else
-        boxes through :meth:`gen_box_any`, so a struct or array extra hits
-        the standard escape-hatch rejection.
-
-        Args:
-            extras: The argument expressions past the fixed parameters.
-            ptype: The trailing ``slice<const any>`` parameter type.
-            hidden: Whether that parameter travels by hidden reference (a
-                ``const`` parameter, as the ``args...`` sugar declares).
-            label: A description of the callee, for error messages.
-            line: Source line for diagnostics.
-
-        Returns:
-            The LLVM value to pass for the trailing parameter.
-        """
-        return self.collect_from_values(
-            [self.gen_expr(e) for e in extras], extras, ptype, hidden, label, line
-        )
-
     def collect_from_values(
         self,
         tvs: list[TypedValue],
@@ -15912,11 +16205,22 @@ class CodeGen:
     ) -> ir.Value:
         """Form the trailing ``slice<const any>`` from already-evaluated extras.
 
-        The boxing/slice-forming core of :meth:`collect_variadic_args`,
-        shared with the overload-resolution path, whose extras were lowered
-        before the winner was known -- no boxing happens before then (boxing
-        is store-side and its borrow target is always ``const any``, so it
-        is candidate-independent).
+        The native variadic model's boxing/slice-forming core, shared by the
+        direct path (:meth:`marshal_args`) and the overload-resolution path,
+        whose extras were lowered before the winner was known -- no boxing
+        happens before then (boxing is store-side and its borrow target is
+        always ``const any``, so it is candidate-independent). Each extra
+        boxes into a caller-stack ``any`` -- entry allocas with function
+        lifetime, so ``defer`` bodies and calls inside loops are safe -- and
+        a read-only slice over the run is what travels, allocation-free. The
+        pass-through rule keeps explicit-slice calls meaning what they
+        always did: a lone extra that is already exactly ``slice<const
+        any>`` (or ``slice<any>``, which widens) hands over uncollected, so
+        it never double-boxes. Zero extras synthesize an empty ``{ null,
+        0 }`` slice. An extra that is already an ``any`` copies in as-is (an
+        ``any`` never nests); everything else boxes through
+        :meth:`gen_box_any`, so a struct or array extra hits the standard
+        escape-hatch rejection.
 
         Args:
             tvs: The evaluated extra arguments, in call order.
@@ -16553,6 +16857,9 @@ class CodeGen:
             tv = TypedValue(self.gen_load(addr), t)
         else:
             tv = self.gen_expr(arg_expr)
+            # An own call lent as a hidden (const) reference is still
+            # argument position: the temporary drops when the chain ends.
+            self.register_own_drop(arg_expr, tv)
             if tv.lvalue is not None and tv.type.ir is ptype.ir:
                 # A mut-returning call's storage is shared as the hidden
                 # reference directly -- the same no-copy path an addressable
@@ -17028,6 +17335,14 @@ class CodeGen:
                 arg_tvs.append(TypedValue(ir.Constant(RAWPTR.ir, None), NULLT))
             else:
                 arg_tvs.append(self.gen_expr(arg))
+        # Argument position never adopts: an own call among the args is
+        # queued here, once, on the pre-evaluated value (winner emission
+        # reuses these TypedValues; deferred literals are not calls, and an
+        # f-string's holes -- evaluated at emission -- stay out of scope,
+        # as on the direct path). The _CtorSelf placeholder and the NULLT
+        # stand-ins fail the own-call predicate before their type is read.
+        for arg, tv in zip(expr.args, arg_tvs):
+            self.register_own_drop(arg, tv)
         if len(candidates) == 1:
             func = candidates[0]
             try:
@@ -18398,7 +18713,7 @@ class CodeGen:
 
         Exact arity with the final argument already exactly ``slice<const
         any>`` (or ``slice<any>``, which widens): the slice hands over
-        uncollected (see :meth:`collect_variadic_args`, which keeps the
+        uncollected (see :meth:`collect_from_values`, which keeps the
         detection at emission), so for ranking the match counts as
         not-collecting at full specificity.
 

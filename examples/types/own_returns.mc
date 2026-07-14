@@ -144,13 +144,14 @@ fn main() -> int32 {
         println("  made {}", c.id);
     }                                    // close 4 -- adopted through the type
 
-    // Every other consumption of an own call is INERT -- the obligation
-    // is dropped (a leak, documented and yours), consistent with
-    // expression-position temporaries owning no cleanup: discarding the
+    // Every other consumption of an own call DROPS: discarding the
     // call, passing it as an argument, chaining off it, assigning to an
-    // existing variable, and the mixed-ownership `try f() ?? fallback`.
-    // `own` on a destructor-less type is likewise a no-op, which keeps
-    // generic `-> own T` signatures writable for every T.
+    // existing variable, and the `try f() ?? fallback` mix each receive
+    // a temporary that is destroyed automatically when the full call
+    // chain -- the statement -- ends (own_drops.mc walks every form and
+    // pins exactly where each drop lands). `own` on a destructor-less
+    // type is a no-op, which keeps generic `-> own T` signatures
+    // writable for every T.
 
     println("done");
     return 0;
@@ -169,5 +170,6 @@ fn main() -> int32 {
 //
 // See also: destructors.mc (the error this lifts and every opt-out
 // spelling), mut_returns.mc (the sibling return flag), error_handling.mc
-// (results, try, except). Full rules: docs/language.md, "Move-out
-// returns".
+// (results, try, except), own_drops.mc (the statement-end destruction of
+// every receiverless consumption). Full rules: docs/language.md,
+// "Move-out returns".

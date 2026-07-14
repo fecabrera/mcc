@@ -93,6 +93,37 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Expression-position `own` temporaries are destroyed at statement
+  end** — a receiverless [`-> own`](docs/language.md#move-out-returns-own)
+  call now *drops*, in the Rust sense: every consumption other than an
+  adopting `let` — discarding the call (`f();`, `try f();`), argument
+  position (`g(f())`), chaining (`f().m()`), assignment to an existing
+  lvalue, and the `try f() ?? fallback` mix — destroys the handed-over
+  temporary automatically once the full call chain / statement ends. The
+  value lives through every call that consumes it
+  (`println("{}".format(test()))` destroys `test()`'s value after
+  `println` returns), the statement's result is computed into its own
+  storage first, and the destructor runs on the temporary's dedicated
+  copy, so it can never clobber the result flowing onward — for
+  `return g(f());`, the temp drops after the return value is computed and
+  before the function returns. A temporary is destroyed only when its
+  call actually executed (ternary arms and short-circuit right operands
+  drop inside their own arm; a jump abandoning an in-flight expression
+  destroys its already-built temps on the way out), several temps in one
+  statement drop newest-first, and statement temps die before the
+  scope's `defer`s run. The `??` mix now also *adopts* under a `let`
+  (`let v = try f() ?? fb;` destroys whichever value fills the slot at
+  scope end), closing its never-adopts gap. Assignment keeps its
+  documented aliasing consequence — the variable's bitwise copy names a
+  destroyed resource (`-Wdestructor-copy` on the roadmap is the
+  diagnostic direction). A mixed own/plain overload set neither adopts
+  nor drops (a plain copy, adoption's conservative judgment), and `own`
+  over a destructor-less type stays a no-op. Still plain copies, as
+  follow-ups: struct-literal field inits, `emit f();`, non-own
+  `return f();`, and f-string hole temporaries. See
+  [Move-out returns](docs/language.md#move-out-returns-own) and
+  [own_drops.mc](examples/types/own_drops.mc).
+
 - **`std/slice` — methods on the builtin `slice<T>`** — a new module home for
   slice-receiver methods. `slice<T>::equals` compares two slices element by
   element (different lengths never equal, empty slices equal, `T` must support
@@ -140,9 +171,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   results through the ok payload: `return ok(local)` transfers,
   `return error(...)` destroys normally, `let s = try f();` and the
   except-let adopt the unwrapped payload (an error-only `result<E>`
-  cannot be `own`). Everything else is inert by the expression-temporary
-  stance: discard, argument position, assignment, and `?? fallback`
-  drop the obligation (documented leaks). `own` is a flag beside `mut`
+  cannot be `own`). Every receiverless consumption — discard, argument
+  position, chaining, assignment, `?? fallback` — destroys the
+  handed-over temporary at statement end (see the drop entry above). `own` is a flag beside `mut`
   (mutually exclusive, no ABI change), a no-op on destructor-less types
   (generic `-> own T` stays writable), rides `.mci` stubs, and is barred
   from `@extern`, `@asm`, and `@property`/`@accessor` methods.
