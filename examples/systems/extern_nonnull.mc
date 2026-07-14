@@ -22,16 +22,15 @@
 //
 // This file keeps a LIVE possibly-null site (length_of below) on purpose, to
 // teach the graded crossing. Because the class is off by default, the plain
-// build compiles it clean and `main` runs. CI's main example loop now compiles
-// every file at `-Werror -Wextern-nonnull` (the class ENABLED), which would
-// promote this live site to a hard error, so CI builds THIS demo in a
-// dedicated step at plain `-Werror` (the class off, its documented relaxed
-// default), exactly as a warning-class demo cannot build with its own class
-// promoted to error. The two other opt-in-class demos,
-// types/unchecked_dereference.mc and control-flow/dead_code.mc, still ride the
-// main loop clean: only extern-nonnull is enabled there, so their classes stay
-// off and their live sites stay silent. This file shares their default-off
-// shape but needs the carve-out because its class is the one CI turns on.
+// build compiles it clean and `main` runs. CI's main example loop compiles
+// every file at `-Wall -Werror` (every class ENABLED and promoted), which
+// would make this live site a hard error, so CI compiles each class demo
+// separately at plain `-Werror` instead (its class off, the documented
+// relaxed default) -- a warning-class demo cannot build with its own class
+// promoted to error. The carve-out list is exactly the demos that keep live
+// triggers: this file, types/unchecked_dereference.mc,
+// control-flow/dead_code.mc, and functions/panic_assert.mc
+// (`-Wnoreturn-own`).
 //
 // Prerequisites: systems/extern.mc (the `@extern` boundary), functions/
 // nonnull.mc and nonnull_narrowing.mc (the proof relation and the null-check

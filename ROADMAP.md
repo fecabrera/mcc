@@ -3350,6 +3350,32 @@ already do).
           (call-site compile-time rewriting, which the `@format`
           positional desugar already proves out), its own item when it
           comes
+    - [x] `-Wnoreturn-own` — an opt-in class reporting an `-> own` value
+          passed in argument position to a `@noreturn` function. USER
+          RULING (2026-07-14, verbatim): "actually there should be a
+          warning for passing an -> own into a @noreturn fn, like that
+          panic(f\"...\") case". This is the diagnostic counterpart to
+          the leak-by-construction stance recorded above: the call never
+          returns, so the statement never ends and the statement-end drop
+          the argument queued is discarded unemitted — the value's
+          destructor provably never runs. Detection is the drop
+          machinery's own judgment (a pending-drop delta across the
+          call's marshal, on both paths), so a rendered f-string message
+          (`panic(f"x = {x}")`), a hole's own temporary at a `@noreturn`
+          collector, and an own call nested inside an argument all warn,
+          while a plain message, a destructor-less own value, and every
+          *returning* callee — `assert(cond, f"...")` included — stay
+          silent. A call through a function-pointer value never warns:
+          `@noreturn` does not ride function types. Message is type-free
+          (per-instantiation dedup); `-Wall` includes it; the
+          `panic(f"...")` demo in panic_assert.mc is the live trigger
+          (CI compiles it at plain `-Werror`, like the other class
+          demos). One recorded non-goal: an own temporary pending from an
+          *enclosing* expression when a `@noreturn` call terminates a
+          block-expression statement inside it (`g(mk(), { panic(...);
+          emit 1; })`) is also discarded but not reported — a follow-up
+          if it ever bites; implemented, see
+          [-Wnoreturn-own](docs/language.md#-wnoreturn-own)
   - [x] `-Wdead-code` — an opt-in class (via the shipped warning registry)
         reporting statements silently dropped after a `return`, a
         `@noreturn` call, or an `unreachable` (also `break`/`continue`/

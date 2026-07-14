@@ -132,6 +132,9 @@ fn main() -> int32 {
 // `-Wextern-nonnull`, that uses the framework differently: it grades an
 // @extern `@nonnull` argument check across three postures rather than
 // reporting otherwise-legal code;
+// functions/panic_assert.mc for a fourth, `-Wnoreturn-own`, reporting
+// the one leak the drop machinery can prove: an own value handed to a
+// @noreturn callee whose statement never ends;
 // functions/nonnull.mc for the proof relation and its always-non-null
 // sources; functions/nonnull_narrowing.mc for the guard shapes that
 // silence a site; functions/nonnull_assert.mc for the postfix `!` hatch;

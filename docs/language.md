@@ -3101,6 +3101,43 @@ Like the other opt-in classes it is default-off — `-Wunused-result` (or
 [examples/types/error_handling.mc](../examples/types/error_handling.mc) for
 the discard and its suppressor.
 
+#### -Wnoreturn-own
+
+An [`-> own`](#move-out-returns-own) value consumed in argument position is
+destroyed when its statement ends — but a [`@noreturn`](#noreturn-functions)
+callee's statement never ends: the call terminates the path, the queued
+statement-end drop is discarded unemitted, and the value's destructor
+provably never runs. The class warns on exactly that guaranteed leak:
+an own temporary built for a `@noreturn` call's arguments — a direct own
+argument, a [rendered f-string](#formatted-print--println) (it is a
+synthesized `slice::format` own call), an f-string *hole*'s own temporary
+at a `@noreturn` collector, or an own call nested inside an argument.
+
+```
+example.mc: warning: line 7: own value passed to a @noreturn function is never destroyed: the call never returns, so the value's statement-end cleanup never runs and it leaks (pass a plain value, or bind it to a let first to make the leak explicit) [-Wnoreturn-own]
+```
+
+`panic(f"x = {x}")` is the archetype ([Panic and assert](#panic-and-assert)
+documents the stance): the leak is harmless by construction — the process
+is dying — so the class is a *visibility* diagnostic for allocations that
+were not deliberate. The detection is the drop machinery's own judgment, so
+everything that never queues a drop stays silent: a plain message, a
+destructor-less own value, and any own value passed to a function that
+*returns* — `assert(cond, f"...")` never warns, because a passing assert's
+rendered message is destroyed normally at statement end. Binding the value
+to a `let` before the call silences the site (the leak then reads
+explicitly at the binding: a scope that `panic` unwinds never runs its
+destructors either). A call through a function-pointer *value* never
+warns: `@noreturn` is not part of a
+[function type](#mutconst-carrying-function-types), so an indirect callee
+is never known to diverge.
+
+Like the other opt-in classes it is default-off — `-Wnoreturn-own` (or
+`-Wall`) enables it, and under `-Werror` it promotes as
+`[-Werror=noreturn-own]`, a bare `-Werror` build unaffected. See
+[examples/functions/panic_assert.mc](../examples/functions/panic_assert.mc),
+the class's living demo.
+
 ### Deprecated functions
 
 `@deprecated("message")` is a declaration attribute on a function: the
@@ -6535,10 +6572,13 @@ never runs, and the allocation leaks on the dying path. (The removed
 its own body; the value spelling just makes the cost explicit at the call
 site.) The process is aborting, so the leak is harmless by construction —
 but format on the way down only when the dynamic value genuinely earns its
-place in the message. An `assert` message evaluates whether or not the
-condition holds: a passing assert's rendered message *is* destroyed at
-statement end, a failing one aborts mid-statement and leaks it — prefer
-plain messages on hot paths.
+place in the message. The leak is not just documented but *diagnosable*:
+the opt-in [`-Wnoreturn-own`](#-wnoreturn-own) class reports every own
+value handed to a `@noreturn` callee. An `assert` message evaluates
+whether or not the condition holds: a passing assert's rendered message
+*is* destroyed at statement end (and never warns — `assert` returns), a
+failing one aborts mid-statement and leaks it — prefer plain messages on
+hot paths.
 
 The details:
 

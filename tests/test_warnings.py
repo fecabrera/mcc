@@ -1322,3 +1322,181 @@ def test_unused_result_promotes_under_its_selective_werror(capsys):
         [note], Path("w.mc"), False, enabled, error_classes) is True
     assert capsys.readouterr().err == (
         f"w.mc: error: line 11: {UNUSED_MSG} [-Werror=unused-result]\n")
+
+
+# --- -Wnoreturn-own: an own argument to a @noreturn callee ------------------
+#
+# A @noreturn callee's statement never ends, so the statement-end drop an
+# own argument queued is discarded unemitted (flush_own_drops on the
+# terminated path): the value's destructor provably never runs, a
+# guaranteed leak. panic(f"...") is the archetype -- harmless by
+# construction (the process is dying), so the class is a visibility
+# diagnostic. The detection is the drop machinery's own judgment: whatever
+# never queues a drop (a plain value, a destructor-less own, a callee that
+# returns) stays silent.
+
+NR_OWN = "noreturn-own"
+NR_OWN_MSG = ("own value passed to a @noreturn function is never destroyed: "
+              "the call never returns, so the value's statement-end cleanup "
+              "never runs and it leaks (pass a plain value, or bind it to a "
+              "let first to make the leak explicit)")
+
+# A destructor-carrying own producer, a destructor-less one, and a
+# @noreturn sink over a hidden-ref const struct -- all import-free (the
+# constant-true loop diverges, satisfying @noreturn).
+NR_PRELUDE = (
+    "struct res { id: int32; }\n"
+    "fn res::destructor(mut self: res) { }\n"
+    "fn mk() -> own res { return move(res { id = 1 }); }\n"
+    "struct bare { id: int32; }\n"
+    "fn mk_bare() -> own bare { return move(bare { id = 1 }); }\n"
+    "@noreturn fn die(const r: res) { while (true) {} }\n"
+)
+
+
+def noreturn_own_warnings(source: str) -> list[tuple[str, int]]:
+    """The noreturn-own emissions of a source, as (message, line)."""
+    return [(w.message, w.line)
+            for w in generate(source).warnings if w.wclass == NR_OWN]
+
+
+def noreturn_own_warnings_io(source: str) -> list[tuple[str, int]]:
+    """Like noreturn_own_warnings, with the stdlib import graph merged."""
+    from mcc.driver import STDLIB_DIR, merge_imports
+    cg = CodeGen(merge_imports(parse(source), STDLIB_DIR, (STDLIB_DIR,)), "t")
+    cg.generate()
+    return [(w.message, w.line)
+            for w in cg.warnings if w.wclass == NR_OWN]
+
+
+def test_an_own_argument_to_a_noreturn_callee_warns():
+    # The direct marshal path: a concrete @noreturn taking the own call's
+    # result by hidden const reference.
+    src = NR_PRELUDE + "fn main() -> int32 { die(mk()); }\n"
+    assert noreturn_own_warnings(src) == [(NR_OWN_MSG, 7)]
+
+
+def test_an_own_argument_through_an_overload_set_warns():
+    # The set path: the winner's @noreturn is known only after resolution.
+    src = (
+        NR_PRELUDE
+        + "@noreturn fn die(n: int32) { while (true) {} }\n"
+        "fn main() -> int32 { die(mk()); }\n"
+    )
+    assert noreturn_own_warnings(src) == [(NR_OWN_MSG, 8)]
+
+
+def test_a_rendered_fstring_to_panic_warns():
+    # The user's archetype: panic(f"...") renders an own string (the
+    # synthesized slice::format call) that the dying path never destroys.
+    src = (
+        'import "std/io";\n'
+        "fn main() -> int32 {\n"
+        "    let x = 1 as int32;\n"
+        '    panic(f"x = {x}");\n'
+        "}\n"
+    )
+    assert noreturn_own_warnings_io(src) == [(NR_OWN_MSG, 4)]
+
+
+def test_an_own_hole_temporary_at_a_noreturn_collector_warns():
+    # A @noreturn @format collector: the f-string splices, and the hole's
+    # own temporary is queued at winner emission -- also a guaranteed leak.
+    src = (
+        'import "std/io";\n'
+        + NR_PRELUDE
+        + "fn format(mut str: string, const value: res, const modifier: slice<char>) {\n"
+        "    format(str, value.id, modifier);\n"
+        "}\n"
+        "@noreturn\n"
+        "fn logdie(@format const fmt: slice<const char>, args...) {\n"
+        "    while (true) {}\n"
+        "}\n"
+        'fn main() -> int32 { logdie(f"lost {mk()}"); }\n'
+    )
+    assert noreturn_own_warnings_io(src) == [(NR_OWN_MSG, 15)]
+
+
+def test_an_assert_message_does_not_warn():
+    # The contrast case: assert returns on the passing path, so the
+    # rendered message's statement-end drop runs normally.
+    src = (
+        'import "std/io";\n'
+        "fn main() -> int32 {\n"
+        "    let x = 1 as int32;\n"
+        '    assert(x > 0, f"x = {x}");\n'
+        "    return 0;\n"
+        "}\n"
+    )
+    assert noreturn_own_warnings_io(src) == []
+
+
+def test_a_plain_message_to_panic_does_not_warn():
+    src = 'import "std/io";\nfn main() -> int32 { panic("plain"); }\n'
+    assert noreturn_own_warnings_io(src) == []
+
+
+def test_a_destructorless_own_value_does_not_warn():
+    # Nothing to destroy, nothing queued -- silent, consistent with the
+    # drop machinery everywhere else.
+    src = (
+        NR_PRELUDE
+        + "@noreturn fn drop_bare(const b: bare) { while (true) {} }\n"
+        "fn main() -> int32 { drop_bare(mk_bare()); }\n"
+    )
+    assert noreturn_own_warnings(src) == []
+
+
+def test_a_returning_callee_does_not_warn():
+    # The class is @noreturn-specific: an ordinary callee's own argument
+    # drops at statement end as designed.
+    src = (
+        NR_PRELUDE
+        + "fn use(const r: res) -> int32 { return r.id; }\n"
+        "fn main() -> int32 { return use(mk()); }\n"
+    )
+    assert noreturn_own_warnings(src) == []
+
+
+def test_an_indirect_call_never_warns():
+    # @noreturn is not part of a function type, so a call through a
+    # function-pointer value is never known to diverge -- out of the
+    # class's reach, deliberately.
+    src = (
+        NR_PRELUDE
+        + "fn main() -> int32 {\n"
+        "    let g = die;\n"
+        "    g(mk());\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    assert noreturn_own_warnings(src) == []
+
+
+def test_noreturn_own_is_off_without_the_flag():
+    # Collection is unconditional but the driver gates it: a bare -Werror
+    # build never fails on a class it did not enable.
+    note = Note(NR_OWN_MSG, 7, "w.mc", NR_OWN)
+    assert _report_warnings([note], Path("w.mc"), True) is False
+
+
+def test_noreturn_own_renders_its_flag_when_enabled(capsys):
+    note = Note(NR_OWN_MSG, 7, "w.mc", NR_OWN)
+    enabled = frozenset({NR_OWN})
+    assert _report_warnings([note], Path("w.mc"), False, enabled) is False
+    assert capsys.readouterr().err == (
+        f"w.mc: warning: line 7: {NR_OWN_MSG} [-Wnoreturn-own]\n")
+
+
+def test_noreturn_own_promotes_under_its_selective_werror(capsys):
+    note = Note(NR_OWN_MSG, 7, "w.mc", NR_OWN)
+    enabled = frozenset({NR_OWN})
+    error_classes = frozenset({NR_OWN})
+    assert _report_warnings(
+        [note], Path("w.mc"), False, enabled, error_classes) is True
+    assert capsys.readouterr().err == (
+        f"w.mc: error: line 7: {NR_OWN_MSG} [-Werror=noreturn-own]\n")
+
+
+def test_wall_enables_noreturn_own():
+    assert NR_OWN in parse_wflags(["all"])

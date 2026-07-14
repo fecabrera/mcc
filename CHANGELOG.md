@@ -150,6 +150,26 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`-Wnoreturn-own` — a guaranteed-leak diagnostic for `@noreturn`
+  arguments** — a new opt-in warning class reporting an
+  [`-> own`](docs/language.md#move-out-returns-own) value passed in
+  argument position to a `@noreturn` function: the call never returns, so
+  the statement-end drop the argument queued is discarded unemitted and
+  the value's destructor provably never runs. `panic(f"x = {x}")` is the
+  archetype (the rendered message is a synthesized `slice::format` own
+  call), and the detection is the drop machinery's own judgment, so an
+  f-string hole's own temporary at a `@noreturn` collector and an own
+  call nested inside an argument warn too — while a plain message, a
+  destructor-less own value, and every *returning* callee
+  (`assert(cond, f"...")` included: a passing assert's message drops
+  normally) stay silent. Calls through function-pointer values never
+  warn (`@noreturn` is not part of a function type). Default-off;
+  `-Wall` enables it, `-Werror=noreturn-own` promotes it, and the
+  message is type-free so generic re-emissions dedup. The
+  [panic_assert.mc](examples/functions/panic_assert.mc) demo keeps a
+  live trigger (CI compiles it at plain `-Werror`, like the other
+  class demos). See [-Wnoreturn-own](docs/language.md#-wnoreturn-own).
+
 - **String-valued f-strings** — an f-string outside an `@format`
   format-string slot is now a runtime string *value*: it desugars to a
   synthesized [`slice::format`](lib/std/slice.mc) call (`f"x = {x}"` is

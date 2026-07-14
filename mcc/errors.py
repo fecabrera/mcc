@@ -10,7 +10,13 @@ from dataclasses import dataclass
 # expands here). A class name may not start with "no-", keeping the
 # `-Wno-<name>` spelling claimable for per-class disabling later.
 WARNING_CLASSES = frozenset(
-    {"unchecked-dereference", "dead-code", "extern-nonnull", "unused-result"}
+    {
+        "unchecked-dereference",
+        "dead-code",
+        "extern-nonnull",
+        "unused-result",
+        "noreturn-own",
+    }
 )
 
 

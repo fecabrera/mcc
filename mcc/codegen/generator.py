@@ -1030,6 +1030,35 @@ class CodeGen:
             what = "every path through the statement above diverges"
         self.warn(f"unreachable code: {what}", stmt.line, wclass="dead-code")
 
+    def warn_noreturn_own(self, line: int) -> None:
+        """Warn under ``-Wnoreturn-own`` that an own argument leaks for sure.
+
+        The single formatter for the class: both marshal paths funnel
+        through here when an argument queued an own temporary for the
+        statement-end drop (:meth:`register_own_drop`) and the resolved
+        callee is ``@noreturn`` -- the call never returns, so the
+        statement never ends: the queued entry is discarded unemitted
+        (:meth:`flush_own_drops` on the terminated path) and the value's
+        destructor provably never runs. ``panic(f"...")`` is the
+        archetype: the rendered message is a guaranteed leak on a dying
+        path -- harmless by construction, but worth surfacing where the
+        allocation is not deliberate. The detection is exactly the drop
+        machinery's own judgment (a destructor-less own value queues
+        nothing and stays silent, like everywhere else), the message is
+        type-free so generic re-emissions dedup at print time, and like
+        every opt-in class it never changes the code generated.
+
+        Args:
+            line: The call's 1-based source line.
+        """
+        self.warn(
+            "own value passed to a @noreturn function is never destroyed: "
+            "the call never returns, so the value's statement-end cleanup "
+            "never runs and it leaks (pass a plain value, or bind it to a "
+            "let first to make the leak explicit)",
+            line, wclass="noreturn-own",
+        )
+
     def warn_unused_result(self, line: int) -> None:
         """Warn under ``-Wunused-result`` that a discarded value carries an error.
 
@@ -15811,6 +15840,11 @@ class CodeGen:
                 if isinstance(cls, Indirect) and cls.by_value:
                     arg_attrs[i + offset] = ("byval",)
                     byval_aligns[i + offset] = cls.align
+        # -Wnoreturn-own bookkeeping: every own temporary queued while this
+        # call's arguments marshal is provably leaked when the callee never
+        # returns (the terminated path discards the queue unemitted), so
+        # snapshot the queue and warn on the growth below.
+        drops_base = len(self.pending_drops)
         args = self.marshal_args(
             expr.args,
             params,
@@ -15865,6 +15899,11 @@ class CodeGen:
         else:
             result = TypedValue(raw, ret)
         if symbol in self.noreturn_syms:
+            # Every own temporary this call's arguments queued is about to
+            # be discarded unemitted -- the guaranteed leak the class
+            # reports (see warn_noreturn_own).
+            for _, _, _, eline in self.pending_drops[drops_base:]:
+                self.warn_noreturn_own(eline)
             # The callee never returns: terminate the block, so the statement
             # diverges (no dummy return needed past it, dead code after it is
             # skipped, and a diverging guard body narrows like a return).
@@ -17384,6 +17423,12 @@ class CodeGen:
             LangError: When no overload matches, the choice is ambiguous, a type
                 parameter binds to ``void``, or access is denied.
         """
+        # -Wnoreturn-own bookkeeping: every own temporary queued while this
+        # call's arguments evaluate and marshal is provably leaked when the
+        # resolved winner never returns, so snapshot the queue for the
+        # noreturn tail below. (The value-mode f-string rewrite recurses;
+        # only the inner call reaches the tail, so the warning fires once.)
+        drops_base = len(self.pending_drops)
         # An @format format-string slot always wins an f-string: a candidate
         # that can splice it there filters the set before ranking --
         # panic(f"x = {x}") must resolve to the @format collector even
@@ -18076,6 +18121,13 @@ class CodeGen:
         else:
             result = TypedValue(raw, ret)
         if func.noreturn:
+            # Every own temporary this call's arguments queued -- a direct
+            # own argument (a rendered f-string included), a hole's own
+            # temporary, or one nested inside an argument -- is about to be
+            # discarded unemitted: the guaranteed leak the class reports
+            # (see warn_noreturn_own).
+            for _, _, _, eline in self.pending_drops[drops_base:]:
+                self.warn_noreturn_own(eline)
             # The resolved candidate (generic instance or concrete set
             # member) never returns: terminate the block, exactly as in
             # gen_direct_call.
