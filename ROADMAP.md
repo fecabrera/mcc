@@ -2454,8 +2454,10 @@ already do).
               aliasing consequence (the variable's bitwise copy names
               a destroyed resource; an adopted variable destroys it
               AGAIN at scope end; the overwritten old value is never
-              destroyed — `-Wdestructor-copy` below is the
-              diagnostic direction). Inferences (mine, not rulings):
+              destroyed — `-Wown-assign`, this case's dedicated
+              class in the use-after-move detection effort below, is
+              the diagnostic direction). Inferences (mine, not
+              rulings):
               several temps in one statement destroy in reverse
               creation order; statement temps die before the scope's
               defers run; a temp is destroyed only when its call
@@ -2474,8 +2476,9 @@ already do).
               consistent silence; the destructor-existence gate is
               the extracted `type_owns_cleanup` predicate
               (destructor-less `own` stays the documented no-op),
-              shared with RAII scheduling and ready for
-              `-Wdestructor-copy` below. Mechanism: a per-function
+              shared with RAII scheduling and ready for the
+              use-after-move detection effort below
+              (`-Wdestructor-copy` first). Mechanism: a per-function
               pending-drop queue with statement/arm scope marks,
               flushed when the outermost expression ends. Still plain
               copies, follow-up work: struct-literal field inits,
@@ -2483,12 +2486,91 @@ already do).
               temporaries, and field projection (`f().field`).
               Implemented, see
               [Move-out returns](docs/language.md#move-out-returns-own)
-      - [ ] `-Wdestructor-copy` — warn on a bitwise copy of a value
-            whose type declares a destructor (two views naming one
-            resource, C's aliasing problem), the direction the shipped
-            copies-are-not-tracked stance records; the shipped
-            `move(v)` assertion is the sanctioned relinquishing
-            spelling such a warning would exempt
+      - [ ] use-after-move detection — diagnose uses of a value whose
+            resource has been relinquished or destroyed: the shipped
+            copies-are-bitwise-and-alias stance (two views naming one
+            resource, C's aliasing problem) plus the shipped
+            hand-over machinery (`move(v)`, caller adoption,
+            statement-end drops) leave open a double-free /
+            use-after-free class the compiler can now see, because
+            every relinquishing event is a visible compile-time fact.
+            USER RULING (2026-07-13, verbatim): "this is part of a
+            larger effort to detect use-after-move (potential
+            use-after-free) and it needs to be recorded as such";
+            `-Wdestructor-copy` below is that effort's first step,
+            not a standalone warning. USER RULING (2026-07-13, the
+            separation): the effort's legs are COMPLEMENTARY and
+            stay distinct, two mental models — use-after-move is
+            "this binding was consumed; don't touch it again",
+            destructor-copy is "this copy aliases a live resource"
+            (`let b = a;`) — and the assignment footgun the
+            statement-end drops item documents belongs to NEITHER:
+            in the user's near-verbatim words it "is really
+            use-after-free via copy-of-destroyed, not move-from ...
+            the mental model differs", so it gets the dedicated
+            `-Wown-assign` class below. The effort leans on shipped
+            infrastructure: the warning-class framework
+            (`mcc/errors.py`, `-W`/`-Wall`/`-Werror=`) carries the
+            warning legs, and the extracted `type_owns_cleanup`
+            predicate (shared by RAII scheduling and the
+            statement-end drops above) gates all three to types that
+            actually own a resource. The since-removed
+            `-Wdiscarded-own` is NOT part of this effort: real drop
+            semantics superseded it same-day and the class was
+            deleted (nothing leaks at those sites anymore); the
+            surviving diagnostic direction is this item. The
+            ordering below is an inference (mine, not a ruling): the
+            two copy-site classes first (each judges one statement
+            in isolation, no flow analysis), the path-sensitive
+            checker last
+        - [ ] `-Wdestructor-copy` — warn at the COPY SITE on a
+              bitwise copy of a value whose type declares a
+              destructor (the moment two views come to name one
+              LIVE resource: `let b = a;`), the direction the
+              shipped copies-are-not-tracked stance records; the
+              shipped `move(v)` assertion is the sanctioned
+              relinquishing spelling such a warning would exempt.
+              Scoped by the separation ruling above: the
+              copy-of-destroyed assignment case is `-Wown-assign`'s,
+              not this class's
+        - [ ] `-Wown-assign` — a DEDICATED diagnostic (USER RULING:
+              its own named class, severity separable from generic
+              destructor copies; the warning-class option chosen
+              over a hard error) for assigning an own call to an
+              existing lvalue, `v = test();`: the temporary is
+              destroyed at statement end and `v`'s bitwise copy
+              names the destroyed resource — the documented
+              assignment footgun of the statement-end drops item
+              above, use-after-free via copy-of-destroyed rather
+              than move-from
+        - [ ] use-after-move diagnosis — flag USES of a binding on a
+              path after its resource was handed over. USER RULING
+              (2026-07-13): a HARD ERROR on the provable subset,
+              path-sensitive, with the case table ruled: use of `v`
+              after a `return v;` transfer in an `-> own` function
+              errors ON PATHS WHERE THE TRANSFER HAPPENED (other
+              exits stay clean); use of `self.c` after
+              `return move(self.c);` errors (the classic
+              pop-from-container bug); receiverless temps (`test();`,
+              `test().greet()`, argument temps) need NO checker, the
+              statement-end drops already made them safe; and
+              `let s = test();` keeps `s` valid until its scope-end
+              destructor runs. Ruled design points: partial moves
+              mirror Rust (the user's stated direction: "Rust: yes.
+              I'd mirror that."), so `move(self.c)` poisons only `c`
+              and the rest of `self` stays usable; a moved-from
+              `const` binding errors on read exactly like a mut one
+              (destruction already bypasses the const view for the
+              synthesized call, the shipped hidden rebind); and
+              interior paths stay OUT of v1 — arbitrary field
+              projections (`return t.data;`) are already untracked
+              and remain so. EXPLICITLY OPEN (USER RULING: leave it
+              open, rule it when implementation starts):
+              reinitialization — whether `s = dial(1);` after a move
+              un-poisons the binding (assignment-as-reinit is
+              ergonomic for containers, and it needs an explicit
+              rule). Also open, never ruled: the exact
+              path-sensitivity machinery
     - [ ] `new <struct>(...)` sugar — heap construction: desugars to a
           block that allocates with `new<<struct>>()`, runs the shipped
           constructor family on the allocation, and emits the pointer
