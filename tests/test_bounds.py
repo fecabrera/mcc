@@ -609,3 +609,92 @@ def test_dependent_bound_round_trips_through_an_interface(tmp_path):
         "}\n"
     )
     assert run_path(main) == 0  # the re-imported dependent bound still works
+
+
+# ------------------------------------------------- slice const-covariance
+
+def test_a_const_slice_bound_admits_the_mutable_family(capfd):
+    # `extends slice<const char>` is const-covariant: anything whose
+    # lineage reaches slice<char> satisfies it too (adding element const
+    # is always safe, the coerce widening rule) -- so ONE signature takes
+    # a slice of either constness and an owned string/list<char>. This is
+    # the signature behind std/io's print/println and panic/assert.
+    run(
+        'import "std/io";\n'
+        + """
+        fn show<T extends slice<const char>>(const str: T) {
+            print(str as slice<const char>);
+            print("|");
+        }
+        fn main() -> int32 {
+            let sc: slice<const char> = "sc";
+            show(sc);
+            let owned = "ow";
+            show(owned as slice<char>);
+            let s = string("str");
+            show(s);
+            let l = list<char>();
+            l.push('l');
+            show(l);
+            println("");
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "sc|ow|str|l|\n"
+
+
+def test_the_covariance_is_strictly_one_way():
+    # A mutable slice<char> bound still rejects slice<const char>:
+    # satisfying it through the mutable spelling would launder const away.
+    with pytest.raises(
+        LangError,
+        match=r"slice<const char> does not satisfy the bound slice<char> "
+        r"of 'take'",
+    ):
+        compile_ir(
+            'import "std/io";\n'
+            "fn take<T extends slice<char>>(const str: T) {}\n"
+            "fn main() -> int32 {\n"
+            '    let sc: slice<const char> = "sc";\n'
+            "    take(sc);\n"
+            "    return 0;\n"
+            "}"
+        )
+
+
+def test_a_string_literal_binds_a_bounded_char_slice_parameter(capfd):
+    # A literal pre-evaluates to a char* that could never satisfy a slice
+    # bound; instead the declared bound itself becomes the binding
+    # (T = slice<const char>) and the literal borrows against it at
+    # emission, exactly as a concrete slice parameter takes one. A
+    # ternary of literals rides along.
+    run(
+        'import "std/io";\n'
+        + """
+        fn show<T extends slice<const char>>(const str: T) {
+            print(str as slice<const char>);
+            print("|");
+        }
+        fn main() -> int32 {
+            show("literal");
+            show(true ? "yes" : "no");
+            println("");
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "literal|yes|\n"
+
+
+def test_a_literal_at_a_mutable_slice_bound_matches_the_concrete_rule():
+    # The literal binds the bound exactly as declared (T = slice<char>
+    # here), in parity with the concrete-parameter rule: a string literal
+    # adapts to a concrete `slice<char>` parameter today, so the bounded
+    # spelling accepts it identically -- the covariance launders nothing
+    # the concrete form would reject.
+    ir = compile_ir(
+        "fn take<T extends slice<char>>(const str: T) {}\n"
+        'fn main() -> int32 { take("hi"); return 0; }'
+    )
+    assert 'call void @"take<$0 extends slice<char>>($0)<slice<char>>"' in ir

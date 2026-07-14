@@ -455,7 +455,7 @@ def test_an_uninferrable_type_parameter_keeps_its_diagnostic():
 
 
 def test_a_mut_fixed_parameter_collects_through_the_set_path():
-    # The format_args shape: a mut fixed parameter needs its address formed
+    # The accumulator-collector shape: a mut fixed parameter needs its address formed
     # before the winner is known, with the collecting-aware arity match.
     assert run(
         """

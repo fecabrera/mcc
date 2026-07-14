@@ -321,7 +321,7 @@ def test_unit_boxes_and_case_type_recovers(capfd):
     }
     fn main() -> int32 {
         let u = ();
-        println("{}", u);
+        println(f"{u}");
         return probe(u) - 42;
     }
     """
@@ -1082,7 +1082,7 @@ def test_type_alias_names_a_tuple():
 def test_typename_reports_the_canonical_spelling(capfd):
     source = """
     import "std/io";
-    fn main() -> int32 { println("{}", typename(tuple<int32, char>)); return 0; }
+    fn main() -> int32 { println(f"{typename(tuple<int32, char>)}"); return 0; }
     """
     assert run(source) == 0
     assert capfd.readouterr().out == "tuple<int32, char>\n"
@@ -1118,7 +1118,7 @@ def test_println_formats_a_tuple_through_the_fallback(capfd):
     # the runtime formatter's unknown-aggregate fallback.
     source = """
     import "std/io";
-    fn main() -> int32 { let t = (1, 2); println("{}", t); return 0; }
+    fn main() -> int32 { let t = (1, 2); println(f"{t}"); return 0; }
     """
     assert run(source) == 0
     assert capfd.readouterr().out == "<tuple<int32, int32>>\n"

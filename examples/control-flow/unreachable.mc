@@ -27,7 +27,7 @@ fn main() -> int32 {
     // the unreachable arm is never taken.
     let i: int32 = 0;
     while (i < 6) {
-        println("step {} faces {}", i, name_of(i % 4));
+        println(f"step {i} faces {name_of(i % 4)}");
         i += 1;
     }
     return 0;

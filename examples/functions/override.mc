@@ -17,10 +17,11 @@ import "std/io";
 // of the same pattern -- and that is what @override does.
 //
 // The two targets below are both members of std/format's `format` set (the
-// protocol behind println's `{}`): a concrete `bool` formatter and the
-// unbounded `<typename>` fallback. Because the replacement is global, even
-// println's dispatch -- which resolves inside the stdlib module -- picks up
-// these bodies through the shared symbols.
+// protocol behind `{}` placeholders and f-string holes): a concrete `bool`
+// formatter and the unbounded `<typename>` fallback. Because the
+// replacement is global, even the stdlib's own dispatch -- an f-string
+// renders through `slice::format`, which resolves inside std/slice -- picks
+// up these bodies through the shared symbols.
 
 struct point {
     x: int32;
@@ -52,17 +53,17 @@ fn format<T>(mut str: string, value: T, const modifier: slice<char>) {
 fn main() -> int32 {
     // The int keeps its own concrete formatter (it outranks the fallback):
     // only bool and the fallback were replaced.
-    println("count = {}", 3);
+    println(f"count = {3}");
 
-    // bool now renders through the override, everywhere -- this direct call
-    // and println's internal dispatch alike.
-    println("ready = {}", true);
-    println("ready = {y}", false);   // the modifier reaches the override too
+    // bool now renders through the override, everywhere -- a direct
+    // format() call and these f-string holes alike.
+    println(f"ready = {true}");
+    println(f"ready = {false:y}");   // the modifier reaches the override too
 
     // point has no concrete formatter, so it falls to the overridden
     // <typename> fallback.
     let p = point { x = 4, y = 9 };
-    println("origin = {}", p);
+    println(f"origin = {p}");
 
     return 0;
 }

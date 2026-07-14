@@ -32,11 +32,10 @@ fn main() -> int32 {
         row += 1;
     }
 
-    println("{}: {} cells, {} bytes per row", TITLE, CELLS, ROW_BYTES);
-    println("last cell = {}, max level = {}",
-           grid[CELLS - 1], MAX_LEVEL as int32);
+    println(f"{TITLE}: {CELLS} cells, {ROW_BYTES} bytes per row");
+    println(f"last cell = {grid[CELLS - 1]}, max level = {MAX_LEVEL as int32}");
 
     // len() reports the size that the const fixed -- nothing is hard-coded.
-    println("grid holds {} ints", len(grid));
+    println(f"grid holds {len(grid)} ints");
     return 0;
 }

@@ -25,7 +25,7 @@ fn main() -> int32 {
     // A stack value: the ordinary mut/const call from mut_params.mc.
     let s = point { x = 1, y = 2 };
     shift(s, delta);
-    println("stack -> ({}, {})", s.x, s.y);
+    println(f"stack -> ({s.x}, {s.y})");
 
     // A heap value: new<point>() returns a nullable point*. A reference is
     // never null, so decay demands proof; this one diverging guard narrows
@@ -41,13 +41,13 @@ fn main() -> int32 {
 
     // The pointer passed by value, so the narrowed fact survives the call:
     // `h` is still proven non-null, no re-guard before these reads.
-    println("heap  -> ({}, {})", h->x, h->y);
+    println(f"heap  -> ({h->x}, {h->y})");
 
     // Rvalue pointers decay too, here `&s` into the const slot -- and `&s`
     // is its own proof. (The explicit `shift(*h, ...)` spelling stays legal
     // and needs no proof; the dereference is just visible at the call site.)
     shift(h, &s);
-    println("heap  -> ({}, {})", h->x, h->y);
+    println(f"heap  -> ({h->x}, {h->y})");
 
     dealloc(h);
     return 0;

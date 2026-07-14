@@ -21,10 +21,10 @@ import "std/char";
 // sugar (`c.is_alpha()`, see types/method_calls.mc) dispatches the same
 // family either way.
 fn describe(c: char) {
-    println("  '{}'  alpha={} digit={} alnum={} hex={} space={} upper={} lower={}",
+    println("  '{}'  alpha={} digit={} alnum={} hex={} space={} upper={} lower={}".format(
             c, char::is_alpha(c), char::is_digit(c), char::is_alnum(c),
             char::is_hex(c), char::is_space(c), char::is_upper(c),
-            char::is_lower(c));
+            char::is_lower(c)));
 }
 
 // Case-insensitive equality, the classic use of char::lower: fold both
@@ -65,22 +65,22 @@ fn main() -> int32 {
     // upper/lower return the converted character; anything without the
     // other case (digits, punctuation, space) is returned unchanged.
     println("conversion:");
-    println("  upper('q') = '{}', lower('Q') = '{}'",
-            char::upper('q'), char::lower('Q'));
-    println("  upper('7') = '{}', upper('!') = '{}'  (non-letters unchanged)",
-            char::upper('7'), char::upper('!'));
+    println("  upper('q') = '{}', lower('Q') = '{}'".format(
+            char::upper('q'), char::lower('Q')));
+    println("  upper('7') = '{}', upper('!') = '{}'  (non-letters unchanged)".format(
+            char::upper('7'), char::upper('!')));
     // The dot spelling calls the same method (types/method_calls.mc).
-    println("  'q'.upper() = '{}'  (dot-call sugar)", 'q'.upper());
+    println("  'q'.upper() = '{}'  (dot-call sugar)".format('q'.upper()));
 
     // Folding case per character gives case-insensitive comparison.
     println("eq_ignore_case:");
-    println("  \"Sydney\" == \"SYDNEY\" -> {}", eq_ignore_case("Sydney", "SYDNEY"));
-    println("  \"Sydney\" == \"Sidney\" -> {}", eq_ignore_case("Sydney", "Sidney"));
+    println("  \"Sydney\" == \"SYDNEY\" -> {}".format(eq_ignore_case("Sydney", "SYDNEY")));
+    println("  \"Sydney\" == \"Sidney\" -> {}".format(eq_ignore_case("Sydney", "Sidney")));
 
     // And is_hex validates a whole token one character at a time.
     println("is_hex_literal:");
-    println("  \"0x7F3a\" -> {}", is_hex_literal("0x7F3a"));
-    println("  \"0x7G\"   -> {}", is_hex_literal("0x7G"));
+    println("  \"0x7F3a\" -> {}".format(is_hex_literal("0x7F3a")));
+    println("  \"0x7G\"   -> {}".format(is_hex_literal("0x7G")));
 
     // ---- A classifying scan ----
     // The motivating shape: borrow text as a char slice and classify it
@@ -107,7 +107,7 @@ fn main() -> int32 {
     for i in range(s.length) {
         s[i] = char::upper(s[i]);
     }
-    println("shouted: {}", s);
+    println(f"shouted: {s}");
 
     return 0;
 }

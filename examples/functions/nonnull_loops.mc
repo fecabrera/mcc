@@ -78,13 +78,13 @@ fn main() -> int32 {
     let y: int32 = 2;
     let z: int32 = 4;
 
-    println("sum_repeated(&x, 3) = {}", sum_repeated(&x, 3));
-    println("drain(&y) = {}", drain(&y));
+    println(f"sum_repeated(&x, 3) = {sum_repeated(&x, 3)}");
+    println(f"drain(&y) = {drain(&y)}");
 
     let slots: int32*[4] = [&x, &y, &z, null];
-    println("sum_until_null = {}", sum_until_null(slots));
+    println(f"sum_until_null = {sum_until_null(slots)}");
 
-    println("acquire(null, &z) = {}", acquire(null, &z));
+    println(f"acquire(null, &z) = {acquire(null, &z)}");
     return 0;
 }
 

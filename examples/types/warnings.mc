@@ -50,7 +50,7 @@ import "std/io";
 fn main() -> int32 {
     // On a plain build both branches above were dead: nothing was collected,
     // nothing printed, and MATH_MODE folded to "strict".
-    println("float math mode: {}", MATH_MODE);
+    println(f"float math mode: {MATH_MODE}");
     return 0;
 }
 

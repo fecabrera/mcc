@@ -62,7 +62,7 @@ def test_written_qualifier_dispatches_to_a_full_specialization(capfd):
         fn main() -> int32 {
             let bi: box<int32> = { v = 7 };
             let bf: box<float64> = { v = 1.0 };
-            println("{} {}", box<int32>::tag(bi), box<float64>::tag(bf));
+            println(f"{box<int32>::tag(bi)} {box<float64>::tag(bf)}");
             return 0;
         }
         """
@@ -172,7 +172,7 @@ def test_constructor_chains_with_enclosing_type_parameter(capfd):
         }
         fn main() -> int32 {
             let p = point<float64>(1, 2);
-            println("{} {}", p.x, p.y);
+            println(f"{p.x} {p.y}");
             return 0;
         }
         """
@@ -190,7 +190,7 @@ def test_destructor_chains_with_enclosing_type_parameter(capfd):
         struct inner<T> { v: T; }
         fn inner<T>::constructor(mut self: inner<T>, v: T) { self.v = v; }
         fn inner<T>::destructor(mut self: inner<T>) {
-            println("inner down {}", self.v);
+            println(f"inner down {self.v}");
         }
         struct outer<T> { i: inner<T>; }
         fn outer<T>::constructor(mut self: outer<T>, v: T) {
@@ -224,7 +224,7 @@ def test_partial_specialization_family_ranks_under_a_pin(capfd):
         fn main() -> int32 {
             let p: pair<int32, float64> = { a = 1, b = 2.0 };
             let q: pair<int8, float64> = { a = 1, b = 2.0 };
-            println("{} {}", pair<int32, float64>::pick(p), pair<int8, float64>::pick(q));
+            println("{} {}".format(pair<int32, float64>::pick(p), pair<int8, float64>::pick(q)));
             return 0;
         }
         """

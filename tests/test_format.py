@@ -258,15 +258,16 @@ def test_float_modifier_applies_per_slice_element(capfd):
 
 
 def test_float_precision_through_println(capfd):
-    # The end-to-end route: io.mc's format_args passes the bracket content
-    # verbatim, so {.2f} and {8.3f} reach the float member unchanged,
-    # interleaved with other placeholders.
+    # The end-to-end route: the f-string renders through slice::format,
+    # which passes the bracket content verbatim, so {.2f} and {8.3f}
+    # reach the float member unchanged, interleaved with other
+    # placeholders.
     run(
         """
         import "std/io";
 
         fn main() -> int32 {
-            println("pi = {.2f}, e = {8.3f}, {} of {}", 3.14159, 2.71828, 1, 2.0);
+            println(f"pi = {3.14159:.2f}, e = {2.71828:8.3f}, {1} of {2.0}");
             return 0;
         }
         """
@@ -498,3 +499,88 @@ def test_user_overload_joins_the_set_cross_module(tmp_path, capfd):
     )
     assert run_path(main) == 0
     assert capfd.readouterr().out == "|(3, 255) (3, ff)|\n"
+
+
+def test_string_renders_as_its_text(capfd):
+    # The concrete `string` member: a string value formats as its bytes, not
+    # as the `<list<char>>` typename fallback. Boxing rides `const any`, so
+    # the value travels by hidden reference through the protocol.
+    run(
+        PRELUDE
+        + """
+        fn main() -> int32 {
+            let name = string("mcc");
+            let s = string();
+            format(s, name, "");
+            show(s);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "|mcc|\n"
+
+
+def test_string_takes_the_width_grammar(capfd):
+    # The member delegates to the string-slice worker, so the `[N][s][N]`
+    # field widths apply to an owned string unchanged.
+    run(
+        PRELUDE
+        + """
+        fn main() -> int32 {
+            let name = string("mcc");
+            let s = string();
+            format(s, name, "5");  s.push('|');
+            format(s, name, "s5");
+            show(s);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "|  mcc|mcc  |\n"
+
+
+def test_string_formats_through_a_placeholder(capfd):
+    # The dispatch that bites in practice: a string boxed into a `{}`
+    # placeholder's `const any` unboxes as `list<char>` and must land on the
+    # concrete member, not the typename fallback.
+    run(
+        """
+        import "std/io";
+        import "std/slice";
+
+        fn main() -> int32 {
+            let who = string("world");
+            let line = "hello {}!".format(who);
+            println(line);
+            let chars = list<char>();
+            chars.push('h'); chars.push('i');
+            println("{} {:5}".format(who, chars));
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "hello world!\nworld    hi\n"
+
+
+def test_the_collapsed_writers_take_the_whole_family(capfd):
+    # print/println are exactly two overloads each -- (str) and (f, str) --
+    # over one `T extends slice<const char>` signature: the const-covariant
+    # bound binds a literal, a slice of either constness, and an owned
+    # string through the same member, on both the stdout and FILE* shapes.
+    run(
+        """
+        import "std/io";
+
+        fn main() -> int32 {
+            print("lit ");
+            let sc: slice<const char> = "sc";
+            print(sc);
+            let owned = " ow ";
+            print(stdout!, owned as slice<char>);
+            let s = string("str");
+            println(stdout!, s);
+            return 0;
+        }
+        """
+    )
+    assert capfd.readouterr().out == "lit sc ow str\n"

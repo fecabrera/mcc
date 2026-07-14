@@ -1,9 +1,14 @@
 """stdlib panic/assert: report to stderr and abort.
 
 `panic(msg)` writes `msg` verbatim to standard error and aborts;
-`panic(fmt, args...)` renders `{}` placeholders (f-strings included) first.
-`assert(cond, ...)` panics with `assertion failed: ...` when cond is false
-and does nothing otherwise -- always enabled. Both panic members are
+`assert(cond, msg)` panics with `assertion failed: msg` when cond is false
+and does nothing otherwise -- always enabled. Each is ONE member whose
+message parameter is the const-covariant char-run family
+(`T extends slice<const char>`), so a literal, a slice of either
+constness, a `string`, and with it an f-string or `.format` rendering all
+bind -- there is no `@format` variadic pair anymore, so braces are never
+re-scanned. A rendering built for the panic path is never destroyed (the
+process is dying); the blessed style is a plain verbatim message. panic is
 `@noreturn`, so a call diverges like a `return`: it satisfies
 missing-return analysis and an `if (p == null) { panic(...); }` guard
 narrows p.
@@ -44,14 +49,20 @@ def run_aborting(tmp_path, source: str) -> subprocess.CompletedProcess:
 # ------------------------------------------------------------ compile shape
 
 def test_panic_members_carry_the_noreturn_attribute():
-    ir = compile_ir(IO + 'fn main() -> int32 { panic("boom"); }')
-    assert 'define void @"panic(slice<const char>)"' in ir
-    for line in ir.splitlines():
-        if line.startswith('define void @"panic('):
-            assert "noreturn" in line
+    ir = compile_ir(
+        IO
+        + 'fn main() -> int32 { assert(true, "ok"); panic("boom"); }'
+    )
+    # One generic member each; a literal binds T = slice<const char>.
+    panics = [
+        line
+        for line in ir.splitlines()
+        if line.startswith('define') and '@"panic<' in line
+    ]
+    assert panics and all("noreturn" in line for line in panics)
     # assert() returns on the passing path, so it must NOT be noreturn.
     for line in ir.splitlines():
-        if line.startswith('define void @"assert('):
+        if line.startswith("define") and '@"assert<' in line:
             assert "noreturn" not in line
 
 
@@ -63,7 +74,7 @@ def test_a_trailing_panic_satisfies_missing_return():
         + """
         fn last(n: int32) -> int32 {
             if (n > 0) { return n; }
-            panic("no positive value, got {}", n);
+            panic(f"no positive value, got {n}");
         }
         fn main() -> int32 { return last(1); }
         """
@@ -89,36 +100,47 @@ def test_a_panic_guard_narrows_the_pointer():
 
 
 def test_the_msg_arm_keeps_braces_literal():
-    # `panic("hello {}")` picks the verbatim member (matching without
-    # collecting beats collecting), so the braces are not placeholders:
-    # the interned literal survives whole and the msg member is the callee.
+    # There is no collecting member left: a message is verbatim, so braces
+    # are not placeholders -- the interned literal survives whole and the
+    # literal binds the slice<const char> instance of the one generic.
     ir = compile_ir(IO + 'fn main() -> int32 { panic("hello {} braces"); }')
     assert 'c"hello {} braces\\00"' in ir
-    assert 'call void @"panic(slice<const char>)"' in ir
+    assert (
+        'call void @"panic<$0 extends slice<const char>>'
+        '($0)<slice<const char>>"' in ir
+    )
 
 
-def test_an_fstring_panic_resolves_to_the_format_collector():
-    # An f-string can only bind an @format slot, so it filters the msg-only
-    # member out before ranking instead of winning as the plain literal
-    # would -- panic(f"...") is the idiomatic spelling, not an error.
+def test_an_fstring_panic_renders_to_a_string_value():
+    # With no @format collector on panic, an f-string message is an
+    # ordinary string value: it renders through slice::format and binds
+    # the message family's string instance. The rendering is never
+    # destroyed -- panic diverges, the process is dying -- which the
+    # variadic member always did invisibly; the value spelling just makes
+    # the allocation explicit at the call site.
     ir = compile_ir(
         IO
         + "fn main() -> int32 { let x = 1 as int32; "
         'panic(f"x = {x}"); }'
     )
-    assert 'call void @"panic(slice<const char>, slice<const any>)"' in ir
+    assert (
+        'call void @"panic<$0 extends slice<const char>>'
+        '($0)<list<char>>"' in ir
+    )
 
 
-def test_an_fstring_still_misplaced_without_a_format_candidate():
-    # The viability filter empties a set with no @format collector and
-    # reports the same sink-rule error as ever.
+def test_an_fstring_without_a_format_candidate_is_a_string_value():
+    # With no @format collector in the set, the f-string renders to an
+    # owned string and resolution re-runs over that value -- here neither
+    # member takes a string (and there is no implicit string-to-slice
+    # coercion), so the miss is the honest no-overload error.
     with pytest.raises(
         LangError,
-        match=r"an f-string is only allowed as the format string of an "
-        r"@format call like 'println' or 'format_args'",
+        match=r"no overload of 'take' with signature take\(list<char>\)",
     ):
         compile_ir(
-            "fn take(s: slice<const char>) {}\n"
+            IO
+            + "fn take(s: slice<const char>) {}\n"
             "fn take(n: int32) {}\n"
             'fn main() -> int32 { take(f"{1 as int32}"); return 0; }'
         )
@@ -133,7 +155,7 @@ def test_passing_asserts_return_normally(capfd):
         fn main() -> int32 {
             let x = 41 as int32;
             assert(true, "never fires");
-            assert(x > 0, "x must be positive, got {}", x);
+            assert(x > 0, f"x must be positive, got {x}");
             println("alive");
             return 0;
         }
@@ -186,7 +208,7 @@ def test_assert_failure_renders_format_arguments(tmp_path):
         fn main() -> int32 {
             let want = 3 as int32;
             let got = 5 as int32;
-            assert(want == got, "want {}, got {}", want, got);
+            assert(want == got, f"want {want}, got {got}");
             return 0;
         }
         """,

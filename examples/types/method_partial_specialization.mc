@@ -37,21 +37,21 @@ fn pair<T, U>::describe(const self: pair<T, U>) {
 // It matches every pair<int32, X>, and beats the generic for those receivers
 // on pattern specificity (a concrete position outscores a bare name).
 fn pair<int32, U>::describe(const self: pair<int32, U>) {
-    println("  [partial] pair<int32, U>::describe, a = {}", self.a);
+    println(f"  [partial] pair<int32, U>::describe, a = {self.a}");
 }
 
 // The FULL specialization: all positions concrete, so it is an ordinary
 // concrete overload and outranks both templates for this exact receiver.
 fn pair<int32, int8>::describe(const self: pair<int32, int8>) {
-    println("  [full]    pair<int32, int8>::describe, a = {}, b = {}",
-            self.a, self.b as int32);
+    println("  [full]    pair<int32, int8>::describe, a = {}, b = {}".format(
+            self.a, self.b as int32));
 }
 
 // Fresh names are REAL type parameters: they are inferred at the call and
 // prepend the method's own `<...>` list, so a partial may add method type
 // parameters too. Here `U` comes from the receiver and `W` from `label`.
 fn pair<int32, U>::tag<W>(const self: pair<int32, U>, label: W) -> W {
-    println("  [partial] pair<int32, U>::tag<W>, b = {}", self.b);
+    println(f"  [partial] pair<int32, U>::tag<W>, b = {self.b}");
     return label;
 }
 
@@ -92,14 +92,14 @@ fn main() -> int32 {
     // `tag` binds U = int64 from the receiver and W = float64 from the label,
     // both inferred at the call.
     println("pair<int32, int64> tag:");
-    println("  tagged = {:.2f}", pair::tag(part, 9.5));  // 9.50, via [partial]
+    println(f"  tagged = {pair::tag(part, 9.5):.2f}");  // 9.50, via [partial]
 
     // The bounded partial admits int8 (in the group) but not int64, which
     // falls through to the generic width.
     println("pair<int32, int8> width:");
-    println("  width = {}", pair::width(full));  // 1, via [bounded partial]
+    println(f"  width = {pair::width(full)}");  // 1, via [bounded partial]
     println("pair<int32, int64> width:");
-    println("  width = {}", pair::width(part));  // -1, via [generic]: int64 fails the group
+    println(f"  width = {pair::width(part)}");  // -1, via [generic]: int64 fails the group
     return 0;
 }
 

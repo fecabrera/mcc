@@ -138,7 +138,7 @@ def test_adaptable_literal_filters_the_noninteger_diagonal_free_function(capfd):
             fn f<T, U>(x: T, y: U) -> int32 { return 2; }
             fn main() -> int32 {
                 let fv: float64 = 1.5;
-                println("{}", f(fv, 1));
+                println(f"{f(fv, 1)}");
                 return 0;
             }
             """
@@ -163,7 +163,7 @@ def test_diagonal_beats_open_free_function(capfd):
             fn main() -> int32 {
                 let a: int32 = 1;
                 let b: int32 = 2;
-                println("{} {}", f(a, b), f(a, 1.5));
+                println(f"{f(a, b)} {f(a, 1.5)}");
                 return 0;
             }
             """
@@ -186,7 +186,7 @@ def test_three_way_chain_resolves_to_the_most_specialized(capfd):
             fn f<T, U, V>(x: T, y: U, z: V) -> int32 { return 3; }
             fn main() -> int32 {
                 let a: int32 = 1;
-                println("{} {} {}", f(a, a, a), f(a, a, 1.5), f(a, 1.5, a));
+                println(f"{f(a, a, a)} {f(a, a, 1.5)} {f(a, 1.5, a)}");
                 return 0;
             }
             """
@@ -256,7 +256,7 @@ def test_wildcard_absorbs_surplus_stars_through_an_alias(capfd):
             fn main() -> int32 {
                 let p: pair<int32*, int32>;
                 let q: pair<int32, int32>;
-                println("{} {}", f(p), f(q));
+                println(f"{f(p)} {f(q)}");
                 return 0;
             }
             """
@@ -304,7 +304,7 @@ def test_fn_type_behind_a_plain_alias_participates_by_name(capfd):
             fn f<A, B>(cb: cbi, x: A, y: B) -> int32 { return 2; }
             fn main() -> int32 {
                 let a: int32 = 1;
-                println("{}", f(g, a, a));
+                println(f"{f(g, a, a)}");
                 return 0;
             }
             """
@@ -328,7 +328,7 @@ def test_tiers_stay_supreme_over_subsumption(capfd):
             }
             fn main() -> int32 {
                 let a: int32 = 1;
-                println("{}", f(a, a));
+                println(f"{f(a, a)}");
                 return 0;
             }
             """
@@ -354,7 +354,7 @@ def test_group_subset_lets_the_diagonal_win(capfd):
             fn main() -> int32 {
                 let a: int8 = 1;
                 let b: int8 = 2;
-                println("{}", f(a, b));
+                println(f"{f(a, b)}");
                 return 0;
             }
             """
@@ -404,7 +404,7 @@ def test_extends_chain_implication_lets_the_diagonal_win(capfd):
             fn main() -> int32 {
                 let c: circle;
                 let d: circle;
-                println("{}", f(c, d));
+                println(f"{f(c, d)}");
                 return 0;
             }
             """
@@ -480,7 +480,7 @@ def test_concrete_position_through_an_alias_satisfies_the_group(capfd):
             fn main() -> int32 {
                 let p: pair<int32, int8>;
                 let q: pair<int8, int8>;
-                println("{} {}", f(p), f(q));
+                println(f"{f(p)} {f(q)}");
                 return 0;
             }
             """

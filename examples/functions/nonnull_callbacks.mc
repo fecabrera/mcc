@@ -43,13 +43,13 @@ fn main() -> int32 {
     // the same cures apply -- a null-check guard narrows it
     // (nonnull_narrowing.mc), and the postfix hatch asserts it, `f(q!)`
     // (nonnull_assert.mc).
-    println("f(&x) = {}", f(&x));
+    println(f"f(&x) = {f(&x)}");
 
     // Assignability along the contract is contravariant. A plain function
     // lifts into an annotated slot: the annotation only adds a call-site
     // obligation, which a function that tolerates null meets trivially.
     f = fallback;
-    println("f(&x) = {}", f(&x)); // the call still proves: prints 40
+    println(f"f(&x) = {f(&x)}"); // the call still proves: prints 40
 
     // The reverse would let calls skip the proof, so it is rejected:
     //     let g: fn(int32*) -> int32 = first;
@@ -64,16 +64,16 @@ fn main() -> int32 {
     // argument would be undefined behavior, exactly like `p!` -- which is why
     // k only ever sees the provably-good &x here.
     let k = first as fn(int32*) -> int32;
-    println("k(&x) = {}", k(&x));
+    println(f"k(&x) = {k(&x)}");
 
     // The lift covers every annotated slot, argument position included, so
     // apply() takes the checked and the tolerant callback alike...
-    println("apply(first)    = {}", apply(first, &x));
-    println("apply(fallback) = {}", apply(fallback, &x));
+    println(f"apply(first)    = {apply(first, &x)}");
+    println(f"apply(fallback) = {apply(fallback, &x)}");
 
     // ...and the mixed @static table dispatches, proving at the indexed call.
-    println("handlers[0](&x) = {}", handlers[0](&x));
-    println("handlers[1](&x) = {}", handlers[1](&x));
+    println(f"handlers[0](&x) = {handlers[0](&x)}");
+    println(f"handlers[1](&x) = {handlers[1](&x)}");
 
     // The extern asymmetry: strlen's binding declares @nonnull, and while a
     // *direct* extern call is graded by the -Wextern-nonnull posture (see
@@ -81,7 +81,7 @@ fn main() -> int32 {
     // checks strictly. An indirect call can no longer be attributed to an
     // extern declaration, so there is no posture to grade it by.
     let n = strlen; // inferred: fn(@nonnull char*) -> uint64
-    println("n(\"callback\") = {}", n("callback")); // a string literal proves
+    println("n(\"callback\") = {}".format(n("callback"))); // a string literal proves
     return 0;
 }
 

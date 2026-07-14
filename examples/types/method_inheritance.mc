@@ -98,16 +98,16 @@ fn main() -> int32 {
     let p = pointf(1.0, 1.0);
     println("pointf(1, 1):");
     let q = pointf(1, 1);
-    println("  p = ({:.2f}, {:.2f}), q = ({:.2f}, {:.2f})", p.x, p.y, q.x, q.y);
+    println(f"  p = ({p.x:.2f}, {p.y:.2f}), q = ({q.x:.2f}, {q.y:.2f})");
 
     // An inherited method via the dot call: p.sum() resolves point<T>::sum
     // rebased at float64, exactly as if pointf had declared it.
-    println("p.sum() = {:.2f}", p.sum());                     // 2.00
+    println(f"p.sum() = {p.sum():.2f}");                     // 2.00
 
     // An inherited mut-self method writes through: the receiver lends its
     // base prefix in place, so the stores land in p's own leading fields.
     p.translate(2.0, 3.0);
-    println("translated: ({:.2f}, {:.2f})", p.x, p.y);        // 3.00, 4.00
+    println(f"translated: ({p.x:.2f}, {p.y:.2f})");        // 3.00, 4.00
 
     // Shadowing: the derived same-shape describe wins on pointf. The base
     // body is not hidden, only outranked: the explicit base-qualified call
@@ -120,7 +120,7 @@ fn main() -> int32 {
     // chained call), then fills z.
     println("point3f(1.5, 2.5, 3.5):");
     let t = point3f(1.5, 2.5, 3.5);
-    println("  t = ({:.2f}, {:.2f}, {:.2f}), sum {:.2f}", t.x, t.y, t.z, t.sum());
+    println(f"  t = ({t.x:.2f}, {t.y:.2f}, {t.z:.2f}), sum {t.sum():.2f}");
 
     // Nearer shadows farther: on point3f, pointf's describe (hop 1) shadows
     // point's (hop 2).
@@ -133,14 +133,14 @@ fn main() -> int32 {
     // z keeps its `let s: S;` field default.
     println("point3f(4.0, 5.0):");
     let u = point3f(4.0, 5.0);
-    println("  u = ({:.2f}, {:.2f}), z = {:.2f}", u.x, u.y, u.z);  // z = -1.00
+    println(f"  u = ({u.x:.2f}, {u.y:.2f}), z = {u.z:.2f}");  // z = -1.00
 
     // A generic derivation: the inherited members stay generic, bare-head
     // constructor inference included. Int literals lean int32, so this
     // builds a pd<int32>, not the origin's point<int32>.
     println("pd(1, 2):");
     let g = pd(1, 2);
-    println("  g.sum() = {}, a {}", g.sum(), typename(g));    // 3, pd<int32>
+    println(f"  g.sum() = {g.sum()}, a {typename(g)}");    // 3, pd<int32>
 
     return 0;
 }

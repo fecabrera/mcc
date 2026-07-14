@@ -255,15 +255,29 @@ class _InheritedOrigin:
     source: str | None
 
 
-# The f-string sink rule: an interpolated literal may stand only where an
-# @format callee's format string receives it (marshal_args and the set-path
-# winner emission substitute the desugared text and splice the holes there).
-# Every funnel a plain StrLit lowers through raises this instead, so a
-# misplaced f-string can never silently drop its holes -- an FStrLit *is* a
-# StrLit, and the isinstance predicates deliberately keep matching it.
+# The f-string value rule: at an @format callee's format string the
+# interpolated literal splices at compile time (marshal_args and the set-path
+# winner emission substitute the desugared text and hole expressions);
+# everywhere else it is a runtime string value, rendered through a
+# synthesized `slice::format` call (see fstring_render_call). The two
+# remaining rejections are the positions a runtime value can never fill: a
+# compile-time constant (a `const`, a global/@static initializer) and
+# in-place addressing (`&`, `len`, a borrow of the literal's storage) -- an
+# FStrLit *is* a StrLit, and the isinstance predicates deliberately keep
+# matching it, so those funnels raise this instead of silently dropping the
+# holes.
 FSTRING_MISPLACED = (
-    "an f-string is only allowed as the format string of an @format call "
-    "like 'println' or 'format_args'"
+    "an f-string renders at runtime into an owned string, so it cannot "
+    "form a compile-time constant or be addressed in place; bind it to a "
+    "let first"
+)
+
+# A string-valued f-string desugars to a `slice::format` call, so using one
+# as a value needs the family in the import graph (std/slice, which std/io
+# and std/string pull in transitively).
+FSTRING_NO_RENDERER = (
+    "an f-string used as a value renders through 'slice::format'; import "
+    "\"std/slice\" (or \"std/io\", which pulls it in) to build the string"
 )
 
 MOVE_MISPLACED = (
@@ -1742,7 +1756,7 @@ class CodeGen:
             default = func.type_param_defaults.get(tparam)
             if default is not None:
                 got = self.lang_type(default, func.line)
-                if not self.nominal_subtype(bound, got):
+                if not self.satisfies_bound(bound, strip_const(got)):
                     raise LangError(
                         f"default {got} for type parameter {tparam} of "
                         f"{func.name!r} does not satisfy its bound {bound}",
@@ -1809,7 +1823,7 @@ class CodeGen:
                     # naming the resolved bound.
                     return strip_const(deduced), bound
             bare = strip_const(deduced)
-            if not self.nominal_subtype(bound, bare):
+            if not self.satisfies_bound(bound, bare):
                 return bare, bound
         return None
 
@@ -1845,6 +1859,37 @@ class CodeGen:
     def bound_error(name: str, offender: LangType, bound: LangType) -> str:
         """The error message for a deduced type outside an ``extends`` bound."""
         return f"{offender} does not satisfy the bound {bound} of {name!r}"
+
+    def satisfies_bound(self, bound: LangType, got: LangType) -> bool:
+        """Whether a deduced binding satisfies an ``extends`` bound.
+
+        The nominal relation, plus one slice const-covariance: a bound of
+        ``slice<const E>`` is also satisfied by any type whose declared
+        lineage reaches ``slice<E>`` -- adding element ``const`` is always
+        safe (the same one-way widening :meth:`coerce` performs on slice
+        values), which is what lets a single
+        ``fn print<T extends slice<const char>>(const str: T)`` signature
+        take the whole read-only-or-better family: ``slice<const char>``,
+        ``slice<char>``, ``list<char>``/``string``, and their ``extends``
+        chains. Strictly one-way: a ``slice<E>`` bound still rejects
+        ``slice<const E>`` (satisfying it through the mutable spelling
+        would launder the ``const`` away).
+
+        Args:
+            bound: The resolved bound type.
+            got: The (const-stripped) deduced binding.
+
+        Returns:
+            ``True`` when ``got`` satisfies ``bound``.
+        """
+        if self.nominal_subtype(bound, got):
+            return True
+        if is_slice(bound):
+            elem = bound.fields[0][1].pointee
+            if elem.const:
+                mut_bound = self.slice_type(strip_const(elem), 0)
+                return self.nominal_subtype(mut_bound, got)
+        return False
 
     def group_member_combos(self, func: Func) -> list[dict[str, LangType]]:
         """Enumerate a grouped template's eager-check binding combinations.
@@ -7977,9 +8022,16 @@ class CodeGen:
             # mutated. Declared as a pointer (`let s: uint8* = "..."`, or a
             # pointer alias), it keeps the old decay to a uint8* into the shared
             # constant (no copy), which the generic path below handles.
-            if isinstance(stmt.value, StrLit):
-                if isinstance(stmt.value, FStrLit):
-                    raise LangError(FSTRING_MISPLACED, stmt.line)
+            # An f-string is not a literal here: it skips the whole
+            # string-literal block and lowers through the generic path
+            # below -- gen_expr renders it to an owned string, an
+            # annotation coerces (string to string, or the honest
+            # mismatch), and the adoption check at the bottom schedules
+            # the automatic destructor (own_call_initializer judges the
+            # written FStrLit).
+            if isinstance(stmt.value, StrLit) and not isinstance(
+                stmt.value, FStrLit
+            ):
                 if stmt.type_name is None:
                     declared = self.string_array_type(stmt.value.value)
                 else:
@@ -10206,7 +10258,13 @@ class CodeGen:
             return TypedValue(ir.Constant(RAWPTR.ir, None), NULLT, adaptable=True)
         if isinstance(expr, StrLit):
             if isinstance(expr, FStrLit):
-                raise LangError(FSTRING_MISPLACED, expr.line)
+                # A string-valued f-string: render through the synthesized
+                # `slice::format` call, an `-> own string`. The consumer
+                # sites judge the written FStrLit itself for adoption and
+                # statement-end drops (see own_call_initializer), so the
+                # temporary is destroyed exactly as the spelled-out
+                # `"...".format(...)` chain's would be.
+                return self.gen_call(self.fstring_render_call(expr))
             return self.gen_string(expr.value)
         if isinstance(expr, ArrayLit):
             raise LangError(
@@ -10827,6 +10885,15 @@ class CodeGen:
             # either that payload or the fallback standing in for it --
             # both carry the obligation the way the bare call does.
             return self.own_call_initializer(expr.value)
+        if isinstance(expr, FStrLit):
+            # A string-valued f-string is the synthesized `slice::format`
+            # call (see fstring_render_call), whose `-> own string` the
+            # consumer adopts or drops like any other own call. Judged
+            # only when the renderer family exists -- a missing import
+            # reports at evaluation, not from this predicate.
+            return self.method_family_exists(
+                "slice::format"
+            ) and self.known_own_call(Call("slice::format", [], [expr], expr.line))
         if isinstance(expr, Call):
             return self.known_own_call(expr)
         if isinstance(expr, CallExpr):
@@ -10845,6 +10912,71 @@ class CodeGen:
                 callee_t = strip_const(callee_t)
                 return is_function(callee_t) and callee_t.ownret
         return False
+
+    def fstring_render_call(self, expr: FStrLit) -> Call:
+        """The synthesized ``slice::format`` call rendering an f-string value.
+
+        A string-valued f-string desugars to ``"...".format(holes...)``: a
+        ``Call`` to the ``slice::format`` family with the ``FStrLit`` itself
+        riding as the ``@format`` format-string argument, so the shipped
+        substitution and hole-splice machinery does the rendering -- the
+        parse-time-desugared text stands in and the hole expressions become
+        the collected extras, evaluated once each, in source order -- and
+        the value is the member's ``-> own string``. Synthesized fresh per
+        emission, never an AST rewrite (a call inside a template body
+        re-marshals per instantiation). The family lives in ``std/slice``;
+        without it in the import graph there is nothing to render through,
+        so the miss names the import instead of the bare undefined-function
+        error.
+
+        Args:
+            expr: The f-string literal to render.
+
+        Returns:
+            The synthesized ``Call`` node.
+
+        Raises:
+            LangError: When no ``slice::format`` family is registered.
+        """
+        if not self.method_family_exists("slice::format"):
+            raise LangError(FSTRING_NO_RENDERER, expr.line)
+        return Call("slice::format", [], [expr], expr.line)
+
+    def spelled_format_literal(self, node):
+        """See through a char-slice borrow cast for the @format literal checks.
+
+        A string-literal dot-call receiver (``"{0}".format(x)``) reaches the
+        marshal wrapped in its ``as slice<const char>`` borrow (see
+        :meth:`plan_dot_call`), but the positional-placeholder desugar keys
+        on the literal itself -- and ``.format`` is the positional form's
+        home spelling. Unwrap the cast when its operand is a plain string
+        literal and its target is a char slice; the explicit
+        ``("{0}" as slice<const char>).format(x)`` spelling is synthesized
+        identically, so it desugars too, deliberately. An f-string operand
+        stays wrapped: ``f"..." as slice<...>`` is the render-then-borrow
+        escape hatch, whose result is runtime text.
+
+        Args:
+            node: The argument standing in the ``@format`` slot.
+
+        Returns:
+            The literal behind the borrow cast, or ``node`` unchanged.
+        """
+        if (
+            isinstance(node, Cast)
+            and isinstance(node.value, StrLit)
+            and not isinstance(node.value, FStrLit)
+        ):
+            try:
+                target = self.lang_type(node.type_name, node.line)
+            except LangError:
+                return node
+            target = strip_const(target)
+            if is_slice(target) and (
+                strip_const(target.fields[0][1].pointee) == CHAR
+            ):
+                return node.value
+        return node
 
     def register_own_drop(self, expr, tv: TypedValue) -> None:
         """Queue a receiverless own call's temporary for chain-end destruction.
@@ -11091,6 +11223,10 @@ class CodeGen:
             return t
         if isinstance(expr, CharLit):
             return CHAR
+        # An f-string receiver is an rvalue call result (the rendered
+        # `own string`), not literal bytes: None routes it through the
+        # evaluate-once spill, which renders it and queues the chain-end
+        # drop -- `f"{x}".equals(s)` works like `"...".format(x).equals(s)`.
         if isinstance(expr, StrLit) and not isinstance(expr, FStrLit):
             return self.string_array_type(expr.value)
         if isinstance(expr, Cast):
@@ -12732,10 +12868,16 @@ class CodeGen:
             The adapted value.
         """
         if isinstance(expr, FStrLit):
-            # str_literal_adapts matches it (an FStrLit is a StrLit), but the
-            # only position an f-string may adapt into is an @format string,
-            # which substitutes the plain literal before reaching here.
-            raise LangError(FSTRING_MISPLACED, expr.line)
+            # str_literal_adapts matches it (an FStrLit is a StrLit), but an
+            # f-string is a runtime string value, never a borrowable
+            # literal: render it, queue the temporary's statement-end drop
+            # (this is argument position, which never adopts), and let the
+            # coerce report the honest mismatch where the position's type
+            # does not take a string (a concrete char-slice parameter wants
+            # `f"..." as slice<const char>`, the explicit borrow).
+            tv = self.gen_expr(self.fstring_render_call(expr))
+            self.register_own_drop(expr, tv)
+            return self.coerce(tv, expected, line, "f-string value")
         if isinstance(expr, ResultLit):
             return self.gen_result_lit(expr, strip_const(expected))
         if isinstance(expr, TupleLit):
@@ -12883,7 +13025,17 @@ class CodeGen:
                 "not known statically -- index it through its pointer instead",
                 line,
             )
-        if isinstance(value_expr, StrLit) or (src_t is not None and is_array(src_t)):
+        # An f-string is a runtime string value, not addressable literal
+        # bytes: it falls through to the general expression path below,
+        # which renders it (gen_expr) and borrows the owned string's
+        # leading slice prefix -- `f"{x}" as slice<const char>` is the
+        # explicit borrow of the rendered text. (The temporary is not
+        # queued for a drop: destroying it would dangle the view, so the
+        # borrow leaks the rendering, like any own call's `as` borrow.)
+        if (
+            isinstance(value_expr, StrLit)
+            and not isinstance(value_expr, FStrLit)
+        ) or (src_t is not None and is_array(src_t)):
             addr, owner, _, _ = self.gen_addr(value_expr, line)
             self.check_borrow_element(owner.element, value_expr, str(owner), target, line)
             ptr = self.builder.gep(addr, [I32_ZERO, I32_ZERO], inbounds=True)
@@ -15996,7 +16148,9 @@ class CodeGen:
             )
         slot_map = None
         fmt = (
-            arg_exprs[fixed - 1] if collecting and format and fixed >= 1 else None
+            self.spelled_format_literal(arg_exprs[fixed - 1])
+            if collecting and format and fixed >= 1
+            else None
         )
         if isinstance(fmt, FStrLit):
             # An f-string: parse time already desugared its text to the
@@ -16115,13 +16269,12 @@ class CodeGen:
         if collecting:
             extras = arg_exprs[fixed:]
             tvs = [self.gen_expr(e) for e in extras]
-            if not isinstance(fmt, FStrLit):
-                # Collected extras are argument position too. An f-string's
-                # spliced hole expressions are exempt: the holes are the
-                # format call's own consumption, not a written argument
-                # list (their temporaries are a separate design question).
-                for e, tv in zip(extras, tvs):
-                    self.register_own_drop(e, tv)
+            # Collected extras are argument position too -- an f-string's
+            # spliced hole expressions included: a hole's own call
+            # (`f"{make()}"`) is a consumed expression temporary, destroyed
+            # at statement end like any other collected argument's.
+            for e, tv in zip(extras, tvs):
+                self.register_own_drop(e, tv)
             if slot_map is not None:
                 # Positional desugar: the extras were evaluated once, in
                 # source order, above; map values and expressions by slot
@@ -17231,13 +17384,22 @@ class CodeGen:
             LangError: When no overload matches, the choice is ambiguous, a type
                 parameter binds to ``void``, or access is denied.
         """
-        # An f-string can only ever bind an @format format-string slot, so a
-        # candidate that would receive one anywhere else is non-viable before
-        # ranking -- panic(f"x = {x}") must resolve to the @format collector
-        # even though the msg-only member would win the plain-literal rank.
-        # An f-string among a viable candidate's *extras* is left alone here:
-        # the winner's takes-no-arguments-after-an-f-string rejection (or the
-        # collected-extra funnel) reports it against the resolved callee.
+        # An @format format-string slot always wins an f-string: a candidate
+        # that can splice it there filters the set before ranking --
+        # panic(f"x = {x}") must resolve to the @format collector even
+        # though the msg-only member would win the plain-literal rank (the
+        # splice is injection-free and zero-cost, so it outranks value
+        # rendering wherever both could apply). An f-string among a viable
+        # candidate's *extras* is left alone here: the winner's
+        # takes-no-arguments-after-an-f-string rejection (or the
+        # collected-extra funnel, which renders it) reports against the
+        # resolved callee. With NO splicing candidate, the f-strings are
+        # ordinary string values: each rewrites to its synthesized
+        # `slice::format` call (a fresh node list, never an AST mutation)
+        # and resolution re-runs over the full set, exactly as the
+        # spelled-out `f("...".format(...))` would resolve -- adoption,
+        # ranking, and statement-end drops all riding the ordinary
+        # own-call machinery.
         if any(isinstance(arg, FStrLit) for arg in expr.args):
 
             def receives_fstrings(f: Func) -> bool:
@@ -17252,9 +17414,22 @@ class CodeGen:
                     if isinstance(arg, FStrLit)
                 )
 
-            candidates = [f for f in candidates if receives_fstrings(f)]
-            if not candidates:
-                raise LangError(FSTRING_MISPLACED, expr.line)
+            splicing = [f for f in candidates if receives_fstrings(f)]
+            if splicing:
+                candidates = splicing
+            else:
+                rewritten = Call(
+                    expr.name,
+                    expr.type_args,
+                    [
+                        self.fstring_render_call(a)
+                        if isinstance(a, FStrLit)
+                        else a
+                        for a in expr.args
+                    ],
+                    expr.line,
+                )
+                return self.gen_generic_call(rewritten, candidates, qframe)
         # A mut argument lends the caller's storage, so its address must be
         # formed before the args are lowered to values for inference -- but
         # which overload wins (and with it which positions are mut) is not
@@ -17337,10 +17512,12 @@ class CodeGen:
                 arg_tvs.append(self.gen_expr(arg))
         # Argument position never adopts: an own call among the args is
         # queued here, once, on the pre-evaluated value (winner emission
-        # reuses these TypedValues; deferred literals are not calls, and an
-        # f-string's holes -- evaluated at emission -- stay out of scope,
-        # as on the direct path). The _CtorSelf placeholder and the NULLT
-        # stand-ins fail the own-call predicate before their type is read.
+        # reuses these TypedValues; deferred literals are not calls, and a
+        # splicing f-string's char* pre-evaluation owns no cleanup -- its
+        # holes and a collected-extra rendering register at emission
+        # instead, as on the direct path). The _CtorSelf placeholder and
+        # the NULLT stand-ins fail the own-call predicate before their
+        # type is read.
         for arg, tv in zip(expr.args, arg_tvs):
             self.register_own_drop(arg, tv)
         if len(candidates) == 1:
@@ -17728,7 +17905,7 @@ class CodeGen:
             and n_fixed >= 1
             and func.params[n_fixed - 1][0] in func.format_params
         ):
-            fmt = expr.args[n_fixed - 1]
+            fmt = self.spelled_format_literal(expr.args[n_fixed - 1])
             if isinstance(fmt, FStrLit):
                 # An f-string: the parse-time-desugared text stands in and
                 # the hole expressions become the extras (collected below,
@@ -17839,23 +18016,32 @@ class CodeGen:
                 # The f-string's hole expressions are the collected extras:
                 # invisible to pre-evaluation and ranking, they evaluate here
                 # -- once each, in source order (the deferred-literal
-                # precedent below).
-                extras = [self.gen_expr(h.expr) for h in fstr.holes]
+                # precedent below). A hole's own call is a consumed
+                # expression temporary like any collected argument's, so it
+                # queues for the statement-end drop.
+                extras = []
+                for h in fstr.holes:
+                    tv = self.gen_expr(h.expr)
+                    self.register_own_drop(h.expr, tv)
+                    extras.append(tv)
                 extra_exprs = [h.expr for h in fstr.holes]
             else:
                 extras = []
                 for j in range(n_fixed, len(arg_tvs)):
                     raw_arg = expr.args[j]
                     if isinstance(raw_arg, FStrLit):
-                        # An f-string may only ever be the @format format
-                        # string, never a trailing collected argument. With a
-                        # plain literal in the format slot (fstr is None here)
-                        # the pre-evaluation lowered this f-string to its
-                        # char* for ranking, so it slipped past the viability
-                        # filter's fixed-prefix guard; reject it now against
-                        # the resolved callee, in parity with the direct
-                        # path's gen_expr(FStrLit) rejection.
-                        raise LangError(FSTRING_MISPLACED, raw_arg.line)
+                        # A trailing collected f-string is an ordinary value
+                        # argument of the resolved @format collector (the
+                        # plain literal owns the format slot; fstr is None
+                        # here). The char* pre-evaluation fed ranking only:
+                        # render the string now -- holes evaluate here,
+                        # once -- and queue the temporary like any collected
+                        # own call, in parity with the direct path's
+                        # gen_expr(FStrLit) rendering.
+                        tv = self.gen_expr(self.fstring_render_call(raw_arg))
+                        self.register_own_drop(raw_arg, tv)
+                        extras.append(tv)
+                        continue
                     if self.defers_array_literal(
                         raw_arg
                     ) or self.defers_struct_literal(raw_arg):
@@ -18244,8 +18430,8 @@ class CodeGen:
                     and not expr.type_args
                     and qframe is None
                 )
-                for (_, ptype), tv, actual in zip(
-                    func.params[:n_fixed], arg_tvs, actuals
+                for ((_, ptype), tv, actual, arg) in zip(
+                    func.params[:n_fixed], arg_tvs, actuals, expr.args
                 ):
                     # A constructor-sugar receiver placeholder carries no
                     # type: like null, it never binds a parameter (the
@@ -18254,6 +18440,16 @@ class CodeGen:
                     if tv.type is CTOR_SELF:
                         continue
                     if tv.adaptable == adaptable_pass and tv.type is not NULLT:
+                        if not adaptable_pass and self.literal_binds_bound(
+                            func, ptype, arg, bindings
+                        ):
+                            # A string literal at a char-slice-bounded bare
+                            # T: the bound itself is the binding; the char*
+                            # pre-evaluation never unifies (it could not
+                            # satisfy the slice bound), and emission
+                            # borrows the literal against the resolved
+                            # parameter as at any concrete slice position.
+                            continue
                         self.unify(
                             ptype,
                             actual,
@@ -18330,6 +18526,58 @@ class CodeGen:
                     continue
                 return None
         return bindings
+
+    def literal_binds_bound(
+        self,
+        func: Func,
+        ptype: TypeRef,
+        arg,
+        bindings: dict[str, LangType],
+    ) -> bool:
+        """Bind a bare bounded ``T`` from a string literal at its slot.
+
+        ``fn print<T extends slice<const char>>(const str: T)`` called with
+        a literal: the ``char*`` the literal pre-evaluates to can never
+        satisfy a slice bound, but the literal itself adapts to any char
+        slice -- so the declared bound *is* the binding (``T`` becomes the
+        bound's slice type), and winner emission borrows the literal
+        against the resolved parameter exactly as a concrete
+        ``slice<const char>`` parameter takes one. A ternary of literals
+        rides along; an f-string does not (a value-position f-string is
+        rewritten to its render call before resolution ever sees it, and a
+        splicing one sits at a concrete ``@format`` slot). Only a CONCRETE
+        char-slice bound participates -- a dependent bound
+        (``U extends slice<T>``) resolves too late to bind from here. When
+        ``T`` is already bound (another argument, an explicit type
+        argument) to the same slice, the literal simply skips unification
+        and adapts at emission; any other existing binding falls through
+        to the ordinary unify, whose conflict is the honest error.
+
+        Args:
+            func: The candidate template.
+            ptype: The parameter's ``TypeRef`` pattern.
+            arg: The raw argument expression.
+            bindings: The in-progress bindings map (mutated on success).
+
+        Returns:
+            ``True`` when the literal claims (or matches) the binding and
+            unification must be skipped.
+        """
+        if isinstance(arg, FStrLit) or not isinstance(arg, (StrLit, Ternary)):
+            return False
+        p = self.dealias_pattern(ptype, func.type_params)
+        if p.stars or p.args or p.name not in func.type_params:
+            return False
+        bound = self.bound_types.get(id(func), {}).get(p.name)
+        if bound is None or not is_slice(bound):
+            return False
+        if not self.str_literal_adapts(arg, bound):
+            return False
+        existing = bindings.get(p.name)
+        if existing is None:
+            bindings[p.name] = bound
+            return True
+        return strip_const(existing) == bound
 
     def literal_adapts_to_pattern(
         self,

@@ -77,7 +77,7 @@ def test_target_evaluated_once(capfd):
         "    let arr: int32[3] = [10, 20, 30];\n"
         "    let counter: int32 = 1;\n"
         "    arr[next(&counter)] += 100;\n"
-        '    println("{} {} {} {}", arr[0], arr[1], arr[2], counter);\n'
+        '    println(f"{arr[0]} {arr[1]} {arr[2]} {counter}");\n'
         "    return 0;\n"
         "}\n"
     )
@@ -106,7 +106,7 @@ def test_through_pointer(capfd):
         "    let n: int32 = 8;\n"
         "    let p = &n;\n"
         "    *p -= 3;\n"
-        '    println("{}", n);\n'
+        '    println(f"{n}");\n'
         "    return 0;\n"
         "}\n"
     )
@@ -125,7 +125,7 @@ def test_struct_field_value_and_arrow(capfd):
         "    let pp = &p;\n"
         "    pp->y = 3;\n"
         "    pp->y += 7;\n"
-        '    println("{} {}", p.x, p.y);\n'
+        '    println(f"{p.x} {p.y}");\n'
         "    return 0;\n"
         "}\n"
     )
@@ -140,7 +140,7 @@ def test_float_arithmetic(capfd):
         "    let f: float64 = 2.0;\n"
         "    f += 0.5;\n"
         "    f *= 4.0;\n"
-        '    println("{.1f}", f);\n'  # precision: the {.1f} modifier carries it now
+        '    println(f"{f:.1f}");\n'  # precision: the {.1f} modifier carries it now
         "    return 0;\n"
         "}\n"
     )

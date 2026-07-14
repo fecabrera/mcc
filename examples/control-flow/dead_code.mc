@@ -120,13 +120,13 @@ fn poll_forever(target: int32) -> int32 {
 }
 
 fn main() -> int32 {
-    println("classify(-5) = {}", classify(-5));
-    println("first_multiple(3, 10) = {}", first_multiple(3, 10));
-    println("low_digit(47) = {}", low_digit(47));
-    println("ensure_positive(5) = {}", ensure_positive(5));
-    println("magnitude(-8) = {}", magnitude(-8));
+    println(f"classify(-5) = {classify(-5)}");
+    println(f"first_multiple(3, 10) = {first_multiple(3, 10)}");
+    println(f"low_digit(47) = {low_digit(47)}");
+    println(f"ensure_positive(5) = {ensure_positive(5)}");
+    println(f"magnitude(-8) = {magnitude(-8)}");
     cleanup_demo();
-    println("poll_forever(3) = {}", poll_forever(3));
+    println(f"poll_forever(3) = {poll_forever(3)}");
 
     // Inside a block expression, `emit` is the divergence: it ends the
     // block with its value, so trailing statements are dead.
@@ -135,7 +135,7 @@ fn main() -> int32 {
         emit n * 2;
         println("emitted");     // warns: nothing runs after 'emit'
     };
-    println("doubled = {}", doubled);
+    println(f"doubled = {doubled}");
 
     // THE GATE. Code after a forever loop WITH a `break` does NOT warn:
     // the break keeps the loop's exit block, so the tail stays reachable,
@@ -149,7 +149,7 @@ fn main() -> int32 {
             break;
         }
     }
-    println("counted to {}", i);    // live: no warning
+    println(f"counted to {i}");    // live: no warning
 
     return 0;
 }

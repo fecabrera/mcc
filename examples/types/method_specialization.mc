@@ -66,7 +66,7 @@ fn holder<T>::describe(const self: holder<T>) {
 
 // Specialization keyed on a USER STRUCT argument, `holder<widget>`.
 fn holder<widget>::describe(const self: holder<widget>) {
-    println("  [specialized] holder<widget>::describe, widget id = {}", self.item.id);
+    println("  [specialized] holder<widget>::describe, widget id = {}".format(self.item.id));
 }
 
 fn main() -> int32 {

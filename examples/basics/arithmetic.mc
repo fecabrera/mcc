@@ -5,20 +5,20 @@ fn main() -> int32 {
     let a: int32 = 17;
     let b: int32 = 5;
 
-    println("a + b  = {}", a + b);
-    println("a - b  = {}", a - b);
-    println("a * b  = {}", a * b);
-    println("a / b  = {}", a / b);   // integer division truncates: 3
-    println("a % b  = {}", a % b);  // remainder: 2
+    println(f"a + b  = {a + b}");
+    println(f"a - b  = {a - b}");
+    println(f"a * b  = {a * b}");
+    println(f"a / b  = {a / b}");   // integer division truncates: 3
+    println(f"a % b  = {a % b}");  // remainder: 2
 
     // Standard precedence; parentheses override.
-    println("2 + 3 * 4   = {}", 2 + 3 * 4);
-    println("(2 + 3) * 4 = {}", (2 + 3) * 4);
+    println(f"2 + 3 * 4   = {2 + 3 * 4}");
+    println(f"(2 + 3) * 4 = {(2 + 3) * 4}");
 
     // Unary minus, and abs() from stdlib.h.
     let neg = -a;
-    println("neg      = {}", neg);
-    println("abs(neg) = {}", abs(neg));
+    println(f"neg      = {neg}");
+    println(f"abs(neg) = {abs(neg)}");
 
     // Comparisons produce bool values.
     let bigger = a > b;
@@ -37,9 +37,9 @@ fn main() -> int32 {
     // float64 arithmetic (no % for floats).
     let x = 2.5;
     let y = 0.5;
-    println("x + y = {}", x + y);
-    println("x / y = {}", x / y);
-    println("x > y = {}", x > y);
+    println(f"x + y = {x + y}");
+    println(f"x / y = {x / y}");
+    println(f"x > y = {x > y}");
 
     return 0;
 }

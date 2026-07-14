@@ -23,20 +23,20 @@ fn main() -> int32 {
     x &= 0xC;  // 4
     x |= 0x1;  // 5
     x ^= 0x6;  // 3
-    println("x = {}", x);   // 3
+    println(f"x = {x}");   // 3
 
     // The right-hand side is a full expression, and the result keeps the
     // target's type -- exactly like the plain assignment it stands in for.
     let total: int32 = 0;
     total += 2 * 3 + 1;     // total = total + (2 * 3 + 1)
-    println("total = {}", total);   // 7
+    println(f"total = {total}");   // 7
 
     // Compound assignment works through every assignable target: a variable,
     // a pointer dereference, an array element, and a struct field.
     let n: int32 = 100;
     let p = &n;
     *p -= 58;               // through a pointer
-    println("n = {}", n);   // 42
+    println(f"n = {n}");   // 42
 
     // The target is evaluated a single time. `bump(&i)` runs once, so the
     // counter advances by one and only arr[0] is incremented -- not the
@@ -45,13 +45,13 @@ fn main() -> int32 {
     let arr: int32[3] = [0, 0, 0];
     let i: int32 = 0;
     arr[bump(&i)] += 10;
-    println("arr = [{}, {}, {}], i = {}", arr[0], arr[1], arr[2], i);
+    println(f"arr = [{arr[0]}, {arr[1]}, {arr[2]}], i = {i}");
 
     // float64 supports the arithmetic forms (no %= for floats).
     let f: float64 = 2.0;
     f += 0.5;
     f *= 4.0;
-    println("f = {.1f}", f);   // 10.0 (the {.1f} modifier rounds to one decimal)
+    println(f"f = {f:.1f}");   // 10.0 (the {.1f} modifier rounds to one decimal)
 
     return 0;
 }

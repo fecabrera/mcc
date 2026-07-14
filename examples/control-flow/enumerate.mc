@@ -18,14 +18,14 @@ fn main() -> int32 {
     // index and value come paired; break/continue work as in any loop.
     for e in enumerate(&nums) {
         if (e.index == 3) { break; }     // just the first three
-        println("nums[{}] = {}", e.index, e.value);
+        println(f"nums[{e.index}] = {e.value}");
     }
 
     // As with a bare `for x in`, the & is optional: a struct value is borrowed
     // automatically, so enumerate(nums) iterates a snapshot with no dereference.
     for e in enumerate(nums) {
         if (e.index > 0) { break; }
-        println("first square (by value): {}", e.value);
+        println(f"first square (by value): {e.value}");
     }
 
     return 0;

@@ -9,7 +9,7 @@ fn main() -> int32 {
     // Count down: the loop stops once `countdown == 0` becomes true.
     let countdown: int32 = 3;
     until (countdown == 0) {
-        println("countdown = {}", countdown);
+        println(f"countdown = {countdown}");
         countdown -= 1;
     }
     println("liftoff");
@@ -23,7 +23,7 @@ fn main() -> int32 {
         if (n % 2 == 0) { continue; }   // add only the odd numbers
         sum += n;
     }
-    println("reached {} after adding odds up to {}", sum, n);
+    println(f"reached {sum} after adding odds up to {n}");
 
     return 0;
 }

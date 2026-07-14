@@ -18,7 +18,7 @@ fn main() -> int32 {
     // Popping returns the most recently pushed element first.
     print("stack (LIFO): ");
     until (chars.is_empty()) {
-        print("{} ", chars.pop());    // c b a
+        print(f"{chars.pop()} ");    // c b a
     }
     println("");
 

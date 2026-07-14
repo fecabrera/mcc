@@ -63,8 +63,8 @@ fn clamp_int(x: int32, lo: int32, hi: int32) -> int32 {
 }
 
 fn main() -> int32 {
-    println("saturate(300) = {}", saturate(300));
-    println("saturate(-7)  = {}", saturate(-7));
+    println(f"saturate(300) = {saturate(300)}");
+    println(f"saturate(-7)  = {saturate(-7)}");
     return 0;
 }
 

@@ -41,7 +41,7 @@ fn classify(c: char) -> char* {
 fn main() -> int32 {
     let i: int32 = 0;
     while (i < 4) {
-        println("{} is {}", i, name_of(i));
+        println(f"{i} is {name_of(i)}");
         i += 1;
     }
 
@@ -53,18 +53,18 @@ fn main() -> int32 {
         n += 1;
         case (n % 3) {
             when 0: continue;        // skip multiples of 3
-            else:   print("{} ", n);
+            else:   print(f"{n} ");
         }
     }
     println("");
 
-    println("'0' -> {}, ' ' -> {}", kind_of('0'), kind_of(' '));
+    println("'0' -> {}, ' ' -> {}".format(kind_of('0'), kind_of(' ')));
 
     // One arm per group, each covering several characters at once.
     let text: char* = "i9 x";
     let j: uint64 = 0;
     while (text[j] != '\0') {
-        println("'{}' is a {}", text[j], classify(text[j]));
+        println(f"'{text[j]}' is a {classify(text[j])}");
         j += 1;
     }
     return 0;

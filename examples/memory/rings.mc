@@ -20,21 +20,21 @@ fn main() -> int32 {
         v += 1;
     }
 
-    println("pop {}", r.pop());            // pop 1
-    println("pop {}", r.pop());            // pop 2 -- head is now at slot 2
+    println(f"pop {r.pop()}");            // pop 1
+    println(f"pop {r.pop()}");            // pop 2 -- head is now at slot 2
 
     // Pushing again reuses the two freed slots: the buffer physically holds
     // [5 6 3 4], but logically the ring still reads 3 4 5 6 front to back.
     r.push(5);
     r.push(6);
 
-    println("front {}", r.peek());         // front 3
+    println(f"front {r.peek()}");         // front 3
 
     // .at indexes logically from the front (index 0), wrap and all; .length
     // is the live element count.
     print("ring (wrapped): ");
     for i in range(r.length) {
-        print("{} ", r.at(i));             // 3 4 5 6
+        print(f"{r.at(i)} ");             // 3 4 5 6
     }
     println("");
 
@@ -44,14 +44,14 @@ fn main() -> int32 {
 
     print("ring (grown):   ");
     for i in range(r.length) {
-        print("{} ", r.at(i));             // 3 4 5 6 7
+        print(f"{r.at(i)} ");             // 3 4 5 6 7
     }
     println("");
 
     // Draining pops in arrival order, like any FIFO.
     print("ring (FIFO):    ");
     until (r.is_empty()) {
-        print("{} ", r.pop());             // 3 4 5 6 7
+        print(f"{r.pop()} ");             // 3 4 5 6 7
     }
     println("");
 

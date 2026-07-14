@@ -1201,13 +1201,16 @@ class FStrLit(StrLit):
     Parse-time sugar over the sequential format runtime: ``value`` holds the
     already-desugared format text (each hole reduced to its ``{modifier}``
     placeholder, literal braces and inspector labels ``{{``/``}}``-escaped)
-    and ``holes`` the interpolated expressions, in order. Legal only as the
-    format string of an ``@format`` call, where the holes splice in as the
-    collected arguments; every other sink rejects it (the ``StrLit`` funnels
-    guard). A literal with no holes (``f"{{}}"``, ``f"no holes"``) still
+    and ``holes`` the interpolated expressions, in order. As the format
+    string of an ``@format`` call the holes splice in at compile time as the
+    collected arguments; everywhere else the literal is a runtime string
+    *value*, rendered through a synthesized ``slice::format`` call (see
+    ``CodeGen.fstring_render_call``) -- only a compile-time-constant or
+    addressing sink still rejects it (the remaining ``StrLit`` funnel
+    guards). A literal with no holes (``f"{{}}"``, ``f"no holes"``) still
     builds this node with an empty ``holes`` list, keeping its f-string
-    identity so the ``@format``-only rule governs it too -- it never degrades
-    to a plain ``StrLit`` that a verbatim overload could bind.
+    identity -- it renders like any other f-string and never degrades to a
+    plain ``StrLit`` that a verbatim overload could bind.
 
     Attributes:
         holes: The ``FStrHole`` records, one per placeholder, in source order

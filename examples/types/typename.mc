@@ -23,7 +23,7 @@ const BYTE_NAME = typename(uint8);
 // In a generic, typename(T) resolves per instantiation: monomorphization
 // gives each copy its own literal.
 fn describe<T>(v: T) {
-    println("{}: {} bytes", typename(T), sizeof(T) as int32);
+    println(f"{typename(T)}: {sizeof(T) as int32} bytes");
 }
 
 // The headline composition. A generic `case type` arm is a real generic
@@ -35,9 +35,9 @@ fn show(a: any) {
         // In a pointer arm T binds to the pointee, and the binding is the
         // pointer: typename(T) names the pointee, typename(ptr) the pointer.
         when T* ptr:
-            println("a boxed {} (pointee {})", typename(ptr), typename(T));
+            println(f"a boxed {typename(ptr)} (pointee {typename(T)})");
         when T v:
-            println("a boxed {}", typename(T));
+            println(f"a boxed {typename(T)}");
         else:
             println("an empty box");
     }
@@ -47,26 +47,26 @@ fn main() -> int32 {
     // A type operand folds to the compiler's canonical spelling: exactly
     // the string the `any` tags hash and the diagnostics print, so it is
     // deterministic across compilations.
-    println("{}", typename(int64));         // int64
-    println("{}", typename(int32**));       // int32**
-    println("{}", typename(slice<int32>));  // slice<int32>
-    println("{}", typename(box<int64>));    // box<int64>
+    println(f"{typename(int64)}");         // int64
+    println(f"{typename(int32**)}");       // int32**
+    println(f"{typename(slice<int32>)}");  // slice<int32>
+    println(f"{typename(box<int64>)}");    // box<int64>
 
     // A bare name in scope names the variable's static type. A top-level
     // `const` strips, matching what boxing does with tags, so both of these
     // print plain "float64" / "int64".
     let x: const float64 = 1.5;
-    println("{}", typename(x));             // float64
-    println("{}", typename(const int64));   // int64
+    println(f"{typename(x)}");             // float64
+    println(f"{typename(const int64)}");   // int64
 
     // The result is an ordinary string value: here one that folded into a
     // file-scoped const initializer above.
-    println("{} is {} byte", BYTE_NAME, sizeof(uint8) as int32);   // uint8 is 1 byte
+    println(f"{BYTE_NAME} is {sizeof(uint8) as int32} byte");   // uint8 is 1 byte
 
     // typename never looks through a box at runtime: an `any` variable
     // names as its STATIC type, "any", no matter what it holds.
     let a: any = 5;
-    println("{}", typename(a));             // any, not int32
+    println(f"{typename(a)}");             // any, not int32
 
     // Per-instantiation resolution: each call stamps its own name.
     describe(7);        // int32: 4 bytes (an untyped literal anchors at int32)

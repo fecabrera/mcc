@@ -43,7 +43,7 @@ def test_qualified_def_and_call_returns_a_value(capfd):
         }
         fn main() -> int32 {
             let p: point = { x = 3, y = 4 };
-            println("{}", point::sum(p));
+            println(f"{point::sum(p)}");
             return 0;
         }
         """
@@ -64,7 +64,7 @@ def test_mut_self_mutation_visible_to_caller(capfd):
         fn main() -> int32 {
             let c: counter = { n = 41 };
             counter::bump(c);
-            println("{}", c.n);
+            println(f"{c.n}");
             return 0;
         }
         """
@@ -105,7 +105,7 @@ def test_same_method_name_on_two_structs(capfd):
         fn main() -> int32 {
             let s: square = { side = 5 };
             let r: rect = { w = 2, h = 3 };
-            println("{} {}", square::area(s), rect::area(r));
+            println(f"{square::area(s)} {rect::area(r)}");
             return 0;
         }
         """
@@ -128,7 +128,7 @@ def test_overloaded_qualified_method_dispatches_by_arg(capfd):
         }
         fn main() -> int32 {
             let p: point = { x = 10, y = 20 };
-            println("{} {}", point::shift(p, 1), point::shift(p, 1, 2));
+            println(f"{point::shift(p, 1)} {point::shift(p, 1, 2)}");
             return 0;
         }
         """
@@ -153,7 +153,7 @@ def test_private_qualified_method(capfd, tmp_path):
         "import \"geo\";\n"
         "fn main() -> int32 {\n"
         "    let p: point = { x = 9, y = 0 };\n"
-        "    println(\"{}\", point::show(p));\n"
+        "    println(f\"{point::show(p)}\");\n"
         "    return 0;\n"
         "}\n"
     )
@@ -201,7 +201,7 @@ def test_enum_member_value_still_works(capfd):
         enum Color { Red = 0, Green = 1, Blue = 2 }
         fn main() -> int32 {
             let c: int32 = Color::Blue;
-            println("{}", c);
+            println(f"{c}");
             return 0;
         }
         """
@@ -223,7 +223,7 @@ def test_generic_method_def_and_inference_call_returns_a_value(capfd):
         }
         fn main() -> int32 {
             let p: point<int32> = { x = 3, y = 4 };
-            println("{}", point::sum(p));
+            println(f"{point::sum(p)}");
             return 0;
         }
         """
@@ -245,7 +245,7 @@ def test_generic_mut_self_mutation_visible_to_caller(capfd):
         fn main() -> int32 {
             let p: point<int32> = { x = 2, y = 3 };
             point::scale(p, 10);
-            println("{} {}", p.x, p.y);
+            println(f"{p.x} {p.y}");
             return 0;
         }
         """
@@ -266,7 +266,7 @@ def test_generic_method_monomorphizes_across_two_instantiations(capfd):
         fn main() -> int32 {
             let pi: point<int32> = { x = 3, y = 4 };
             let pf: point<float64> = { x = 1.5, y = 2.0 };
-            println("{} {}", point::sum(pi), point::sum(pf));
+            println(f"{point::sum(pi)} {point::sum(pf)}");
             return 0;
         }
         """
@@ -288,7 +288,7 @@ def test_generic_method_with_own_type_param(capfd):
         }
         fn main() -> int32 {
             let b: box<int32> = { v = 10 };
-            println("{}", box::combine(b, 5));
+            println(f"{box::combine(b, 5)}");
             return 0;
         }
         """
@@ -327,7 +327,7 @@ def test_generic_const_self_and_private_method(capfd, tmp_path):
         'import "geo";\n'
         "fn main() -> int32 {\n"
         "    let p: point<int32> = { x = 9, y = 0 };\n"
-        '    println("{}", point::show(p));\n'
+        '    println(f"{point::show(p)}");\n'
         "    return 0;\n"
         "}\n"
     )
@@ -399,7 +399,7 @@ def test_specialization_dispatches_a_distinct_body(capfd):
         fn main() -> int32 {
             let bi: box<int32> = { v = 7 };
             let bf: box<float64> = { v = 1.0 };
-            println("{} {}", box::tag(bi), box::tag(bf));
+            println(f"{box::tag(bi)} {box::tag(bf)}");
             return 0;
         }
         """
@@ -420,7 +420,7 @@ def test_specialization_on_a_user_struct_argument(capfd):
         fn main() -> int32 {
             let w: holder<widget> = { item = { n = 5 } };
             let i: holder<int32> = { item = 9 };
-            println("{} {}", holder::code(w), holder::code(i));
+            println(f"{holder::code(w)} {holder::code(i)}");
             return 0;
         }
         """
@@ -438,7 +438,7 @@ def test_lone_specialization_without_a_generic_base(capfd):
         fn box<int32>::only(self: box<int32>) -> int32 { return self.v + 5; }
         fn main() -> int32 {
             let b: box<int32> = { v = 3 };
-            println("{}", box::only(b));
+            println(f"{box::only(b)}");
             return 0;
         }
         """
@@ -465,7 +465,7 @@ def test_partial_specialization_three_tier_dispatch(capfd):
             let g: pair<int64, int64> = { a = 1, b = 2 };
             let p: pair<int32, int64> = { a = 1, b = 2 };
             let f: pair<int32, int8> = { a = 1, b = 2 };
-            println("{} {} {}", pair::which(g), pair::which(p), pair::which(f));
+            println(f"{pair::which(g)} {pair::which(p)} {pair::which(f)}");
             return 0;
         }
         """
@@ -541,7 +541,7 @@ def test_lone_partial_specialization(capfd):
         fn pair<int32, U>::second(self: pair<int32, U>) -> U { return self.b; }
         fn main() -> int32 {
             let p: pair<int32, int64> = { a = 1, b = 40 };
-            println("{}", pair::second(p) + 2);
+            println(f"{pair::second(p) + 2}");
             return 0;
         }
         """
@@ -560,7 +560,7 @@ def test_partial_mismatched_receiver_falls_to_generic(capfd):
         fn pair<int32, U>::which(self: pair<int32, U>) -> int32 { return 1; }
         fn main() -> int32 {
             let p: pair<int64, int8> = { a = 1, b = 2 };
-            println("{}", pair::which(p));
+            println(f"{pair::which(p)}");
             return 0;
         }
         """
@@ -604,7 +604,7 @@ def test_bounded_partial_specialization(capfd):
         fn main() -> int32 {
             let inside: pair<int32, int8> = { a = 1, b = 2 };
             let outside: pair<int32, int64> = { a = 1, b = 2 };
-            println("{} {}", pair::which(inside), pair::which(outside));
+            println(f"{pair::which(inside)} {pair::which(outside)}");
             return 0;
         }
         """
@@ -625,7 +625,7 @@ def test_bounded_generic_beats_unbounded_partial(capfd):
         fn pair<int32, U>::which(self: pair<int32, U>) -> int32 { return 2; }
         fn main() -> int32 {
             let p: pair<int32, int64> = { a = 1, b = 2 };
-            println("{}", pair::which(p));
+            println(f"{pair::which(p)}");
             return 0;
         }
         """
@@ -646,7 +646,7 @@ def test_bounded_partial_beats_bounded_generic(capfd):
         }
         fn main() -> int32 {
             let p: pair<int32, int8> = { a = 1, b = 2 };
-            println("{}", pair::which(p));
+            println(f"{pair::which(p)}");
             return 0;
         }
         """
@@ -672,7 +672,7 @@ def test_default_on_a_partial_fresh_param(capfd):
             return sizeof(K) as int64 * 10 + sizeof(V) as int64;
         }
         fn main() -> int32 {
-            println("{} {}", pair::width(0), triple::tag(7));
+            println(f"{pair::width(0)} {triple::tag(7)}");
             return 0;
         }
         """
@@ -731,7 +731,7 @@ def test_partial_fresh_name_may_reuse_its_own_position(capfd):
         fn pair<int32, B>::second(self: pair<int32, B>) -> B { return self.b; }
         fn main() -> int32 {
             let p: pair<int32, int64> = { a = 1, b = 7 };
-            println("{}", pair::second(p));
+            println(f"{pair::second(p)}");
             return 0;
         }
         """
@@ -805,7 +805,7 @@ def test_partial_with_method_own_type_param(capfd):
         fn pair<int32, U>::pick<W>(self: pair<int32, U>, w: W) -> W { return w; }
         fn main() -> int32 {
             let p: pair<int32, int8> = { a = 1, b = 2 };
-            println("{}", pair::pick(p, 42));
+            println(f"{pair::pick(p, 42)}");
             return 0;
         }
         """
@@ -826,7 +826,7 @@ def test_partial_on_user_struct_concrete_argument(capfd):
         fn main() -> int32 {
             let t: table<vec2, int8> = { k = { x = 1, y = 2 }, v = 3 };
             let u: table<int32, int8> = { k = 1, v = 3 };
-            println("{} {}", table::kind(t), table::kind(u));
+            println(f"{table::kind(t)} {table::kind(u)}");
             return 0;
         }
         """
@@ -918,7 +918,7 @@ def test_decorated_all_fresh_list_still_works(capfd):
         }
         fn main() -> int32 {
             let p: pair<int32, int8> = { a = 40, b = 2 };
-            println("{}", pair::sum(p));
+            println(f"{pair::sum(p)}");
             return 0;
         }
         """
@@ -1050,7 +1050,7 @@ def test_specialization_coexists_with_own_type_param_generic(capfd):
         fn box<T>::labeled<U>(self: box<T>, label: U) -> U { return label; }
         fn main() -> int32 {
             let b: box<int32> = { v = 7 };
-            println("{}", box::labeled(b, 99));
+            println(f"{box::labeled(b, 99)}");
             return 0;
         }
         """
@@ -1082,7 +1082,7 @@ def test_alias_declared_specialization_outranks_generic(capfd):
         fn main() -> int32 {
             let pi: point<int64>;
             let pf: pointf;
-            println("{} {}", point::tag(pi), point::tag(pf));
+            println(f"{point::tag(pi)} {point::tag(pf)}");
             return 0;
         }
         """
@@ -1104,7 +1104,7 @@ def test_plain_struct_alias_qualifier_and_both_call_spellings(capfd):
             let x: counter = { n = 0 };
             counter::bump(x);
             c::bump(x);
-            println("{}", x.n);
+            println(f"{x.n}");
             return 0;
         }
         """
@@ -1360,7 +1360,7 @@ def test_duplicate_position_alias_is_a_diagonal_constraint(capfd):
             let p: pair2<int32, int32>;
             p.a = 41;
             p.b = 1;
-            println("{}", pair2::first(p) + 1);
+            println(f"{pair2::first(p) + 1}");
             return 0;
         }
         """

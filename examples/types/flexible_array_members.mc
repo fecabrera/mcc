@@ -32,20 +32,20 @@ fn make_packet(n: uint64) -> struct packet* {
 
 fn main() -> int32 {
     // The FAM contributes nothing to sizeof -- it is just the uint64 length.
-    println("sizeof(struct packet) = {}", sizeof(struct packet));
+    println(f"sizeof(struct packet) = {sizeof(struct packet)}");
 
     let p = make_packet(5)!;
     print("data:");
     let i: uint64 = 0;
     while (i < p->length) {           // 0 1 4 9 16
-        print(" {}", p->data[i]);
+        print(f" {p->data[i]}");
         i += 1;
     }
     println("");
 
     // Writing through the tail pointer is an ordinary indexed store.
     p->data[0] = 100;
-    println("data[0] is now {}", p->data[0]);
+    println(f"data[0] is now {p->data[0]}");
 
     dealloc(p as byte*);
     return 0;

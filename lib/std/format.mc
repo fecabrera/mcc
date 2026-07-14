@@ -6,12 +6,14 @@ import "libc/stdlib";
 // `value`'s rendering to `str`, steered by `modifier` (`""` for the
 // default; a string literal adapts directly, so `format(s, 255 as int32,
 // "x")` works as-is — the value must be typed, an untyped 255 is ambiguous
-// among the integer and char members). std/io's print/println dispatch
-// here: each `{[modifiers]}` placeholder renders its argument through this
-// set, the bracket content arriving verbatim as the modifier. Overload
-// sets are open, so making a type printable is adding one `format`
-// overload for it in your own module — a concrete member outranks the
-// closed-group templates and the unbounded fallback.
+// among the integer and char members). The `@format` collectors dispatch
+// here — std/slice's `"...".format(args)`, and with it every f-string's
+// holes (`println(f"{x:08x}")`) and your own collecting functions — each
+// `{[modifiers]}` placeholder rendering its argument through this set,
+// the bracket content arriving verbatim as the modifier. Overload sets are open, so making a
+// type printable is adding one `format` overload for it in your own module
+// — a concrete member outranks the closed-group templates and the
+// unbounded fallback.
 
 // Scratch space for the one snprintf-rendered member (float64).
 @private const MAX_BUF_LEN = 256;
@@ -401,6 +403,26 @@ fn format(mut str: string, const value: slice<const char>, const modifier: slice
             str.push(' ');
         }
     }
+}
+
+/**
+ * Appends an owned string's text to str, space-padded to a field width.
+ *
+ * The `string` face of the string-slice member above: the value borrows to
+ * its `slice<const char>` view and delegates, so the same `[N][s][N]` width
+ * grammar applies. This concrete member is what renders a boxed `string`
+ * (`"{}".format(s)`, an f-string's `{s}` hole) as its text -- without it
+ * the value would fall to the unbounded `<T>` fallback and print
+ * `<list<char>>`. `string` is `list<char>`, so a `list<char>` value renders
+ * through here too.
+ *
+ * @param str:      destination string
+ * @param value:    string whose text to append (its `length` bytes)
+ * @param modifier: `[N][s][N]` (see the string-slice member above)
+ */
+@inline
+fn format(mut str: string, const value: string, const modifier: slice<char>) {
+    format(str, value as slice<const char>, modifier);
 }
 
 /**

@@ -31,16 +31,16 @@ struct res { fd: int32; }
 
 fn res::constructor(mut self: res, fd: int32) {
     self.fd = fd;
-    println("open {}", fd);
+    println(f"open {fd}");
 }
 
 fn res::destructor(mut self: res) {
-    println("close {}", self.fd);
+    println(f"close {self.fd}");
     self.fd = -1;
 }
 
 fn make(fd: int32) -> own res { return res(fd); }
-fn use(r: res) -> int32 { println("use {}", r.fd); return r.fd; }
+fn use(r: res) -> int32 { println(f"use {r.fd}"); return r.fd; }
 """
 
 FAIL = "error fail { OOPS }\n"
@@ -87,7 +87,7 @@ def test_argument_temp_destroyed_after_the_callee_returns(capfd):
     src = RES + """
     fn main() -> int32 {
         let n = use(make(3));
-        println("got {}", n);
+        println(f"got {n}");
         return 0;
     }
     """
@@ -99,7 +99,7 @@ def test_nested_chain_destroys_at_the_full_chain_end(capfd):
     # Statement end, not innermost-call end: the temp survives through the
     # OUTER call and is destroyed after it returns.
     src = RES + """
-    fn outer(x: int32) -> int32 { println("outer {}", x); return x; }
+    fn outer(x: int32) -> int32 { println(f"outer {x}"); return x; }
     fn main() -> int32 {
         let n = outer(use(make(4)));
         return n - 4;
@@ -136,10 +136,10 @@ def test_collected_extra_temp_drops(capfd):
 
 def test_chained_receiver_drops_after_the_chain(capfd):
     src = RES + """
-    fn res::poke(self: res) -> int32 { println("poke {}", self.fd); return self.fd; }
+    fn res::poke(self: res) -> int32 { println(f"poke {self.fd}"); return self.fd; }
     fn main() -> int32 {
         let n = make(7).poke();
-        println("got {}", n);
+        println(f"got {n}");
         return 0;
     }
     """
@@ -158,7 +158,7 @@ def test_assignment_drops_the_temp_and_the_copy_aliases(capfd):
     fn main() -> int32 {
         let r = make(10);
         r = make(11);
-        println("assigned {}", r.fd);
+        println(f"assigned {r.fd}");
         return 0;
     }
     """
@@ -187,7 +187,7 @@ def test_compound_assignment_drops_a_scalar_temp(capfd):
     # the right-hand side is computed, before the combined store.
     src = """
     import "std/io";
-    fn int32::destructor(mut self: int32) { println("dint {}", self); }
+    fn int32::destructor(mut self: int32) { println(f"dint {self}"); }
     fn mkint() -> own int32 {
         let v: int32 = 7;
         return move(v);
@@ -195,7 +195,7 @@ def test_compound_assignment_drops_a_scalar_temp(capfd):
     fn main() -> int32 {
         let x: int32 = 1;
         x += mkint();
-        println("x {}", x);
+        println(f"x {x}");
         return 0;
     }
     """
@@ -272,7 +272,7 @@ def test_fallback_let_adopts_on_both_arms(capfd):
     src = RES + LOAD + """
     fn scope(k: int32) {
         let v = try load(k) ?? res(99);
-        println("held {}", v.fd);
+        println(f"held {v.fd}");
     }
     fn main() -> int32 {
         scope(40);
@@ -297,7 +297,7 @@ def test_adopting_lets_destroy_at_scope_end_once(capfd):
         let a = make(50);
         let _ = make(51);
         let c = try load(52) except (err) { return -1; };
-        println("held {} {}", a.fd, c.fd);
+        println(f"held {a.fd} {c.fd}");
         return 0;
     }
     """
@@ -315,7 +315,7 @@ def test_transfer_chain_does_not_double_destroy(capfd):
     fn wrap(k: int32) -> own res { return make(k); }
     fn main() -> int32 {
         let w = wrap(60);
-        println("held {}", w.fd);
+        println(f"held {w.fd}");
         return 0;
     }
     """
@@ -339,7 +339,7 @@ def test_destructorless_own_stays_a_noop(capfd):
         let n = take(mint(2));
         let p = mint(3);
         p = mint(4);
-        println("ok {}", n + p.x);
+        println(f"ok {n + p.x}");
         return 0;
     }
     """
@@ -377,7 +377,7 @@ def test_return_value_computes_before_the_drop_and_the_return(capfd):
     }
     fn main() -> int32 {
         let n = ret_path(80);
-        println("ret {}", n);
+        println(f"ret {n}");
         return 0;
     }
     """
@@ -422,7 +422,7 @@ def test_conditional_arms_drop_only_what_executed(capfd):
         let a = pick(true);
         let ok = a > 0 and use(make(102)) > 0;
         let skipped = a < 0 and use(make(103)) > 0;
-        println("{} {}", ok, skipped);
+        println(f"{ok} {skipped}");
         return 0;
     }
     """
@@ -443,7 +443,7 @@ def test_break_destroys_temps_of_the_abandoned_expression(capfd):
     fn main() -> int32 {
         while (true) {
             let x = use2(make(110), try load(-1) ?? { break; });
-            println("not reached {}", x);
+            println(f"not reached {x}");
         }
         println("after");
         return 0;

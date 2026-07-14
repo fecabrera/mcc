@@ -16,7 +16,7 @@ import "std/io";
 // the constructors, every consuming form, and stage 4, rendering an error
 // to text with error_name/error_message plus the -Wunused-result warning
 // for a silently dropped result. One follow-up remains: an error value
-// still does not box into `any`/`{}`, so `println("{}", err)` cannot print
+// still does not box into `any`/`{}`, so `println(f"{err}")` cannot print
 // its name directly; use error_name/error_message to render one.
 
 // An `error` declaration is enum-like but NOMINAL: a distinct int32-backed
@@ -122,15 +122,15 @@ fn main() -> int32 {
     // Reading the numeric value out is an explicit escape, `as int32`; no
     // cast goes the other way. (An error value still does not box into `{}`;
     // to render one to text use error_name/error_message, shown just below.)
-    println("NOT_FOUND = {}, PERMISSION = {}",
-            file_error::NOT_FOUND as int32, file_error::PERMISSION as int32);
-    println("EXHAUSTED = {}, TIMEOUT = {}",
-            file_error::EXHAUSTED as int32, file_error::TIMEOUT as int32);
+    println("NOT_FOUND = {}, PERMISSION = {}".format(
+            file_error::NOT_FOUND as int32, file_error::PERMISSION as int32));
+    println("EXHAUSTED = {}, TIMEOUT = {}".format(
+            file_error::EXHAUSTED as int32, file_error::TIMEOUT as int32));
 
     // Truthiness tests against the reserved zero state; equality works
     // against members of the same declaration.
     let e = file_error::PERMISSION;
-    if (e) { println("e holds a cause: {}", describe(e)); }
+    if (e) { println(f"e holds a cause: {describe(e)}"); }
     if (e == file_error::PERMISSION) { println("e == PERMISSION"); }
     if (e != file_error::NOT_FOUND)  { println("e != NOT_FOUND"); }
 
@@ -142,12 +142,12 @@ fn main() -> int32 {
     // Both are claimed only when directly followed by `(` (like ok(/error(),
     // so the names stay ordinary identifiers otherwise; the operand must be a
     // declared error value (error_name(5) is a compile error).
-    println("NOT_FOUND: name = {}, message = {}",
+    println("NOT_FOUND: name = {}, message = {}".format(
             error_name(file_error::NOT_FOUND),      // "file_error::NOT_FOUND"
-            error_message(file_error::NOT_FOUND));  // "Not Found" (has display)
-    println("PERMISSION: name = {}, message = {}",
+            error_message(file_error::NOT_FOUND)));  // "Not Found" (has display)
+    println("PERMISSION: name = {}, message = {}".format(
             error_name(e),       // "file_error::PERMISSION"
-            error_message(e));   // "PERMISSION" (no display, falls back to name)
+            error_message(e)));   // "PERMISSION" (no display, falls back to name)
 
     // ok()/error() are context-typed like a bare struct literal: legal in
     // a return, a typed let, an assignment, an argument, or a struct
@@ -168,23 +168,23 @@ fn main() -> int32 {
     // On ok, err is the reserved zero no-error state: it reads out as 0, and
     // error_name/error_message of a non-cause render as the empty string
     // (bracketed here to make the emptiness visible).
-    println("find(2): found = {}, err reads out as {}, error_name is [{}]",
-            found, err as int32, error_name(err));
+    println("find(2): found = {}, err reads out as {}, error_name is [{}]".format(
+            found, err as int32, error_name(err)));
 
     // On error, err is the cause and ret is the ZERO VALUE of T: zero
     // filled, never the union's other-arm bytes reinterpreted.
     let missing, cause = find(0);
     if (cause) {
-        println("find(0) failed: {}; missing = {} (the zero value of int32)",
-                describe(cause), missing);
+        println("find(0) failed: {}; missing = {} (the zero value of int32)".format(
+                describe(cause), missing));
     }
 
     // checked() builds its result with a ternary of constructors: no
     // annotation is needed, the two arms bind each other's free parameter.
     let ok_val, ok_err = checked(2);
     let bad_val, bad_err = checked(-1);
-    println("checked(2) = {} (err [{}]); checked(-1) err = {}",
-            ok_val, error_name(ok_err), describe(bad_err));
+    println("checked(2) = {} (err [{}]); checked(-1) err = {}".format(
+            ok_val, error_name(ok_err), describe(bad_err)));
 
     // The destructure also opens a stored result, not just a fresh call.
     // (The error-only result<E> rejects here: it has no ok value to bind;
@@ -192,7 +192,7 @@ fn main() -> int32 {
     // the bare `try flush(fail);` inside flush_all() above.)
     let stale, why = pending;
     if (why == file_error::TIMEOUT) {
-        println("pending held TIMEOUT; stale = {}", stale);
+        println(f"pending held TIMEOUT; stale = {stale}");
     }
 
     // FORM A, TRY ... EXCEPT: `try f() except (err) { H } [else { S }];`.
@@ -208,27 +208,27 @@ fn main() -> int32 {
     // code after the statement still runs, with the binding set to the
     // fallback.
     let v = try find(0) except (err) {
-        println("handler: {}, emitting a fallback", describe(err));
+        println(f"handler: {describe(err)}, emitting a fallback");
         emit -1;
     } else {
         println("never printed: the fallback path skips else");
     };
-    println("after: v = {} (the fallback; else did not run)", v);
+    println(f"after: v = {v} (the fallback; else did not run)");
 
     // On the ok arm the handler is skipped and `else` runs with the bound
     // value already in scope; it stays in scope after the statement.
     let w = try find(3) except (err) {
         emit -1;
     } else {
-        println("else runs on ok: w = {}", w);
+        println(f"else runs on ok: w = {w}");
     };
-    println("after: w = {}", w);
+    println(f"after: w = {w}");
 
     // Because `try` sits at unary level, the whole form composes as an
     // ordinary operand inside a larger expression, same diverge-or-emit
     // obligation.
     let n = 1 + try find(2) except (err) { emit 0; };
-    println("1 + try find(2) ... = {}", n);
+    println(f"1 + try find(2) ... = {n}");
 
     // STATEMENT POSITION: as a whole expression statement nothing escapes,
     // so the handler is obligation-free and may simply fall through ("log
@@ -236,7 +236,7 @@ fn main() -> int32 {
     // result<E>; with no ok value there is no T, so `emit` rejects inside
     // this handler and the let/return forms reject the call outright.
     try flush(true) except (err) {
-        println("flush failed: {}, logged and moving on", err as int32);
+        println(f"flush failed: {err as int32}, logged and moving on");
     };
     try flush(false) except (err) {
         println("never printed: flush(false) is ok");
@@ -255,17 +255,17 @@ fn main() -> int32 {
     // int32, so a bare try HERE is a compile error naming both types;
     // main opens results with the binding forms instead.)
     let big, werr = wrap(7);
-    println("wrap(7) = {} (werr reads out as {})", big, werr as int32);
+    println(f"wrap(7) = {big} (werr reads out as {werr as int32})");
     let none, werr2 = wrap(0);
     if (werr2 == file_error::NOT_FOUND) {
-        println("wrap(0) propagated NOT_FOUND; none = {}", none);
+        println(f"wrap(0) propagated NOT_FOUND; none = {none}");
     }
 
     // And the statement form observed the same way: flush_all(true) stops
     // at its first `try flush(fail);` and forwards TIMEOUT; flush_all(false)
     // continues past both and reaches ok().
     try flush_all(true) except (err) {
-        println("flush_all(true) propagated: {}", err as int32);
+        println(f"flush_all(true) propagated: {err as int32}");
     };
     try flush_all(false) except (err) {
         println("never printed: flush_all(false) runs to ok()");
@@ -278,15 +278,15 @@ fn main() -> int32 {
     // consulted, which is why it is legal right here in main. (result<E>
     // rejects the form: no ok value to default.)
     let fell = try find(0) ?? -1;
-    println("try find(0) ?? -1 = {}", fell);
+    println(f"try find(0) ?? -1 = {fell}");
 
     // The fallback is LAZY: it evaluates only on the error path, so its
     // side effects never run on ok. The counter stays at 0 through the
     // first line and ticks on the second.
     let hit = try find(2) ?? slow_default();
-    println("ok path: hit = {}, defaults_used = {}", hit, defaults_used);
+    println(f"ok path: hit = {hit}, defaults_used = {defaults_used}");
     let dflt = try find(0) ?? slow_default();
-    println("error path: dflt = {}, defaults_used = {}", dflt, defaults_used);
+    println(f"error path: dflt = {dflt}, defaults_used = {defaults_used}");
 
     // The right-hand side is a full expression (an identifier, a literal,
     // a call, an arithmetic or ternary expression), or an emit-block that
@@ -296,7 +296,7 @@ fn main() -> int32 {
         println("emit-block fallback: logging, then defaulting");
         emit -2;
     };
-    println("logged = {}", logged);
+    println(f"logged = {logged}");
 
     // Precedence: ?? binds LOOSER than the ternary and every binary
     // operator (it is the lowest-precedence expression form, just above
@@ -305,13 +305,13 @@ fn main() -> int32 {
     // try find(0) ?? (2 - 1), never (try find(0) ?? 2) - 1. The whole
     // `2 - 1` is the fallback (find(0) errors, so it evaluates to 1).
     let tight = try find(0) ?? 2 - 1;
-    println("try find(0) ?? 2 - 1 = {}", tight);
+    println(f"try find(0) ?? 2 - 1 = {tight}");
 
     // To operate on the UNWRAPPED value you parenthesize the fallback so it
     // stops before the operator. Here find(2) is ok, so the fallback is
     // skipped and the subtraction applies to the payload 42.
     let unwrapped = (try find(2) ?? 0) - 1;
-    println("(try find(2) ?? 0) - 1 = {}", unwrapped);
+    println(f"(try find(2) ?? 0) - 1 = {unwrapped}");
 
     // FORM B, THE TRY STATEMENT: `try (r = f()) { B } except (err) { H }`
     // keeps the binding inside a block. The head binds a fresh r with no
@@ -320,7 +320,7 @@ fn main() -> int32 {
     // error with err bound (scoped to H) and is obligation-free. There is
     // no else arm: the block already is the no-error arm.
     try (r = find(5)) {
-        println("try statement: r = {} inside the ok block", r);
+        println(f"try statement: r = {r} inside the ok block");
     } except (err) {
         println("never printed: find(5) is ok");
     }
@@ -330,7 +330,7 @@ fn main() -> int32 {
     try (r = find(0)) {
         println("never printed: find(0) fails");
     } except (err) {
-        println("try statement error arm: {}", describe(err));
+        println(f"try statement error arm: {describe(err)}");
     }
 
     return 0;

@@ -62,7 +62,7 @@ def test_non_generic_struct_constructs(capfd):
         fn main() -> int32 {
             let c = counter(41);
             c.n += 1;
-            println("{}", c.n);
+            println(f"{c.n}");
             return 0;
         }
         """
@@ -318,7 +318,7 @@ def test_builtin_with_declared_ctor_constructs(capfd):
         }
         fn main() -> int32 {
             let c = char(65);
-            println("{}", c);
+            println(f"{c}");
             return 0;
         }
         """
@@ -336,7 +336,7 @@ def test_alias_to_builtin_constructs(capfd):
         type letter = char;
         fn main() -> int32 {
             let c = letter(66);
-            println("{}", c);
+            println(f"{c}");
             return 0;
         }
         """
@@ -759,7 +759,7 @@ def test_implicit_empty_ctor_on_a_derived_struct(capfd):
         }
         fn main() -> int32 {
             let p = pointf();
-            println("{}", p.tag);
+            println(f"{p.tag}");
             return 0;
         }
         """
@@ -777,7 +777,7 @@ def test_declared_zero_arg_ctor_wins_over_the_implicit(capfd):
         fn cfg::constructor(mut self: cfg) { self.mode = 99; }
         fn main() -> int32 {
             let k = cfg();
-            println("{}", k.mode);
+            println(f"{k.mode}");
             return 0;
         }
         """
@@ -797,7 +797,7 @@ def test_declared_collecting_ctor_claims_the_zero_arg_call(capfd):
         }
         fn main() -> int32 {
             let b = bag();
-            println("{}", b.n);
+            println(f"{b.n}");
             return 0;
         }
         """
@@ -814,7 +814,7 @@ def test_implicit_empty_ctor_in_expression_position(capfd):
         struct pt { x: int32 = 20; y: int32 = 22; }
         fn sum(p: pt) -> int32 { return p.x + p.y; }
         fn main() -> int32 {
-            println("{}", sum(pt()));
+            println(f"{sum(pt())}");
             return 0;
         }
         """
@@ -847,7 +847,7 @@ def test_implicit_empty_ctor_through_an_alias(capfd):
         fn main() -> int32 {
             let p = pf();
             p.x = 9.0;
-            println("{}", p.x as int32);
+            println(f"{p.x as int32}");
             return 0;
         }
         """
@@ -964,7 +964,7 @@ def test_inherited_zero_arg_ctor_claims_the_derived_call(capfd):
         fn b::constructor(mut self: b) { self.n = 99; }
         fn main() -> int32 {
             let v = d();
-            println("{} {}", v.n, v.extra);
+            println(f"{v.n} {v.extra}");
             return 0;
         }
         """

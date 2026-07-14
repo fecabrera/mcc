@@ -30,19 +30,19 @@ fn first<A, B>(a: A, b: B) -> A {
 
 fn main() -> int32 {
     // Explicit instantiation...
-    println("max<int32>   = {}", max<int32>(3, 9));
-    println("max<float64> = {}", max<float64>(2.5, 1.5));
+    println(f"max<int32>   = {max<int32>(3, 9)}");
+    println(f"max<float64> = {max<float64>(2.5, 1.5)}");
 
     // ...or inferred from the arguments (typed variables win over literals).
     let big: int64 = 9000000000;
-    println("max inferred = {}", max(big, 7));
+    println(f"max inferred = {max(big, 7)}");
 
     // Each instantiation compiles to its own function (monomorphization),
     // so uint8 math really happens in 8 bits with unsigned comparisons.
-    println("clamp<uint8> = {}", clamp<uint8>(200, 0, 100));
+    println(f"clamp<uint8> = {clamp<uint8>(200, 0, 100)}");
 
-    println("power<int64>(2, 40) = {}", power<int64>(2, 40));
-    println("first(7, 1.5)       = {}", first(7, 1.5));
+    println(f"power<int64>(2, 40) = {power<int64>(2, 40)}");
+    println(f"first(7, 1.5)       = {first(7, 1.5)}");
 
     return 0;
 }

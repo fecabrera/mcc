@@ -20,7 +20,7 @@ fn main() -> int32 {
     // get writes the element through a `mut` parameter -- no & at the call.
     let value: int32 = 0;
     if (nums.get(6, value))
-        println("length {}, nums[6] = {}", nums.length, value);
+        println(f"length {nums.length}, nums[6] = {value}");
 
     // The list<T> constructor is overloaded on its source: a (T*, n) pair
     // copies a raw array, and a const slice<T> copies any borrowed run -- so a
@@ -33,8 +33,8 @@ fn main() -> int32 {
     nums.append(more as slice<int32>);     // append the whole list onto nums
 
     let copy = list<int32>(nums as slice<int32>);   // independent deep copy
-    println("after append: nums.length {}, copy.length {}",
-            nums.length, copy.length);
+    println("after append: nums.length {}, copy.length {}".format(
+            nums.length, copy.length));
 
     return 0;
 }

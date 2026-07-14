@@ -1867,8 +1867,10 @@ certainly hands over, so it neither adopts nor drops — the call stays a
 plain copy, the same conservative judgment a `let` applies. Still plain
 copies (no automatic destruction, follow-up work): an own call in a
 struct-literal field initializer, `emit f();`, `return f();` from a
-non-own function, f-string hole temporaries, and field projection
-(`f().field`).
+non-own function, and field projection (`f().field`). (F-string hole
+temporaries, formerly on this list, now drop at statement end like any
+collected argument's — see
+[string-valued f-strings](#formatted-print--println).)
 
 **With a result return** the ownership rides the **ok payload**:
 
@@ -2369,6 +2371,26 @@ inferred from it. A dependent target that resolves to a non-struct
 deduced. Inherited methods carry their dependent bounds through `extends`
 with the base's parameters seeded, so a derived container's calls enforce the
 same resolved bound.
+
+**A slice bound is const-covariant, one way.** A bound of `slice<const E>`
+is satisfied not only by its own lineage but by any type whose lineage
+reaches `slice<E>` — adding element `const` is always safe, the same
+one-way widening slice values already coerce by — so a single
+
+```c
+fn show<T extends slice<const char>>(const str: T) { ... }
+```
+
+takes the whole read-only-or-better char-run family: `slice<const char>`,
+`slice<char>`, `list<char>`/`string` (and with them a rendered f-string or
+`.format(...)` result). This is the signature behind `std/io`'s
+`print`/`println` and `panic`/`assert` message parameters. Strictly one
+way: a `slice<E>` bound still rejects `slice<const E>` (satisfying it
+through the mutable spelling would launder the `const` away). And a
+**string literal binds a bounded bare-`T` char-slice slot directly** — the
+declared bound itself becomes the binding (`show("hi")` instantiates
+`T = slice<const char>` and borrows the literal), exactly as a concrete
+slice parameter takes a literal; a ternary of literals rides along.
 
 The essential difference from a closed group is that the satisfying set is
 **open-ended** — any struct, anywhere, may later `extends` the bound — so
@@ -3366,7 +3388,7 @@ value: T }`) read as `e.index` / `e.value`:
 
 ```c
 for e in enumerate(&nums) {                    // nums: list<int32>
-    println("{}: {}", e.index, e.value);       // 0: first, 1: second, ...
+    println(f"{e.index}: {e.value}");       // 0: first, 1: second, ...
 }
 for e in enumerate(xs as slice<char>) { ... }  // slices too; index is free
 ```
@@ -3419,7 +3441,7 @@ one-type unwrap to a line:
 
 ```mcc
 fn describe(a: any) {
-    with (n = a as int32) println("int32: {}", n);
+    with (n = a as int32) println(f"int32: {n}");
     else println("something else");
 }
 ```
@@ -5007,7 +5029,7 @@ Two same-shape tuples are the **same type**, across functions and modules —
 interned structurally, like `slice<T>` — and `.mci` interface stubs render
 the type by its canonical spelling. Under [the `any` type](#the-any-type) a
 tuple follows the struct rule: it boxes by reference into a `const any` (so
-`println("{}", t)` compiles, rendering the `<tuple<int32, int32>>` fallback),
+`println(f"{t}")` compiles, rendering the `<tuple<int32, int32>>` fallback),
 recovers in a `case type` arm, and an owning `any` of it stays rejected.
 
 **Arity runs all the way down to zero.** `tuple<T>` spells the 1-tuple
@@ -5092,7 +5114,7 @@ reference**: the payload holds a *pointer* to the value's existing storage
 [hidden references](#functions-and-methods)), tagged as the struct type itself
 (`point`, not `point*`), so `case type` recovers it as a reference with no
 copy. The archetypal `const any` position is the `slice<const any>` a
-[variadic](#functions-and-methods) collects into, so `println("{}", p)` boxes
+[variadic](#functions-and-methods) collects into, so `println(f"{p}")` boxes
 `p` by reference and dispatches it to a user `format(const value: point, …)`
 overload. An rvalue struct with no storage of its own (a literal, a function
 return) spills to a call-scoped temporary first; a bare variable's storage is
@@ -5115,11 +5137,11 @@ readable):
 ```c
 fn show(a: any) {
     case type (a) {
-        when int32 n:       println("int {}", n);
-        when float64 f:     println("float {}", f);
-        when char* s:       println("string {}", s);
-        when slice<char> t: println("slice of {}", t.length);
-        when T* ptr:        println("pointer {p}", ptr);  // every other boxed pointer
+        when int32 n:       println(f"int {n}");
+        when float64 f:     println(f"float {f}");
+        when char* s:       println(f"string {s}");
+        when slice<char> t: println(f"slice of {t.length}");
+        when T* ptr:        println(f"pointer {ptr:p}");  // every other boxed pointer
         else:               println("something else");
     }
 }
@@ -5218,10 +5240,10 @@ by design: the name flows into a variable, a parameter, a struct field, a
 initializer.
 
 ```c
-println("{}", typename(int64));          // int64
-println("{}", typename(slice<int32>));   // slice<int32>
+println(f"{typename(int64)}");          // int64
+println(f"{typename(slice<int32>)}");   // slice<int32>
 let x: const float64 = 1.5;
-println("{}", typename(x));              // float64 — const strips
+println(f"{typename(x)}");              // float64 — const strips
 const NAME = typename(uint8);            // folds like sizeof does
 ```
 
@@ -5247,7 +5269,7 @@ registry:
 ```c
 fn describe(a: any) {
     case type (a) {
-        when T v: println("a boxed %s", typename(T));
+        when T v: println(f"a boxed {typename(T)}");
         else:     println("nothing yet");
     }
 }
@@ -5513,7 +5535,7 @@ let v = try find(key) except (err) {   // err: the error value, scoped here
     return -1;                         // diverge ...
     // ... or supply a fallback:  emit 0;
 } else {
-    println("found {}", v);            // the ok arm; v is in scope
+    println(f"found {v}");            // the ok arm; v is in scope
 };
 // v is also in scope here
 ```
@@ -5546,7 +5568,7 @@ obligation-free — it may fall through ("log and move on"), diverge, or
 still `emit` a discarded fallback. This is also the `result<E>` consumer:
 
 ```c
-try flush() except (err) { println("flush failed: {}", err as int32); };
+try flush() except (err) { println(f"flush failed: {err as int32}"); };
 ```
 
 (For a `result<E>` there is no ok value, so `emit` rejects inside the
@@ -5656,9 +5678,9 @@ already is the no-error arm.
 
 ```c
 try (v = find(key)) {
-    println("found {}", v);
+    println(f"found {v}");
 } except (err) {
-    println("lookup failed: {}", err as int32);
+    println(f"lookup failed: {err as int32}");
 }
 // v is not in scope here
 ```
@@ -5688,7 +5710,7 @@ runtime:
 ```c
 let value, err = find(key);
 if (err) {
-    println("{}: {}", error_name(err), error_message(err));
+    println(f"{error_name(err)}: {error_message(err)}");
     // e.g.  my_error::NOT_FOUND: Not Found     (PERMISSION, with no display
     //       string, would print  my_error::PERMISSION: PERMISSION)
 }
@@ -5702,7 +5724,7 @@ any unreachable value render as the empty string. `error_name` and
 `error_message` are not keywords — only the call shape is claimed, so the
 names stay ordinary identifiers elsewhere.
 
-Automatic `{}` formatting of an error value — `println("{}", err)` printing
+Automatic `{}` formatting of an error value — `println(f"{err}")` printing
 its name directly — is a separate follow-up: the
 [formatted-print](#strings-and-formatting) machinery is a closed set that
 cannot yet enumerate user-declared error types, so `error_name` /
@@ -6295,56 +6317,69 @@ fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
 ```
 
 See [examples/systems/formatting.mc](../examples/systems/formatting.mc).
-The protocol's main consumers are `print`/`println` just below — `{}`
-placeholders, positional `{n}` selection, and `f"..."` interpolation all
-render through this one set.
+The protocol's consumers are just below — an f-string's `{expr}` holes,
+`"...".format(args)`'s `{}` placeholders, and positional `{n}` selection
+all render through this one set.
 
 ### Formatted print / println
 
-`std/io`'s `print` / `println` are the protocol's main consumer, and their
-format is `{}` placeholders — type-driven, no `%`-letters:
+`std/io`'s `print` / `println` **write a string** — verbatim, braces are
+not placeholders, so runtime text is always safe to print. Formatting
+belongs to the *producers*: an f-string renders its holes through the
+`format` overload set, and `"...".format(args)` (the
+[`slice::format`](#strings) method from `std/slice`) is the explicit
+renderer behind it:
 
 ```c
 import "std/io";
 
-println("{} + {} = {}", 2, 3, 2 + 3);      // 2 + 3 = 5
-println("mask {x}, ok {yes}", 255, true);  // mask ff, ok yes
-println(f"2 + 3 = {2 + 3}");               // f-string interpolation (below)
+println(f"{x} + {y} = {x + y}");           // f-string interpolation (below)
+println("mask {x}, ok {yes}".format(255, true));  // mask ff, ok yes
+println(name);                             // a string/slice value, verbatim
+println(stderr!, f"bad input: {arg}");     // any FILE* stream
 ```
 
-The signature is `fn println(@format const fmt: slice<const char>,
-args...)`: a
-string literal adapts to `fmt` at the call site, and the
-[native variadic](#native-variadics) collects the arguments into a
-`slice<const any>`. Each `{[modifiers]}` placeholder renders the next
-argument in sequence through the `format` overload set, passing the bracket
-content verbatim as the per-type modifier — `{}` is the default rendering,
-`{x}`/`{X}`/`{p}` steer integers, `{y}`/`{yes}` steer bools, and a modifier
-applies per element on slices. `{{` and `}}` print literal braces. Because
-dispatch is the open overload set, a `format` overload you write makes your
-type printable straight through `println("{}", value)` — boxed
-[by reference](#the-any-type) with no copy.
+`print`/`println` are exactly two overloads each — `print(str)` and
+`print(f, str)` — one signature apiece: the string parameter is a single
+`T extends slice<const char>`, whose [const-covariant bound](#bounds)
+takes the whole char-run family with no `as` at the call site — a string
+literal, a `slice<char>` or `slice<const char>`, an owned `string` or
+`list<char>`, and with those an f-string or a `.format(...)` call's
+rendering (the owned temporary is
+[destroyed at statement end](#move-out-returns-own)). There are no
+`println(fmt, args...)` overloads: formatting always goes through an
+`@format` collector such as `slice::format`, never through the printer
+itself.
 
-Integer placeholders already carry width and zero-padding —
-`println("{08x}", n)` — via the `[0][width][x|X|b|p]` modifier grammar,
-string placeholders carry field widths — `println("{s20}", name)` — via
+In a format string, each `{[modifiers]}` placeholder renders the next
+argument through the `format` overload set, passing the bracket content
+verbatim as the per-type modifier — `{}` is the default rendering,
+`{x}`/`{X}`/`{p}` steer integers, `{y}`/`{yes}` steer bools, and a
+modifier applies per element on slices; in an f-string the same modifiers
+ride after the hole's `:` (`f"{n:08x}"`). `{{` and `}}` print literal
+braces. Because dispatch is the open overload set, a `format` overload you
+write makes your type printable straight through `println(f"{value}")` —
+boxed [by reference](#the-any-type) with no copy.
+
+Integer placeholders already carry width and zero-padding — `f"{n:08x}"`,
+`"{08x}".format(n)` — via the `[0][width][x|X|b|p]` modifier grammar,
+string placeholders carry field widths — `f"{name:s20}"` — via
 `[N][s][N]`, and float placeholders carry width and precision —
-`println("{.2f}", f)`, `println("{8.2f}", f)` — via `[[N].M]f` (all
-above). libc's `printf` remains the tool only for what the modifiers do
-not carry: scientific notation (`printf("%g\n", f)` / `%e`).
+`f"{f:.2f}"`, `f"{f:8.2f}"` — via `[[N].M]f` (all above). libc's `printf`
+remains the tool only for what the modifiers do not carry: scientific
+notation (`printf("%g\n", f)` / `%e`).
 
 **Positional placeholders** select an argument manually: in a format
-string *literal*, `{n}` renders the n-th argument after the format string
-(0-based), and a `:` separates the index from the modifiers. This is pure
-compile-time sugar — the call desugars to the sequential form by
-duplicating or reordering the arguments (each argument still evaluates
-exactly once, in source order), so the runtime parser stays
-sequential-only:
+string *literal*, `{n}` renders the n-th collected argument (0-based), and
+a `:` separates the index from the modifiers. This is pure compile-time
+sugar — the call desugars to the sequential form by duplicating or
+reordering the arguments (each argument still evaluates exactly once, in
+source order), so the runtime parser stays sequential-only:
 
 ```c
-println("{0}, {0}!", "again");        // println("{}, {}!", "again", "again")
-println("{1} then {0}", 'b', 'a');    // a then b
-println("{0} is {0:x} in hex", 255);  // {0:x} desugars to {x}
+println("{0}, {0}!".format("again"));         // again, again!
+println("{1} then {0}".format('b', 'a'));     // a then b
+println("{0} is {0:x} in hex".format(255));   // {0:x} desugars to {x}
 ```
 
 One string commits to one placeholder style: mixing automatic `{}` and
@@ -6352,34 +6387,38 @@ positional `{n}` placeholders is a compile error, and in the positional
 style an out-of-range index and an argument no placeholder references are
 compile errors too. Because an all-digit bracket now selects an argument,
 a *bare* field width in a literal is spelled with the index-less escape
-`{:N}` — `println("{:2}", n)` desugars to the runtime `{2}` width — while
+`{:N}` — `"{:2}".format(n)` desugars to the runtime `{2}` width — while
 digit-leading modifiers with a base letter (`{06x}`) stay plain modifiers
 and `{{`/`}}` still escape literal braces. Only a literal desugars: a
 format string arriving through a variable is parsed by the runtime
 machinery above, where bracket content is always modifier text (so a
-runtime `{2}` is still the field width).
+runtime `{2}` is still the field width). The literal may sit behind its
+`as slice<const char>` borrow — the dot-call receiver adaptation
+synthesizes exactly that — so `"{0}".format(x)` and
+`("{0}" as slice<const char>).format(x)` desugar alike.
 
-The hook is the **`@format` parameter attribute**: `std/io` declares
-`fn println(@format const fmt: slice<const char>, args...)` (ditto
-`print` and the `format_args` worker), and any collecting function may
-opt its own format string into the desugar the same way. `@format` is
-valid only on the `slice<const char>` parameter just before the
-collecting `args...`, and it travels through
-[interface stubs](#interface-files) like `@nonnull` does.
+The hook is the **`@format` parameter attribute**: `std/slice` declares
+`fn slice::format(@format const self: slice<const char>, args...)`, and
+any collecting function may opt its own format string into the desugar
+the same way. `@format` is valid only on the
+`slice<const char>` parameter just before the collecting `args...`, and it
+travels through [interface stubs](#interface-files) like `@nonnull` does.
 
 **String interpolation (f-strings)** writes the expressions inline: an
-`f`-prefixed string literal holds `{expr}` holes, and the literal desugars
-at parse time into the sequential form above — `println(f"x = {x}")` is
-`println("x = {}", x)`, surface syntax only, no new runtime. The prefix is
-what keeps the two brace grammars apart: in a plain literal `{x}` is the
-runtime *modifier* (hex the next argument), in an f-string it is the
-*expression* `x` — `println("{x}", x)` and `println(f"{x}")` are both
-meaningful. A `:` after the expression carries a runtime modifier through
-(the hole is parsed first and only a *leftover* colon starts the modifier,
-so a ternary's own colon stays inside the expression), and the inspector
-form `f"{n=}"` — Python's spelling, Python's semantics — prints the
-expression's verbatim source text, whitespace and all, ahead of its value,
-with a modifier composing after the `=`:
+`f`-prefixed string literal holds `{expr}` holes. At an `@format` call's
+format string it desugars at parse time into the sequential form above —
+`logf(f"x = {x}")` splices like `logf("x = {}", x)` for your own `@format`
+collector — and anywhere else it renders into a string value (below), so
+`println(f"x = {x}")` is `println("x = {}".format(x))`. The prefix is what keeps the two brace
+grammars apart: in a plain literal `{x}` is the runtime *modifier* (hex
+the next argument), in an f-string it is the *expression* `x` —
+`"{x}".format(x)` and `f"{x}"` are both meaningful. A `:` after the
+expression carries a runtime modifier through (the hole is parsed first
+and only a *leftover* colon starts the modifier, so a ternary's own colon
+stays inside the expression), and the inspector form `f"{n=}"` — Python's
+spelling, Python's semantics — prints the expression's verbatim source
+text, whitespace and all, ahead of its value, with a modifier composing
+after the `=`:
 
 ```c
 let x = 255 as int32;
@@ -6392,38 +6431,73 @@ println(f"{x > 9 ? x : 0}");        // 255 — any expression goes
 
 An f-string is its own placeholder style: every hole is an expression, so
 it never mixes with the automatic `{}` or positional `{n}` forms, and
-passing extra arguments after one is a compile error — `println(f"{x}", y)`
-has no placeholder left for `y`. `{{` and `}}` still escape literal braces
+passing extra arguments after one at an `@format` slot is a compile error
+— `logf(f"{x}", y)` has no placeholder left for `y` (at a verbatim callee
+the mismatch is the ordinary no-overload error: `println(f"{x}", y)` finds
+no `println(string, int32)`). `{{` and `}}` still escape literal braces
 (braces inside a hole's nested string/char literals need no escape), an
 empty hole `{}`, a bare `{:mods}`, and a stray or unclosed brace are
 compile errors. A hole-free `f"..."` (only plain text or escaped braces,
 e.g. `f"{{}}"`) keeps its f-string identity rather than degrading to a
-plain literal, so the same `@format`-only rule governs it — bound to
-`println` it renders through the sequential runtime (`println(f"{{}}")`
-prints `{}`), and a verbatim overload never steals it; the plain literal
-`println("{{}}")` is the way to print `{{}}` unchanged. An f-string is
-legal *only* as the format string of an `@format` call
-(`println(f"...")`, `format_args(str, f"...")`); every other sink — a
-`let` initializer, a plain parameter, an ordinary expression, or a
-trailing collected argument (`println("{}", f"...")`) — is a compile
-error (a string-*valued* f-string would need a runtime rendering buffer, a
-possible later extension). In an [overload set](#function-overloading) the
-sink rule filters **before** ranking: a candidate that would receive the
-f-string anywhere but its `@format` format-string slot is non-viable, and
-the usual plain-literal rank runs among the survivors — so
-`panic(f"x = {x}")` resolves to the formatting collector even though the
-equivalent plain literal would pick the verbatim `panic(msg)` member
-(below).
+plain literal — its escapes still collapse (`println(f"{{}}")` prints
+`{}`), while the plain literal `println("{{}}")` goes out verbatim
+(prints `{{}}`, as it always did), the way every plain string does.
+
+**String-valued f-strings.** At the format string of an `@format` call
+(`"...".format(...)`'s own receiver aside, your collector's `@format`
+slot) the literal splices at compile time — zero-cost, and injection-free,
+since the hole *values* are never re-scanned for braces. Everywhere else an f-string is a
+runtime string **value**: it desugars to a synthesized
+[`slice::format`](#strings) call (`f"x = {x}"` is `"x = {}".format(x)`),
+rendering into an [`-> own string`](#move-out-returns-own) that flows like
+any other owned value — this is what `println(f"...")` binds —
+
+```c
+let s = f"x is {x}, hex {x:08x}";  // the let adopts: destroyed at scope end
+let t: string = f"{n=}";           // a typed string let adopts the same way
+take(f"{x}");                      // an argument: the temporary drops at
+                                   // statement end, after the callee returns
+if (f"{x}".equals(s)) { ... }      // chains; the temporary drops at chain end
+return f"hello {name}!";           // transfers out of an `-> own string` fn
+```
+
+The rendering needs `slice::format` in the import graph (`import
+"std/slice";` — `std/io` pulls it in transitively); without it the compile
+error names the import. A hole's own temporaries (`f"{make()}"`) drop at
+statement end like any collected argument's, on both the splice and value
+paths. There is no implicit string-to-slice coercion, so a concrete
+`slice<const char>` position reports the honest mismatch — borrow
+explicitly (`f"{x}" as slice<const char>`, which leaks the rendering like
+any own call's `as` borrow) or bind a `let` first. Two positions a runtime
+value can never fill stay compile errors: a compile-time constant (a
+`const`, a global/`@static` initializer) and in-place addressing
+(`len(f"...")`, `&`).
+
+In an [overload set](#function-overloading) the **format slot wins**: a
+candidate that splices the f-string in its `@format` format-string slot
+filters the set before ranking, and the usual plain-literal rank runs
+among those survivors — with `fn logf(msg: slice<const char>)` beside
+`fn logf(@format const fmt: slice<const char>, args...)`,
+`logf(f"x = {x}")` resolves to the collector even though the equivalent
+plain literal would pick the verbatim member. Only when *no* candidate can
+splice it does the f-string render as a value and resolution re-run over
+the owned string (so `println(f"{x}")` and `panic(f"{x}")` bind the
+writers' string-taking signatures). A trailing collected f-string after a
+plain format string (`logf("{}", f"...")`) is an ordinary value argument:
+it renders and formats as its text.
 
 See [examples/systems/formatting.mc](../examples/systems/formatting.mc) —
-the positional and f-string demos are its finale.
+the positional and f-string demos are its finale — and
+[examples/types/fstring_values.mc](../examples/types/fstring_values.mc),
+which walks the string-value ownership story with drop-stamped hole
+temporaries.
 
 ### Panic and assert
 
 `std/io` packages the [`@noreturn`](#noreturn-functions) guard pattern:
-`panic` writes `panic: <message>` to standard error and aborts the process
+`panic(msg)` writes its message to standard error and aborts the process
 (`abort()`, so SIGABRT — exit status 134 under a shell), and
-`assert(cond, ...)` panics with `assertion failed: <message>` when its
+`assert(cond, msg)` panics with `assertion failed: <message>` when its
 condition is false, doing nothing otherwise:
 
 ```c
@@ -6438,21 +6512,33 @@ fn first(p: int32*) -> int32 {
 
 fn main() -> int32 {
     let x = 41 as int32;
-    assert(x > 0, "x must be positive, got {}", x);
-    println("first(&x) = {}", first(&x));
-    panic(f"x = {x}, giving up");       // f-strings interpolate as usual
+    assert(x > 0, "x must be positive");
+    println(f"first(&x) = {first(&x)}");
+    panic(f"x = {x}, giving up");       // formats explicitly — see below
 }
 ```
 
-Each family is two overloads. `panic(msg)` and `assert(cond, msg)` take one
-`slice<const char>` and write it **verbatim** — braces are not placeholders
-in the message arm, so runtime text always passes through safely.
-`panic(fmt, args...)` and `assert(cond, fmt, args...)` are `@format`
-collectors rendering through the same machinery as
-[`print`/`println`](#formatted-print--println): `{}` placeholders,
-modifiers, positional `{n}` sugar, and f-strings all apply. A string
-*literal* adapts to the message arm directly; an owned `string` borrows in
-with `panic(str as slice<char>)`.
+Each is **one member**, and the message is **verbatim** — braces are not
+placeholders, so runtime text always passes through safely (there is no
+`panic(fmt, args...)` collector). Like `print`/`println`, the message
+parameter is a single `T extends slice<const char>` with the
+[const-covariant bound](#bounds), so a literal, a slice of either
+constness, an owned `string` — and with it an f-string or `.format(...)`
+rendering — all bind with no `as` at the call site.
+
+**The blessed panic style is a plain verbatim message.** `panic(f"x =
+{x}")` compiles — the f-string renders to an owned string like anywhere
+else — but the rendering is **never destroyed**: `panic` diverges, so the
+statement-end drop that would normally clean up an argument temporary
+never runs, and the allocation leaks on the dying path. (The removed
+`@format` collector always leaked the same allocation, invisibly, inside
+its own body; the value spelling just makes the cost explicit at the call
+site.) The process is aborting, so the leak is harmless by construction —
+but format on the way down only when the dynamic value genuinely earns its
+place in the message. An `assert` message evaluates whether or not the
+condition holds: a passing assert's rendered message *is* destroyed at
+statement end, a failing one aborts mid-statement and leaks it — prefer
+plain messages on hot paths.
 
 The details:
 
@@ -6468,9 +6554,9 @@ The details:
   [Defers](#defer) do not run on the panic path (a `@noreturn` call is not
   a block exit), but pending standard *output* is flushed first, so
   interleaved program output survives the abort.
-- **`assert` is always enabled** — its arguments evaluate whether or not
-  the condition holds, and there is no release-stripping mode yet (a
-  `-D`-gated variant is a roadmap follow-up).
+- **`assert` is always enabled** — its condition and message evaluate
+  whether or not the assertion holds, and there is no release-stripping
+  mode yet (a `-D`-gated variant is a roadmap follow-up).
 
 See [examples/functions/panic_assert.mc](../examples/functions/panic_assert.mc).
 

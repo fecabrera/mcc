@@ -82,47 +82,47 @@ fn main() -> int32 {
     // Read a computed property like a field -- this is the headline: an
     // f-string hole takes it like any expression.
     let t = temperature { celsius = 100 };
-    println("{}C is {}F", t.celsius, t.fahrenheit);     // 100C is 212F
+    println(f"{t.celsius}C is {t.fahrenheit}F");     // 100C is 212F
     println(f"{t.fahrenheit}");                         // 212
 
     // Both spellings reach the same method; the call form stays valid.
-    println("call spelling: {}", t.fahrenheit());       // 212
+    println(f"call spelling: {t.fahrenheit()}");       // 212
 
     // A `-> mut` property is an lvalue: assignable and compound-assignable,
     // reading and writing through the same accessor.
     let c = cell { n = 5 };
-    println("c.value = {}", c.value);                   // 5
+    println(f"c.value = {c.value}");                   // 5
     c.value = 40;                                       // property write
     c.value += 2;                                       // compound: 42
-    println("after writes: {}", c.value);               // 42
+    println(f"after writes: {c.value}");               // 42
 
     // Inheritance: the derived type reaches the base's property by field
     // syntax too.
     let lc = labelled_cell { n = 7, label = 'x' };
-    println("inherited: {} ({})", lc.value, lc.label);  // 7 (x)
+    println(f"inherited: {lc.value} ({lc.label})");  // 7 (x)
 
     // A pointer receiver auto-derefs one hop, like a dot call.
     let p = &c;
-    println("through a pointer: {}", p.value);          // 42
+    println(f"through a pointer: {p.value}");          // 42
 
     // A generic property binds T from the receiver.
     let q = pair<int32> { a = 9, b = 3 };
-    println("q.first = {}", q.first);                   // 9
+    println(f"q.first = {q.first}");                   // 9
 
     // An explicit get/set pair: writes run the setter's logic, so the clamp
     // is unbypassable through the field syntax.
     let g = gauge { raw = 10 };
-    println("g.level = {}", g.level);                   // 10 (the getter)
+    println(f"g.level = {g.level}");                   // 10 (the getter)
     g.level = 50;                                       // the setter
     g.level = 999;                                      // clamps to 100
-    println("after clamped write: {}", g.level);        // 100
+    println(f"after clamped write: {g.level}");        // 100
     g.level = -3;                                       // clamps to 0
     g.level += 7;                                       // RMW: set(get() + 7)
-    println("after RMW: {}", g.level);                  // 7
+    println(f"after RMW: {g.level}");                  // 7
     // Both members stay ordinary overloads at the call spelling too:
     // g.level() is the getter, g.level(v) the setter, dispatched by arity.
     g.level(25);
-    println("call spellings: {}", g.level());           // 25
+    println(f"call spellings: {g.level()}");           // 25
 
     // A stdlib property: std/stack marks stack<T>::length @property, so a
     // stack's element count reads like a field.
@@ -130,7 +130,7 @@ fn main() -> int32 {
     s.push(1);
     s.push(2);
     s.push(3);
-    println("stack length = {}", s.length);             // 3
+    println(f"stack length = {s.length}");             // 3
 
     return 0;
 }

@@ -32,21 +32,21 @@ union boxed<T> {
 
 fn main() -> int32 {
     // sizeof is the largest member; every member is at offset 0.
-    println("sizeof(value) = {}", sizeof(union value) as int32);
-    println("offsetof(f)   = {}", offsetof(union value, f) as int32);
+    println(f"sizeof(value) = {sizeof(union value) as int32}");
+    println(f"offsetof(f)   = {offsetof(union value, f) as int32}");
 
     // 1.0 is 0x3FF0000000000000: exponent bits land in the high byte.
     let bits = float_bits(1.0);
-    println("bits(1.0)     = {x}", bits);
+    println(f"bits(1.0)     = {bits:x}");
 
     // Poking one member is visible through the others (little-endian here).
     let v = value { i = 0x41 };
-    println("low byte      = {}", low_byte(&v) as char);
+    println(f"low byte      = {low_byte(&v) as char}");
 
     // A generic union adapts its storage to the instantiation.
     let box: union boxed<float64>;
     box.typed = 2.5;
-    println("raw(2.5)      = {x}", box.raw);
+    println(f"raw(2.5)      = {box.raw:x}");
 
     return 0;
 }

@@ -38,13 +38,13 @@ fn main() -> int32 {
         squares[i] = i * i;
         i += 1;
     }
-    println("squares[5] = {}, sum = {}", squares[5], sum(squares, 6));
-    println("sizeof(int32[6]) = {} bytes", sizeof(int32[6]));
+    println(f"squares[5] = {squares[5]}, sum = {sum(squares, 6)}");
+    println(f"sizeof(int32[6]) = {sizeof(int32[6])} bytes");
 
     // A constant expression sizes this one: room for a digit histogram plus a
     // spare slot. len() reports the computed size (DIGITS + 1 == 11).
     let padded: int32[DIGITS + 1];
-    println("padded holds {} ints", len(padded));
+    println(f"padded holds {len(padded)} ints");
 
     // An array literal initializes in one place; the size can be inferred.
     let digits: int32[] = [3, 1, 4, 1, 5, 9, 1];
@@ -53,19 +53,19 @@ fn main() -> int32 {
         counts[digits[i]] += 1;   // counts is the @static buffer
         i += 1;
     }
-    println("digit 1 appears {} times", counts[1]);
+    println(f"digit 1 appears {counts[1]} times");
 
     // Print the static lookup table. len() gives the row count -- the size
     // that was inferred from the literal -- so nothing is hard-coded. It is an
     // adaptable constant, so it compares against this int32 counter directly.
     i = 0;
     while (i < len(cmds)) {
-        println("  {s6} {}", cmds[i][0], cmds[i][1]);  // {s6}: left-aligned, 6 wide
+        println(f"  {cmds[i][0]:s6} {cmds[i][1]}");  // {s6}: left-aligned, 6 wide
         i += 1;
     }
 
     // Nested literals build multi-dimensional arrays (row-major).
     let grid: int32[2][2] = [[1, 2], [3, 4]];
-    println("grid corners: {} {}", grid[0][0], grid[1][1]);
+    println(f"grid corners: {grid[0][0]} {grid[1][1]}");
     return 0;
 }

@@ -65,35 +65,35 @@ fn box<T>::labeled<U>(const self: box<T>, label: U) -> tuple<U, T> {
 fn main() -> int32 {
     // `T` is inferred as int32 from `pi`; this call keys the int32 instance.
     let pi: point<int32> = { x = 3, y = 4 };
-    println("int sum = {}", point::sum(pi));            // 7
+    println(f"int sum = {point::sum(pi)}");            // 7
 
     // A point<float64> keys a SEPARATE, distinct point::sum -- monomorphization
     // gives one function per element type. (float64 prints via %f, so the
     // `:.2f` specifier keeps the output clean.)
     let pf: point<float64> = { x = 1.5, y = 2.0 };
-    println("float sum = {:.2f}", point::sum(pf));      // 3.50
+    println(f"float sum = {point::sum(pf):.2f}");      // 3.50
 
     // Or spell the instantiation instead of inferring it: the qualifier's
     // type arguments PIN the receiver, and the call reaches the same
     // point<float64> instance as the inferred call above.
-    println("pinned sum = {:.2f}", point<float64>::sum(pf));   // 3.50
+    println(f"pinned sum = {point<float64>::sum(pf):.2f}");   // 3.50
 
     // The no-receiver member: nothing to infer from, so the pin is the only
     // way to call it.
     let o = point<float64>::origin();
-    println("origin = ({:.2f}, {:.2f})", o.x, o.y);     // 0.00, 0.00
+    println(f"origin = ({o.x:.2f}, {o.y:.2f})");     // 0.00, 0.00
 
     // `mut self` mutates each instance in place, through its own instantiation.
     point::scale(pi, 10);
-    println("scaled int = ({}, {})", pi.x, pi.y);       // 30, 40
+    println(f"scaled int = ({pi.x}, {pi.y})");       // 30, 40
     point::scale(pf, 2.0);
-    println("scaled float = ({:.2f}, {:.2f})", pf.x, pf.y);  // 3.00, 4.00
+    println(f"scaled float = ({pf.x:.2f}, {pf.y:.2f})");  // 3.00, 4.00
 
     // `box::labeled` binds T from the box (int32) and U from the label
     // (float64) in one call; it returns a tuple<U, T> we destructure.
     let b: box<int32> = { value = 7 };
     let lbl, v = box::labeled(b, 9.5);
-    println("labeled = {:.2f}, {}", lbl, v);            // 9.50, 7
+    println(f"labeled = {lbl:.2f}, {v}");            // 9.50, 7
 
     return 0;
 }

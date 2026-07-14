@@ -17,10 +17,10 @@ fn apply(op: fn(int32, int32) -> int32, x: int32, y: int32) -> int32 {
 // so a printf-style function can be passed and called through with varargs.
 // (A function type can also spell the per-parameter `@nonnull` contract, so
 // a @nonnull function is a legal value too -- see nonnull_callbacks.mc --
-// and the `mut`/`const` hidden-reference conventions, so even mcc's own
-// `println`, whose format parameter is a const slice, is one -- see
-// mut_callbacks.mc. Only the compile-time @format desugars and `args...`
-// collection stay direct-call affordances.)
+// and the `mut`/`const` hidden-reference conventions -- see
+// mut_callbacks.mc. Overload sets and generic functions stay direct-call
+// names: mcc's own `println`, an overload set with generic members since
+// print/println became verbatim single-string writers, is not a value.)
 fn log_with(printer: fn(char*, ...) -> int32, label: char*) {
     printer("logging from %s\n", label);
 }
@@ -59,12 +59,12 @@ const log = printf;
 fn main() -> int32 {
     // In a variable, reassignable.
     let op: fn(int32, int32) -> int32 = add;
-    println("add(10, 3) = {}", op(10, 3));
+    println(f"add(10, 3) = {op(10, 3)}");
     op = sub;
-    println("sub(10, 3) = {}", op(10, 3));
+    println(f"sub(10, 3) = {op(10, 3)}");
 
     // Passed as an argument.
-    println("apply(add) = {}", apply(add, 4, 5));
+    println(f"apply(add) = {apply(add, 4, 5)}");
 
     // A const alias of a function, called by its new name (`log` is `printf`).
     log("plus(8, 8) = %d\n", plus(8, 8));
@@ -73,22 +73,22 @@ fn main() -> int32 {
     log_with(printf, "fn_ptr demo");
 
     // Calling the result of a call directly.
-    println("op_for('-')(9, 2) = {}", op_for('-')(9, 2));
+    println("op_for('-')(9, 2) = {}".format(op_for('-')(9, 2)));
 
     // Calling a callback stored in a struct field, in place.
     let b = struct button { label = "press me", on_press = loud};
-    println("{} -> {}", b.label, b.on_press(7));
+    println(f"{b.label} -> {b.on_press(7)}");
 
     // The @static dispatch table, indexed and called in place.
-    println("binops[0](2, 3) = {}, binops[1](2, 3) = {}",
-            binops[0](2, 3), binops[1](2, 3));
+    println("binops[0](2, 3) = {}, binops[1](2, 3) = {}".format(
+            binops[0](2, 3), binops[1](2, 3)));
 
     // A fixed-size table on the stack: (fn(...) -> ...)[N] is an array of N
     // function pointers, assigned element by element.
     let local: (fn(int32, int32) -> int32)[2];
     local[0] = add;
     local[1] = sub;
-    println("local[0](7, 4) = {}, local[1](7, 4) = {}", local[0](7, 4), local[1](7, 4));
+    println("local[0](7, 4) = {}, local[1](7, 4) = {}".format(local[0](7, 4), local[1](7, 4)));
 
     // A heap table: alloc<T> returns a typed T*, here a pointer to function
     // pointers -- no sizeof or cast needed. The element type is the grouped
@@ -96,7 +96,7 @@ fn main() -> int32 {
     let table = alloc<fn(int32, int32) -> int32>(2)!;
     table[0] = add;
     table[1] = sub;
-    println("table[0](2, 3) = {}, table[1](2, 3) = {}", table[0](2, 3), table[1](2, 3));
+    println("table[0](2, 3) = {}, table[1](2, 3) = {}".format(table[0](2, 3), table[1](2, 3)));
     dealloc(table);
 
     // null is a valid function pointer; optional callbacks compare with ==/!=.

@@ -32,11 +32,11 @@ struct res {
 
 fn res::constructor(mut self: res, id: int32) {
     self.id = id;
-    println("  open {}", id);
+    println(f"  open {id}");
 }
 
 fn res::destructor(mut self: res) {
-    println("  close {}", self.id);
+    println(f"  close {self.id}");
     self.id = -1;
 }
 
@@ -47,22 +47,22 @@ fn make(id: int32) -> own res {
 }
 
 fn use(r: res) -> int32 {
-    println("  use {}", r.id);
+    println(f"  use {r.id}");
     return r.id;
 }
 
 fn use2(a: res, b: res) -> int32 {
-    println("  use2 {} {}", a.id, b.id);
+    println(f"  use2 {a.id} {b.id}");
     return a.id + b.id;
 }
 
 fn outer(x: int32) -> int32 {
-    println("  outer {}", x);
+    println(f"  outer {x}");
     return x;
 }
 
 fn res::poke(self: res) -> int32 {
-    println("  poke {}", self.id);
+    println(f"  poke {self.id}");
     return self.id;
 }
 
@@ -112,7 +112,7 @@ fn walk() {
 // destroyed at scope end, not at the statement.
 fn hold_default(k: int32) {
     let v = try load(k) ?? res(99);
-    println("  held {}", v.id);
+    println(f"  held {v.id}");
 }
 
 // The documented no-op: `own` over a destructor-less type has nothing to
@@ -155,20 +155,20 @@ fn main() -> int32 {
     // temps in one statement drop newest-first: 4 closes before 3.
     println("argument:");
     let n = use(make(2));           // open 2, use 2, close 2
-    println("  got {}", n);
+    println(f"  got {n}");
     let s = use2(make(3), make(4)); // open 3, open 4, use2 3 4,
-    println("  sum {}", s);         //   close 4, close 3
+    println(f"  sum {s}");         //   close 4, close 3
 
     // FULL CHAIN END, not innermost-call end: the temp survives through
     // the OUTER call too and closes only after it returns.
     println("chain:");
     let m = outer(use(make(5)));    // open 5, use 5, outer 5, close 5
-    println("  got {}", m);
+    println(f"  got {m}");
 
     // CHAINING: a method-call receiver drops the same way.
     println("chained:");
     let p = make(6).poke();         // open 6, poke 6, close 6
-    println("  got {}", p);
+    println(f"  got {p}");
 
     // ASSIGNMENT, the sharp edge. The temp closes after the statement;
     // the destructor ran on the temp's dedicated copy, so r's bits stay
@@ -181,7 +181,7 @@ fn main() -> int32 {
     {
         let r = make(10);           // adopts
         r = make(11);               // open 11, close 11 (the temp)
-        println("  holding {}", r.id);
+        println(f"  holding {r.id}");
     }                               // close 11 AGAIN; 10 never closes
 
     // THE TRY STATEMENT, in a result-returning helper: `try load(20);`
@@ -212,21 +212,21 @@ fn main() -> int32 {
     {
         let a = make(50);
         let _ = make(51);
-        println("  held {}", a.id);
+        println(f"  held {a.id}");
     }                               // close 51, close 50
 
     // RETURN TIMING: the close lands inside ret_path, between computing
     // the return value and returning it.
     println("return:");
     let rv = ret_path(60);          // open 60, use 60, close 60
-    println("  got {}", rv);
+    println(f"  got {rv}");
 
     // TRANSFER: wrap forwards the obligation without dropping; the
     // adopting let here closes it once, at this block's end.
     println("transfer:");
     {
         let w = wrap(70);
-        println("  held {}", w.id);
+        println(f"  held {w.id}");
     }                               // close 70
 
     // ONLY IF EXECUTED: a ternary arm or short-circuit right operand
@@ -238,7 +238,7 @@ fn main() -> int32 {
     let c = rv > 0 ? use(make(80)) : use(make(81));
     let both = c > 0 and use(make(82)) > 0;
     let skipped = c < 0 and use(make(83)) > 0;
-    println("  {} {}", both, skipped);
+    println(f"  {both} {skipped}");
 
     // BEFORE THE DEFERS: walk's temp closes at its statement's end;
     // the block's defer runs later, at scope exit.
@@ -253,7 +253,7 @@ fn main() -> int32 {
     mint(1);                        // silent: no obligation exists
     let k = take_plain(mint(2));
     mixed(100);                     // open 100 -- and no close anywhere
-    println("  plain {}", k);
+    println(f"  plain {k}");
 
     println("done");
     return 0;
@@ -267,14 +267,16 @@ fn main() -> int32 {
 // its let/try/?? spellings and compiles clean under `-Wall -Werror`.
 // And these forms remain PLAIN COPIES (no automatic destruction,
 // follow-up work): an own call in a struct-literal field initializer,
-// `emit f();`, `return f();` from a non-own function, f-string hole
-// temporaries, and field projection (`make(9).id` reads the field out
-// of an undestroyed copy).
+// `emit f();`, `return f();` from a non-own function, and field
+// projection (`make(9).id` reads the field out of an undestroyed
+// copy). F-string hole temporaries, once on this list, now drop at
+// statement end like any collected argument's: see fstring_values.mc.
 //
 // See also: own_returns.mc for the feature itself (the obligation, the
 // formation rule, move, adoption, the function-pointer marker);
 // destructors.mc for the schedule and the stack-lets-only scope this
 // drop rule is the one exception to; error_handling.mc for results, the
 // try endings, and `??`; control-flow/defer.mc for the defer stack
-// statement temps die before. Full rules: docs/language.md, "Move-out
-// returns: `-> own`".
+// statement temps die before; fstring_values.mc for the drop schedule
+// carrying an f-string's rendered string and its hole temporaries.
+// Full rules: docs/language.md, "Move-out returns: `-> own`".

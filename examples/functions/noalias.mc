@@ -23,7 +23,7 @@ fn main() -> int32 {
     for i in range(5) {
         sum += dst[i] as uint64;
     }
-    println("copied {} bytes, sum = {}", 5 as uint64, sum);
+    println(f"copied {len(dst)} bytes, sum = {sum}");
 
     return 0;
 }

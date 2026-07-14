@@ -57,9 +57,9 @@ fn main() -> int32 {
     let g: grid;
     g[1, 2] = 40;
     g[1, 2] += 2;
-    println("g[1, 2] = {}", g[1, 2]);                   // 42
+    println(f"g[1, 2] = {g[1, 2]}");                   // 42
     // Both spellings reach the same method.
-    println("call spelling: {}", g.at(1, 2));           // 42
+    println(f"call spelling: {g.at(1, 2)}");           // 42
 
     // The get/set pair: writes run the setter's logic, so the clamp is
     // unbypassable through `[]`.
@@ -67,7 +67,7 @@ fn main() -> int32 {
     b[0] = 300;                                         // clamps to 255
     b[1] = -5;                                          // clamps to 0
     b[1] += 7;                                          // RMW: set(get() + 7)
-    println("b[0] = {}, b[1] = {}", b[0], b[1]);        // 255, 7
+    println(f"b[0] = {b[0]}, b[1] = {b[1]}");        // 255, 7
 
     // The stdlib's bare accessor: std/list marks list<T>::at @accessor, so
     // elements read and write like array slots -- and string = list<char>
@@ -77,11 +77,11 @@ fn main() -> int32 {
     xs.push(2);
     xs[0] = 10;
     xs[1] *= 4;
-    println("xs = [{}, {}]", xs[0], xs[1]);             // [10, 8]
+    println(f"xs = [{xs[0]}, {xs[1]}]");             // [10, 8]
 
     let s = string("hallo");
     s[1] = 'e';
-    println("s[1] = {}, fixed: {}", s[1], s.equals("hello"));  // e, true
+    println("s[1] = {}, fixed: {}".format(s[1], s.equals("hello")));  // e, true
 
     // The stdlib's get/set pair: std/dict marks dict<V>::at with the pair,
     // so a dict indexes BY KEY -- the index is a char*, not an integer.
@@ -91,7 +91,7 @@ fn main() -> int32 {
     d["answer"] = 40;                                   // insert
     d["answer"] += 2;                                   // RMW through get+set
     if (d.has("answer"))
-        println("d[\"answer\"] = {}", d["answer"]);     // 42
+        println("d[\"answer\"] = {}".format(d["answer"]));     // 42
 
     return 0;
 }

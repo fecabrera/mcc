@@ -76,19 +76,19 @@ fn main() -> int32 {
 
     // Every value in shape's lineage satisfies `extends shape`: the bound
     // struct itself, a direct subtype, and a transitive one.
-    println("areas: shape {}, circle {}, disc {}",
-            describe(&s), describe(&c), describe(&d));
+    println("areas: shape {}, circle {}, disc {}".format(
+            describe(&s), describe(&c), describe(&d)));
 
     // The bounded overload claims the subtypes; a struct outside the lineage
     // falls through to the unbounded fallback. (Passing an outside struct to
     // `describe` instead would be a compile error at the call:
     //     error: label does not satisfy the bound shape of 'describe'.)
     let label = "hi";
-    println("tag: circle {} (bounded), string-ptr {} (fallback)",
-            tag(&c), tag(&label));
+    println("tag: circle {} (bounded), string-ptr {} (fallback)".format(
+            tag(&c), tag(&label)));
 
     // The default anchored the measurement to circle.
-    println("footprint<circle> = {} bytes", footprint());
+    println(f"footprint<circle> = {footprint()} bytes");
 
     // Dependent bounds resolve per call: T = int32 makes the bound
     // slice<int32>, and the whole pack<int32> argument binds U with no
@@ -101,11 +101,11 @@ fn main() -> int32 {
     p.data = &arr[0]; p.length = 3; p.cap = 3;
     let q: pack<int32>;
     q.data = &brr[0]; q.length = 3; q.cap = 3;
-    println("p.matches(q) = {}", p.matches(q));         // true (equal lengths)
+    println(f"p.matches(q) = {p.matches(q)}");         // true (equal lengths)
 
     // The same-list form: S = shape binds from `a`, then T's bound resolves
     // to shape and circle satisfies it.
-    println("wider(&s, &c) = {}", wider(&s, &c));       // true (10 > 3)
+    println(f"wider(&s, &c) = {wider(&s, &c)}");       // true (10 > 3)
 
     return 0;
 }

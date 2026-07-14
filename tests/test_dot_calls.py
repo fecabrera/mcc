@@ -70,7 +70,7 @@ def test_mut_self_dot_call_mutates_the_receiver(capfd):
             let c: counter; c.n = 0;
             c.bump();
             c.bump();
-            println("{}", c.get());
+            println(f"{c.get()}");
             return 0;
         }
         """
@@ -222,7 +222,7 @@ def test_pointer_receiver_auto_derefs(capfd):
             let c: counter; c.n = 0;
             let q = &c;
             q.bump();
-            println("{}", q.get());
+            println(f"{q.get()}");
             return c.n - 1;
         }
         """
@@ -274,7 +274,7 @@ def test_builtin_receiver_dispatches_the_family(capfd):
         import "std/io";
         import "std/char";
         fn main() -> int32 {
-            println("{}{}", 'c'.upper(), 'D'.lower());
+            println("{}{}".format('c'.upper(), 'D'.lower()));
             return 0;
         }
         """
@@ -322,7 +322,7 @@ def test_generic_receiver_specialization_outranks_the_generic(capfd):
         fn main() -> int32 {
             let bi: box<int32> = { v = 7 };
             let bf: box<float64> = { v = 1.0 };
-            println("{} {}", bi.tag(), bf.tag());
+            println(f"{bi.tag()} {bf.tag()}");
             return 0;
         }
         """
@@ -358,7 +358,7 @@ def test_chained_calls_evaluate_the_receiver_once(capfd):
             return w;
         }
         fn main() -> int32 {
-            println("{}", wrap::mk('a').get().upper().lower().upper());
+            println("{}".format(wrap::mk('a').get().upper().lower().upper()));
             return 0;
         }
         """
@@ -418,7 +418,7 @@ def test_dot_call_is_an_assignment_and_compound_target(capfd):
             let l: list8;
             l.at(3) = 42;
             l.at(3) += 1;
-            println("{}", l.at(3));
+            println(f"{l.at(3)}");
             return l.data[3] - 43;
         }
         """
@@ -739,7 +739,7 @@ def test_qualified_chaining_spellings_stay_legal(capfd):
             self.tag = tag;
         }
         fn tagged::destructor(mut self: tagged) {
-            println("drop tag {}", self.tag);
+            println(f"drop tag {self.tag}");
             res::destructor(self);
         }
         fn main() -> int32 {
@@ -811,8 +811,8 @@ def test_string_literal_receiver_dispatches_a_user_slice_family(capfd):
             return self.length;
         }
         fn main() -> int32 {
-            println("{}", "Zebra".first_byte());
-            println("{}", "Zebra".size());
+            println("{}".format("Zebra".first_byte()));
+            println("{}".format("Zebra".size()));
             return 0;
         }
         """

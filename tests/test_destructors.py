@@ -40,7 +40,7 @@ from helpers import compile_ir, run, run_path
 RES = """
 struct res { id: int32; }
 fn res::constructor(mut self: res, id: int32) { self.id = id; }
-fn res::destructor(mut self: res) { println("drop {}", self.id); }
+fn res::destructor(mut self: res) { println(f"drop {self.id}"); }
 """
 
 # The same shape with a silent destructor, for compile-only error tests
@@ -326,7 +326,7 @@ def test_derived_destructor_chains_the_base_manually(capfd):
             self.tag = tag;
         }
         fn tagged::destructor(mut self: tagged) {
-            println("drop tag {}", self.tag);
+            println(f"drop tag {self.tag}");
             res::destructor(self);
         }
         fn main() -> int32 {
@@ -401,7 +401,7 @@ def test_any_annotated_ctor_let_does_not_schedule(capfd):
         import "std/io";
         type handle = int32;
         fn int32::constructor(mut self: int32, v: int32) { self = v; }
-        fn int32::destructor(mut self: int32) { println("drop {}", self); }
+        fn int32::destructor(mut self: int32) { println(f"drop {self}"); }
         fn main() -> int32 {
             let x: any = handle(5);
             println("end");
@@ -529,7 +529,7 @@ def test_emitting_an_outer_local_stays_legal(capfd):
         fn main() -> int32 {
             let r = res(2);
             let x = { emit r; };
-            println("got {}", x.id);
+            println(f"got {x.id}");
             return 0;
         }
         """
@@ -547,7 +547,7 @@ def test_returning_the_constructor_expression_is_the_hatch(capfd):
         fn make() -> res { return res(8); }
         fn main() -> int32 {
             let r = make();
-            println("made {}", r.id);
+            println(f"made {r.id}");
             return 0;
         }
         """
@@ -643,7 +643,7 @@ def test_cross_module_destructor_runs(capfd, tmp_path):
         'import "std/io";\n'
         "struct res { id: int32; }\n"
         "fn res::constructor(mut self: res, id: int32) { self.id = id; }\n"
-        'fn res::destructor(mut self: res) { println("drop {}", self.id); }\n'
+        'fn res::destructor(mut self: res) { println(f"drop {self.id}"); }\n'
     )
     main = tmp_path / "main.mc"
     main.write_text(
@@ -684,7 +684,7 @@ def test_destructor_round_trips_through_mci(capfd, tmp_path):
         "@inline\n"
         "fn res::constructor(mut self: res, id: int32) { self.id = id; }\n"
         "@inline\n"
-        'fn res::destructor(mut self: res) { println("drop {}", self.id); }\n'
+        'fn res::destructor(mut self: res) { println(f"drop {self.id}"); }\n'
     )
     out = tmp_path / "lib.mci"
     assert emit_interface(lib, (tmp_path, STDLIB_DIR), None, {}, out) == 0

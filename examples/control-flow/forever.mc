@@ -41,8 +41,8 @@ fn drain(level: int32) -> int32 {
 const FOREVER = true;
 
 fn main() -> int32 {
-    println("next_request(0) = {}", next_request(0));
-    println("drain(5) = {}", drain(5));
+    println(f"next_request(0) = {next_request(0)}");
+    println(f"drain(5) = {drain(5)}");
 
     // THE BLOCK-EXPRESSION LIFT. A block expression may now end in a
     // forever loop that `emit`s from inside; this shape used to be the
@@ -55,7 +55,7 @@ fn main() -> int32 {
             if (candidate % 7 == 0) { emit candidate; }
         }
     };
-    println("first multiple of 7 past 40 = {}", first);
+    println(f"first multiple of 7 past 40 = {first}");
 
     // THE GATE. One `break` anywhere in the body -- inside a `case` arm, a
     // nested block expression, even a `defer` -- keeps the exit block, and
@@ -68,7 +68,7 @@ fn main() -> int32 {
         i += 1;
         if (i == 4) { break; }   // the gate: this loop has an exit again
     }
-    println("counted to {}", i);   // live and reachable, no warning
+    println(f"counted to {i}");   // live and reachable, no warning
 
     return 0;
 }

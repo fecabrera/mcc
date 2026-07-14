@@ -161,7 +161,7 @@ def test_upper_maps_over_a_string(capfd):
         import "std/char";
         fn main() -> int32 {
             for c in "mcc rocks!" as slice<char> {
-                print("{}", char::upper(c));
+                print(f"{char::upper(c)}");
             }
             println("");
             return 0;

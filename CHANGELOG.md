@@ -10,6 +10,48 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Removed
 
+- **BREAKING: the variadic `@format` `print`/`println` overloads** —
+  `print(fmt, args...)`, `println(fmt, args...)`, and their `FILE*` forms
+  are gone from `std/io`: `print`/`println` are now *verbatim string
+  writers* that never scan braces, so runtime text is always safe to
+  print — and (a follow-up ruling) the verbatim pair itself collapsed to
+  **exactly two overloads each**, `print(str)` and `print(f, str)`, one
+  signature per shape: `fn print<T extends slice<const char>>(const str:
+  T)`, whose const-covariant bound (see the bounds entry below) takes a
+  string literal, a `slice<char>` or `slice<const char>`, and an owned
+  `string`/`list<char>` through the one parameter. Formatting moved to
+  the producers: migrate `println("x = {}", x)` to `println(f"x = {x}")`
+  (the idiomatic spelling — holes take `{expr[:modifiers]}`, so
+  `println("{08x}", n)` becomes `println(f"{n:08x}")`) or, where an
+  explicit or runtime format string reads better, to
+  `println("x = {}".format(x))` / `println(fmt.format(args))` over
+  `slice::format` — which is also how a collector forwards now
+  (`print(fmt, args)` inside an `@format` function body becomes
+  `print(fmt.format(args))`). Positional `{n}` placeholders, the `{:N}`
+  width escape, and the one-style-per-string rules live on unchanged at
+  `@format` call sites (`"{1} then {0}".format(a, b)`). Single-string
+  calls are untouched: `println("{{}}")` already bound the verbatim
+  writer (prints `{{}}`, as before), and `println(f"{{}}")` still renders
+  `{}`. Every stdlib, example, test, and documentation call site migrated
+  (~800 sites, byte-identical example output).
+
+- **BREAKING: the variadic `@format` `panic`/`assert` overloads** —
+  `panic(fmt, args...)` and `assert(cond, fmt, args...)` are gone from
+  `std/io` (and the private `format_args` worker they rendered through,
+  now unreferenced, was deleted with them): each guard is **one member**
+  whose verbatim message parameter is the same const-covariant
+  `T extends slice<const char>` family as the writers'. Migrate
+  `panic("x = {}", x)` to `panic(f"x = {x}")` (or
+  `panic(fmt.format(args))` for a runtime format string) — but prefer a
+  plain verbatim message: the removed collector *always leaked* its
+  formatted allocation invisibly (panic diverges, so cleanup never ran —
+  a pre-existing bug this change surfaces rather than introduces), and
+  the value spelling makes that allocation explicit at the call site. A
+  rendering built for the panic path is never destroyed, by construction
+  (the process is dying); a *passing* assert's rendered message is
+  destroyed at statement end as usual. Braces in a message are never
+  placeholders now — runtime text is always safe.
+
 - **`std/equality`** — the free-function equality protocol
   (`equals<T>(slice<T>, slice<T>)`) was always a stopgap before methods
   landed; it is now the `slice<T>::equals` method in the new
@@ -28,6 +70,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `-D` define mechanism itself is unchanged.
 
 ### Changed
+
+- **Slice `extends` bounds are const-covariant, and a string literal binds
+  a bounded char-slice type parameter** — a bound of `slice<const E>` is
+  now also satisfied by any type whose declared lineage reaches
+  `slice<E>` (adding element `const` is always safe, the same one-way
+  widening slice values coerce by), so one
+  `fn show<T extends slice<const char>>(const str: T)` signature takes
+  `slice<const char>`, `slice<char>`, `list<char>`/`string`, and their
+  `extends` chains — the signature behind the collapsed
+  `print`/`println`/`panic`/`assert`. Strictly one way: a `slice<E>` bound
+  still rejects `slice<const E>`. And a string literal at a bounded
+  bare-`T` char-slice slot now binds `T` to the declared bound itself and
+  borrows against it (`show("hi")` instantiates `T = slice<const char>`),
+  exactly as a concrete slice parameter takes a literal; ternaries of
+  literals ride along. See [Bounds](docs/language.md#bounds).
 
 - **`std/stack`, `std/queue`, `std/ring`, `std/set`, and `std/dict` are now
   method families** — following list/string, the `stack_*`/`queue_*`/`ring_*`/
@@ -93,6 +150,35 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **String-valued f-strings** — an f-string outside an `@format`
+  format-string slot is now a runtime string *value*: it desugars to a
+  synthesized [`slice::format`](lib/std/slice.mc) call (`f"x = {x}"` is
+  `"x = {}".format(x)`, an `-> own string`), so it goes anywhere a string
+  goes. A `let` adopts it (`let s = f"x is {x}";` destroys the string at
+  scope end), a typed `let s: string` adopts the same way, an argument's
+  temporary drops at statement end, a method chains off it
+  (`f"{x}".equals(s)`), and `return f"..."` transfers out of an
+  `-> own string` function; a zero-hole `f"hi"` renders too (a terse heap
+  string constructor). At an `@format` format string the compile-time
+  splice still wins — zero-cost and injection-free (hole values are never
+  re-scanned for braces) — so `"...".format(...)` and your own collectors
+  resolve exactly as before; only when no candidate can splice does the
+  literal render (with the panic/assert collectors removed, that now
+  includes `panic(f"...")` — see the breaking entry above), and a trailing
+  collected f-string after a plain format string (`logf("{}", f"...")`)
+  renders as an ordinary value argument. F-string *hole* own-temporaries (`f"{make()}"`), formerly the
+  drops item's recorded follow-up, now drop at statement end on both
+  marshal paths. The rendering needs `slice::format` imported (`std/slice`;
+  `std/io` pulls it in) — a miss names the import. No implicit
+  string-to-slice coercion: a concrete `slice<const char>` position
+  reports the honest mismatch (borrow with `f"..." as slice<const char>`,
+  which leaks the rendering like any own call's `as` borrow, or bind a
+  `let`). Two positions stay compile errors, reworded accordingly: a
+  compile-time constant and in-place addressing (*an f-string renders at
+  runtime into an owned string, so it cannot form a compile-time constant
+  or be addressed in place; bind it to a let first*). See
+  [Formatted print/println](docs/language.md#formatted-print--println).
+
 - **Expression-position `own` temporaries are destroyed at statement
   end** — a receiverless [`-> own`](docs/language.md#move-out-returns-own)
   call now *drops*, in the Rust sense: every consumption other than an
@@ -119,8 +205,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   diagnostic direction). A mixed own/plain overload set neither adopts
   nor drops (a plain copy, adoption's conservative judgment), and `own`
   over a destructor-less type stays a no-op. Still plain copies, as
-  follow-ups: struct-literal field inits, `emit f();`, non-own
-  `return f();`, and f-string hole temporaries. See
+  follow-ups: struct-literal field inits, `emit f();`, and non-own
+  `return f();` (f-string hole temporaries, originally on this list,
+  were closed by the string-valued f-strings entry above). See
   [Move-out returns](docs/language.md#move-out-returns-own) and
   [own_drops.mc](examples/types/own_drops.mc).
 
@@ -855,6 +942,28 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and [nonnull_callbacks.mc](examples/functions/nonnull_callbacks.mc).
 
 ### Fixed
+
+- **Positional placeholders did not desugar through a `.format` dot-call
+  receiver** — a string-literal receiver reaches the marshal wrapped in
+  its `as slice<const char>` borrow (the dot-call adaptation), which
+  defeated the `@format` literal detection: `"{0}, {0}".format(x)`
+  silently skipped the compile-time positional desugar (the runtime then
+  read `{0}` as a zero-pad modifier) and none of the positional
+  diagnostics fired. The `@format` checks now see through the borrow cast
+  when its operand is a plain string literal, so `"{0}".format(x)`,
+  `("{0}" as slice<const char>).format(x)`, and `panic("{0}", x)` all
+  desugar — and diagnose — alike. Load-bearing now that `.format` is the
+  positional form's home spelling.
+
+- **A `string` value formatted as `<list<char>>`** — `std/format` had no
+  member for `string`, so a string boxed into a `{}` placeholder
+  (`"{}".format(s)`, an f-string's `{s}` hole) fell to the unbounded
+  `format<T>` typename fallback and printed `<list<char>>` instead of its
+  text. A concrete member now borrows the value to its
+  `slice<const char>` view and delegates to the string-slice worker, so
+  the `[N][s][N]` field-width grammar applies to owned strings unchanged
+  (`"{5}".format(s)` right-aligns). `string` is `list<char>`, so
+  `list<char>` values render through the same member.
 
 - **A conditional of proven non-null arms was rejected at `@nonnull`
   slots** — the syntactic non-null proof had no case for `?:`, so

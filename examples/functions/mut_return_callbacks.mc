@@ -60,19 +60,19 @@ fn main() -> int32 {
     // parameter. `&f(b, 2)` stays rejected ("cannot take the address of a
     // call result"): the reference must not outlive the full expression.
     bump(f(b, 2));                      // 'c' + 1 = 'd'
-    println("bytes  -> {}{}{}", bytes[0], bytes[1], bytes[2]);
+    println(f"bytes  -> {bytes[0]}{bytes[1]}{bytes[2]}");
 
     // A field-held callee is written through the same way: whichever
     // expression names the function, the call is the lvalue.
     let t = struct ops { at = buf_at };
     t.at(b, 0) = 'A';
     t.at(b, 0) += 1;                    // 'A' + 1 = 'B'
-    println("t.at   -> {}", bytes[0]);
+    println(f"t.at   -> {bytes[0]}");
 
     // The formation chain through the indirect callee: length_slot returns
     // a reference into b, and the assignment lands in the caller's struct.
     length_slot(buf_ref, b) = 2;
-    println("length -> {}", b.length as int32);
+    println(f"length -> {b.length as int32}");
 
     // Like the parameter conventions (mut_callbacks.mc), the return
     // convention is NOT convertible -- in either direction, with no `as`

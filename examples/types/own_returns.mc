@@ -24,11 +24,11 @@ struct conn {
 
 fn conn::constructor(mut self: conn, id: int32) {
     self.id = id;
-    println("  open {}", id);
+    println(f"  open {id}");
 }
 
 fn conn::destructor(mut self: conn) {
-    println("  close {}", self.id);
+    println(f"  close {self.id}");
     self.id = -1;
 }
 
@@ -92,7 +92,7 @@ fn main() -> int32 {
     println("dial:");
     {
         let c = dial(1);
-        println("  using {}", c.id);
+        println(f"  using {c.id}");
     }                                    // close 1 -- the adopted schedule
 
     // Both paths of the checked dial. On the fallback path the abandoned
@@ -110,7 +110,7 @@ fn main() -> int32 {
     {
         let s = slot { c = conn { id = 9 } };   // literal: nothing scheduled
         let c = s.take();                // adopts the moved-out value
-        println("  took {}", c.id);
+        println(f"  took {c.id}");
     }                                    // close 9 -- once, via c
 
     // Result composition: the adopting unwraps are the plain
@@ -122,12 +122,12 @@ fn main() -> int32 {
     println("careful, ok:");
     {
         let c = try dial_carefully(3) except (e) { emit conn { id = 0 }; };
-        println("  got {}", c.id);
+        println(f"  got {c.id}");
     }                                    // close 3
     println("careful, unlucky:");
     {
         let c = try dial_carefully(13) except (e) { emit conn { id = 0 }; };
-        println("  got {}", c.id);       // 0: the fallback literal
+        println(f"  got {c.id}");       // 0: the fallback literal
     }                                    // close 0
 
     // The marker rides function-pointer TYPES too: `fn(int32) -> own conn`
@@ -141,7 +141,7 @@ fn main() -> int32 {
     {
         let factory: fn(int32) -> own conn = dial;
         let c = factory(4);
-        println("  made {}", c.id);
+        println(f"  made {c.id}");
     }                                    // close 4 -- adopted through the type
 
     // Every other consumption of an own call DROPS: discarding the

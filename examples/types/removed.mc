@@ -58,7 +58,7 @@ fn max_of<T>(a: T, b: T) -> T;
 fn main() -> int32 {
     // Migrated code builds and runs as ever; an uncalled tombstone costs
     // nothing and generates nothing.
-    println("largest(3, 7)     = {}", largest(3, 7));
+    println(f"largest(3, 7)     = {largest(3, 7)}");
     printf("largest(2.5, 1.5) = %g\n", largest(2.5, 1.5));
     return 0;
 }

@@ -55,20 +55,20 @@ fn point::area(self: point) -> int32 {
 
 fn main() -> int32 {
     let r: rect = { w = 3, h = 4 };
-    println("area = {}", rect::area(r));       // 12
+    println(f"area = {rect::area(r)}");       // 12
 
     // `scale` mutates `r` in place through `mut self`.
     rect::scale(r, 2);
-    println("scaled = {} x {}, area = {}", r.w, r.h, rect::area(r));  // 6 x 8, 48
+    println(f"scaled = {r.w} x {r.h}, area = {rect::area(r)}");  // 6 x 8, 48
 
     // Overload resolution picks the matching `rect::grow` by arity.
     rect::grow(r, 1);       // both sides + 1
     rect::grow(r, 10, 0);   // width + 10 only
-    println("grown = {} x {}", r.w, r.h);      // 17 x 9
+    println(f"grown = {r.w} x {r.h}");      // 17 x 9
 
     // `point::area` is a different method that happens to share the name.
     let p: point = { x = 5, y = 6 };
-    println("point area = {}", point::area(p));  // 30
+    println(f"point area = {point::area(p)}");  // 30
 
     return 0;
 }

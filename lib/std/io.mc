@@ -1,184 +1,58 @@
 import "std/string";
 import "std/format";
 
-// print/println format with `{}` placeholders: each `{[modifiers]}` renders
-// the next variadic argument through the std/format overload set,
-// type-driven -- no `%`-letters. libc's printf remains the tool for the
-// formatting the `{...}` modifiers do not carry (scientific `%g`/`%e`
-// notation).
+// print/println write a string -- verbatim, no placeholder scanning, so
+// runtime text is always safe to print. Formatting is the producers' job:
+// an f-string (`println(f"x = {x}")`) renders its holes through the
+// std/format overload set, and `"...".format(args)` (std/slice) is the
+// explicit spelling for a runtime format string. libc's printf remains the
+// tool for the formatting the `{...}` modifiers do not carry (scientific
+// `%g`/`%e` notation).
 
 /**
- * Renders fmt into str: literal text copied through, each `{[modifiers]}`
- * placeholder replaced by the next argument's `format(...)` rendering,
- * with the bracket content passed verbatim as its modifier. `{{` and
- * `}}` escape literal braces.
+ * Writes a string's bytes verbatim -- braces are not placeholders, the
+ * content goes out as-is, so runtime text is always safe. The one-argument
+ * form targets standard output; pass a FILE* (such as `stderr!`) to write
+ * to another stream. `T` is bounded to `slice<const char>`, and the bound
+ * is const-covariant, so one signature takes the whole family: a string
+ * literal, a `slice<char>` or `slice<const char>`, a `string` or
+ * `list<char>` -- and with them an f-string (`print(f"x = {x}")`) or a
+ * `"...".format(args)` rendering, whose owned temporary is destroyed at
+ * statement end.
  *
- * @param str:  destination string
- * @param fmt:  format string with `{[modifiers]}` placeholders
- * @param args: values rendered in sequence, one per placeholder
- */
-@private
-fn format_args(mut str: string, @format const fmt: slice<const char>, args...) {
-    let i: uint64 = 0;
-    let bracket_open = false;
-    let bracket_closed = false;
-
-    let modifier = string();
-
-    for c in fmt {
-        case (c) {
-        when '{':
-            if (bracket_open) {
-                str.push(c);
-                bracket_open = false;
-                continue;
-            }
-
-            bracket_open = true;
-        when '}':
-            if (bracket_closed) {
-                str.push(c);
-                bracket_closed = false;
-                continue;
-            }
-
-            if (!bracket_open) {
-                bracket_closed = true;
-                continue;
-            }
-
-            bracket_open = false;
-
-            if (i < args.length) {
-                with (t = args[i] as T) {
-                    format(str, t, modifier as slice<char>);
-                }
-
-                modifier.reset();
-                i += 1;
-            }
-        else:
-            if (bracket_open) {
-                modifier.push(c);
-            } else {
-                str.push(c);
-            }
-        }
-    }
-}
-
-/**
- * Writes a string's bytes verbatim -- no `{}` formatting, the content
- * goes out as-is. The one-argument forms target standard output; pass a
- * FILE* (such as `stderr!`) to write to another stream. `T` is bounded to
- * `slice<char>`, so a `string`, `list<char>`, or `slice<char>` binds
- * without an explicit `as` at the call site. Reach for the @format `print`
- * below when you want `{}` placeholders instead.
- *
- * @param f:   destination stream; the forms without it write to stdout
+ * @param f:   destination stream; the form without it writes to stdout
  * @param str: the bytes to write, unchanged
  */
 @inline
-fn print(const str: const slice<const char>) {
+fn print<T extends slice<const char>>(const str: T) {
     print(stdout!, str);
 }
 
 @inline
-fn print<T extends slice<char>>(const str: T) {
-    print(stdout!, str as slice<const char>);
-}
-
-@inline
-fn print(@nonnull f: FILE*, const str: const slice<const char>) {
-    fwrite(str.data as byte*, sizeof(char), str.length, f);
-}
-
-@inline
-fn print<T extends slice<char>>(@nonnull f: FILE*, const str: T) {
-    print(f, str as slice<const char>);
-}
-
-/**
- * Formats according to fmt and writes the result to standard output, or
- * to the given FILE* with the two-argument form (no trailing newline).
- *
- * Each `{}` placeholder renders the next argument through the
- * std/format overload set (type-driven), and `{modifiers}` passes the
- * bracket content through as the per-type modifier -- `{x}`/`{X}`/`{p}`
- * on integers, `{.2f}`/`{8.2f}` on floats, `{y}`/`{yes}` on bools,
- * applied per element on slices.
- * `{{`/`}}` print literal braces. Making your own type printable is one
- * `format` overload in your module (the set is open).
- *
- * The parameter is @format, so a string *literal* also takes positional
- * `{n[:modifiers]}` placeholders, desugared at compile time to the
- * sequential form above (`{:modifiers}` spells a bare all-digit
- * modifier, e.g. the `{:2}` field width), and an f-string interpolates
- * expressions directly: `print(f"x = {x}")` desugars to the same
- * sequential form, its `{expr[:modifiers]}` holes becoming the
- * arguments (`{expr=}` labels the value with the expression's own
- * spelling).
- *
- * @param fmt:  format string with `{[modifiers]}` placeholders
- * @param args: values rendered in sequence, one per placeholder
- */
-fn print(@format const fmt: slice<const char>, args...) {
-    print(stdout!, fmt, args);
-}
-
-fn print(@nonnull f: FILE*, @format const fmt: slice<const char>, args...) {
-    let str = string();
-    format_args(str, fmt, args);
-    print(f, str);   // hand the finished string to the verbatim printer
+fn print<T extends slice<const char>>(@nonnull f: FILE*, const str: T) {
+    let view = str as slice<const char>;
+    fwrite(view.data as byte*, sizeof(char), view.length, f);
 }
 
 /**
  * Verbatim print followed by a newline: writes str's bytes as-is and then
  * a '\n', to standard output or the given FILE*. This is the replacement
- * for the deprecated `writeln`. As with verbatim `print`, `T` binds any
- * `slice<char>`-extending type, and the @format `println` below is the
- * one to use for `{}` placeholders.
+ * for the deprecated `writeln`. As with `print`, the one `T` bounded to
+ * `slice<const char>` binds every char-run type -- literals, slices of
+ * either constness, `string`/`list<char>`, f-strings, `.format` results.
  *
- * @param f:   destination stream; the forms without it write to stdout
+ * @param f:   destination stream; the form without it writes to stdout
  * @param str: the bytes to write, unchanged
  */
 @inline
-fn println(const str: const slice<const char>) {
+fn println<T extends slice<const char>>(const str: T) {
     println(stdout!, str);
 }
 
 @inline
-fn println<T extends slice<char>>(const str: T) {
-    println(stdout!, str as slice<const char>);
-}
-
-@inline
-fn println(@nonnull f: FILE*, const str: const slice<const char>) {
+fn println<T extends slice<const char>>(@nonnull f: FILE*, const str: T) {
     print(f, str);
     fputc('\n' as int32, f);
-}
-
-@inline
-fn println<T extends slice<char>>(@nonnull f: FILE*, const str: T) {
-    println(f, str as slice<const char>);
-}
-
-/**
- * Like the @format print, but appends a newline after the formatted
- * output; the two-argument form targets a given FILE* instead of stdout.
- *
- * @param fmt:  format string with `{[modifiers]}` placeholders
- * @param args: values rendered in sequence, one per placeholder
- */
-fn println(@format const fmt: slice<const char>, args...) {
-    println(stdout!, fmt, args);
-}
-
-fn println(@nonnull f: FILE*, @format const fmt: slice<const char>, args...) {
-    let str = string();
-    format_args(str, fmt, args);
-    str.push('\n');
-    print(f, str);
 }
 
 /**
@@ -276,27 +150,17 @@ fn fail(const prefix: slice<const char>, const msg: slice<const char>) {
  * `if (p == null) { panic("..."); }` guard narrows p for the rest of the
  * scope; enclosing defers do not run on the panic path.
  *
+ * The message parameter takes the same const-covariant char-run family as
+ * `print`, so `panic(f"x = {x}")` compiles -- but prefer a plain verbatim
+ * message: the process is dying, so a rendering built for the panic path
+ * (an f-string, a `.format` result) is never destroyed. Formatting on the
+ * way down is an explicit, visible cost, not the blessed style.
+ *
  * @param msg: message text, written as-is
  */
 @noreturn
-fn panic(const msg: slice<const char>) {
-    fail(msg);
-}
-
-/**
- * Formats according to fmt -- `{}` placeholders through the std/format
- * overload set, positional `{n}` and f-string literals included -- then
- * writes the rendering to standard error and aborts
- * (SIGABRT), like the verbatim member above.
- *
- * @param fmt:  format string with `{[modifiers]}` placeholders
- * @param args: values rendered in sequence, one per placeholder
- */
-@noreturn
-fn panic(@format const fmt: slice<const char>, args...) {
-    let str = string();
-    format_args(str, fmt, args);
-    fail(str as slice<char>);
+fn panic<T extends slice<const char>>(const msg: T) {
+    fail(msg as slice<const char>);
 }
 
 /**
@@ -305,29 +169,17 @@ fn panic(@format const fmt: slice<const char>, args...) {
  * facts do not cross the call -- so a narrowing null guard stays
  * `if (p == null) { panic("..."); }`.
  *
+ * The message takes the same char-run family as `panic`, and it is built
+ * whether or not the assertion holds -- an f-string message renders on
+ * every pass (and is destroyed at statement end only when the assertion
+ * holds; a failing assert aborts mid-statement). Prefer a plain verbatim
+ * message on hot paths.
+ *
  * @param cond: condition expected to hold
  * @param msg:  message text, written as-is on failure
  */
-fn assert(const cond: bool, const msg: slice<const char>) {
+fn assert<T extends slice<const char>>(const cond: bool, const msg: T) {
     if (!cond) {
-        fail("assertion failed: ", msg);
-    }
-}
-
-/**
- * Like the verbatim assert, but the message formats: `{}` placeholders
- * through the std/format overload set, positional `{n}` and f-string
- * literals included. The arguments are evaluated whether or not the
- * assertion holds; only the rendering is skipped.
- *
- * @param cond: condition expected to hold
- * @param fmt:  format string with `{[modifiers]}` placeholders
- * @param args: values rendered in sequence, one per placeholder
- */
-fn assert(const cond: bool, @format const fmt: slice<const char>, args...) {
-    if (!cond) {
-        let str = string();
-        format_args(str, fmt, args);
-        fail("assertion failed: ", str as slice<char>);
+        fail("assertion failed: ", msg as slice<const char>);
     }
 }

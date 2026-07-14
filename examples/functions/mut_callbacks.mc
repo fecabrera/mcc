@@ -51,7 +51,7 @@ fn main() -> int32 {
 
     // The call passes &n underneath; the callee's write lands in n.
     f(n);
-    println("f(n)        -> {}", n);
+    println(f"f(n)        -> {n}");
 
     // The same call-site rules as a direct call: the argument must be the
     // caller's own writable lvalue of exactly the parameter's type. A
@@ -64,12 +64,12 @@ fn main() -> int32 {
     // too, exactly as at a direct call (pointer_decay.mc): &n always proves.
     let p: int32* = &n;
     f(p);
-    println("f(p)        -> {}", n);
+    println(f"f(p)        -> {n}");
 
     // The @static table dispatches in place, writing n each time.
     transforms[0](n);
     transforms[1](n);
-    println("table       -> {}", n);
+    println(f"table       -> {n}");
 
     // The convention is NOT convertible -- in either direction, with no
     // `as` hatch (unlike the @nonnull contract's strip in
@@ -90,17 +90,17 @@ fn main() -> int32 {
     let g = double_it as fn(mut uint32);
     let u: uint32 = 5;
     g(u);
-    println("reinterpret -> {}", u);
+    println(f"reinterpret -> {u}");
 
     // cmp<int32>: the const erases, the plain `less` inhabits the alias.
-    println("pick(3, 9, less)   -> {}", pick(3, 9, less));
+    println(f"pick(3, 9, less)   -> {pick(3, 9, less)}");
 
     // cmp<struct point>: the same alias, now the hidden-reference type,
     // inhabited by the const-parameter comparator -- no copies made.
     let a = point { x = 3, y = 4 };
     let b = point { x = 6, y = 8 };
     let best = pick(a, b, closer);
-    println("pick(a, b, closer) -> ({}, {})", best.x, best.y);
+    println(f"pick(a, b, closer) -> ({best.x}, {best.y})");
 
     // A collecting function (args...) is a value too: its type spells the
     // sugar's underlying parameter, fn(const slice<const any>) -> R, and a

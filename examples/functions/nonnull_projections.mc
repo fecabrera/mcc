@@ -106,10 +106,10 @@ fn main() -> int32 {
     let buf = struct buffer { data = &x, size = 3 };
     let none = struct buffer { data = null, size = 0 };
 
-    println("peek(buf) = {}, peek(none) = {}", peek(buf), peek(none));
-    println("read(&buf) = {}, read(&none) = {}", read(&buf), read(&none));
-    println("audit(&buf) = {}, audit(&none) = {}", audit(&buf), audit(&none));
-    println("sum(&buf) = {}", sum(&buf));
+    println(f"peek(buf) = {peek(buf)}, peek(none) = {peek(none)}");
+    println(f"read(&buf) = {read(&buf)}, read(&none) = {read(&none)}");
+    println(f"audit(&buf) = {audit(&buf)}, audit(&none) = {audit(&none)}");
+    println(f"sum(&buf) = {sum(&buf)}");
     return 0;
 }
 

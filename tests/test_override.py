@@ -30,7 +30,7 @@ def test_overrides_a_stdlib_concrete_formatter(capfd):
             str.append(value ? "YEP" : "NOPE");
         }
         fn main() -> int32 {
-            println("flag is {}", true);
+            println(f"flag is {true}");
             return 0;
         }
         """
@@ -52,7 +52,7 @@ def test_overrides_the_typename_fallback(capfd):
         }
         fn main() -> int32 {
             let p = struct point { x = 1, y = 2 };
-            println("{} then {}", 42, p);
+            println(f"{42} then {p}");
             return 0;
         }
         """

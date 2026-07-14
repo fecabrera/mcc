@@ -19,8 +19,8 @@ fn sum(label: char*, args...) -> int32 {
     for a in args {
         case type (a) {
             when int32 v: n = n + v;
-            when char* s: println("{}: note {}", label, s);
-            else:         println("{}: an extra with no arm", label);
+            when char* s: println(f"{label}: note {s}");
+            else:         println(f"{label}: an extra with no arm");
         }
     }
     return n;
@@ -37,15 +37,15 @@ fn count(args: slice<const any>) -> uint64 {
 // collect, and between collecting candidates, more fixed parameters
 // wins. These three make one `log` set.
 fn log(args...) {
-    println("log: {} bare extras", args.length);
+    println(f"log: {args.length} bare extras");
 }
 
 fn log(level: int32, args...) {
-    println("log[{}]: {} extras", level, args.length);
+    println(f"log[{level}]: {args.length} extras");
 }
 
 fn log(level: int32, tag: char*) {
-    println("log[{}] exact: {}", level, tag);
+    println(f"log[{level}] exact: {tag}");
 }
 
 // A collector can share a generic name too. T binds from the FIXED
@@ -56,7 +56,7 @@ fn acc<T>(seed: T, args...) -> T {
     for a in args {
         case type (a) {
             when T v: total = total + v;
-            else:     println("acc: skipped a non-{} extra", typename(T));
+            else:     println(f"acc: skipped a non-{typename(T)} extra");
         }
     }
     return total;
@@ -65,14 +65,14 @@ fn acc<T>(seed: T, args...) -> T {
 fn main() -> int32 {
     // Three extras, each boxed where the call is made: the two int32s hit
     // the first arm, the string literal lands under the char* tag.
-    println("total = {}", sum("mix", 1, 2, "three"));
+    println("total = {}".format(sum("mix", 1, 2, "three")));
 
     // Zero extras: args is an empty slice (length 0), the loop runs 0 times.
-    println("empty = {}", sum("empty"));
+    println("empty = {}".format(sum("empty")));
 
     // The explicit form, with and without extras.
-    println("count = {}", count(4, 5, 6));
-    println("none  = {}", count());
+    println(f"count = {count(4, 5, 6)}");
+    println(f"none  = {count()}");
 
     // The overload set. No int32 first argument here, so only the bare
     // collector is viable: both values become extras.
@@ -89,11 +89,11 @@ fn main() -> int32 {
     // The generic collector: T = int32 comes from the seed alone. The
     // extras 1 and 2 match the T arm; 2.5 was boxed as float64 when the
     // call was made, so it is skipped, not converted.
-    println("acc = {}", acc(0, 1, 2, 2.5));
+    println(f"acc = {acc(0, 1, 2, 2.5)}");
 
     // A second instantiation: the float64 seed binds T = float64, and
     // now 2.5 is exactly a T.
-    println("acc = {}", acc(1.0, 2.5));
+    println(f"acc = {acc(1.0, 2.5)}");
 
     // Still explicit: a fn(...) value's type carries no collecting
     // marker, so a call through one passes the slice<const any> itself.

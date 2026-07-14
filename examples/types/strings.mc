@@ -8,42 +8,42 @@ import "std/io";
 
 // `msg` arrives as uint8*; a string literal (char*) coerces to it.
 fn shout(msg: uint8*) {
-    println("{}!", msg as char*);   // {} renders char* as text; uint8* is raw memory
+    println(f"{msg as char*}!");   // {} renders char* as text; uint8* is raw memory
 }
 
 fn main() -> int32 {
     // Bound to an array variable, the literal is an owned, mutable copy.
     // len() counts the bytes including the NUL, so "message 1" (9 chars) is 10.
     let owned = "message 1";              // inferred char[10]
-    println("owned: \"{}\", len {}, sizeof {}",
-            &owned[0], len(owned), sizeof(owned));
+    println("owned: \"{}\", len {}, sizeof {}".format(
+            &owned[0], len(owned), sizeof(owned)));
 
     owned[0] = 'M';                       // owned storage, so writable
-    println("mutated: \"{}\"", &owned[0]);
+    println(f"mutated: \"{&owned[0]}\"");
 
     // `char[]` infers the size; an explicit, larger buffer is zero-filled past
     // the string; `char*` keeps the pointer-into-the-constant behavior (no copy).
     let inferred: char[] = "hi";          // char[3]
     let padded: char[8] = "hi";           // char[8], zeroed past "hi\0"
     let ptr: char* = "no copy";           // a pointer into the shared constant
-    println("inferred len {}, padded len {}, ptr \"{}\"",
-            len(inferred), len(padded), ptr);
+    println("inferred len {}, padded len {}, ptr \"{}\"".format(
+            len(inferred), len(padded), ptr));
 
     // A literal in any expression position decays to char*. A char literal is an
     // untyped constant: it defaults to char, but adapts to an integer slot too.
     shout("hello");
     let first = "abc"[0];                 // indexes the literal: 'a', a char
     let code: int32 = 'a';                // the literal adapts to int32 here
-    println("first byte {} (= {})", first as int32, code);
+    println(f"first byte {first as int32} (= {code})");
 
     // A char[N] is NUL-terminated text, so its slice<char> borrow drops the
     // terminator: view.length is the text length (8, not 9).
     let text = "slice me";                // char[9]
     let view = text as slice<char>;
-    println("view.length {}", view.length);   // 8
+    println(f"view.length {view.length}");   // 8
     print("text: ");
     for c in view {
-        print("{}", c);
+        print(f"{c}");
     }
     println("");
 
@@ -52,13 +52,13 @@ fn main() -> int32 {
     // carries the chosen literal's own length.
     let flag = true;
     let answer: slice<char> = flag ? "y" : "yes";
-    println("answer.length {}", answer.length);   // 1
+    println(f"answer.length {answer.length}");   // 1
 
     // A uint8[N], by contrast, is a raw byte buffer: its slice keeps every byte.
     // (Char literals adapt to uint8 here, since the values fit.)
     let raw: uint8[3] = ['a', 'b', 'c'];
     let bytes = raw as slice<uint8>;
-    println("raw bytes kept: {}", bytes.length);   // 3, nothing dropped
+    println(f"raw bytes kept: {bytes.length}");   // 3, nothing dropped
 
     return 0;
 }

@@ -54,18 +54,18 @@ fn main() -> int32 {
 
     // Concrete pattern with else: one tag compare. The binding `n` exists
     // only in the true branch; the else has no binding at all.
-    with (n = a as int32) println("int32: {}", n);
+    with (n = a as int32) println(f"int32: {n}");
     else println("not an int32");
 
     // Re-box and test again: the same head now takes the else.
     a = 2.5;
-    with (n = a as int32) println("int32: {}", n);
+    with (n = a as int32) println(f"int32: {n}");
     else println("not an int32");
 
     // A braced block body, like `if`.
     with (f = a as float64) {
         let doubled = f * 2.0;
-        println("float64 doubled: {}", doubled);
+        println(f"float64 doubled: {doubled}");
     }
 
     // A lone `with` on an unmatched tag falls through doing nothing --
@@ -74,20 +74,20 @@ fn main() -> int32 {
 
     // Tag 0 is an unmatched tag like any other: with an else it takes the
     // else, and a lone `with` on it would fall through silently.
-    with (n = empty as int32) println("int32: {}", n);
+    with (n = empty as int32) println(f"int32: {n}");
     else println("empty box");
 
     // The generic pointer pattern: one body copy per boxed pointer tag
     // (point* and char* here), and a non-pointer tag skips the body.
     let origin = point { x = 3, y = 4 };
-    println("pointee_width(&origin) = {}", pointee_width(&origin));
-    println("pointee_width(\"hi\")    = {}", pointee_width("hi"));
-    println("pointee_width(42)      = {}", pointee_width(42));
+    println(f"pointee_width(&origin) = {pointee_width(&origin)}");
+    println("pointee_width(\"hi\")    = {}".format(pointee_width("hi")));
+    println(f"pointee_width(42)      = {pointee_width(42)}");
 
     // The generic value pattern: T binds to each boxed type in turn.
-    println("payload_width(42)      = {}", payload_width(42));
-    println("payload_width(2.5)     = {}", payload_width(2.5));
-    println("payload_width(false)   = {}", payload_width(false));
+    println(f"payload_width(42)      = {payload_width(42)}");
+    println(f"payload_width(2.5)     = {payload_width(2.5)}");
+    println(f"payload_width(false)   = {payload_width(false)}");
 
     return 0;
 }

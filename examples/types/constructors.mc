@@ -131,7 +131,7 @@ fn main() -> int32 {
     println("counter(41):");
     let c = counter(41);
     c.n += c.step;
-    println("  c.n = {}, c.step = {}", c.n, c.step);      // 42, 1 (default)
+    println(f"  c.n = {c.n}, c.step = {c.step}");      // 42, 1 (default)
 
     // Explicit type arguments type the receiver up front: T = float64 is
     // pinned, so the diagonal is NON-VIABLE for int literals (an int
@@ -140,7 +140,7 @@ fn main() -> int32 {
     // T = float64, so both markers print.
     println("point<float64>(1, 1):");
     let a = point<float64>(1, 1);
-    println("  a = ({:.2f}, {:.2f})", a.x, a.y);
+    println(f"  a = ({a.x:.2f}, {a.y:.2f})");
 
     // A bare generic head spells no instantiation: the receiver enters
     // resolution as a placeholder and the arguments deduce it. float64
@@ -148,37 +148,37 @@ fn main() -> int32 {
     // ctor (concrete positions beat the per-call <U>).
     println("point(1.5, 2.5):");
     let b = point(1.5, 2.5);
-    println("  b = ({:.2f}, {:.2f}), a {}", b.x, b.y, typename(b));
+    println(f"  b = ({b.x:.2f}, {b.y:.2f}), a {typename(b)}");
 
     // Adaptable int literals lean int32, exactly as ordinary inference does.
     println("point(1, 2):");
     let i = point(1, 2);
-    println("  i = ({}, {}), a {}", i.x, i.y, typename(i));
+    println(f"  i = ({i.x}, {i.y}), a {typename(i)}");
 
     // An alias head chases to the type it names: pointf(3, 4) constructs
     // point<float64>, and the pinned T again routes the int literals to the
     // converting ctor.
     println("pointf(3, 4):");
     let pf = pointf(3, 4);
-    println("  pf = ({:.2f}, {:.2f}), a {}", pf.x, pf.y, typename(pf));
+    println(f"  pf = ({pf.x:.2f}, {pf.y:.2f}), a {typename(pf)}");
 
     // A fully-defaulted generic written bare is a complete type (as in
     // `let bx: box;`): the defaults fill first, so box(1) constructs
     // box<int64> and the argument adapts to int64 instead of leaning int32.
     println("box(1):");
     let bx = box(1);
-    println("  bx.v = {}, a {}", bx.v, typename(bx));
+    println(f"  bx.v = {bx.v}, a {typename(bx)}");
 
     // Expression and return positions.
     println("sum1(point<float64>(1.5, 2.5)) and mk(2.0):");
     let s = sum1(point<float64>(1.5, 2.5));
     let m = mk(2.0);
-    println("  sum1 = {:.2f}, mk(2.0).x = {:.2f}", s, m.x);
+    println(f"  sum1 = {s:.2f}, mk(2.0).x = {m.x:.2f}");
 
     // A builtin head over the declared char family.
     println("char(65):");
     let ch = char(65);
-    println("  ch = {}", ch);                             // A
+    println(f"  ch = {ch}");                             // A
 
     // The desugared spelling stays first-class alongside the sugar -- bare,
     // inferring the instantiation from the arguments, or with the qualifier
@@ -188,7 +188,7 @@ fn main() -> int32 {
     point::constructor(d, 7, 9);
     println("point<int32>::constructor(d, 5, 6):");
     point<int32>::constructor(d, 5, 6);
-    println("  d = ({}, {})", d.x, d.y);
+    println(f"  d = ({d.x}, {d.y})");
 
     // The implicit empty constructor. point's declared family is
     // 2-argument, so point<float64>() default-initializes: NO marker
@@ -200,26 +200,26 @@ fn main() -> int32 {
     let e = point<float64>();
     e.x = 8.0;
     e.y = 0.5;
-    println("  e = ({:.2f}, {:.2f})", e.x, e.y);
+    println(f"  e = ({e.x:.2f}, {e.y:.2f})");
 
     // Field defaults apply, exactly as in the bare declaration: counter()
     // starts from step = 1 with no constructor body run.
     let z = counter();
     z.n = 0;                    // n has no default; assign before reading
-    println("counter(): z.step = {} (default), z.n = {}", z.step, z.n);
+    println(f"counter(): z.step = {z.step} (default), z.n = {z.n}");
 
     // token's receiver-only member claims token(): the marker proves the
     // body ran, overriding the field default with 7.
     println("token():");
     let tk = token();
-    println("  tk.id = {}", tk.id);                       // 7
+    println(f"  tk.id = {tk.id}");                       // 7
 
     // Builtin heads too: char() is `let c0: char;` even though the
     // declared char family above is 1-argument (char(65) still needs it;
     // int32(5) with no family stays the has-no-constructor error).
     let c0 = char();
     c0 = 'z';
-    println("char() then assigned: {}", c0);              // z
+    println(f"char() then assigned: {c0}");              // z
 
     return 0;
 }

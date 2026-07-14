@@ -15,10 +15,13 @@ import "libc/stdio";
 // rounds and pads floats with ".2f" / "8.2f",
 // renders slices (nested too), hits the <typename> fallback, and then makes
 // its own struct printable by declaring one more overload into the set.
-// The finale moves to println's `{}` placeholders, their positional
-// `{n}` sugar (duplicate, reorder, `{0:x}`, and the `{:N}` width escape),
-// and f-string interpolation: `{expr}` holes written inline, with the
-// Python-style `{n=}` inspector.
+// The finale moves to the consumers: print/println write ONE string
+// verbatim, so formatting stays with the producers -- the `.format`
+// method behind `{}` placeholders and their positional `{n}` sugar
+// (duplicate, reorder, `{0:x}`, and the `{:N}` width escape), and
+// f-string interpolation: `{expr}` holes written inline, with the
+// Python-style `{n=}` inspector, rendering to a string value println
+// binds directly.
 // Builds on io.mc (raw printf, used here to print the results),
 // functions/open_overloads.mc (how a module joins a foreign overload set),
 // types/type_groups.mc (the closed integer groups behind the set), and
@@ -130,49 +133,58 @@ fn main() -> int32 {
     format(line, &p, "x");                   // (3, ff)
     show("point:", line);
 
-    // println is this same set behind `{}` placeholders: each `{[modifiers]}`
-    // renders the next argument, the bracket content arriving verbatim as the
-    // modifier -- the float precision `{.2f}` and string width `{s6}`
-    // included. The point* overload above answers the last placeholder.
-    println("println:  {} {x} {.2f} {yes} {s6}| {x}",
-            -4, 255 as uint8, 3.5, true, "mc", &p);
+    // The `.format` method (std/slice) is this same set behind `{}`
+    // placeholders: each `{[modifiers]}` renders the next argument, the
+    // bracket content arriving verbatim as the modifier -- the float
+    // precision `{.2f}` and string width `{s6}` included -- into an owned
+    // string. println itself formats nothing: it writes one string
+    // verbatim, braces and all, which is exactly what .format hands it.
+    // The point* overload above answers the last placeholder.
+    println("format:   {} {x} {.2f} {yes} {s6}| {x}".format(
+            -4, 255 as uint8, 3.5, true, "mc", &p));
 
     // Positional placeholders: when the format string is a *literal*, `{n}`
-    // selects the n-th argument after it (0-based) instead of taking the
-    // next one. This is compile-time sugar: the call desugars to the
-    // sequential form by duplicating or reordering the arguments (each
-    // argument still evaluates once, in source order), so the runtime
-    // parser above never sees an index.
-    println("repeat:   {0} and {0} and {0}", 42);        // one arg, three renderings
-    println("reorder:  {1} before {0}", "second", "first");
+    // selects the n-th argument (0-based) instead of taking the next one.
+    // This is compile-time sugar: the call desugars to the sequential form
+    // by duplicating or reordering the arguments (each argument still
+    // evaluates once, in source order), so the runtime parser above never
+    // sees an index. The dot call's own receiver borrow is seen through:
+    // "...".format(...) desugars exactly like the explicit
+    // ("..." as slice<const char>).format(...) would.
+    println("repeat:   {0} and {0} and {0}".format(42)); // one arg, three renderings
+    println("reorder:  {1} before {0}".format("second", "first"));
 
     // A colon separates the index from the modifiers, and the modifier text
     // is the same grammar as ever: {0:x} desugars to {x} on a duplicated
     // argument.
-    println("hex:      {0} is {0:x}, padded {0:06x}", 255);
+    println("hex:      {0} is {0:x}, padded {0:06x}".format(255));
 
     // The digits claimed by argument selection cost one spelling: a *bare*
     // field width in a literal is now the index-less escape {:N}, which
-    // desugars to the runtime {2} width (control-flow/while.mc's table uses
-    // it in the wild). Digit-leading modifiers with a base letter ({06x})
-    // stay plain modifiers.
-    println("width:    [{:2}] [{:2}]", 3, 9);            // [ 3] [ 9]
-    println("width:    [{1:2}] [{0:2}]", 3, 9);          // [ 9] [ 3]
+    // desugars to the runtime {2} width (an f-string spells the same width
+    // as a plain colon modifier, {expr:2} -- control-flow/while.mc's table
+    // does). Digit-leading modifiers with a base letter ({06x}) stay plain
+    // modifiers.
+    println("width:    [{:2}] [{:2}]".format(3, 9));     // [ 3] [ 9]
+    println("width:    [{1:2}] [{0:2}]".format(3, 9));   // [ 9] [ 3]
 
     // One literal commits to one style, and the positional style must be
     // total. Each of these is a compile error:
-    //   println("{} {0}", 1)       mixes automatic {} with positional {0}
-    //                              ({:N} counts as automatic, so the two
-    //                              width lines above cannot merge into one)
-    //   println("{2}", 1, 2)       index out of range: arguments are 0 and 1
-    //   println("{0}", 1, 2)       the 2 is never referenced
+    //   "{} {0}".format(1)       mixes automatic {} with positional {0}
+    //                            ({:N} counts as automatic, so the two
+    //                            width lines above cannot merge into one)
+    //   "{2}".format(1, 2)       index out of range: arguments are 0 and 1
+    //   "{0}".format(1, 2)       the 2 is never referenced
     // A format string arriving through a variable is untouched: it hits the
     // sequential runtime parser, where {2} is always the field width.
 
     // F-strings write the expressions inline: an f-prefixed literal holds
-    // `{expr}` holes, and the whole literal desugars at parse time to the
-    // sequential form -- f"n is {n}" IS "n is {}" with n appended to the
-    // arguments. Surface syntax only; the runtime parser never sees it.
+    // `{expr}` holes. At an @format call's format string (a .format
+    // literal, or your own collector's) it splices at compile time into
+    // the sequential form above. println has no format slot, so there the
+    // literal renders instead into a string VALUE -- a synthesized .format
+    // call, f"n is {n}" IS "n is {}".format(n), an owned string println
+    // binds directly. Either way the runtime parser never sees the holes.
     let n = 7 as int32;
     println(f"fstring:  n is {n}, twice {n * 2}");
 
@@ -198,18 +210,32 @@ fn main() -> int32 {
     // string or char literals need no escape at all).
     println(f"brace:    {{{n}}}");                       // {7}
 
-    // An f-string is its own placeholder style and its own sink. Each of
-    // these is a compile error:
-    //   println(f"{n}", 9)      no placeholder is left for the 9: the holes
-    //                           supply every argument, and {} / {n} never
-    //                           mix in
-    //   let s = f"n is {n}";    an f-string is only allowed as the format
-    //                           string of an @format call (print, println,
-    //                           format_args, or your own @format function)
+    // The rendering is a first-class owned string, so it flows past
+    // println too: a let adopts it (destroyed at scope end), methods
+    // chain off the rvalue, an argument's temporary drops at statement
+    // end. types/fstring_values.mc walks that ownership story end to end.
+    let kept = f"kept:     n is {n}, hex {hx:x}";
+    println(kept);
+    if (f"{n * 2}".equals("14"))         // an rvalue receiver: renders once,
+        println("chain:    equals ok");  // drops when the chain ends
+
+    // An f-string is its own placeholder style. Each of these is a
+    // compile error:
+    //   logf(f"{n}", 9)         at an @format collector of your own
+    //                           (fn logf(@format const fmt: ..., args...))
+    //                           the holes already supply every argument:
+    //                           "'logf' takes no arguments after an
+    //                           f-string" -- and {} / {n} never mix in. At
+    //                           println, a verbatim writer, the same
+    //                           mistake is the plain no-overload error:
+    //                           no println(list<char>, int32) exists
     //   println(f"{}")          a hole must hold an expression: empty {},
     //                           bare {:x}, a stray } or an unclosed { all
     //                           reject
-    // A hole-free f"abc" simply degrades to a plain string literal.
+    // A hole-free f"abc" keeps its f-string identity: it still renders (a
+    // heap string), and its {{ }} escapes still collapse, where the plain
+    // literal "{{}}" goes out verbatim (as it always did) like every
+    // other string.
 
     return 0;
 }
@@ -217,5 +243,7 @@ fn main() -> int32 {
 // See also: io.mc (the raw printf side of formatted output),
 // functions/open_overloads.mc (the open-set mechanics this protocol rides
 // on), types/type_groups.mc (the closed signed/unsigned groups behind the
-// integer members), memory/slices.mc (the slice views rendered here).
+// integer members), memory/slices.mc (the slice views rendered here),
+// types/fstring_values.mc (the f-string as an owned string value: adoption,
+// drops, chaining, transfer, and the `as slice<const char>` hatch).
 // Full reference: docs/language.md, "Formatting".

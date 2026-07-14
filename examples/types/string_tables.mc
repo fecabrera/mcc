@@ -27,14 +27,14 @@ fn main() -> int32 {
     let i: uint64 = 0;
     while (i < len(dirs)) {
         print(dirs[i]);
-        println(": {} chars", dirs[i].length);   // 3, then 7
+        println(f": {dirs[i].length} chars");   // 3, then 7
         i += 1;
     }
 
     // The @static table indexes the same way.
     print(prompt);
     println(levels[1]);                            // "> warn"
-    println("levels[2] is {} chars", levels[2].length);   // 5
+    println(f"levels[2] is {levels[2].length} chars");   // 5
     return 0;
 }
 

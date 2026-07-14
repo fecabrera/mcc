@@ -45,13 +45,13 @@ fn main() -> int32 {
     // drop the fact at entry: see functions/nonnull_loops.mc.)
     let n: uint64 = 4;
     while (n <= 16) {
-        println("crc32 of the first {} bytes: {}", n, crc32(buf, n));
+        println(f"crc32 of the first {n} bytes: {crc32(buf, n)}");
         n += 4;
     }
 
     // The surviving fact also holds past the loop's exit: still no hatch.
     fill(buf, 0x11 as uint8, 16);
-    println("crc32 after the refill: {}", crc32(buf, 16));
+    println(f"crc32 after the refill: {crc32(buf, 16)}");
 
     // The same heap buffer behind a struct field. A guarded field like
     // v.data is a choosier fact than the bare name buf: it dies at any call
@@ -63,7 +63,7 @@ fn main() -> int32 {
     if (v.data == null) return 1;
     let head = crc32(v.data, 8);       // the write-free call keeps the fact
     let whole = crc32(v.data, v.size); // so this call needs no new proof
-    println("field crc32: first half {}, whole {}", head, whole);
+    println(f"field crc32: first half {head}, whole {whole}");
 
     // println is a writing call (it bottoms out in @extern printf), so past
     // this point v.data would need re-proving. When a checked field must

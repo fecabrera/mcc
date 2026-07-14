@@ -35,34 +35,34 @@ struct pair<A, B = int8> {
 
 fn main() -> int32 {
     // The priority ladder, low to high, on one function:
-    println("size(0)          = {}  (declared default: T = int64)", size(0));
-    println("size(0 as int16) = {}  (typed value beats the default)", size(0 as int16));
-    println("size<int8>(0)    = {}  (explicit beats everything)", size<int8>(0));
+    println(f"size(0)          = {size(0)}  (declared default: T = int64)");
+    println("size(0 as int16) = {}  (typed value beats the default)".format(size(0 as int16)));
+    println(f"size<int8>(0)    = {size<int8>(0)}  (explicit beats everything)");
 
     // U falls back to T*, so with T = int8 it is int8*: a pointer's width.
     let v = 5 as int8;
-    println("ref_width        = {}  (U defaulted to T* = int8*)", ref_width(v, &v));
+    println("ref_width        = {}  (U defaulted to T* = int8*)".format(ref_width(v, &v)));
 
     // In a written type, bare `span` means span<int64>; the same works in
     // sizeof and extends.
     let s: span;
     s.start = 0;
     s.stop  = 16;
-    println("bare span        : stop = {}, sizeof = {}",
-            s.stop, sizeof(span) as int64);
+    println("bare span        : stop = {}, sizeof = {}".format(
+            s.stop, sizeof(span) as int64));
 
     // pair<int32> fills the omitted tail from its default: pair<int32, int8>.
-    println("pair<int32>      : sizeof = {}  (B filled as int8)",
-            sizeof(pair<int32>) as int64);
+    println("pair<int32>      : sizeof = {}  (B filled as int8)".format(
+            sizeof(pair<int32>) as int64));
 
     // A struct literal with no typed field for T uses the default too:
     // both fields are untyped constants, so this is a span<int64>.
     let r = struct span { start = 0, stop = 10 };
-    println("literal span     : start width = {}", size(r.start));
+    println(f"literal span     : start width = {size(r.start)}");
 
     // A typed field still wins, exactly like call-site inference.
     let small = struct span { start = 1 as int16, stop = 10 };
-    println("typed field wins : start width = {}", size(small.start));
+    println(f"typed field wins : start width = {size(small.start)}");
 
     return 0;
 }

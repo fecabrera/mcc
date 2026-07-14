@@ -2395,10 +2395,10 @@ already do).
             "declare `-> own`" hint. `emit` keeps its whole-value hard
             error, deliberately unlifted (a block expression has no
             signature to carry the marker). With the caller adoption
-            this opens the
+            this opened the
             [string-valued f-strings](#strings-and-formatting) gate
-            for let position only; that item records the
-            argument-position temporary gap that remains. Implemented,
+            for let position (the argument-position gap closed with
+            statement-end drops; the item has since shipped). Implemented,
             see
             [Move-out returns](docs/language.md#move-out-returns-own):
         - [x] fn-pointer-type `own` parity — `fn(int32) -> own res`
@@ -2482,8 +2482,10 @@ already do).
               pending-drop queue with statement/arm scope marks,
               flushed when the outermost expression ends. Still plain
               copies, follow-up work: struct-literal field inits,
-              `emit f();`, non-own `return f();`, f-string hole
-              temporaries, and field projection (`f().field`).
+              `emit f();`, non-own `return f();`, and field projection
+              (`f().field`) — f-string hole temporaries, formerly on
+              this list, were closed by the string-valued f-strings
+              item (they drop at statement end on both marshal paths).
               Implemented, see
               [Move-out returns](docs/language.md#move-out-returns-own)
       - [ ] use-after-move detection — diagnose uses of a value whose
@@ -2961,11 +2963,13 @@ already do).
           interface value itself boxes into `any` and matches its own
           interface arm, which is what makes a heterogeneous
           `slice<const any>` of interface values work and is the
-          natural endpoint for the stdlib's `format_args` dispatch (a
-          `when printable p:` arm; `format_args` shipped with the
+          natural endpoint for the stdlib's format dispatch (a
+          `when printable p:` arm in `slice::format`, which renders
+          f-strings and `"...".format(args)`; its lone generic `with`
+          arm over the open `format` set shipped with the
           [native variadics](docs/language.md#native-variadic-arguments)
-          stdlib flip as a lone generic `with` arm in `std/io` over the
-          open `format` set).
+          stdlib flip, originally as `std/io`'s since-deleted
+          `format_args` worker).
           Arm ordering becomes semantic: today every arm is a distinct
           concrete type so order cannot matter, but an interface arm
           overlaps concrete arms, so the spec is first-match-wins in
@@ -3324,16 +3328,18 @@ already do).
       [@noreturn functions](docs/language.md#noreturn-functions) and
       [The unreachable statement](docs/language.md#the-unreachable-statement):
   - [x] stdlib `panic`/`assert` — the `@noreturn` "print to stderr and
-        abort" guards in `std/io`, a verbatim-message and an
-        `@format`-collecting overload of each (`panic(msg)`,
-        `panic(fmt, args...)`, `assert(cond, msg)`,
-        `assert(cond, fmt, args...)`): `panic: ...` / `assertion failed:
-        ...` on stderr, then `abort()` with stdout flushed first (no
-        defers, no atexit handlers), the idiomatic guard body
-        (`if (p == null) { panic("..."); }` narrows; `assert` itself does
-        not — facts stop at the call). An f-string resolves to the
-        collector because the sink rule filters overload candidates
-        before ranking (a non-`@format` slot can never receive one);
+        abort" guards in `std/io`: the message (`assertion failed: `-
+        prefixed for `assert`) on stderr, then `abort()` with stdout
+        flushed first (no defers, no atexit handlers), the idiomatic guard
+        body (`if (p == null) { panic("..."); }` narrows; `assert` itself
+        does not — facts stop at the call). Shipped as a verbatim-message
+        plus `@format`-collecting overload of each; SUPERSEDED 2026-07-14
+        by USER RULING (verbatim: "after that remove the variadic versions
+        of panic and assert") — one member each, the message a verbatim
+        const-covariant `T extends slice<const char>` (an f-string message
+        renders as a string value and binds it; the rendering leaks on the
+        dying path, see the string-valued f-strings item for the recorded
+        USER RATIONALE);
         implemented, see
         [Panic and assert](docs/language.md#panic-and-assert):
     - [ ] release-stripping asserts — a `-D MC_NDEBUG=1`-style `@if` gate
@@ -3641,10 +3647,25 @@ already do).
       string literal adapts to `fmt` at the call site (so `println("{}", a)`
       works directly), and an owned `struct string` borrows in with
       `str as slice<char>` — both via the
-      [`slice<T>`](docs/language.md#slices) borrowing rules. **This is now
-      the only `print`/`println`**, every stage nested below shipped and
-      the legacy toggle retired; the open sub-items are the remaining
-      scraps and the silent-edge spec:
+      [`slice<T>`](docs/language.md#slices) borrowing rules. Every stage
+      nested below shipped and the legacy toggle retired. SUPERSEDED
+      2026-07-14 by the string-valued f-strings ruling under
+      [String interpolation](#strings-and-formatting) below: the variadic
+      `@format` `print`/`println` overloads were REMOVED — the writers are
+      verbatim single-string members again — and a follow-up USER RULING
+      (2026-07-14, verbatim: "keep only (str) and (f, str) for print and
+      println") collapsed the verbatim pair itself to exactly TWO
+      overloads each, one signature per shape —
+      `fn print<T extends slice<const char>>(const str: T)` plus the
+      FILE* form — over the const-covariant slice bound (a small language
+      addition shipped alongside: `extends slice<const E>` also admits
+      everything reaching `slice<E>`, and a string literal binds a bounded
+      bare-T char-slice slot directly; see
+      [Bounds](docs/language.md#bounds)). This item's `{}` machinery lives
+      on at the `@format` collectors (`slice::format`, i.e.
+      `"...".format(args)` and f-string holes, plus user-declared
+      collectors), where the positional/f-string desugars below still
+      apply unchanged:
   - [x] printf-style `%` formatting — the previous `print`/`println` in the
         [standard library](README.md#standard-library), superseded by the
         `{}` model and kept behind `-D PRINTF_PRINTLN=1` for programs
@@ -3704,7 +3725,10 @@ already do).
         string is a compile error, not a guess at the intent, as are an
         out-of-range index and an argument no placeholder references.
         Shipped with the `@format` parameter attribute as the hook
-        (`std/io` marks `print`/`println`/`format_args`; valid on the
+        (today's lone stdlib marker: `std/slice`'s `slice::format` —
+        where a string-literal receiver's borrow cast is seen through, so
+        `"{0}".format(x)` desugars; user collectors join freely; valid on
+        the
         `slice<const char>` just before a collecting `args...`, carried
         through `.mci` stubs like `@nonnull`) and the index-less `{:N}`
         escape spelling the bare all-digit field width the positional
@@ -3743,13 +3767,14 @@ already do).
         C library's. The last runtime modifier stage: libc's `printf`
         remains only the scientific-notation (`%g`/`%e`) tool
 - [x] String interpolation — `println(f"x = {x}")`: an `f`-prefixed string
-      literal with `{expr}` holes desugars at parse time into the formatted
-      `println("x = {}", x)` call above (`{{`/`}}` escape a literal brace),
-      so it is surface syntax only — no new runtime. The prefix is what
+      literal with `{expr}` holes desugars at parse time into the
+      sequential `@format` form above (`"x = {}".format(x)`; `{{`/`}}`
+      escape a literal brace), so it is surface syntax only — no new
+      runtime. The prefix is what
       keeps the two brace grammars apart: in a plain literal `{x}` is a
       *modifier* placeholder (hex the next argument), while in an `f`-string
-      `{x}` is the *expression* `x` — `println("{x}", x)` and
-      `println(f"{x}")` are both meaningful and unambiguous, and
+      `{x}` is the *expression* `x` — `"{x}".format(x)` and
+      `f"{x}"` are both meaningful and unambiguous, and
       `f"{x:08x}"` carries a modifier through (the hole is parsed first, so
       a ternary's own colon stays inside the expression). The inspector form
       is Python's, spelling and semantics: `f"{n=}"` splices the hole's
@@ -3758,34 +3783,60 @@ already do).
       the `=` (`f"{x=:08x}"`). An interpolated string is its own
       placeholder style: it does not mix with the auto-numbered `{}` or
       manually numbered `{n}` forms, and extra arguments after one are a
-      compile error. Legal only as the format string of an `@format` call —
-      every other sink is a compile error, never a silently dropped hole;
-      implemented, see
+      compile error. At an `@format` format string the literal splices at
+      compile time; everywhere else it is a string *value* (the sub-item
+      below) — never a silently dropped hole; implemented, see
       [Formatted print/println](docs/language.md#formatted-print--println)
-  - [ ] string-valued f-strings — an f-string used outside an `@format`
-        argument, as a standalone value (`let s = f"{x}";`), rendering into a
-        runtime `string` so it can go anywhere a string can, not only into an
-        `@format` argument position. The gate is now HALF OPEN: the shipped
-        move-out returns (`-> own`, nested under the destructor item in
-        [Methods / OOP](#functions-and-methods)) plus caller-adopted
-        destruction cover LET position — `let s = f"..."` can desugar to
-        `let s = "...".format(args...)` over the since-shipped
-        `slice::format` / `string::format` `-> own string` builder (the
-        `std/slice` format-string entry point in the Core stdlib above),
-        the renderer this desugar always wanted, whose returned `string` is
-        constructed in the callee, adopted by the caller's let, and destroyed
-        at the end of that scope (RAII over
-        [`defer`](docs/language.md#defer), the same discipline the destructor
-        item establishes). What remains is ARGUMENT position:
-        `println("{}", f"{x}")` produces an expression temporary — and the
-        machinery this deferral was waiting for now exists: the shipped
-        statement-end drop destroys an unadopted own call in argument
-        position, so a desugar emitting `format(...)` calls inherits the
-        cleanup for free (f-string HOLE temporaries themselves remain the
-        drop item's recorded follow-up). The shipped `@format`-only
-        rule above (an f-string anywhere but a format-string argument is a
-        compile error) is exactly this deferral, and lifts to the desugar
-        position by position as the lifecycle allows
+  - [x] string-valued f-strings — an f-string used outside an `@format`
+        format-string slot is a runtime string value: it desugars to a
+        synthesized `slice::format` call (`f"x = {x}"` is
+        `"x = {}".format(x)`, the `-> own string` builder in `std/slice`),
+        so it goes anywhere a string goes — a `let` adopts it (RAII, the
+        destructor item's discipline), an argument's temporary drops at
+        statement end (the drops item's machinery), a method chains off the
+        spilled receiver, and `return f"..."` transfers out of an
+        `-> own string` function. USER RULING (2026-07-14): value rendering
+        applies EVERYWHERE outside an `@format` slot — the slot-wins-only
+        option for `println` was rejected in favor of removing
+        `print`/`println`'s variadic `@format` overloads outright
+        (verbatim: "remove print/println with \"args...\", only
+        println(f\"...\") and println(\"...\".format()) are allowed"), so
+        `std/io`'s print/println are now verbatim single-string writers and
+        never re-scan braces — the format-injection question for them
+        dissolves. USER RULING (2026-07-14): a zero-hole `f"hi"` as a value
+        is ALLOWED — it renders to a heap string, the terse constructor
+        (`f""` identity is kept at parse time, so a verbatim overload never
+        steals it). USER RULING (2026-07-14): the hole own-temporaries
+        follow-up is FOLDED IN — `f"{make()}"` drops its temporary at
+        statement end on both marshal paths (closed on the drops item's
+        follow-up list). USER RULING (2026-07-14, verbatim: "after that
+        remove the variadic versions of panic and assert"): the `@format`
+        `panic(fmt, args...)` / `assert(cond, fmt, args...)` collectors
+        are REMOVED too — one member each, whose message parameter is the
+        same const-covariant `T extends slice<const char>` family as the
+        writers', so `panic(f"x = {x}")` still compiles as a string value.
+        USER RATIONALE (near-verbatim): "for the variadic panic it was
+        already leaking, which is a bug, so by only having the verbatim
+        version it can be taught to programmers not to use string
+        formatting directly" — the collector always leaked its formatted
+        allocation invisibly (panic diverges; cleanup never ran); the
+        value spelling makes the allocation explicit at the call site, and
+        the blessed panic style is a plain verbatim message (`std/io`'s
+        now-unreferenced private `format_args` worker was deleted with
+        them). INFERENCE (not a ruling): the surviving `@format` slots —
+        `slice::format` itself (so `string::format` too) and user-declared
+        collectors — KEEP the compile-time splice, which outranks value
+        rendering wherever both could apply (it is zero-cost and
+        injection-free, where render-then-rescan would re-interpret braces
+        inside interpolated values); an f-string is a string value
+        everywhere *except* a surviving `@format` format slot, where it
+        still splices. Remaining rejections are only the positions a
+        runtime value can never fill: compile-time constants and in-place
+        addressing (`len(f"...")`, `&`). A missing `std/slice` import
+        reports itself by name; a concrete `slice<const char>` position
+        reports the honest type mismatch (borrow with
+        `f"..." as slice<const char>`, or bind a let). Implemented, see
+        [Formatted print/println](docs/language.md#formatted-print--println)
 
 ### Tooling and C interop
 

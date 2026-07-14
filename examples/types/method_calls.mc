@@ -123,15 +123,15 @@ fn main() -> int32 {
     // The desugar itself: r.area() IS rect::area(r), and a `mut self`
     // method mutates the receiver exactly as the qualified call does.
     let r: rect = { w = 3, h = 4 };
-    println("r.area() = {}", r.area());                 // 12
+    println(f"r.area() = {r.area()}");                 // 12
     r.scale(2);
     rect::scale(r, 2);      // the qualified spelling stays valid beside it
-    println("scaled twice: {} x {}", r.w, r.h);         // 12 x 16
+    println(f"scaled twice: {r.w} x {r.h}");         // 12 x 16
 
     // Overloads dispatch by the full desugared argument list.
     r.grow(1);              // rect::grow(r, 1)
     r.grow(10, 0);          // rect::grow(r, 10, 0)
-    println("grown: {} x {}", r.w, r.h);                // 23 x 17
+    println(f"grown: {r.w} x {r.h}");                // 23 x 17
 
     // A pointer receiver auto-derefs EXACTLY one hop: q.scale(2) is
     // rect::scale(*q, 2). Fields of the pointee still need `->`, and `->`
@@ -140,7 +140,7 @@ fn main() -> int32 {
     // struct".
     let q = &r;
     q.scale(2);
-    println("through q: {} x {}", q->w, q->h);          // 46 x 34
+    println(f"through q: {q->w} x {q->h}");          // 46 x 34
 
     // Fields shadow methods: `cb` names a field here, so h.cb(5) calls the
     // fn value stored in it. The method is not gone, just unsugared. Only
@@ -148,12 +148,12 @@ fn main() -> int32 {
     // "struct 'rect' has no field or method 'nope'"; a bare access like
     // `h.cb` (no call) is always the field -- no bound-method values.
     let h: handler = { cb = double_it };
-    println("h.cb(5) = {} (field)", h.cb(5));           // 10
-    println("handler::cb(h, 5) = {} (method)", handler::cb(h, 5));  // 500
+    println(f"h.cb(5) = {h.cb(5)} (field)");           // 10
+    println(f"handler::cb(h, 5) = {handler::cb(h, 5)} (method)");  // 500
 
     // An rvalue receiver evaluates once into a hidden CONST local, so a
     // const-self method on a temporary is fine...
-    println("mk(2, 5).area() = {}", mk(2, 5).area());   // 10
+    println(f"mk(2, 5).area() = {mk(2, 5).area()}");   // 10
     // ...but a mut-self method on one is the desugared call's own error --
     // `mk(2, 5).scale(3)` is "cannot pass a read-only const rect as a mut
     // argument": the mutation would vanish with the temporary. A
@@ -161,7 +161,7 @@ fn main() -> int32 {
     // writes r2's own storage:
     let r2: rect = { w = 1, h = 1 };
     r2.itself().grow(4);
-    println("re-lent chain: {} x {}", r2.w, r2.h);      // 5 x 5
+    println(f"re-lent chain: {r2.w} x {r2.h}");      // 5 x 5
 
     // A mut-returning dot call is an lvalue: assignable, compound-
     // assignable, and chainable as a store target.
@@ -169,30 +169,30 @@ fn main() -> int32 {
     l.fill(0);
     l.at(0) = 9;
     l.at(0) += 1;
-    println("l.at(0) -> {}", l.data[0]);                // 10
+    println(f"l.at(0) -> {l.data[0]}");                // 10
 
     let a: wrap;
     a.l.fill(0);            // the receiver can itself be a field access
     a.view().at(2) = 7;     // chained store target
     a.second() = 5;         // and the formation-chained accessor
-    println("a.l.data = [{}, {}, {}, {}]",
-            a.l.data[0], a.l.data[1], a.l.data[2], a.l.data[3]);  // 0 5 7 0
+    println("a.l.data = [{}, {}, {}, {}]".format(
+            a.l.data[0], a.l.data[1], a.l.data[2], a.l.data[3]));  // 0 5 7 0
 
     // A generic receiver binds T exactly as the `::` call does -- and a
     // dot call never spells type arguments (`p.m<int32>(...)` reads `<` as
     // a comparison and fails on the bare member access): method type
     // parameters are inference-only, as at a `::` call.
     let p: point<int32> = { x = 3, y = 4 };
-    println("p.sum() = {}", p.sum());                   // 7
+    println(f"p.sum() = {p.sum()}");                   // 7
 
     // Builtin receivers dispatch their canonical family: with std/char
     // imported, 'q'.upper() is char::upper('q'), and each link of a chain
     // is just the next call's receiver.
-    println("'q'.upper() = '{}'", 'q'.upper());         // Q
-    println("chained: '{}'", 'a'.upper().lower());      // a
+    println("'q'.upper() = '{}'".format('q'.upper()));         // Q
+    println("chained: '{}'".format('a'.upper().lower()));      // a
 
     let arr: int32[4] = [11, 22, 33, 44];
-    println("first = {}", (arr as slice<int32>).first());  // 11
+    println(f"first = {(arr as slice<int32>).first()}");  // 11
 
     // A STRING LITERAL receiver adapts to slice<const char> so the slice
     // family reaches it: "hello".first() is slice<char>::first("hello" as
@@ -202,7 +202,7 @@ fn main() -> int32 {
     // resolves no method of the name) and literal-only: it never shadows the
     // char* decay a C binding needs (strlen("hi") still passes a pointer),
     // and a NAMED char[N] receiver does not adapt.
-    println("\"hello\".first() = '{}'", "hello".first());  // h
+    println("\"hello\".first() = '{}'".format("hello".first()));  // h
 
     // f-string holes take dot calls like any expression.
     println(f"{p.sum() = }");                           // p.sum() = 7

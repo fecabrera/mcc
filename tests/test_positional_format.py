@@ -1,19 +1,20 @@
 """Positional `{n}` format placeholders: compile-time sugar over `{}`.
 
 A parameter marked `@format` (the `slice<const char>` just before a
-collecting `args...`; `std/io` marks `print`/`println`/`format_args`) opts a
-function's format string into the desugar: when the argument bound to it is
-a string *literal*, `{n}` placeholders select the collected arguments
-manually and the call rewrites to the sequential runtime form --
-`println("{0}, {0}", x)` becomes `println("{}, {}", x, x)`, duplicating or
-reordering the once-evaluated arguments, so the runtime parser stays
-sequential-only. In the positional form a `:` separates the index from the
-modifiers (`{0:x}` -> `{x}`), the index-less `{:mods}` escape spells a bare
-all-digit runtime modifier (`{:2}` -> the `{2}` field width the positional
-grammar would otherwise claim), and one string commits to one placeholder
-style. The desugar runs on both marshal paths -- the direct call and the
-overload/generic winner emission -- and a non-literal format string is
-untouched (runtime behavior unchanged).
+collecting `args...`; `std/slice` marks `slice::format`, the
+`"...".format(args)` renderer behind f-strings) opts a
+function's format string into the desugar: when the
+argument bound to it is a string *literal*, `{n}` placeholders select the
+collected arguments manually and the call rewrites to the sequential
+runtime form -- `"{0}, {0}".format(x)` becomes `"{}, {}".format(x, x)`,
+duplicating or reordering the once-evaluated arguments, so the runtime
+parser stays sequential-only. In the positional form a `:` separates the
+index from the modifiers (`{0:x}` -> `{x}`), the index-less `{:mods}`
+escape spells a bare all-digit runtime modifier (`{:2}` -> the `{2}` field
+width the positional grammar would otherwise claim), and one string commits
+to one placeholder style. The desugar runs on both marshal paths -- the
+direct call and the overload/generic winner emission -- and a non-literal
+format string is untouched (runtime behavior unchanged).
 """
 
 import pytest
@@ -38,10 +39,10 @@ def test_positional_matches_the_equivalent_sequential_call(capfd):
         IO
         + """
         fn main() -> int32 {
-            println("{0}, {0}", 42);
-            println("{}, {}", 42, 42);
-            println("{1} beats {0}", "rock", "paper");
-            println("{} beats {}", "paper", "rock");
+            println("{0}, {0}".format(42));
+            println("{}, {}".format(42, 42));
+            println("{1} beats {0}".format("rock", "paper"));
+            println("{} beats {}".format("paper", "rock"));
             return 0;
         }
         """
@@ -61,7 +62,7 @@ def test_a_duplicated_argument_evaluates_once(capfd):
             return 7;
         }
         fn main() -> int32 {
-            println("{0} {0} {0}", side());
+            println("{0} {0} {0}".format(side()));
             return 0;
         }
         """
@@ -75,11 +76,11 @@ def test_extras_evaluate_in_source_order_then_map(capfd):
         IO
         + """
         fn mark(c: char, v: int32) -> int32 {
-            print("{}", c);
+            print(f"{c}");
             return v;
         }
         fn main() -> int32 {
-            println(" -> {1} {0}", mark('f', 1), mark('g', 2));
+            println(" -> {1} {0}".format(mark('f', 1), mark('g', 2)));
             return 0;
         }
         """
@@ -93,7 +94,7 @@ def test_a_colon_separates_the_index_from_the_modifiers(capfd):
         IO
         + """
         fn main() -> int32 {
-            println("{0} {0:x} {0:08x} {0:}", 255);
+            println("{0} {0:x} {0:08x} {0:}".format(255));
             return 0;
         }
         """
@@ -108,8 +109,8 @@ def test_the_index_less_escape_spells_a_bare_width(capfd):
         IO
         + """
         fn main() -> int32 {
-            print("{:2}|", 7);
-            print("{:08}|", 5);
+            print("{:2}|".format(7));
+            print("{:08}|".format(5));
             println("");
             return 0;
         }
@@ -125,7 +126,7 @@ def test_digit_leading_runtime_modifiers_pass_through(capfd):
         IO
         + """
         fn main() -> int32 {
-            println("{06x} {0x}", 255, 255);
+            println("{06x} {0x}".format(255, 255));
             return 0;
         }
         """
@@ -140,7 +141,7 @@ def test_escaped_braces_render_literally(capfd):
         IO
         + """
         fn main() -> int32 {
-            println("{{0}} = {0}", 7);
+            println("{{0}} = {0}".format(7));
             return 0;
         }
         """
@@ -155,7 +156,7 @@ def test_an_unclosed_brace_passes_through_verbatim(capfd):
         IO
         + """
         fn main() -> int32 {
-            println("{0} {d", 1);
+            println("{0} {d".format(1));
             return 0;
         }
         """
@@ -173,7 +174,7 @@ def test_an_escape_interleaved_span_passes_through_verbatim(capfd):
         IO
         + """
         fn main() -> int32 {
-            println("}{0}}", 1);
+            println("}{0}}".format(1));
             return 0;
         }
         """
@@ -192,7 +193,7 @@ def test_a_pass_through_slice_counts_as_one_argument(capfd):
         IO
         + """
         fn relay(@format const fmt: slice<const char>, args...) {
-            println("{0}", args);
+            println("{0}".format(args));
         }
         fn main() -> int32 {
             relay("{} {}", 3, 4);
@@ -212,7 +213,7 @@ def test_a_variable_format_string_is_untouched(capfd):
         + """
         fn main() -> int32 {
             let fmt: slice<const char> = "{0}!";
-            println(fmt, 42);
+            println(fmt.format(42));
             return 0;
         }
         """
@@ -231,12 +232,12 @@ def test_positional_desugars_through_an_overload_set(capfd):
         + """
         fn logf(@format const fmt: slice<const char>, args...) {
             print("p: ");
-            print(fmt, args);
+            print(fmt.format(args));
             println("");
         }
         fn logf(level: int32, @format const fmt: slice<const char>, args...) {
-            print("l{}: ", level);
-            print(fmt, args);
+            print(f"l{level}: ");
+            print(fmt.format(args));
             println("");
         }
         fn side() -> int32 {
@@ -263,8 +264,8 @@ def test_positional_desugars_through_a_generic_collector(capfd):
         IO
         + """
         fn tag<T>(prefix: T, @format const fmt: slice<const char>, args...) {
-            print("{}: ", prefix);
-            print(fmt, args);
+            print(f"{prefix}: ");
+            print(fmt.format(args));
             println("");
         }
         fn main() -> int32 {
@@ -297,21 +298,21 @@ def test_out_of_range_index_with_the_width_hint():
     # `{:2}` spelling.
     with pytest.raises(
         LangError,
-        match=r"positional placeholder \{2\} is out of range: 'println' has "
+        match=r"positional placeholder \{2\} is out of range: 'slice::format' has "
         r"1 argument\(s\) after the format string "
         r"\(for a field width, write \{:2\}\)",
     ):
-        compile_ir(IO + 'fn main() -> int32 { println("{2}", 1); return 0; }')
+        compile_ir(IO + 'fn main() -> int32 { "{2}".format(1); return 0; }')
 
 
 def test_out_of_range_index_with_modifiers_gets_no_width_hint():
     # `{2:x}` is unambiguously positional; the hint would mislead.
     with pytest.raises(
         LangError,
-        match=r"positional placeholder \{2\} is out of range: 'println' has "
+        match=r"positional placeholder \{2\} is out of range: 'slice::format' has "
         r"1 argument\(s\) after the format string$",
     ):
-        compile_ir(IO + 'fn main() -> int32 { println("{2:x}", 1); return 0; }')
+        compile_ir(IO + 'fn main() -> int32 { "{2:x}".format(1); return 0; }')
 
 
 def test_mixing_automatic_and_positional_is_an_error():
@@ -321,7 +322,7 @@ def test_mixing_automatic_and_positional_is_an_error():
         r"'\{0\}' placeholders",
     ):
         compile_ir(
-            IO + 'fn main() -> int32 { println("{0} {}", 1); return 0; }'
+            IO + 'fn main() -> int32 { "{0} {}".format(1); return 0; }'
         )
 
 
@@ -332,7 +333,7 @@ def test_the_escape_counts_as_automatic_style():
         r"'\{0\}' placeholders",
     ):
         compile_ir(
-            IO + 'fn main() -> int32 { println("{:2} {0}", 1); return 0; }'
+            IO + 'fn main() -> int32 { "{:2} {0}".format(1); return 0; }'
         )
 
 
@@ -341,11 +342,11 @@ def test_an_unreferenced_argument_is_an_error():
     # the second one after the format string).
     with pytest.raises(
         LangError,
-        match=r"argument 3 of 'println' is never referenced by the format "
+        match=r"argument 3 of 'slice::format' is never referenced by the format "
         r"string",
     ):
         compile_ir(
-            IO + 'fn main() -> int32 { println("{0}", 1, 2); return 0; }'
+            IO + 'fn main() -> int32 { "{0}".format(1, 2); return 0; }'
         )
 
 
@@ -353,13 +354,13 @@ def test_a_pass_through_slice_makes_a_second_index_out_of_range():
     # The explicit slice is one source argument, so `{1}` selects nothing.
     with pytest.raises(
         LangError,
-        match=r"positional placeholder \{1\} is out of range: 'println' has "
+        match=r"positional placeholder \{1\} is out of range: 'slice::format' has "
         r"1 argument\(s\) after the format string",
     ):
         compile_ir(
             IO
             + "fn relay(@format const fmt: slice<const char>, args...) {\n"
-            '    println("{1}", args);\n'
+            '    "{1}".format(args);\n'
             "}\n"
             'fn main() -> int32 { relay("{}", 1); return 0; }'
         )
@@ -374,7 +375,7 @@ def test_a_colon_without_an_index_before_it_is_an_error():
         r"placeholder \{x:2\}",
     ):
         compile_ir(
-            IO + 'fn main() -> int32 { println("{x:2}", 1); return 0; }'
+            IO + 'fn main() -> int32 { "{x:2}".format(1); return 0; }'
         )
 
 

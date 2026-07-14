@@ -98,7 +98,7 @@ def test_concrete_base_method_callable_on_derived(capfd):
         fn b::describe(const self: b) -> int32 { return self.tag * 10; }
         fn main() -> int32 {
             let v: d = { tag = 3, extra = 9 };
-            println("{} {} {}", v.describe(), d::describe(v), b::describe(v));
+            println(f"{v.describe()} {d::describe(v)} {b::describe(v)}");
             return 0;
         }
         """
@@ -120,7 +120,7 @@ def test_mut_self_write_through_lands_in_the_base_prefix(capfd):
             let v: d = { n = 5, extra = 7 };
             v.bump();
             b::bump(v);
-            println("{} {}", v.n, v.extra);
+            println(f"{v.n} {v.extra}");
             return 0;
         }
         """
@@ -139,7 +139,7 @@ def test_by_value_receiver_prefix_copies(capfd):
         fn b::probe(self: b) -> int32 { self.n = 99; return self.n; }
         fn main() -> int32 {
             let v: d = { n = 5, extra = 7 };
-            println("{} {}", v.probe(), v.n);
+            println(f"{v.probe()} {v.n}");
             return 0;
         }
         """
@@ -160,7 +160,7 @@ def test_pointer_receiver_auto_derefs_into_the_inherited_method(capfd):
             let v: d = { n = 1, extra = 0 };
             let q: d* = &v;
             q.bump();
-            println("{}", v.n);
+            println(f"{v.n}");
             return 0;
         }
         """
@@ -179,7 +179,7 @@ def test_inherited_constructor_defaults_derived_added_fields(capfd):
         fn b::constructor(mut self: b, n: int32) { self.n = n; }
         fn main() -> int32 {
             let v = d(7);
-            println("{} {}", v.n, v.extra);
+            println(f"{v.n} {v.extra}");
             return 0;
         }
         """
@@ -203,7 +203,7 @@ def test_derived_same_shape_override_shadows_the_inherited_member(capfd):
         fn main() -> int32 {
             let v: d = { n = 0 };
             let w: b = { n = 0 };
-            println("{} {}", v.describe(), w.describe());
+            println(f"{v.describe()} {w.describe()}");
             return 0;
         }
         """
@@ -226,7 +226,7 @@ def test_derived_generic_does_not_shadow_an_inherited_concrete_exact_match(capfd
             let v: d = { n = 0 };
             let x: int32 = 5;
             let y: int64 = 5;
-            println("{} {}", v.take(x), v.take(y));
+            println(f"{v.take(x)} {v.take(y)}");
             return 0;
         }
         """
@@ -250,7 +250,7 @@ def test_nearer_hop_shadows_the_farther_one_transitively(capfd):
         fn c::deep(const self: c) -> int32 { return self.n + 30; }
         fn main() -> int32 {
             let v: a = { n = 1, m = 2, k = 3 };
-            println("{} {}", v.which(), v.deep());
+            println(f"{v.which()} {v.deep()}");
             return 0;
         }
         """
@@ -302,7 +302,7 @@ def test_generic_derived_over_generic_base_infers_through_the_receiver(capfd):
         fn main() -> int32 {
             let p: pd<int32> = { x = 20, y = 22, tag = 1 };
             let q: pd<int64> = { x = 100, y = 1, tag = 2 };
-            println("{} {}", p.sum(), q.sum());
+            println(f"{p.sum()} {q.sum()}");
             return 0;
         }
         """
@@ -326,7 +326,7 @@ def test_generic_derived_bare_ctor_head_infers_the_instantiation(capfd):
         fn main() -> int32 {
             let p = pd(40, 2);
             let q = pd<int64>(1, 2);
-            println("{} {} {}", p.x + p.y, p.tag, q.x + q.y);
+            println(f"{p.x + p.y} {p.tag} {q.x + q.y}");
             return 0;
         }
         """
@@ -349,7 +349,7 @@ def test_method_own_type_param_survives_and_renames_off_a_collision(capfd):
         fn main() -> int32 {
             let p: pd<int32> = { x = 40, y = 0 };
             let wide: int64 = 2;
-            println("{}", p.first_as(wide));
+            println(f"{p.first_as(wide)}");
             return 0;
         }
         """
@@ -373,7 +373,7 @@ def test_base_specializations_filter_by_the_declared_instantiation(capfd):
         }
         fn main() -> int32 {
             let p: pi = { x = 41, y = 0 };
-            println("{}", p.only_i());
+            println(f"{p.only_i()}");
             return 0;
         }
         """
@@ -413,7 +413,7 @@ def test_diagonal_qualifier_filters_on_a_disagreeing_base(capfd):
         }
         fn main() -> int32 {
             let t: twin = { k = 40, v = 2 };
-            println("{}", t.same());
+            println(f"{t.same()}");
             return 0;
         }
         """
@@ -540,7 +540,7 @@ def test_non_receiver_argument_upcasts_with_an_explicit_as(capfd):
         fn main() -> int32 {
             let v: d = { n = 40 };
             let w: d = { n = 2 };
-            println("{}", b::plus(v, w as b));
+            println(f"{b::plus(v, w as b)}");
             return 0;
         }
         """
@@ -582,7 +582,7 @@ def test_inherited_mut_return_re_lends_the_base_prefix(capfd):
             let v: d = { n = 1, extra = 0 };
             v.ref_n() = 41;
             d::ref_n(v) = d::ref_n(v) + 1;
-            println("{}", v.n);
+            println(f"{v.n}");
             return 0;
         }
         """
@@ -605,7 +605,7 @@ def test_builtin_base_family_is_inherited(capfd):
         fn main() -> int32 {
             let backing: int32[3] = [7, 8, 9];
             let v: named<int32> = { data = &backing[0], length = 3, tag = 1 };
-            println("{} {}", v.head(), slice::head(v));
+            println(f"{v.head()} {slice::head(v)}");
             return 0;
         }
         """
@@ -695,7 +695,7 @@ def test_derived_call_shadows_the_would_be_base_ambiguity(capfd):
         fn main() -> int32 {
             let v: d = { n = 0 };
             let a: int32 = 1;
-            println("{}", v.pick(a, a));
+            println(f"{v.pick(a, a)}");
             return 0;
         }
         """
@@ -751,7 +751,7 @@ def test_inherited_methods_resolve_through_an_interface_stub(capfd, tmp_path):
         "struct pointi extends point<int32> { tag: int32 = 5; }\n"
         "fn main() -> int32 {\n"
         "    let p = pointi(40, 2);\n"
-        '    println("{} {}", p.sum(), p.tag);\n'
+        '    println(f"{p.sum()} {p.tag}");\n'
         "    return 0;\n"
         "}\n"
     )
@@ -777,7 +777,7 @@ def test_derived_struct_in_a_stub_inherits_a_local_base_family(capfd, tmp_path):
         'import "shapes";\n'
         "fn main() -> int32 {\n"
         "    let v: d = { n = 41, m = 0 };\n"
-        '    println("{}", v.total());\n'
+        '    println(f"{v.total()}");\n'
         "    return 0;\n"
         "}\n"
     )
@@ -800,7 +800,7 @@ def test_extends_through_a_plain_alias_inherits(capfd):
         fn point<T>::sum(const self: point<T>) -> T { return self.x + self.y; }
         fn main() -> int32 {
             let p: pointf = { x = 1.5, y = 2.5 };
-            println("{}", p.sum() as int32);
+            println(f"{p.sum() as int32}");
             return 0;
         }
         """
@@ -820,7 +820,7 @@ def test_extends_through_a_generic_alias_inherits(capfd):
         fn point<T>::sum(const self: point<T>) -> T { return self.x + self.y; }
         fn main() -> int32 {
             let p: pi = { x = 40, y = 2 };
-            println("{}", p.sum());
+            println(f"{p.sum()}");
             return 0;
         }
         """
@@ -843,7 +843,7 @@ def test_concrete_base_overload_set_is_inherited_whole(capfd):
         fn b::get(const self: b, bias: int32) -> int32 { return self.n + bias; }
         fn main() -> int32 {
             let v: d = { n = 40 };
-            println("{} {}", v.get(), v.get(2));
+            println(f"{v.get()} {v.get(2)}");
             return 0;
         }
         """
@@ -933,7 +933,7 @@ def test_explicit_qualified_call_two_hops_up_the_chain(capfd):
         fn c::deep(const self: c) -> int32 { return self.n + 30; }
         fn main() -> int32 {
             let v: a = { n = 1, m = 2, k = 3 };
-            println("{}", c::deep(v));
+            println(f"{c::deep(v)}");
             return 0;
         }
         """
@@ -981,7 +981,7 @@ def test_rvalue_derived_receiver_spills_and_upcasts(capfd):
             return v;
         }
         fn main() -> int32 {
-            println("{}", b::get(mk(42)));
+            println(f"{b::get(mk(42))}");
             return 0;
         }
         """
@@ -1003,7 +1003,7 @@ def test_mut_returning_receiver_re_lends_upcast_on_the_direct_path(capfd):
         fn main() -> int32 {
             let v: d = { n = 41, extra = 0 };
             b::bump(d::ref(v));
-            println("{}", b::get(d::ref(v)));
+            println(f"{b::get(d::ref(v))}");
             return 0;
         }
         """
@@ -1026,7 +1026,7 @@ def test_mut_returning_receiver_re_lends_upcast_on_the_set_path(capfd):
             let v: d = { n = 1, extra = 0 };
             b::bump(d::ref(v));
             b::bump(d::ref(v), 40);
-            println("{}", v.n);
+            println(f"{v.n}");
             return 0;
         }
         """
@@ -1070,7 +1070,7 @@ def test_return_types_stay_spelled_at_the_base(capfd):
         fn main() -> int32 {
             let p: pi = { x = 1, y = 2 };
             let f: point<int32> = p.flipped();
-            println("{} {}", f.x, f.y);
+            println(f"{f.x} {f.y}");
             return 0;
         }
         """
@@ -1090,7 +1090,7 @@ def test_inherited_and_derived_different_shapes_overload(capfd):
         fn d::get(const self: d, bias: int32) -> int32 { return self.n + bias; }
         fn main() -> int32 {
             let v: d = { n = 40 };
-            println("{} {}", v.get(), v.get(2));
+            println(f"{v.get()} {v.get(2)}");
             return 0;
         }
         """

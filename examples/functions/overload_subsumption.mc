@@ -74,13 +74,13 @@ fn main() -> int32 {
 
     // Agreeing arguments pick the diagonal; disagreeing ones leave only the
     // open member, no tie to break.
-    println("same(a, b)      -> member {}", same(a, b));         // 1
-    println("same(a, f)      -> member {}", same(a, f));         // 2
+    println(f"same(a, b)      -> member {same(a, b)}");         // 1
+    println(f"same(a, f)      -> member {same(a, f)}");         // 2
 
     // The three-way chain: full diagonal, partial diagonal, fully open.
-    println("triple(a, b, a) -> member {}", triple(a, b, a));    // 1
-    println("triple(a, b, f) -> member {}", triple(a, b, f));    // 2
-    println("triple(a, f, b) -> member {}", triple(a, f, b));    // 3
+    println(f"triple(a, b, a) -> member {triple(a, b, a)}");    // 1
+    println(f"triple(a, b, f) -> member {triple(a, b, f)}");    // 2
+    println(f"triple(a, f, b) -> member {triple(a, f, b)}");    // 3
 
     // Untyped integer literals on a float64 point: the diagonal deduces
     // T = float64 at the literal slots, and mcc has no int-to-float literal
@@ -91,7 +91,7 @@ fn main() -> int32 {
     point::set(p, 1.5, 2.5);                                     // [diagonal]
     println("point<float64>, integer literals:");
     point::set(p, 1, 2);                                         // [converting]
-    println("  p.x = {}, p.y = {}", p.x, p.y);   // 1.000000, 2.000000
+    println(f"  p.x = {p.x}, p.y = {p.y}");   // 1.000000, 2.000000
 
     // On an integer point the same literals deduce an integer binding, so
     // the diagonal stays viable and wins the tie as usual.
@@ -103,8 +103,8 @@ fn main() -> int32 {
     let s8: int8 = 5;
     let t8: int8 = 6;
     let s16: int16 = 300;
-    println("fits(s8, t8)    -> member {}", fits(s8, t8));       // 1
-    println("fits(s16, s16)  -> member {}", fits(s16, s16));     // 2
+    println(f"fits(s8, t8)    -> member {fits(s8, t8)}");       // 1
+    println(f"fits(s16, s16)  -> member {fits(s16, s16)}");     // 2
 
     return 0;
 }

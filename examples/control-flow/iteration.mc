@@ -27,10 +27,10 @@ fn main() -> int32 {
     for sq in &nums {
         if (sq % 2 == 0) { continue; }   // skip the even squares
         if (sq > 20) { break; }          // stop past 20
-        println("odd square: {}", sq);
+        println(f"odd square: {sq}");
         sum += sq;
     }
-    println("sum of odd squares <= 20: {}", sum);   // 1 + 9 = 10
+    println(f"sum of odd squares <= 20: {sum}");   // 1 + 9 = 10
 
     // The same `for x in` walks any container. A set yields a `pair<K, V>` per
     // entry, in unspecified (hash-table) order; read its fields as x.key and
@@ -42,7 +42,7 @@ fn main() -> int32 {
     table.set(3, 12);
 
     for x in &table {
-        println("{}: {}", x.key, x.value);
+        println(f"{x.key}: {x.value}");
     }
 
     // A dict iterates the same way: a string key and its value per entry. Each
@@ -53,7 +53,7 @@ fn main() -> int32 {
     cmds.set("quit", "exit the program");
 
     for x in &cmds {
-        println("{}: {}", x.key, x.value);
+        println(f"{x.key}: {x.value}");
     }
 
     return 0;

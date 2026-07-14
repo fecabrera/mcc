@@ -187,7 +187,7 @@ fn main() -> int32 {
     println("pt::mk / point::mk:");
     let m1 = pt::mk(1, 2);
     let m2 = point::mk(3, 4);
-    println("  m1 = ({}, {}), m2 = ({}, {})", m1.x, m1.y, m2.x, m2.y);
+    println(f"  m1 = ({m1.x}, {m1.y}), m2 = ({m2.x}, {m2.y})");
 
     // float64 arguments select the specialization the fully-defaulted alias
     // declared; the canonical and alias spellings call the same body. (ptd
@@ -216,7 +216,7 @@ fn main() -> int32 {
     // Second position float64: the partial is filtered out, the generic runs.
     let ge: pair<int32, float64> = { a = 7, b = 2.5 };
     println("pair<int32, float64> pick:");
-    println("  a = {}", pair::pick(ge));                // 7, via [generic]
+    println(f"  a = {pair::pick(ge)}");                // 7, via [generic]
 
     // The diagonal: a pair<int32, int32> receiver binds U = int32 through the
     // alias spelling in the signature. The bare `diag::` spelling is fine at
@@ -225,9 +225,9 @@ fn main() -> int32 {
     // declarations must annotate.
     let dd: pair<int32, int32> = { a = 21, b = 21 };
     println("pair<int32, int32> same:");
-    println("  a + b = {}", pair::same(dd));            // 42, via [diagonal]
+    println(f"  a + b = {pair::same(dd)}");            // 42, via [diagonal]
     println("pair<int32, int32> same, alias call spelling:");
-    println("  a + b = {}", diag::same(dd));            // same body again
+    println(f"  a + b = {diag::same(dd)}");            // same body again
 
     // ge disagrees on the diagonal, so trace falls through to the generic.
     println("pair<int32, float64> trace:");
@@ -240,8 +240,8 @@ fn main() -> int32 {
 
     // Builtin qualifiers: the alias and canonical spellings call one clamp.
     println("int32::clamp / myint::clamp:");
-    println("  int32::clamp(15, 0, 10) = {}", int32::clamp(15, 0, 10));   // 10
-    println("  myint::clamp(-3, 0, 10) = {}", myint::clamp(-3, 0, 10));   // 0
+    println(f"  int32::clamp(15, 0, 10) = {int32::clamp(15, 0, 10)}");   // 10
+    println(f"  myint::clamp(-3, 0, 10) = {myint::clamp(-3, 0, 10)}");   // 0
 
     // A generic builtin qualifier, T inferred from the borrowed slice -- or
     // pinned: builtin families take a written instantiation at a CALL just
@@ -249,8 +249,8 @@ fn main() -> int32 {
     // the header stands).
     let arr: int32[4] = [11, 22, 33, 44];
     println("slice<int32> first:");
-    println("  first = {}", slice::first(arr as slice<int32>));           // 11
-    println("  pinned = {}", slice<int32>::first(arr as slice<int32>));   // 11
+    println(f"  first = {slice::first(arr as slice<int32>)}");           // 11
+    println(f"  pinned = {slice<int32>::first(arr as slice<int32>)}");   // 11
 
     return 0;
 }

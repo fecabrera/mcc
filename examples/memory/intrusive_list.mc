@@ -28,7 +28,7 @@ struct entry<T> extends T {
 // A payload-only function: it takes a `reading*` and has no idea the value
 // lives inside a list entry.
 fn describe(r: struct reading*) {
-    println("station {} read {} degrees", r!->station, r!->celsius);
+    println(f"station {r!->station} read {r!->celsius} degrees");
 }
 
 // Prepend a heap-allocated entry. The payload fields are set directly on
@@ -59,7 +59,7 @@ fn main() -> int32 {
         dealloc(cur);                          // one allocation frees both
         cur = next;
     }
-    println("total {}", total);
+    println(f"total {total}");
 
     return 0;
 }

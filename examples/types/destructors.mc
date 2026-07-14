@@ -36,7 +36,7 @@ struct file {
 }
 
 fn file::constructor(mut self: file, fd: int32) {
-    println("  open  fd {}", fd);
+    println(f"  open  fd {fd}");
     self.fd = fd;
 }
 
@@ -44,7 +44,7 @@ fn file::destructor(mut self: file) {
     // The destructor sees the value's LATEST state, mutations after
     // construction included (main reassigns an fd below and the close
     // line proves it).
-    println("  close fd {}", self.fd);
+    println(f"  close fd {self.fd}");
 }
 
 // Every exit path closes every constructed handle, and no path spells the
@@ -72,7 +72,7 @@ fn logfile::constructor(mut self: logfile, fd: int32, lines: int32) {
 }
 
 fn logfile::destructor(mut self: logfile) {
-    println("  flush {} lines", self.lines);
+    println(f"  flush {self.lines} lines");
     file::destructor(self);         // ...and so does base cleanup
 }
 
@@ -89,12 +89,12 @@ struct handle<T> {
 }
 
 fn handle<T>::constructor(mut self: handle<T>, v: T) {
-    println("  grab {}", v);
+    println(f"  grab {v}");
     self.v = v;
 }
 
 fn handle<T>::destructor(mut self: handle<T>) {
-    println("  drop {}", self.v);
+    println(f"  drop {self.v}");
 }
 
 // The automatic schedule covers the constructed LET value only: a member
@@ -124,7 +124,7 @@ fn main() -> int32 {
     let early = transfer(true);
     println("transfer(false):");
     let full = transfer(false);
-    println("  returned {} and {}", early, full);
+    println(f"  returned {early} and {full}");
 
     // One defer stack, strictly LIFO: values destroy in reverse
     // construction order, interleaved with explicit defers.
@@ -186,7 +186,7 @@ fn main() -> int32 {
     // A struct-literal let builds the value without the constructor
     // family and schedules nothing either.
     let lit = file{fd = 41};
-    println("  fd {} was never opened, so it is never closed", lit.fd);
+    println(f"  fd {lit.fd} was never opened, so it is never closed");
 
     // A copy is bitwise and never scheduled: no open prints for view, and
     // only the constructed original closes, once. If the type owns a

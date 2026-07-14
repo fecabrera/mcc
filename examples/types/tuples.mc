@@ -46,20 +46,20 @@ fn main() -> int32 {
     // have no single result type) and is bounds-checked at compile time:
     // t[2] on this two-tuple is a compile error, not UB.
     let t = divmod(7, 2);
-    println("divmod(7, 2)  = ({}, {})", t[0], t[1]);
+    println(f"divmod(7, 2)  = ({t[0]}, {t[1]})");
 
     // With no context the literal fixes its own type, untyped integers
     // anchoring to their int32 default: u is tuple<int32, char>.
     let u = (10, 'x');
-    println("u             = ({}, {})", u[0], u[1]);
+    println(f"u             = ({u[0]}, {u[1]})");
 
     // In a tuple-typed position each element lowers against its position's
     // type exactly like a struct-literal field: untyped constants adapt, and
     // a string literal borrows into a slice position with no `as`.
     let big: tuple<int64, int64> = (1, 2);
     let v: tuple<slice<const char>, int32> = ("hi", 2);
-    println("big           = ({}, {})", big[0], big[1]);
-    println("v             = ({}, {})", v[0], v[1]);
+    println(f"big           = ({big[0]}, {big[1]})");
+    println(f"v             = ({v[0]}, {v[1]})");
 
     // Elements are lvalues: writes, compound assignment, and whole-value
     // copies all work like struct fields. The uninitialized
@@ -70,14 +70,14 @@ fn main() -> int32 {
     w[0] += 5;
     let copy = w;
     copy[1] = 99;                             // a copy: w is untouched
-    println("w             = ({}, {})", w[0], w[1]);
-    println("manhattan(w)  = {}", manhattan(w));
-    println("fst(u)        = {}", fst(u));
+    println(f"w             = ({w[0]}, {w[1]})");
+    println(f"manhattan(w)  = {manhattan(w)}");
+    println(f"fst(u)        = {fst(u)}");
 
     // Tuples nest, indexed position by position; a trailing comma is
     // allowed, as in array and struct literals.
     let nested = ((1, 2), 3,);
-    println("nested[0][1]  = {}", nested[0][1]);
+    println(f"nested[0][1]  = {nested[0][1]}");
 
     // Slicing is compile-time too: s[n:m] narrows to positions n..m-1, the
     // same half-open [a:b] grammar as sub-slicing on slices, open ends
@@ -88,18 +88,18 @@ fn main() -> int32 {
     // checked at compile time (0 <= n <= m <= arity).
     let s = (1, 'x', 2.5, 4);
     let mid = s[1:3];                         // mid is tuple<char, float64>
-    println("mid           = ({}, {})", mid[0], mid[1]);
-    println("s[1:][2]      = {}", s[1:][2]);  // the open tail, then indexed
-    println("divmod[:][0]  = {}", divmod(9, 4)[:][0]);   // rvalue base copy
+    println(f"mid           = ({mid[0]}, {mid[1]})");
+    println(f"s[1:][2]      = {s[1:][2]}");  // the open tail, then indexed
+    println(f"divmod[:][0]  = {divmod(9, 4)[:][0]}");   // rvalue base copy
 
     // len(t) is the arity -- the same builtin, and the same compile-time,
     // context-adapting constant, as an array's len. It folds in constant
     // expressions, so it composes with the constant bounds above:
     // s[len(s) - 1] is the last position. Arity is a property of the type
     // alone, so an rvalue operand (a call result, a slice) works too.
-    println("len(s)        = {}", len(s) as int32);
-    println("s[len(s)-1]   = {}", s[len(s) - 1]);
-    println("len(divmod)   = {}", len(divmod(9, 4)) as int32);
+    println(f"len(s)        = {len(s) as int32}");
+    println(f"s[len(s)-1]   = {s[len(s) - 1]}");
+    println(f"len(divmod)   = {len(divmod(9, 4)) as int32}");
 
     // Arity runs all the way down: a slice keeping one position is the
     // 1-tuple (tuple<float64> here), and `()` is the empty tuple `tuple<>`
@@ -107,9 +107,9 @@ fn main() -> int32 {
     // code needs a T that carries nothing (len(unit) is 0).
     let single = s[2:3];
     let unit: tuple<> = ();
-    println("single[0]     = {}", single[0]);
-    println("sizeof(unit)  = {}", sizeof(unit) as int32);
-    println("len(unit)     = {}", len(unit) as int32);
+    println(f"single[0]     = {single[0]}");
+    println(f"sizeof(unit)  = {sizeof(unit) as int32}");
+    println(f"len(unit)     = {len(unit) as int32}");
 
     // Destructuring binds positions to names: comma-separated binders, no
     // parens, one ordinary local per position. This is the headline in its
@@ -119,7 +119,7 @@ fn main() -> int32 {
     // rest binder the count must equal the arity exactly: `let a, b = s;`
     // on the 4-tuple above is a compile error, not a partial bind.
     let q, r = divmod(9, 4);
-    println("q, r          = {}, {}", q, r);
+    println(f"q, r          = {q}, {r}");
 
     // A trailing `...` makes the last binder a rest binder taking the tail:
     // `first = s[0]`, `rest = s[1:]`, the constant slice above, so on a
@@ -128,8 +128,8 @@ fn main() -> int32 {
     // then number at most the arity, naming every position leaves the empty
     // tail, and a lone `let all... = s;` is the whole copy.
     let first, rest... = s;               // rest: tuple<char, float64, int32>
-    println("first         = {}", first);
-    println("rest[0]       = {}", rest[0]);
+    println(f"first         = {first}");
+    println(f"rest[0]       = {rest[0]}");
 
     // `as` converts a tuple to any struct with the same field types in the
     // same order (a fresh value copy, not a view). Field names never matter;
@@ -137,7 +137,7 @@ fn main() -> int32 {
     // never qualifies. The literal form lowers its elements against the
     // fields like a typed let, so 3 and 4 adapt here.
     let pt = (3, 4) as point;
-    println("pt            = ({}, {})", pt.x, pt.y);
+    println(f"pt            = ({pt.x}, {pt.y})");
 
     // And back: `as tuple<...>` turns a struct into its positional form,
     // composing with destructuring to consume an existing struct by
@@ -145,23 +145,23 @@ fn main() -> int32 {
     // converts: struct-to-struct stays nominal, `extends` only (see
     // extends.mc), and tuple-to-tuple stays rejected.
     let x, y = pt as tuple<int32, int32>;
-    println("x, y          = {}, {}", x, y);
+    println(f"x, y          = {x}, {y}");
 
     // The alias in action; 5 adapts to int64 per position, as above.
     let p: polar = (5, 0.5);
-    println("polar         = ({}, {})", p[0], p[1]);
+    println(f"polar         = ({p[0]}, {p[1]})");
 
     // Arrays of tuples: each element literal adapts against the element type.
     let grid: tuple<int32, int32>[2] = [(1, 2), (3, 4)];
-    println("grid diagonal = {}", grid[0][0] + grid[1][1]);
+    println(f"grid diagonal = {grid[0][0] + grid[1][1]}");
 
     // The layout is the struct layout, padding included: int32 + int64 pads
     // the first field's slot to 8, so the pair is 16 bytes.
-    println("sizeof        = {}", sizeof(tuple<int32, int64>) as int32);
+    println(f"sizeof        = {sizeof(tuple<int32, int64>) as int32}");
 
     // A whole tuple has no format overload of its own, so it renders the
     // generic typename fallback.
-    println("t             = {}", t);
+    println(f"t             = {t}");
 
     return 0;
 }

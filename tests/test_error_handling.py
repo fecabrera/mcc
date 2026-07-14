@@ -680,9 +680,9 @@ def test_a_mixed_ternary_needs_no_annotation(capfd):
             let a, ea = pick(true, 7);
             let b, eb = pick(false, 7);
             let c, ec = flip(false, 9);
-            println("a={} ea=[{}]", a, error_name(ea));
-            println("b={} eb=[{}]", b, error_name(eb));
-            println("c={} ec=[{}]", c, error_name(ec));
+            println(f"a={a} ea=[{error_name(ea)}]");
+            println(f"b={b} eb=[{error_name(eb)}]");
+            println(f"c={c} ec=[{error_name(ec)}]");
             return 0;
         }
         """
@@ -707,7 +707,7 @@ def test_a_pending_arm_binds_against_a_concrete_result(capfd):
         }
         fn main() -> int32 {
             let v, e = choose(false);
-            println("v={} e=[{}]", v, error_name(e));
+            println(f"v={v} e=[{error_name(e)}]");
             return 0;
         }
         """
@@ -726,7 +726,7 @@ def test_an_error_only_ternary_pairs_ok_with_error(capfd):
             return bad ? error(my_error::NOT_FOUND) : ok();
         }
         fn main() -> int32 {
-            try chk(true) except (er) { println("failed: {}", error_name(er)); };
+            try chk(true) except (er) { println(f"failed: {error_name(er)}"); };
             try chk(false) except (er) { println("unreached"); };
             return 0;
         }
@@ -750,7 +750,7 @@ def test_constructors_compose_in_let_and_argument_positions(capfd):
             let r: result<int32, my_error> = (1 > 0) ? ok(10) : error(my_error::PERMISSION);
             let got = unwrap((1 > 2) ? error(my_error::NOT_FOUND) : ok(20));
             let v, e = r;
-            println("r={} arg={}", v, got);
+            println(f"r={v} arg={got}");
             return 0;
         }
         """
@@ -2604,10 +2604,10 @@ def test_error_name_returns_the_qualified_variant_name(capfd):
         'import "std/io";\n' + ACC
         + """
         fn main() -> int32 {
-            println("{}", error_name(acc_error::NOT_FOUND));
-            println("{}", error_name(acc_error::PERMISSION));
-            println("{}", error_name(acc_error::EXHAUSTED));
-            println("{}", error_name(acc_error::TIMEOUT));
+            println(f"{error_name(acc_error::NOT_FOUND)}");
+            println(f"{error_name(acc_error::PERMISSION)}");
+            println(f"{error_name(acc_error::EXHAUSTED)}");
+            println(f"{error_name(acc_error::TIMEOUT)}");
             return 0;
         }
         """
@@ -2626,10 +2626,10 @@ def test_error_message_prefers_display_then_identifier(capfd):
         'import "std/io";\n' + ACC
         + """
         fn main() -> int32 {
-            println("{}", error_message(acc_error::NOT_FOUND));
-            println("{}", error_message(acc_error::PERMISSION));
-            println("{}", error_message(acc_error::EXHAUSTED));
-            println("{}", error_message(acc_error::TIMEOUT));
+            println(f"{error_message(acc_error::NOT_FOUND)}");
+            println(f"{error_message(acc_error::PERMISSION)}");
+            println(f"{error_message(acc_error::EXHAUSTED)}");
+            println(f"{error_message(acc_error::TIMEOUT)}");
             return 0;
         }
         """
@@ -2646,7 +2646,7 @@ def test_error_accessors_run_through_a_destructured_result(capfd):
         fn main() -> int32 {
             let value, err = afind(0);
             if (err) {
-                println("{}: {}", error_name(err), error_message(err));
+                println(f"{error_name(err)}: {error_message(err)}");
             }
             return 0;
         }
@@ -2665,7 +2665,7 @@ def test_error_name_of_the_zero_no_error_state_is_empty(capfd):
         + """
         fn main() -> int32 {
             let value, err = afind(7);
-            println("[{}][{}]", error_name(err), error_message(err));
+            println(f"[{error_name(err)}][{error_message(err)}]");
             return 0;
         }
         """

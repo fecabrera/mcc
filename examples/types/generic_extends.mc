@@ -20,7 +20,7 @@ struct entry<K, V> extends cell<K, V> {
 
 // A function over one base instantiation; the matching entry upcasts to it.
 fn describe(c: struct cell<int32, uint8*>*) {
-    println("{} -> {}", c!->key, c!->value as char*);
+    println(f"{c!->key} -> {c!->value as char*}");
 }
 
 fn main() -> int32 {
@@ -30,7 +30,7 @@ fn main() -> int32 {
     // "struct 'entry' has no field 'key'": key is nobody's field until
     // K and V are bound.
     let e = entry<int32, uint8*> { key = 3, value = "three", state = 1 };
-    println("key {}, value {}, state {}", e.key, e.value as char*, e.state);
+    println(f"key {e.key}, value {e.value as char*}, state {e.state}");
 
     // The pointer upcast works per instantiation, to the matching base.
     describe(&e as struct cell<int32, uint8*>*);
@@ -38,15 +38,15 @@ fn main() -> int32 {
     // A second instantiation is a separate monomorphization with its own
     // layout; the two entry types never interconvert.
     let f = entry<int32, int32> { key = 7, value = 49, state = 1 };
-    println("f: {} -> {}, state {}", f.key, f.value, f.state);
+    println(f"f: {f.key} -> {f.value}, state {f.state}");
 
     // Each entry is its cell plus the state byte, padded to alignment.
-    println("sizeof entry<int32, uint8*> = {} (cell {})",
+    println("sizeof entry<int32, uint8*> = {} (cell {})".format(
             sizeof(struct entry<int32, uint8*>),
-            sizeof(struct cell<int32, uint8*>));
-    println("sizeof entry<int32, int32> = {} (cell {})",
+            sizeof(struct cell<int32, uint8*>)));
+    println("sizeof entry<int32, int32> = {} (cell {})".format(
             sizeof(struct entry<int32, int32>),
-            sizeof(struct cell<int32, int32>));
+            sizeof(struct cell<int32, int32>)));
 
     return 0;
 }
