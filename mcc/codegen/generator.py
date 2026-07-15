@@ -3280,6 +3280,9 @@ class CodeGen:
             params = tuple(self.lang_type(p, line) for p in ref.params)
             nonnull = frozenset(i for i, p in enumerate(ref.params) if p.nonnull)
             mutref = frozenset(i for i, p in enumerate(ref.params) if p.mut)
+            own = frozenset(
+                i for i, p in enumerate(ref.params) if getattr(p, "own", False)
+            )
             mutret = ref.ret is not None and ref.ret.mut
             ownret = ref.ret is not None and getattr(ref.ret, "own", False)
             if mutret:
@@ -3330,7 +3333,7 @@ class CodeGen:
             # drops -- per use, so `type cmp<T> = fn(const T, const T)` gets
             # the right convention at each binding.
             base = function_type(
-                ret, params, ref.variadic, nonnull, mutref,
+                ret, params, ref.variadic, nonnull, mutref, own=own,
                 mutret=mutret, ownret=ownret,
             )
             for _ in range(ref.stars):
@@ -4536,6 +4539,7 @@ class CodeGen:
                 const=sub.const or ref.const,
                 nonnull=sub.nonnull or ref.nonnull,
                 mut=sub.mut or ref.mut,
+                own=sub.own or ref.own,
             )
         return dataclasses_replace(
             ref, args=[self.subst_struct_args(a, binding) for a in ref.args]
@@ -7556,6 +7560,7 @@ class CodeGen:
             and tv.type.signature == expected.signature
             and tv.type.mutref == expected.mutref
             and tv.type.constref == expected.constref
+            and tv.type.own == expected.own
             and tv.type.mutret == expected.mutret
             and tv.type.ownret == expected.ownret
             and tv.type.nonnull <= expected.nonnull
@@ -7637,6 +7642,15 @@ class CodeGen:
                     "return is passed as a pointer to the returned storage, "
                     "a different calling convention; the types are not "
                     "convertible)",
+                    line,
+                )
+            if src.own != expected.own:
+                raise LangError(
+                    f"{context}: expected {expected}, got {src} (an own "
+                    "parameter moves ownership in and the callee drops it, a "
+                    "different calling convention from a by-value copy: "
+                    "dropping the marker would double-free, adding it would "
+                    "leak; the types are not convertible)",
                     line,
                 )
             if src.ownret != expected.ownret:
@@ -14022,6 +14036,7 @@ class CodeGen:
             and tv.type.signature == expected.signature
             and tv.type.mutref == expected.mutref
             and tv.type.constref == expected.constref
+            and tv.type.own == expected.own
             and tv.type.mutret == expected.mutret
             and tv.type.ownret == expected.ownret
             and tv.type.nonnull <= expected.nonnull
@@ -15888,30 +15903,18 @@ class CodeGen:
             symbol = name
         if symbol is None:
             return None
-        # An `own` parameter's move-in/adopt discipline is emitted on the
-        # direct-call path (:meth:`own_move_arg`), so a function-pointer type
-        # cannot carry it: an indirect call would drop the callee's copy while
-        # the caller still runs the source's scheduled destructor (a double
-        # free). Reject function-value formation, mirroring the generic and
-        # overloaded guards; indirect own transfer is a follow-up.
-        if self.own_ref.get(symbol, frozenset()):
-            raise LangError(
-                f"{name!r} has own parameters and cannot be used as a function "
-                "value (ownership transfer is a direct-call discipline; "
-                "indirect calls are a follow-up)",
-                line,
-            )
         # A function value is a call site in waiting: warn here, since calls
         # through the pointer are indirect and can no longer be attributed.
         self.warn_deprecated(name, self.deprecated_syms.get(symbol), line)
         ret, params, variadic = self.signatures[symbol]
         # The value's type spells the function's whole call contract --
-        # @nonnull, mut, const-aggregate hidden references, and a mut
-        # return -- so a call through it runs the same call-site checks,
-        # passes the same by-reference arguments, and yields the same
+        # @nonnull, mut, const-aggregate hidden references, `own` by-value
+        # consuming parameters, and a mut return -- so a call through it runs
+        # the same call-site checks, passes the same by-reference arguments,
+        # enforces the same move-in discipline, and yields the same
         # lvalue-ness as a direct call. This is what lets an annotated or
-        # hidden-reference or mut-returning function be a function value
-        # at all.
+        # hidden-reference or mut-returning or consuming function be a
+        # function value at all.
         mutref = self.mut_ref.get(symbol, frozenset())
         return TypedValue(
             self.funcs[symbol],
@@ -15922,6 +15925,7 @@ class CodeGen:
                 self.nonnull_ref.get(symbol, frozenset()),
                 mutref,
                 self.hidden_ref.get(symbol, frozenset()) - mutref,
+                own=self.own_ref.get(symbol, frozenset()),
                 mutret=symbol in self.mut_ret,
                 ownret=symbol in self.own_ret,
             ),
@@ -16105,11 +16109,12 @@ class CodeGen:
         ret, params, variadic = callee.type.signature
         # The type's contract runs the same call-site rules as a direct call:
         # the @nonnull proof (flow-narrowing and the postfix `!` hatch
-        # included), the writable-lvalue rules for mut, and the by-reference
-        # handover for mut and const-aggregate parameters. Always strict:
-        # even a value of an @extern function checks unconditionally -- the
-        # indirect call can no longer be attributed, so the graded extern
-        # posture does not apply.
+        # included), the writable-lvalue rules for mut, the by-reference
+        # handover for mut and const-aggregate parameters, and the move-in
+        # discipline for an `own` consuming parameter (an owned local via
+        # move(x), a fresh own value adopted). Always strict: even a value of
+        # an @extern function checks unconditionally -- the indirect call can
+        # no longer be attributed, so the graded extern posture does not apply.
         args = self.marshal_args(
             arg_exprs,
             params,
@@ -16119,6 +16124,7 @@ class CodeGen:
             hidden=callee.type.mutref | callee.type.constref,
             mut=callee.type.mutref,
             nonnull=callee.type.nonnull,
+            own=callee.type.own,
         )
         raw = self.emit_call(callee.value, args)
         if callee.type.mutret:
@@ -16269,7 +16275,9 @@ class CodeGen:
         pieces.append(text[copied:])
         return "".join(pieces), slots if pos_text is not None else None
 
-    def own_move_arg(self, arg_expr, param_t: LangType, line: int, context: str):
+    def own_move_arg(
+        self, arg_expr, param_t: LangType, line: int, context: str, tv=None
+    ):
         """Marshal an argument consumed by an ``own`` by-value parameter.
 
         An ``own`` parameter over a type with a destructor takes ownership of
@@ -16298,6 +16306,11 @@ class CodeGen:
             param_t: The (owning) parameter type to coerce to.
             line: The call site's line.
             context: A description of the argument slot, for diagnostics.
+            tv: The argument's already-evaluated value (with any ``move(x)``
+                relinquish already unwrapped to its inner value), for the
+                generic/overloaded path where arguments are lowered before the
+                winner -- and with it the ``own`` positions -- is known. When
+                ``None`` (the direct path) the value is evaluated here.
 
         Returns:
             The marshalled LLVM value to pass.
@@ -16309,7 +16322,8 @@ class CodeGen:
         asserted = isinstance(consumed, Move)
         if asserted:
             consumed = consumed.value
-        tv = self.gen_expr(consumed)
+        if tv is None:
+            tv = self.gen_expr(consumed)
         tv = self.coerce(tv, param_t, line, context)
         if isinstance(consumed, Var):
             if consumed.name[:1].isdigit():
@@ -16387,8 +16401,10 @@ class CodeGen:
             own: Indices of ``own`` by-value parameters: the argument is
                 consumed (see :meth:`own_move_arg`) -- an owned local
                 relinquished with ``move(x)`` (its scheduled destructor
-                cancelled), or a fresh own value the callee adopts. Empty on
-                the indirect path (own transfer is a direct-call discipline).
+                cancelled), or a fresh own value the callee adopts. Carried on
+                the indirect path too, from the function-pointer type's ``own``
+                set (the type spells the same move-in contract as a
+                declaration).
             collecting: Whether the callee's trailing ``slice<const any>``
                 parameter collects the extra arguments (native variadics).
             format: Whether the callee's last fixed parameter is ``@format``:
@@ -17697,21 +17713,29 @@ class CodeGen:
             LangError: When no overload matches, the choice is ambiguous, a type
                 parameter binds to ``void``, or access is denied.
         """
-        # An `own` by-value parameter's move-in/adopt discipline is emitted on
-        # the direct-call path (:meth:`marshal_args` / :meth:`own_move_arg`).
-        # A generic candidate carrying it is already rejected at parse, so an
-        # own candidate reaching here belongs to an *overloaded* set, whose
-        # arguments this path evaluates and queues before the winner is known
-        # -- sound own-transfer there is a follow-up. Reject uniformly (over
-        # the whole set: mixing own and plain members under one name is itself
-        # out of scope for now).
+        # `own` by-value parameters (SIE-180): the move-in/adopt discipline
+        # runs at winner emission below, on the pre-evaluated arguments
+        # (:meth:`own_move_arg` given the lowered value). This is the generic
+        # and overloaded path; the direct path handles it in
+        # :meth:`marshal_args`. The one constraint an overload set must meet:
+        # its members must AGREE on which positions are ``own`` -- a set
+        # mixing a consuming member and a plain (copying) one at the same name
+        # has no single caller contract (a call site cannot know whether to
+        # relinquish), so it stays rejected. ``own_slots`` (known before the
+        # winner, since all members agree) drives both the argument lowering
+        # and the winner-side emission below.
+        own_slots: frozenset[int] = frozenset()
         if any(f.own_params for f in candidates):
-            raise LangError(
-                "own parameters are not yet supported on overloaded functions "
-                "(the consuming receiver's move-in discipline is emitted on "
-                "the direct-call path; overloaded own is a follow-up)",
-                expr.line,
-            )
+            own_sets = {frozenset(self.own_indices(f)) for f in candidates}
+            if len(own_sets) > 1:
+                raise LangError(
+                    "own parameters must agree across an overload set: every "
+                    f"member of {expr.name!r} must mark the same parameter "
+                    "positions own (a set mixing a consuming member and a "
+                    "copying one has no single call contract)",
+                    expr.line,
+                )
+            own_slots = next(iter(own_sets))
         # -Wnoreturn-own bookkeeping: every own temporary queued while this
         # call's arguments evaluate and marshal is provably leaked when the
         # resolved winner never returns, so snapshot the queue for the
@@ -17802,6 +17826,18 @@ class CodeGen:
                 proofs.append(False)
                 arg_tvs.append(TypedValue(None, CTOR_SELF))
                 continue
+            if i in own_slots and isinstance(arg, Move):
+                # A `move(x)` relinquish into an `own` slot: evaluate the inner
+                # value for inference (a bare `move(...)` cannot lower on its
+                # own -- MOVE_MISPLACED). The move-in discipline (cancelling
+                # the source's scheduled destructor, marking it moved) runs at
+                # winner emission, through own_move_arg on this value. A
+                # non-move own argument -- a fresh constructor / `-> own` call,
+                # a bare owned local, a struct literal -- falls through to the
+                # ordinary lowering arms below and is judged there.
+                proofs.append(False)
+                arg_tvs.append(self.gen_expr(arg.value))
+                continue
             proofs.append(self.proves_nonnull(arg))
             if i in maybe_mut and self.denotes_storage(arg):
                 addr, t, align, volatile = self.gen_addr(arg, expr.line)
@@ -17851,8 +17887,13 @@ class CodeGen:
         # holes and a collected-extra rendering register at emission
         # instead, as on the direct path). The _CtorSelf placeholder and
         # the NULLT stand-ins fail the own-call predicate before their
-        # type is read.
-        for arg, tv in zip(expr.args, arg_tvs):
+        # type is read. An argument bound for an `own` slot is skipped: it is
+        # consumed, not queued -- the callee drops it, so winner emission
+        # relinquishes the source (own_move_arg) instead of registering a
+        # caller-side drop, exactly as the direct path's marshal_args does.
+        for i, (arg, tv) in enumerate(zip(expr.args, arg_tvs)):
+            if i in own_slots:
+                continue
             self.register_own_drop(arg, tv)
         if len(candidates) == 1:
             func = candidates[0]
@@ -18277,6 +18318,34 @@ class CodeGen:
                 if fmt_lit is not None and i == n_fixed - 1
                 else expr.args[i]
             )
+            if i in own_slots and self.type_owns_cleanup(strip_const(p)):
+                # An `own` by-value argument over an owning type is consumed:
+                # enforce the move-in discipline on the pre-evaluated value --
+                # a fresh constructor / `-> own` call (or a dot-call's `0recv`
+                # spill) adopted, a named owned local relinquished with
+                # move(x) (its scheduled destructor cancelled, the name marked
+                # moved), a bare owned local refused. A struct/array/result
+                # literal is a fresh built value the callee drops, adopted with
+                # no move -- built here as on the direct path, where the
+                # literal-adaptation arm precedes the own marshal. The queue
+                # skip above kept it off the caller's drop list, so the callee
+                # is the one and only dropper.
+                if (
+                    self.struct_literal_adapts(arg_node, p)
+                    and not isinstance(arg_node, TupleLit)
+                    or self.array_literal_adapts(arg_node, p)
+                    or self.result_literal_adapts(arg_node, p)
+                ):
+                    args.append(
+                        self.gen_adapted_literal(arg_node, p, expr.line).value
+                    )
+                else:
+                    args.append(
+                        self.own_move_arg(
+                            expr.args[i], p, expr.line, context, tv=tv
+                        )
+                    )
+                continue
             if i in mut_positions:
                 # A decayed pointer is forwarded by value (it was already
                 # loaded, once, when the argument was evaluated); a direct

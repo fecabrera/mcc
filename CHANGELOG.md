@@ -230,12 +230,25 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   monomorphic and **not dispatch-eligible** (a by-value receiver is never a
   vtable entry); `own` over a destructor-less type is a no-op and needs no
   `move`. The marker rides `.mci` interface stubs and its prototype mismatch is
-  rejected, and a function with `own` parameters cannot be taken as a function
-  value (the move discipline is direct-call only, so an indirect call would
-  double-free). Not yet: the owned-**reference** receiver `own self: &T` (a
-  later phase, rejected for now), and `own` on `@extern`/`@asm`, on generic
-  functions / methods of generic structs, or on overloaded functions. See
+  rejected. Not yet: the owned-**reference** receiver `own self: &T` (a later
+  phase, rejected for now), and `own` on `@extern`/`@asm`. See
   [examples/types/own_receivers.mc](examples/types/own_receivers.mc).
+
+- **`own` parameters on every non-direct call path** — the same move-in
+  discipline now holds beyond the direct call: on **generic functions and
+  methods of generic structs** (what lets a container declare a consuming
+  method, `fn vec<T>::into_sum(own self: vec<T>) -> T`), on **overloaded**
+  sets (whose members must **agree** on which positions are `own` — a set
+  mixing a consuming and a copying member at one name is rejected), and as a
+  **function value**: a function with `own` parameters *is* first-class, its
+  type carrying the contract as `fn(own box)`, a **distinct type** from
+  `fn(box)` (one transfers ownership, the other copies; neither converts to
+  the other) whose call enforces the move exactly as a direct call does. The
+  generic/overloaded path runs the relinquish at winner resolution, on the
+  pre-evaluated arguments; the marker rides `.mci` function-type stubs. This
+  lifts the Phase-2 restrictions to generic/overloaded/indirect `own` (and
+  retires the interim "cannot be taken as a function value" rejection). See
+  [examples/types/own_generic.mc](examples/types/own_generic.mc).
 
 - **`-Wdestructor-copy` — a new opt-in warning class for bitwise copies of
   owning values** — mcc has no copy constructor, so a bitwise copy of a value

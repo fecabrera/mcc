@@ -2034,15 +2034,32 @@ Anything else whose type owns a destructor (a field extracted with
 rather than risk a double free. `own` over a **destructor-less type is a
 no-op** — nothing to move or drop — so it needs no `move` and passes by value
 like a plain parameter. The marker rides `.mci` interface stubs
-(`fn drain(own b: box) -> int32;`). Because the relinquish discipline is a
-**direct-call** property, a function with `own` parameters cannot be taken as a
-**function value** (an indirect call could not enforce the move, so it would
-double-free) — it is rejected at value formation. Not in this phase: the
-owned-**reference** receiver `own self: &T` (an escaping borrow, rejected for
-now), and `own` parameters on `@extern`/`@asm` functions, on generic functions
-or methods of generic structs, and on overloaded functions.
+(`fn drain(own b: box) -> int32;`).
 
-See [examples/types/own_receivers.mc](../examples/types/own_receivers.mc).
+The same relinquish discipline holds on **every call path**, not just the
+direct call:
+
+- **Generic functions and methods of generic structs** may take `own`
+  parameters — this is what lets a container define a *consuming* method
+  (`fn vec<T>::into_sum(own self: vec<T>) -> T`). The move-in runs when the
+  call's winner (and with it its `own` positions) is resolved.
+- **Overloaded** functions may too, provided the members **agree on which
+  positions are `own`** — a set mixing a consuming member and a copying one at
+  the same name has no single caller contract and is rejected.
+- A function with `own` parameters **is** a first-class **function value**:
+  the move-in contract rides its type, `fn(own box) -> int32`, spelled with the
+  same `own` marker. It is a **distinct type** from `fn(box) -> int32` (a
+  different calling convention — one transfers ownership, the other copies), so
+  neither converts to the other; a call through the value enforces the move
+  exactly as a direct call does.
+
+Not in this phase: the owned-**reference** receiver `own self: &T` (an escaping
+borrow, rejected for now), and `own` parameters on `@extern`/`@asm` functions.
+
+See [examples/types/own_receivers.mc](../examples/types/own_receivers.mc) for
+the direct-call receiver, and
+[examples/types/own_generic.mc](../examples/types/own_generic.mc) for the
+generic-container, overloaded, and function-value forms.
 
 #### Inherited methods
 
