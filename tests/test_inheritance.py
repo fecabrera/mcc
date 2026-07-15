@@ -28,10 +28,10 @@ from helpers import compile_ir, run, run_path
 POINT = """
     struct point<T> { x: T; y: T; }
     struct pointf extends point<float64> {}
-    fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+    fn point<T>::constructor(self: &point<T>, x: T, y: T) {
         self.x = x; self.y = y;
     }
-    fn pointf::constructor<U>(mut self: pointf, x: U, y: U) {
+    fn pointf::constructor<U>(self: &pointf, x: U, y: U) {
         self.x = x as float64; self.y = y as float64;
     }
     fn point<T>::magnitude(const self: struct point<T>) -> float64 {
@@ -115,7 +115,7 @@ def test_mut_self_write_through_lands_in_the_base_prefix(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b { extra: int32; }
-        fn b::bump(mut self: b) { self.n = self.n + 1; }
+        fn b::bump(self: &b) { self.n = self.n + 1; }
         fn main() -> int32 {
             let v: d = { n = 5, extra = 7 };
             v.bump();
@@ -155,7 +155,7 @@ def test_pointer_receiver_auto_derefs_into_the_inherited_method(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b { extra: int32; }
-        fn b::bump(mut self: b) { self.n = self.n + 1; }
+        fn b::bump(self: &b) { self.n = self.n + 1; }
         fn main() -> int32 {
             let v: d = { n = 1, extra = 0 };
             let q: d* = &v;
@@ -176,7 +176,7 @@ def test_inherited_constructor_defaults_derived_added_fields(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b { extra: int32 = 42; }
-        fn b::constructor(mut self: b, n: int32) { self.n = n; }
+        fn b::constructor(self: &b, n: int32) { self.n = n; }
         fn main() -> int32 {
             let v = d(7);
             println(f"{v.n} {v.extra}");
@@ -269,10 +269,10 @@ def test_constructor_chains_through_the_explicit_base_qualified_call(capfd):
         import "std/io";
         struct point<T> { x: T; y: T; }
         struct pointf extends point<float64> { label: int32; }
-        fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
-        fn pointf::constructor(mut self: pointf, x: int32, y: int32) {
+        fn pointf::constructor(self: &pointf, x: int32, y: int32) {
             point::constructor(self, x as float64, y as float64);
             self.label = 7;
         }
@@ -320,7 +320,7 @@ def test_generic_derived_bare_ctor_head_infers_the_instantiation(capfd):
         import "std/io";
         struct point<T> { x: T; y: T; }
         struct pd<T> extends point<T> { tag: int32 = 9; }
-        fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
         fn main() -> int32 {
@@ -556,7 +556,7 @@ def test_free_functions_do_not_upcast_receivers():
             """
             struct b { n: int32; }
             struct d extends b {}
-            fn poke(mut self: b) { self.n = 1; }
+            fn poke(self: &b) { self.n = 1; }
             fn main() -> int32 {
                 let v: d = { n = 0 };
                 poke(v);
@@ -577,7 +577,7 @@ def test_inherited_mut_return_re_lends_the_base_prefix(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b { extra: int32; }
-        fn b::ref_n(mut self: b) -> mut int32 { return self.n; }
+        fn b::ref_n(self: &b) -> &int32 { return self.n; }
         fn main() -> int32 {
             let v: d = { n = 1, extra = 0 };
             v.ref_n() = 41;
@@ -733,7 +733,7 @@ def test_inherited_methods_resolve_through_an_interface_stub(capfd, tmp_path):
     lib = tmp_path / "geo.mc"
     lib.write_text(
         "struct point<T> { x: T; y: T; }\n"
-        "fn point<T>::constructor(mut self: point<T>, x: T, y: T) {\n"
+        "fn point<T>::constructor(self: &point<T>, x: T, y: T) {\n"
         "    self.x = x; self.y = y;\n"
         "}\n"
         "fn point<T>::sum(const self: point<T>) -> T {\n"
@@ -998,8 +998,8 @@ def test_mut_returning_receiver_re_lends_upcast_on_the_direct_path(capfd):
         struct b { n: int32; }
         struct d extends b { extra: int32; }
         fn b::get(const self: b) -> int32 { return self.n; }
-        fn b::bump(mut self: b) { self.n = self.n + 1; }
-        fn d::ref(mut self: d) -> mut d { return self; }
+        fn b::bump(self: &b) { self.n = self.n + 1; }
+        fn d::ref(self: &d) -> &d { return self; }
         fn main() -> int32 {
             let v: d = { n = 41, extra = 0 };
             b::bump(d::ref(v));
@@ -1019,9 +1019,9 @@ def test_mut_returning_receiver_re_lends_upcast_on_the_set_path(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b { extra: int32; }
-        fn b::bump(mut self: b) { self.n = self.n + 1; }
-        fn b::bump(mut self: b, by: int32) { self.n = self.n + by; }
-        fn d::ref(mut self: d) -> mut d { return self; }
+        fn b::bump(self: &b) { self.n = self.n + 1; }
+        fn b::bump(self: &b, by: int32) { self.n = self.n + by; }
+        fn d::ref(self: &d) -> &d { return self; }
         fn main() -> int32 {
             let v: d = { n = 1, extra = 0 };
             b::bump(d::ref(v));

@@ -36,8 +36,8 @@ from helpers import compile_ir, run
 # tell a destroyed copy (h == -1) from a transferred one.
 RES = """
 struct res { h: int32; }
-fn res::constructor(mut self: res, v: int32) { self.h = v; }
-fn res::destructor(mut self: res) { self.h = -1; }
+fn res::constructor(self: &res, v: int32) { self.h = v; }
+fn res::destructor(self: &res) { self.h = -1; }
 """
 
 FAIL = 'error fail { OOPS, }\n'
@@ -186,7 +186,7 @@ def test_plain_copy_needs_move():
         compile_ir(
             RES
             + """
-            fn steal(mut r: res) -> own res {
+            fn steal(r: &res) -> own res {
                 return r;           // a parameter copy: the original stays
             }
             fn main() -> int32 { return 0; }
@@ -201,7 +201,7 @@ def test_move_asserts_the_copy_transfer():
         RES
         + """
         struct box { r: res; }
-        fn box::pop(mut self: box) -> own res {
+        fn box::pop(self: &box) -> own res {
             return move(self.r);
         }
         fn main() -> int32 {
@@ -273,7 +273,7 @@ def test_move_composes_inside_the_ok_payload():
         + FAIL
         + """
         struct box { r: res; }
-        fn box::pop(mut self: box) -> own result<res, fail> {
+        fn box::pop(self: &box) -> own result<res, fail> {
             return ok(move(self.r));
         }
         fn main() -> int32 {
@@ -460,14 +460,14 @@ def test_own_void_is_rejected():
         compile_ir("fn f() -> own void { return; } fn main() -> int32 { return 0; }")
 
 
-def test_own_and_mut_do_not_combine():
+def test_own_and_reference_do_not_combine():
     with pytest.raises(
-        LangError, match=r"a return cannot be both a reference and own"
+        LangError, match=r"a return cannot be both own and a reference"
     ):
         compile_ir(
             RES
             + """
-            fn f(mut r: res) -> mut own res { return r; }
+            fn f(r: &res) -> own &res { return r; }
             fn main() -> int32 { return 0; }
             """
         )

@@ -437,7 +437,7 @@ def test_format_cannot_be_mut():
         match=r"a parameter cannot be both @format and a reference "
         r"\(a format string is read, never written\)",
     ):
-        compile_ir("fn f(@format mut fmt: slice<const char>, args...) {}")
+        compile_ir("fn f(@format fmt: &slice<const char>, args...) {}")
 
 
 def test_the_collecting_sugar_rejects_format():

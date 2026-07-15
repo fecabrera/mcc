@@ -1,6 +1,6 @@
-"""``mut`` returns: functions returning lvalues (``-> mut T``).
+"""``mut`` returns: functions returning lvalues (``-> &T``).
 
-A ``-> mut T`` call is an lvalue expression -- assignable, projectable, and
+A ``-> &T`` call is an lvalue expression -- assignable, projectable, and
 re-lendable as a ``mut`` argument -- and loads eagerly in value context. The
 returned reference may only be formed from a ``mut``/pointer parameter or a
 global (never this call's frame), traced through members, elements,
@@ -22,7 +22,7 @@ from helpers import compile_ir, parse, run, run_path
 # the accessor shape the formation rule was designed for.
 BUF = (
     "struct buf { data: char*; length: uint64; }\n"
-    "fn buf_at(mut self: struct buf, i: uint64) -> mut char {\n"
+    "fn buf_at(self: &struct buf, i: uint64) -> &char {\n"
     "    return self.data[i];\n"
     "}\n"
 )
@@ -50,7 +50,7 @@ def iface(source: str) -> str:
 
 
 def test_mut_return_parses():
-    (func,) = parse("fn f(mut x: int32) -> mut int32 { return x; }").functions
+    (func,) = parse("fn f(x: &int32) -> &int32 { return x; }").functions
     assert func.mut_return
     assert func.ret_type.name == "int32"
 
@@ -62,7 +62,7 @@ def test_plain_return_is_not_mut():
 
 def test_bodyless_prototype_carries_mut_return():
     # Interface stubs re-emit `-> mut`; the proto parses and keeps the flag.
-    (func,) = parse("fn f(mut x: int32) -> mut int32;").functions
+    (func,) = parse("fn f(x: &int32) -> &int32;").functions
     assert func.proto and func.mut_return
 
 
@@ -70,20 +70,20 @@ def test_mut_return_rejected_on_extern():
     with pytest.raises(
         LangError, match="a reference return is not allowed on @extern functions"
     ):
-        parse("@extern fn f(n: int32) -> mut int32;")
+        parse("@extern fn f(n: int32) -> &int32;")
 
 
 def test_mut_return_rejected_on_asm():
     with pytest.raises(
         LangError, match="a reference return is not allowed on @asm functions"
     ):
-        parse('@asm fn f(n: int32) -> mut int32 { "nop" }')
+        parse('@asm fn f(n: int32) -> &int32 { "nop" }')
 
 
 def test_fn_pointer_type_spells_mut_return():
     # The fn(...) -> mut T *type* spells a mut return (see
     # test_mut_return_fn_types.py for the full behavior).
-    program = parse("fn main() { let g: fn(int32) -> mut int32; }")
+    program = parse("fn main() { let g: fn(int32) -> &int32; }")
     (let,) = program.functions[0].body
     assert let.type_name.ret.mut
     assert str(let.type_name) == "fn(int32) -> &int32"
@@ -94,12 +94,12 @@ def test_fn_pointer_type_spells_mut_return():
 
 def test_mut_void_return_rejected():
     with pytest.raises(LangError, match="cannot return a reference to void"):
-        compile_ir("fn f() -> mut void { }")
+        compile_ir("fn f() -> &void { }")
 
 
 def test_main_cannot_return_mut():
     with pytest.raises(LangError, match="'main' cannot return a reference"):
-        compile_ir("fn main() -> mut int32 { return 0; }")
+        compile_ir("fn main() -> &int32 { return 0; }")
 
 
 def test_overloads_differing_only_in_mut_return_collide():
@@ -111,7 +111,7 @@ def test_overloads_differing_only_in_mut_return_collide():
         compile_ir(
             "@static let g: int32 = 0;\n"
             "fn f(x: int32) -> int32 { return x; }\n"
-            "fn f(x: int32) -> mut int32 { return g; }\n"
+            "fn f(x: int32) -> &int32 { return g; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -121,15 +121,15 @@ def test_generic_overloads_differing_only_in_mut_return_collide():
         LangError, match="overloads must differ in parameter patterns"
     ):
         compile_ir(
-            "fn f<T>(mut x: T) -> T { return x; }\n"
-            "fn f<T>(mut x: T) -> mut T { return x; }\n"
+            "fn f<T>(x: &T) -> T { return x; }\n"
+            "fn f<T>(x: &T) -> &T { return x; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
 
 def test_mut_return_lowers_to_pointer_return():
     ir_text = compile_ir(
-        "fn pick(mut x: int32) -> mut int32 { return x; }\n"
+        "fn pick(x: &int32) -> &int32 { return x; }\n"
         "fn main() -> int32 { return 0; }"
     )
     assert 'define i32* @"pick"(i32* ' in ir_text
@@ -142,7 +142,7 @@ def test_mut_param_root_direct():
     # A mut parameter is the caller's own storage, legal as the returned
     # lvalue itself (zero hops).
     assert run(
-        "fn self_ref(mut x: int32) -> mut int32 { return x; }\n"
+        "fn self_ref(x: &int32) -> &int32 { return x; }\n"
         "fn main() -> int32 {\n"
         "    let n: int32 = 3;\n"
         "    self_ref(n) = 42;\n"
@@ -164,7 +164,7 @@ def test_mut_param_root_through_member_and_index():
 
 def test_pointer_param_root_through_deref():
     assert run(
-        "fn deref(p: int32*) -> mut int32 { return *p; }\n"
+        "fn deref(p: int32*) -> &int32 { return *p; }\n"
         "fn main() -> int32 {\n"
         "    let n: int32 = 1;\n"
         "    deref(&n) = 7;\n"
@@ -176,7 +176,7 @@ def test_pointer_param_root_through_deref():
 def test_pointer_param_root_through_arrow():
     assert run(
         "struct cell { value: int32; }\n"
-        "fn value_of(c: struct cell*) -> mut int32 { return c->value; }\n"
+        "fn value_of(c: struct cell*) -> &int32 { return c->value; }\n"
         "fn main() -> int32 {\n"
         "    let c: struct cell;\n"
         "    c.value = 0;\n"
@@ -193,7 +193,7 @@ def test_nonnull_assert_in_mut_return_chain():
     # (e.g. a container's backing buffer) be a mut return while asserting the
     # dereference under -Wunchecked-dereference.
     assert run(
-        "fn at(p: int32*, i: uint64) -> mut int32 { return p![i]; }\n"
+        "fn at(p: int32*, i: uint64) -> &int32 { return p![i]; }\n"
         "fn main() -> int32 {\n"
         "    let xs: int32[3];\n"
         "    at(xs, 1) = 8;\n"
@@ -207,11 +207,11 @@ def test_nonnull_assert_in_mut_return_is_ir_neutral():
     # The `!` emits nothing, so a mut return through `p![i]` lowers to exactly
     # the IR of the same return through `p[i]`.
     asserted = compile_ir(
-        "fn at(p: int32*, i: uint64) -> mut int32 { return p![i]; }\n"
+        "fn at(p: int32*, i: uint64) -> &int32 { return p![i]; }\n"
         "fn main() -> int32 { let xs: int32[2]; at(xs, 0) = 1; return 0; }"
     )
     plain = compile_ir(
-        "fn at(p: int32*, i: uint64) -> mut int32 { return p[i]; }\n"
+        "fn at(p: int32*, i: uint64) -> &int32 { return p[i]; }\n"
         "fn main() -> int32 { let xs: int32[2]; at(xs, 0) = 1; return 0; }"
     )
     assert asserted == plain
@@ -220,7 +220,7 @@ def test_nonnull_assert_in_mut_return_is_ir_neutral():
 def test_global_root():
     assert run(
         "@static let counter: int32 = 5;\n"
-        "fn counter_ref() -> mut int32 { return counter; }\n"
+        "fn counter_ref() -> &int32 { return counter; }\n"
         "fn main() -> int32 {\n"
         "    counter_ref() += 1;\n"
         "    return counter;\n"
@@ -233,7 +233,7 @@ def test_chained_mut_return_call():
     # callee's formation vouches, compositionally.
     assert run(
         BUF +
-        "fn first(mut self: struct buf) -> mut char {\n"
+        "fn first(self: &struct buf) -> &char {\n"
         "    return buf_at(self, 0);\n"
         "}\n"
         "fn main() -> int32 {\n" + SETUP +
@@ -247,8 +247,8 @@ def test_chain_through_mut_return_call():
     # A projection continues past a mut-returning call in chain position.
     assert run(
         "struct pt { x: int32; y: int32; }\n"
-        "fn pt_ref(mut p: struct pt) -> mut struct pt { return p; }\n"
-        "fn x_of(mut p: struct pt) -> mut int32 { return pt_ref(p).x; }\n"
+        "fn pt_ref(p: &struct pt) -> &struct pt { return p; }\n"
+        "fn x_of(p: &struct pt) -> &int32 { return pt_ref(p).x; }\n"
         "fn main() -> int32 {\n"
         "    let p = struct pt { x = 0, y = 0 };\n"
         "    x_of(p) = 9;\n"
@@ -272,7 +272,7 @@ def test_local_root_rejected():
 def test_pointer_local_root_rejected_with_inlining_hint():
     with pytest.raises(LangError, match="inline its chain"):
         compile_ir(
-            "fn f(p: int32*) -> mut int32 {\n"
+            "fn f(p: int32*) -> &int32 {\n"
             "    let q = p;\n"
             "    return *q;\n"
             "}\n"
@@ -283,7 +283,7 @@ def test_pointer_local_root_rejected_with_inlining_hint():
 def test_by_value_param_root_rejected():
     with pytest.raises(LangError, match="'x' is a by-value parameter"):
         compile_ir(
-            "fn f(x: int32) -> mut int32 { return x; }\n"
+            "fn f(x: int32) -> &int32 { return x; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -295,7 +295,7 @@ def test_pointer_param_returned_directly_rejected():
         LangError, match="returning the pointer parameter 'p' itself"
     ):
         compile_ir(
-            "fn f(p: int32*) -> mut int32* { return p; }\n"
+            "fn f(p: int32*) -> &int32* { return p; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -303,7 +303,7 @@ def test_pointer_param_returned_directly_rejected():
 def test_const_param_root_rejected():
     with pytest.raises(LangError, match="'p' is a const parameter"):
         compile_ir(
-            "fn f(const p: int32*) -> mut int32 { return *p; }\n"
+            "fn f(const p: int32*) -> &int32 { return *p; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -311,7 +311,7 @@ def test_const_param_root_rejected():
 def test_cast_root_rejected():
     with pytest.raises(LangError, match="must be an lvalue chain"):
         compile_ir(
-            "fn f(mut x: int32) -> mut int32 { return x as int32; }\n"
+            "fn f(x: &int32) -> &int32 { return x as int32; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -319,7 +319,7 @@ def test_cast_root_rejected():
 def test_null_root_rejected():
     with pytest.raises(LangError, match="must be an lvalue chain"):
         compile_ir(
-            "fn f() -> mut int32 { return null; }\n"
+            "fn f() -> &int32 { return null; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -332,7 +332,7 @@ def test_plain_call_in_chain_rejected():
         compile_ir(
             "@static let g: int32 = 0;\n"
             "fn raw() -> int32* { return &g; }\n"
-            "fn f() -> mut int32 { return raw()[0]; }\n"
+            "fn f() -> &int32 { return raw()[0]; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -341,7 +341,7 @@ def test_global_array_element_root():
     # Indexing a global fixed-size array stays in the global's own storage.
     assert run(
         "@static let table: int32[4];\n"
-        "fn slot(i: uint64) -> mut int32 { return table[i]; }\n"
+        "fn slot(i: uint64) -> &int32 { return table[i]; }\n"
         "fn main() -> int32 {\n"
         "    slot(2) = 30;\n"
         "    slot(2) += 3;\n"
@@ -355,7 +355,7 @@ def test_by_value_struct_member_rejected():
     with pytest.raises(LangError, match="'p' is a by-value parameter"):
         compile_ir(
             "struct pt { x: int32; }\n"
-            "fn f(p: struct pt) -> mut int32 { return p.x; }\n"
+            "fn f(p: struct pt) -> &int32 { return p.x; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -364,8 +364,8 @@ def test_chain_through_static_mut_return_call():
     # A file-scoped @static accessor in chain position resolves by symbol.
     assert run(
         "struct pt { x: int32; y: int32; }\n"
-        "@static fn pt_ref(mut p: struct pt) -> mut struct pt { return p; }\n"
-        "fn x_of(mut p: struct pt) -> mut int32 { return pt_ref(p).x; }\n"
+        "@static fn pt_ref(p: &struct pt) -> &struct pt { return p; }\n"
+        "fn x_of(p: &struct pt) -> &int32 { return pt_ref(p).x; }\n"
         "fn main() -> int32 {\n"
         "    let p = struct pt { x = 0, y = 0 };\n"
         "    x_of(p) = 8;\n"
@@ -381,7 +381,7 @@ def test_chain_through_shadowed_name_rejected():
         compile_ir(
             "struct pt { x: int32; }\n"
             "fn make() -> int32 { return 0; }\n"
-            "fn f(mut p: struct pt) -> mut int32 {\n"
+            "fn f(p: &struct pt) -> &int32 {\n"
             "    let pt_ref = make;\n"
             "    return pt_ref().x;\n"
             "}\n"
@@ -393,7 +393,7 @@ def test_shadowing_let_drops_param_root():
     # A shadowing let over a pointer parameter is a local, not a root.
     with pytest.raises(LangError, match="'p' is a local"):
         compile_ir(
-            "fn f(p: int32*, q: int32*) -> mut int32 {\n"
+            "fn f(p: int32*, q: int32*) -> &int32 {\n"
             "    let p = q;\n"
             "    return *p;\n"
             "}\n"
@@ -407,7 +407,7 @@ def test_exact_type_return_required():
         LangError, match="reference return: expected a int32 lvalue, got int64"
     ):
         compile_ir(
-            "fn f(mut x: int64) -> mut int32 { return x; }\n"
+            "fn f(x: &int64) -> &int32 { return x; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -418,7 +418,7 @@ def test_volatile_storage_rejected_as_mut_return():
     ):
         compile_ir(
             "@volatile struct reg { bits: int32; }\n"
-            "fn bits_of(r: struct reg*) -> mut int32 { return r->bits; }\n"
+            "fn bits_of(r: struct reg*) -> &int32 { return r->bits; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -429,7 +429,7 @@ def test_packed_field_rejected_as_mut_return():
     ):
         compile_ir(
             "@packed struct wire { tag: char; value: int32; }\n"
-            "fn value_of(w: struct wire*) -> mut int32 { return w->value; }\n"
+            "fn value_of(w: struct wire*) -> &int32 { return w->value; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -464,7 +464,7 @@ def test_compound_assignment_evaluates_target_once():
 def test_field_projection_through_call():
     assert run(
         "struct pt { x: int32; y: int32; }\n"
-        "fn pt_ref(mut p: struct pt) -> mut struct pt { return p; }\n"
+        "fn pt_ref(p: &struct pt) -> &struct pt { return p; }\n"
         "fn main() -> int32 {\n"
         "    let p = struct pt { x = 0, y = 0 };\n"
         "    pt_ref(p).y = 4;\n"
@@ -477,7 +477,7 @@ def test_index_projection_through_call():
     # A mut return of pointer type indexes through the loaded pointer.
     assert run(
         BUF +
-        "fn data_of(mut self: struct buf) -> mut char* {\n"
+        "fn data_of(self: &struct buf) -> &char* {\n"
         "    return self.data;\n"
         "}\n"
         "fn main() -> int32 {\n" + SETUP +
@@ -490,7 +490,7 @@ def test_index_projection_through_call():
 def test_relend_direct_path():
     assert run(
         BUF +
-        "fn bump(mut c: char) { c += 1; }\n"
+        "fn bump(c: &char) { c += 1; }\n"
         "fn main() -> int32 {\n" + SETUP +
         "    bump(buf_at(b, 0));\n"
         "    return bytes[0] == 'b' ? 0 : 1;\n"
@@ -503,7 +503,7 @@ def test_relend_generic_path():
     # lvalue keeps the mut candidate viable and re-lends.
     assert run(
         BUF +
-        "fn put<T>(mut a: T, v: T) { a = v; }\n"
+        "fn put<T>(a: &T, v: T) { a = v; }\n"
         "fn put<T>(p: T*, v: T) { *p = v; }\n"
         "fn main() -> int32 {\n" + SETUP +
         "    put(buf_at(b, 2), 'w');\n"
@@ -517,7 +517,7 @@ def test_relend_generic_path_exact_type_required():
     with pytest.raises(LangError, match="expected a int64 lvalue, got char"):
         compile_ir(
             BUF +
-            "fn put<T>(mut a: T) { }\n"
+            "fn put<T>(a: &T) { }\n"
             "fn main() -> int32 {\n" + SETUP +
             "    put<int64>(buf_at(b, 0));\n"
             "    return 0;\n"
@@ -529,7 +529,7 @@ def test_relend_exact_type_required():
     with pytest.raises(LangError, match="expected a int64 lvalue, got char"):
         compile_ir(
             BUF +
-            "fn wide(mut n: int64) { n = 0; }\n"
+            "fn wide(n: &int64) { n = 0; }\n"
             "fn main() -> int32 {\n" + SETUP +
             "    wide(buf_at(b, 0));\n"
             "    return 0;\n"
@@ -563,7 +563,7 @@ def test_shared_storage_as_const_hidden_reference():
     # Phase B the view is spelled `const &T`; a plain `const T` copies.)
     ir_text = compile_ir(
         "struct pt { x: int32; y: int32; }\n"
-        "fn pt_ref(mut p: struct pt) -> mut struct pt { return p; }\n"
+        "fn pt_ref(p: &struct pt) -> &struct pt { return p; }\n"
         "fn x_of(const p: &struct pt) -> int32 { return p.x; }\n"
         "fn main() -> int32 {\n"
         "    let p: struct pt;\n"
@@ -651,7 +651,7 @@ def test_mut_returning_function_value_infers_the_carrying_type():
     # test_mut_return_fn_types.py for the full behavior).
     assert run(
         "@static let counter: int32 = 0;\n"
-        "fn counter_ref() -> mut int32 { return counter; }\n"
+        "fn counter_ref() -> &int32 { return counter; }\n"
         "fn main() -> int32 { let f = counter_ref; f() = 9; return counter; }"
     ) == 9
 
@@ -661,7 +661,7 @@ def test_mut_returning_function_value_infers_the_carrying_type():
 
 def test_generic_mut_return_instantiates():
     assert run(
-        "fn pick<T>(mut a: T, mut b: T, first: bool) -> mut T {\n"
+        "fn pick<T>(a: &T, b: &T, first: bool) -> &T {\n"
         "    if (first) { return a; }\n"
         "    return b;\n"
         "}\n"
@@ -678,7 +678,7 @@ def test_generic_mut_return_instantiates():
 def test_generic_mut_return_formation_checked_per_instance():
     with pytest.raises(LangError, match="'x' is a by-value parameter"):
         compile_ir(
-            "fn leak<T>(x: T) -> mut T { return x; }\n"
+            "fn leak<T>(x: T) -> &T { return x; }\n"
             "fn main() -> int32 {\n"
             "    let n: int32 = 0;\n"
             "    leak(n) = 1;\n"
@@ -694,7 +694,7 @@ NONNULL = (
     "struct box { data: int32*; }\n"
     "fn first(@nonnull p: int32*) -> int32 { return *p; }\n"
     "@static let slot: int32 = 0;\n"
-    "fn slot_ref() -> mut int32 { return slot; }\n"
+    "fn slot_ref() -> &int32 { return slot; }\n"
 )
 
 
@@ -752,7 +752,7 @@ def test_function_storing_through_mut_return_is_not_write_free():
 
 def test_interface_renders_mut_return():
     out = iface(
-        "fn at(mut self: char*, i: uint64) -> mut char { return self[i]; }"
+        "fn at(self: &char*, i: uint64) -> &char { return self[i]; }"
     )
     assert "fn at(self: &char*, i: uint64) -> &char;" in out
 
@@ -761,7 +761,7 @@ def test_mut_return_round_trips_through_mci(tmp_path):
     lib = tmp_path / "lib.mc"
     lib.write_text(
         "@static let counter: int32 = 7;\n"
-        "fn counter_ref() -> mut int32 { return counter; }\n"
+        "fn counter_ref() -> &int32 { return counter; }\n"
         "fn counter_value() -> int32 { return counter; }\n"
     )
     out = tmp_path / "lib.mci"
@@ -789,7 +789,7 @@ def test_prototype_mut_return_mismatch_rejected():
     ):
         compile_ir(
             "@static let g: int32 = 0;\n"
-            "fn f() -> mut int32;\n"
+            "fn f() -> &int32;\n"
             "fn f() -> int32 { return g; }\n"
             "fn main() -> int32 { return 0; }"
         )

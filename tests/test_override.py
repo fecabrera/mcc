@@ -26,7 +26,7 @@ def test_overrides_a_stdlib_concrete_formatter(capfd):
         """
         import "std/io";
         @override
-        fn format(mut str: string, value: bool, const modifier: slice<char>) {
+        fn format(str: &string, value: bool, const modifier: slice<char>) {
             str.append(value ? "YEP" : "NOPE");
         }
         fn main() -> int32 {
@@ -47,7 +47,7 @@ def test_overrides_the_typename_fallback(capfd):
         import "std/io";
         struct point { x: int32; y: int32; }
         @override
-        fn format<T>(mut str: string, value: T, const modifier: slice<char>) {
+        fn format<T>(str: &string, value: T, const modifier: slice<char>) {
             str.append("?custom?");
         }
         fn main() -> int32 {

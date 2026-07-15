@@ -58,7 +58,7 @@ def test_mut_self_mutation_visible_to_caller(capfd):
         """
         import "std/io";
         struct counter { n: int32; }
-        fn counter::bump(mut self: counter) {
+        fn counter::bump(self: &counter) {
             self.n = self.n + 1;
         }
         fn main() -> int32 {
@@ -238,7 +238,7 @@ def test_generic_mut_self_mutation_visible_to_caller(capfd):
         """
         import "std/io";
         struct point<T> { x: T; y: T; }
-        fn point<T>::scale(mut self: point<T>, k: T) {
+        fn point<T>::scale(self: &point<T>, k: T) {
             self.x = self.x * k;
             self.y = self.y * k;
         }
@@ -1099,7 +1099,7 @@ def test_plain_struct_alias_qualifier_and_both_call_spellings(capfd):
         import "std/io";
         struct counter { n: int32; }
         type c = counter;
-        fn c::bump(mut self: counter) { self.n = self.n + 1; }
+        fn c::bump(self: &counter) { self.n = self.n + 1; }
         fn main() -> int32 {
             let x: counter = { n = 0 };
             counter::bump(x);

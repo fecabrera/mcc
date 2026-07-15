@@ -23,7 +23,7 @@ BOX = "struct box<T> { value: T; }\n"
 
 def test_pointer_decays_into_concrete_mut_struct():
     assert run(
-        POINT + "fn bump(mut p: struct point) { p.x += 1; }\n"
+        POINT + "fn bump(p: &struct point) { p.x += 1; }\n"
         "fn main() -> int32 {\n"
         "    let v = point { x = 1, y = 2 };\n"
         "    let ptr = &v;\n"  # let-seeded proof: &v is never null
@@ -35,7 +35,7 @@ def test_pointer_decays_into_concrete_mut_struct():
 
 def test_pointer_decays_into_concrete_mut_scalar():
     assert run(
-        "fn set(mut n: int32) { n = 7; }\n"
+        "fn set(n: &int32) { n = 7; }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
         "    let p = &x;\n"
@@ -61,7 +61,7 @@ def test_rvalue_pointer_decays_into_mut():
     # when the pointer expression is a temporary -- deliberately unlike the
     # plain rule that a mut argument must be an lvalue.
     assert run(
-        "fn set(mut n: int32) { n = 9; }\n"
+        "fn set(n: &int32) { n = 9; }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
         "    set(&x);\n"
@@ -73,7 +73,7 @@ def test_rvalue_pointer_decays_into_mut():
 def test_call_result_pointer_decays_with_assert():
     assert run(
         POINT + "fn pick(a: struct point*) -> struct point* { return a; }\n"
-        "fn set(mut p: struct point) { p.x = 5; }\n"
+        "fn set(p: &struct point) { p.x = 5; }\n"
         "fn main() -> int32 {\n"
         "    let v = point { x = 1, y = 2 };\n"
         "    set(pick(&v)!);\n"
@@ -86,7 +86,7 @@ def test_double_pointer_decays_one_level_into_mut_pointer():
     # T** decays into mut T* -- exactly one level; the callee repoints the
     # caller's pointer through the decayed reference.
     assert run(
-        "fn repoint(mut q: int32*, target: int32*) { q = target; }\n"
+        "fn repoint(q: &int32*, target: int32*) { q = target; }\n"
         "fn main() -> int32 {\n"
         "    let a: int32[2] = [7, 9];\n"
         "    let p = &a[0];\n"
@@ -102,7 +102,7 @@ def test_explicit_deref_still_works_without_proof():
     # non-null proof (the deref itself is the programmer's claim) and stays
     # legal alongside decay.
     compile_ir(
-        "fn set(mut n: int32) { n = 3; }\n"
+        "fn set(n: &int32) { n = 3; }\n"
         "fn g(p: int32*) { set(*p); }\n"
         "fn main() -> int32 { return 0; }"
     )
@@ -113,7 +113,7 @@ def test_const_pointer_storage_still_decays():
     # storage* does not block decay: those facts describe the pointer, not
     # the pointee the callee receives.
     assert run(
-        "fn set(mut n: int32) { n = 5; }\n"
+        "fn set(n: &int32) { n = 5; }\n"
         "fn g(const p: int32*) { set(p!); }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
@@ -126,7 +126,7 @@ def test_const_pointer_storage_still_decays():
 def test_volatile_pointer_storage_gets_a_volatile_load():
     ir_text = compile_ir(
         "@extern @volatile let r: int32*;\n"
-        "fn set(mut n: int32) { n = 1; }\n"
+        "fn set(n: &int32) { n = 1; }\n"
         "fn main() -> int32 { set(r!); return 0; }"
     )
     assert "load volatile" in ir_text
@@ -137,7 +137,7 @@ def test_volatile_pointer_storage_gets_a_volatile_load():
 
 def test_nonnull_param_proof_decays():
     assert run(
-        "fn set(mut n: int32) { n = 3; }\n"
+        "fn set(n: &int32) { n = 3; }\n"
         "fn g(@nonnull p: int32*) { set(p); }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
@@ -149,7 +149,7 @@ def test_nonnull_param_proof_decays():
 
 def test_flow_narrowed_pointer_decays():
     assert run(
-        "fn set(mut n: int32) { n = 4; }\n"
+        "fn set(n: &int32) { n = 4; }\n"
         "fn g(p: int32*) -> int32 {\n"
         "    if (p == null) { return -1; }\n"
         "    set(p);\n"
@@ -164,7 +164,7 @@ def test_flow_narrowed_pointer_decays():
 
 def test_assert_hatch_decays():
     compile_ir(
-        "fn set(mut n: int32) {}\n"
+        "fn set(n: &int32) {}\n"
         "fn g(p: int32*) { set(p!); }\n"
         "fn main() -> int32 { return 0; }"
     )
@@ -176,7 +176,7 @@ def test_narrowing_survives_a_decayed_call():
     # no fresh guard (contrast lending the pointer variable itself as mut,
     # which kills the fact).
     assert run(
-        "fn bump(mut n: int32) { n += 1; }\n"
+        "fn bump(n: &int32) { n += 1; }\n"
         "fn g(p: int32*) -> int32 {\n"
         "    if (p == null) { return -1; }\n"
         "    bump(p);\n"
@@ -199,8 +199,8 @@ def test_direct_mut_lend_of_the_pointer_still_kills_narrowing():
     )
     with pytest.raises(LangError, match=message):
         compile_ir(
-            "fn bump(mut n: int32) { n += 1; }\n"
-            "fn clear(mut q: int32*) { q = null; }\n"
+            "fn bump(n: &int32) { n += 1; }\n"
+            "fn clear(q: &int32*) { q = null; }\n"
             "fn g(p: int32*) {\n"
             "    if (p == null) { return; }\n"
             "    clear(p);\n"
@@ -216,7 +216,7 @@ def test_direct_mut_lend_of_the_pointer_still_kills_narrowing():
 def test_unproven_pointer_at_mut_slot_error_is_pinned():
     source = (
         "struct box { value: int32; }\n"
-        "fn f(mut b: struct box) {}\n"
+        "fn f(b: &struct box) {}\n"
         "fn g(p: struct box*) { f(p); }\n"
         "fn main() -> int32 { return 0; }"
     )
@@ -249,7 +249,7 @@ def test_double_pointer_does_not_decay_twice():
     # Exactly one level: the pointee of int32** is int32*, never int32.
     with pytest.raises(LangError, match="expected a int32 lvalue, got int32\\*\\*"):
         compile_ir(
-            "fn set(mut n: int32) {}\n"
+            "fn set(n: &int32) {}\n"
             "fn main() -> int32 {\n"
             "    let x: int32 = 0;\n"
             "    let p = &x;\n"
@@ -286,7 +286,7 @@ def test_null_literal_does_not_decay():
     # `null` is exactly what a decayed reference can never be.
     with pytest.raises(LangError, match="argument 1 of 'f' is not assignable"):
         compile_ir(
-            "fn f(mut n: int32) {}\n"
+            "fn f(n: &int32) {}\n"
             "fn main() -> int32 { f(null); return 0; }"
         )
 
@@ -296,7 +296,7 @@ def test_string_literal_does_not_decay_into_mut():
     # could write through the decayed reference, so it never decays.
     with pytest.raises(LangError, match="argument 1 of 'f' is not assignable"):
         compile_ir(
-            "fn f(mut c: char) {}\n"
+            "fn f(c: &char) {}\n"
             'fn main() -> int32 { f("hi"); return 0; }'
         )
 
@@ -319,7 +319,7 @@ def test_generic_inference_through_decay_at_const_slot():
 
 def test_generic_inference_through_decay_at_mut_slot():
     assert run(
-        BOX + "fn clear<T>(mut b: struct box<T>) { b.value = 0 as T; }\n"
+        BOX + "fn clear<T>(b: &struct box<T>) { b.value = 0 as T; }\n"
         "fn main() -> int32 {\n"
         "    let b = box { value = 7 as int32 };\n"
         "    let p = &b;\n"
@@ -333,7 +333,7 @@ def test_generic_rvalue_pointer_decays_into_mut():
     # Single candidate: the direct reading (T = int32*) is a dead end at an
     # unaddressed mut position, so the decay reading (T = int32) wins.
     assert run(
-        "fn set<T>(mut a: T) { a = 7 as T; }\n"
+        "fn set<T>(a: &T) { a = 7 as T; }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
         "    set(&x);\n"
@@ -349,7 +349,7 @@ def test_decay_binding_beats_untyped_literal_at_struct_receiver():
     # already gave the direct pass a "successful" (but unemittable) binding.
     # The libmc stage-3 shape: dict::set(d, "k", 10) on a heap dict<uint64>*.
     assert run(
-        BOX + "fn put<T>(mut b: struct box<T>, v: T) { b.value = v; }\n"
+        BOX + "fn put<T>(b: &struct box<T>, v: T) { b.value = v; }\n"
         "fn main() -> int32 {\n"
         "    let b = box { value = 0 as uint64 };\n"
         "    let p = &b;\n"
@@ -364,7 +364,7 @@ def test_bare_mut_type_param_still_binds_the_pointer_itself():
     # keeps its direct reading (T = int32*), mutating the caller's pointer,
     # not the pointee.
     assert run(
-        "fn redirect<T>(mut a: T, b: T) { a = b; }\n"
+        "fn redirect<T>(a: &T, b: T) { a = b; }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 1;\n"
         "    let y: int32 = 5;\n"
@@ -379,7 +379,7 @@ def test_generic_mixed_direct_lend_and_decay():
     # One mut position takes the caller's own lvalue, the other decays a
     # proven pointer, in the same call.
     assert run(
-        "fn assign<T>(mut a: T, mut b: T) { a = b; }\n"
+        "fn assign<T>(a: &T, b: &T) { a = b; }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
         "    let y: int32 = 9;\n"
@@ -395,7 +395,7 @@ def test_generic_decay_infers_through_list_pointer():
     # T at a const list<T> slot while the mut slot takes a plain lvalue.
     assert run(
         'import "std/list";\n'
-        "fn steal_len<T>(mut dst: struct list<T>, const src: &struct list<T>) {\n"
+        "fn steal_len<T>(dst: &struct list<T>, const src: &struct list<T>) {\n"
         "    dst.length = src.length;\n"
         "}\n"
         "fn main() -> int32 {\n"
@@ -415,7 +415,7 @@ def test_generic_decay_with_both_arguments_ampersand_shaped():
     # slots receive rvalue pointers, both prove non-null for free.
     assert run(
         'import "std/list";\n'
-        "fn steal_len<T>(mut dst: struct list<T>, const src: &struct list<T>) {\n"
+        "fn steal_len<T>(dst: &struct list<T>, const src: &struct list<T>) {\n"
         "    dst.length = src.length;\n"
         "}\n"
         "fn main() -> int32 {\n"
@@ -449,7 +449,7 @@ def test_generic_arity_error_survives_the_decay_retry():
     # cannot help, the original error is re-raised untouched.
     with pytest.raises(LangError, match=r"'f' expects 1 argument\(s\), got 2"):
         compile_ir(
-            "fn f<T>(mut a: T) {}\n"
+            "fn f<T>(a: &T) {}\n"
             "fn main() -> int32 { let x: int32 = 0; f(x, 1); return 0; }"
         )
 
@@ -471,7 +471,7 @@ def test_exact_pointer_overload_beats_decay():
     # matches the pointer type directly.
     assert run(
         "fn f<T>(x: T*) -> int32 { return 1; }\n"
-        "fn f<T>(mut x: T) -> int32 { return 2; }\n"
+        "fn f<T>(x: &T) -> int32 { return 2; }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
         "    let p = &x;\n"
@@ -484,8 +484,8 @@ def test_decay_tier_mixes_direct_lend_and_decayed_positions():
     # Once no candidate matches directly, the decay tier re-resolves; the
     # winner may take one position as a direct lend and another decayed.
     assert run(
-        "fn f<T>(mut a: T, mut b: T) -> int32 { a = b; return 1; }\n"
-        "fn f<T>(mut a: T, b: slice<T>) -> int32 { return 2; }\n"
+        "fn f<T>(a: &T, b: &T) -> int32 { a = b; return 1; }\n"
+        "fn f<T>(a: &T, b: slice<T>) -> int32 { return 2; }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
         "    let y: int32 = 9;\n"

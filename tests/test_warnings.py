@@ -1346,7 +1346,7 @@ NR_OWN_MSG = ("own value passed to a @noreturn function is never destroyed: "
 # constant-true loop diverges, satisfying @noreturn).
 NR_PRELUDE = (
     "struct res { id: int32; }\n"
-    "fn res::destructor(mut self: res) { }\n"
+    "fn res::destructor(self: &res) { }\n"
     "fn mk() -> own res { return move(res { id = 1 }); }\n"
     "struct bare { id: int32; }\n"
     "fn mk_bare() -> own bare { return move(bare { id = 1 }); }\n"
@@ -1405,7 +1405,7 @@ def test_an_own_hole_temporary_at_a_noreturn_collector_warns():
     src = (
         'import "std/io";\n'
         + NR_PRELUDE
-        + "fn format(mut str: string, const value: res, const modifier: slice<char>) {\n"
+        + "fn format(str: &string, const value: res, const modifier: slice<char>) {\n"
         "    format(str, value.id, modifier);\n"
         "}\n"
         "@noreturn\n"
@@ -1520,7 +1520,7 @@ DTOR_COPY_MSG = ("a value with a destructor is copied here, aliasing a live "
 # consumers of each -- all import-free.
 DC_PRELUDE = (
     "struct res { id: int32; }\n"
-    "fn res::destructor(mut self: res) { }\n"
+    "fn res::destructor(self: &res) { }\n"
     "struct bare { id: int32; }\n"
     "fn by_value(const r: res) -> int32 { return r.id; }\n"
     "fn by_ref(const r: &res) -> int32 { return r.id; }\n"

@@ -1,17 +1,17 @@
-"""The ``&T`` reference spelling: the blessed form of the by-hidden-reference
-convention that ``mut`` (parameters) and ``-> mut`` (returns) spell today.
+"""The ``&T`` reference spelling: the by-hidden-reference convention for
+parameters (``&T`` in the type slot) and returns (``-> &T``).
 
-``&T`` in a parameter- or return-type slot is pure sugar for the same
-name-set registries (``mut_params`` / ``mut_return``); it generates identical
-code. The legacy ``mut`` keyword stays accepted through a deprecation window
-and warns under the opt-in ``deprecated-mut`` class. See ``test_mut_params``,
-``test_mut_returns`` and the ``fn``-type suites for the full behavior, all of
-which the ``&`` spelling inherits unchanged."""
+``&T`` rides the same name-set registries (``mut_params`` / ``mut_return``)
+the internals still key off, and is the only surface spelling: the legacy
+``mut`` / ``-> mut`` keyword forms were removed once their deprecation window
+closed (Phase C of the ``&``-reference redesign), so ``mut`` is now an
+ordinary identifier. See ``test_mut_params``, ``test_mut_returns`` and the
+``fn``-type suites for the full behavior."""
 
 import pytest
 
 from mcc.codegen import CodeGen
-from mcc.errors import WARNING_CLASSES, LangError
+from mcc.errors import LangError
 from helpers import compile_ir, parse, run
 
 
@@ -19,14 +19,6 @@ def generate(source: str) -> CodeGen:
     cg = CodeGen(parse(source), "test")
     cg.generate()
     return cg
-
-
-DEPRECATED = "deprecated-mut"
-PARAM_MSG = "the 'mut' parameter spelling is deprecated; write the type as '&T' instead"
-RETURN_MSG = (
-    "the '-> mut' return spelling is deprecated; write the return type "
-    "as '-> &T' instead"
-)
 
 
 # --------------------------------------------------------------- parser: params
@@ -96,32 +88,6 @@ def test_amp_return_and_const_do_not_combine():
 # ------------------------------------------------------------- code equivalence
 
 
-def test_amp_param_generates_identical_ir_to_mut():
-    amp = compile_ir(
-        "fn set(out: &int32) { out = 7; }\n"
-        "fn main() -> int32 { let x: int32 = 0; set(x); return x; }"
-    )
-    mut = compile_ir(
-        "fn set(mut out: int32) { out = 7; }\n"
-        "fn main() -> int32 { let x: int32 = 0; set(x); return x; }"
-    )
-    assert amp == mut
-
-
-def test_amp_return_generates_identical_ir_to_mut():
-    amp = compile_ir(
-        "@static let counter: int32 = 7;\n"
-        "fn counter_ref() -> &int32 { return counter; }\n"
-        "fn main() -> int32 { counter_ref() += 3; return counter; }"
-    )
-    mut = compile_ir(
-        "@static let counter: int32 = 7;\n"
-        "fn counter_ref() -> mut int32 { return counter; }\n"
-        "fn main() -> int32 { counter_ref() += 3; return counter; }"
-    )
-    assert amp == mut
-
-
 def test_amp_param_write_reaches_caller():
     assert run(
         "fn set(out: &int32) { out = 7; }\n"
@@ -144,31 +110,7 @@ def test_amp_fn_type_spells_the_convention():
     assert str(let.type_name) == "fn(&char) -> &int32"
 
 
-# ----------------------------------------------------- the deprecation window
-
-
-def test_mut_param_warns_under_deprecated_mut():
-    cg = generate("fn set(mut out: int32) { out = 7; }")
-    assert [(w.message, w.line, w.wclass) for w in cg.warnings] == [
-        (PARAM_MSG, 1, DEPRECATED),
-    ]
-
-
-def test_mut_return_warns_under_deprecated_mut():
-    cg = generate(
-        "@static let c: int32 = 0;\nfn ref() -> mut int32 { return c; }"
-    )
-    assert [(w.message, w.line, w.wclass) for w in cg.warnings] == [
-        (RETURN_MSG, 2, DEPRECATED),
-    ]
-
-
-def test_mut_fn_type_warns_under_deprecated_mut():
-    # A `mut` marker inside a function *type* warns too.
-    cg = generate("fn apply(cb: fn(mut char)) {}")
-    assert [(w.message, w.wclass) for w in cg.warnings] == [
-        (PARAM_MSG, DEPRECATED),
-    ]
+# ------------------------------------------------------- mut is now an identifier
 
 
 def test_amp_spelling_never_warns():
@@ -180,15 +122,27 @@ def test_amp_spelling_never_warns():
     assert cg.warnings == []
 
 
-def test_deprecated_mut_is_a_registered_class():
-    assert DEPRECATED in WARNING_CLASSES
+def test_mut_is_no_longer_a_keyword():
+    # Phase C retired the deprecated `mut` spelling and de-keyworded `mut`,
+    # so it is now an ordinary identifier: usable as a local, a parameter
+    # name, and a struct field.
+    assert run(
+        "struct box { mut: int32; }\n"
+        "fn twice(mut: int32) -> int32 { return mut + mut; }\n"
+        "fn main() -> int32 {\n"
+        "    let mut: int32 = 21;\n"
+        "    let b = box { mut = mut };\n"
+        "    return twice(b.mut);\n"
+        "}"
+    ) == 42
 
 
-def test_deprecated_mut_is_off_by_default():
-    # The class is opt-in: a plain compile never surfaces it (compile_ir
-    # succeeds and the IR is produced), so unmigrated code still builds.
-    ir_text = compile_ir("fn set(mut out: int32) { out = 7; }")
-    assert 'define void @"set"' in ir_text
+def test_mut_binder_spelling_no_longer_parses():
+    # The deprecated `mut out: int32` binder form now reads `mut` as the
+    # parameter name, so the following `out` (with no separator) is a parse
+    # error -- the spelling is gone, not silently accepted.
+    with pytest.raises(LangError):
+        parse("fn set(mut out: int32) { out = 7; }")
 
 
 # ------------------------------------------- `&` is not a general type (ruling)
@@ -223,7 +177,7 @@ def test_nested_amp_is_rejected():
 
 def test_interface_emits_the_amp_spelling():
     from mcc.interface import render_interface
-    source = "fn set(mut out: int32) -> bool { return true; }"
+    source = "fn set(out: &int32) -> bool { return true; }"
     cg = CodeGen(parse(source), "test")
     cg.generate()
     out = render_interface(cg, source, [])

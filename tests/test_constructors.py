@@ -37,10 +37,10 @@ def test_explicit_type_args_pick_the_converting_ctor(capfd):
         """
         import "std/io";
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
-        fn point<T>::constructor<U>(mut self: struct point<T>, x: U, y: U) {
+        fn point<T>::constructor<U>(self: &struct point<T>, x: U, y: U) {
             self.x = x as T; self.y = y as T;
         }
         fn main() -> int32 {
@@ -58,7 +58,7 @@ def test_non_generic_struct_constructs(capfd):
         """
         import "std/io";
         struct counter { n: int32; }
-        fn counter::constructor(mut self: counter, n: int32) { self.n = n; }
+        fn counter::constructor(self: &counter, n: int32) { self.n = n; }
         fn main() -> int32 {
             let c = counter(41);
             c.n += 1;
@@ -80,7 +80,7 @@ def test_bare_generic_infers_from_typed_args(capfd):
         """
         import "std/io";
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
         fn main() -> int32 {
@@ -99,7 +99,7 @@ def test_bare_generic_int_literals_lean_int32():
     ir = compile_ir(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
         fn main() -> int32 {
@@ -122,7 +122,7 @@ def test_bare_generic_uninferable_names_the_sugar_spelling():
         compile_ir(
             """
             struct box<T> { v: T; }
-            fn box<T>::constructor<U>(mut self: struct box<T>, v: U) {
+            fn box<T>::constructor<U>(self: &struct box<T>, v: U) {
                 self.v = v as T;
             }
             fn main() -> int32 { let b = box(1); return 0; }
@@ -137,10 +137,10 @@ def test_bare_generic_ambiguity_is_the_family_error():
         compile_ir(
             """
             struct pair<K, V> { k: K; v: V; }
-            fn pair<K, V>::constructor(mut self: struct pair<K, V>, k: K, v: V) {
+            fn pair<K, V>::constructor(self: &struct pair<K, V>, k: K, v: V) {
                 self.k = k; self.v = v;
             }
-            fn pair<K, V>::constructor(mut self: struct pair<K, V>, v: V, k: K) {
+            fn pair<K, V>::constructor(self: &struct pair<K, V>, v: V, k: K) {
                 self.k = k; self.v = v;
             }
             fn main() -> int32 { let p = pair(1, 2.0); return 0; }
@@ -159,10 +159,10 @@ def test_bare_generic_no_overload_renders_the_placeholder():
         compile_ir(
             """
             struct point<T> { x: T; y: T; }
-            fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+            fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
                 self.x = x; self.y = y;
             }
-            fn point<T>::constructor<U>(mut self: struct point<T>, x: U, y: U) {
+            fn point<T>::constructor<U>(self: &struct point<T>, x: U, y: U) {
                 self.x = x as T; self.y = y as T;
             }
             fn main() -> int32 { let p = point("a", 1.5); return 0; }
@@ -177,7 +177,7 @@ def test_bare_generic_lone_concrete_specialization_fixes_the_slot(capfd):
         """
         import "std/io";
         struct point<T> { x: T; y: T; }
-        fn point<float64>::constructor(mut self: struct point<float64>,
+        fn point<float64>::constructor(self: &struct point<float64>,
                                        x: float64, y: float64) {
             self.x = x; self.y = y;
         }
@@ -216,7 +216,7 @@ def test_fully_defaulted_generic_constructs_at_its_defaults():
     ir = compile_ir(
         """
         struct box<T = int64> { v: T; }
-        fn box<T>::constructor(mut self: struct box<T>, v: T) { self.v = v; }
+        fn box<T>::constructor(self: &struct box<T>, v: T) { self.v = v; }
         fn main() -> int32 { let b = box(1); return 0; }
         """
     )
@@ -234,10 +234,10 @@ def test_alias_of_an_instantiation_constructs_it(capfd):
         """
         import "std/io";
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
-        fn point<T>::constructor<U>(mut self: struct point<T>, x: U, y: U) {
+        fn point<T>::constructor<U>(self: &struct point<T>, x: U, y: U) {
             self.x = x as T; self.y = y as T;
         }
         type pointf = point<float64>;
@@ -257,7 +257,7 @@ def test_plain_alias_chain_to_bare_generic_infers():
     ir = compile_ir(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
         type pts = point;
@@ -280,7 +280,7 @@ def test_generic_alias_bare_keeps_the_type_use_arity_error():
         compile_ir(
             """
             struct point<T> { x: T; y: T; }
-            fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+            fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
                 self.x = x; self.y = y;
             }
             type diag<T> = point<T>;
@@ -293,7 +293,7 @@ def test_generic_alias_with_args_constructs_through_the_target():
     ir = compile_ir(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
         type diag<T> = point<T>;
@@ -313,7 +313,7 @@ def test_builtin_with_declared_ctor_constructs(capfd):
     assert run(
         """
         import "std/io";
-        fn char::constructor(mut self: char, code: int32) {
+        fn char::constructor(self: &char, code: int32) {
             self = code as char;
         }
         fn main() -> int32 {
@@ -330,7 +330,7 @@ def test_alias_to_builtin_constructs(capfd):
     assert run(
         """
         import "std/io";
-        fn char::constructor(mut self: char, code: int32) {
+        fn char::constructor(self: &char, code: int32) {
             self = code as char;
         }
         type letter = char;
@@ -412,7 +412,7 @@ def test_same_named_function_wins_over_the_ctor():
     assert run(
         """
         struct point { x: int32; }
-        fn point::constructor(mut self: point, x: int32) { self.x = x; }
+        fn point::constructor(self: &point, x: int32) { self.x = x; }
         fn point(v: int32) -> int32 { return v * 2; }
         fn main() -> int32 { return point(21) - 42; }
         """
@@ -426,7 +426,7 @@ def test_variable_shadow_keeps_the_not_callable_error():
         compile_ir(
             """
             struct point { x: int32; }
-            fn point::constructor(mut self: point, x: int32) { self.x = x; }
+            fn point::constructor(self: &point, x: int32) { self.x = x; }
             fn main() -> int32 {
                 let point: int32 = 3;
                 let p = point(1);
@@ -446,7 +446,7 @@ def test_let_elides_the_temporary():
     ir = compile_ir(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
         fn main() -> int32 {
@@ -463,7 +463,7 @@ def test_arguments_evaluate_once(capfd):
         """
         import "std/io";
         struct point { x: int32; }
-        fn point::constructor(mut self: point, x: int32) { self.x = x; }
+        fn point::constructor(self: &point, x: int32) { self.x = x; }
         fn tick() -> int32 { println("tick"); return 7; }
         fn main() -> int32 {
             let p = point(tick());
@@ -480,7 +480,7 @@ def test_expression_and_return_positions(capfd):
         """
         import "std/io";
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
         fn norm1(p: struct point<float64>) -> float64 { return p.x + p.y; }
@@ -503,9 +503,9 @@ def test_nested_ctor_argument():
     assert run(
         """
         struct inner { n: int32; }
-        fn inner::constructor(mut self: inner, n: int32) { self.n = n; }
+        fn inner::constructor(self: &inner, n: int32) { self.n = n; }
         struct outer { m: int32; }
-        fn outer::constructor(mut self: outer, i: inner) { self.m = i.n; }
+        fn outer::constructor(self: &outer, i: inner) { self.m = i.n; }
         fn main() -> int32 {
             let o = outer(inner(5));
             return o.m - 5;
@@ -521,7 +521,7 @@ def test_annotated_let_mismatch_is_the_plain_coerce_error():
         compile_ir(
             """
             struct point<T> { x: T; y: T; }
-            fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+            fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
                 self.x = x; self.y = y;
             }
             fn main() -> int32 {
@@ -539,7 +539,7 @@ def test_annotated_let_keeps_a_const_view():
         compile_ir(
             """
             struct point { x: int32; }
-            fn point::constructor(mut self: point, x: int32) { self.x = x; }
+            fn point::constructor(self: &point, x: int32) { self.x = x; }
             fn main() -> int32 {
                 let c: const point = point(1);
                 c = point(2);
@@ -556,7 +556,7 @@ def test_default_fields_initialize_before_the_ctor_runs():
     assert run(
         """
         struct config { verbose: int32 = 7; level: int32; }
-        fn config::constructor(mut self: config, level: int32) {
+        fn config::constructor(self: &config, level: int32) {
             self.level = level;
         }
         fn main() -> int32 {
@@ -587,7 +587,7 @@ def test_non_void_ctor_return_is_discarded():
     assert run(
         """
         struct point { x: int32; }
-        fn point::constructor(mut self: point, x: int32) -> int32 {
+        fn point::constructor(self: &point, x: int32) -> int32 {
             self.x = x;
             return 99;
         }
@@ -604,7 +604,7 @@ def test_explicit_family_call_stays_valid():
     assert run(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
         fn main() -> int32 {
@@ -623,7 +623,7 @@ def test_sugar_inside_a_generic_function_context():
     assert run(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
         fn mk<T>(v: T) -> struct point<T> {
@@ -648,7 +648,7 @@ def test_ctor_arity_error_counts_the_receiver():
         compile_ir(
             """
             struct point<T> { x: T; y: T; }
-            fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+            fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
                 self.x = x; self.y = y;
             }
             fn main() -> int32 { let p = point(1); return 0; }
@@ -663,7 +663,7 @@ def test_const_initializer_position_rejects():
         compile_ir(
             """
             struct point { x: int32; }
-            fn point::constructor(mut self: point, x: int32) { self.x = x; }
+            fn point::constructor(self: &point, x: int32) { self.x = x; }
             const g = point(1);
             fn main() -> int32 { return 0; }
             """
@@ -675,7 +675,7 @@ def test_private_ctor_is_access_checked(tmp_path):
     (tmp_path / "pt.mc").write_text(
         "struct point { x: int32; }\n"
         "@private\n"
-        "fn point::constructor(mut self: point, x: int32) { self.x = x; }\n"
+        "fn point::constructor(self: &point, x: int32) { self.x = x; }\n"
     )
     main = tmp_path / "main.mc"
     main.write_text(
@@ -709,7 +709,7 @@ def test_implicit_empty_ctor_despite_a_declared_family(capfd):
         """
         import "std/io";
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
         fn main() -> int32 {
@@ -729,7 +729,7 @@ def test_implicit_empty_ctor_never_calls_the_family():
     ir_text = compile_ir(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
         fn main() -> int32 {
@@ -751,10 +751,10 @@ def test_implicit_empty_ctor_on_a_derived_struct(capfd):
         import "std/io";
         struct point<T> { x: T; y: T; }
         struct pointf extends point<float64> { tag: int32 = 5; }
-        fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
-        fn pointf::constructor<U>(mut self: pointf, x: U, y: U) {
+        fn pointf::constructor<U>(self: &pointf, x: U, y: U) {
             self.x = x as float64; self.y = y as float64;
         }
         fn main() -> int32 {
@@ -774,7 +774,7 @@ def test_declared_zero_arg_ctor_wins_over_the_implicit(capfd):
         """
         import "std/io";
         struct cfg { mode: int32 = 7; }
-        fn cfg::constructor(mut self: cfg) { self.mode = 99; }
+        fn cfg::constructor(self: &cfg) { self.mode = 99; }
         fn main() -> int32 {
             let k = cfg();
             println(f"{k.mode}");
@@ -792,7 +792,7 @@ def test_declared_collecting_ctor_claims_the_zero_arg_call(capfd):
         """
         import "std/io";
         struct bag { n: int32 = 0; }
-        fn bag::constructor(mut self: bag, items...) {
+        fn bag::constructor(self: &bag, items...) {
             self.n = items.length as int32 + 40;
         }
         fn main() -> int32 {
@@ -907,7 +907,7 @@ def test_implicit_empty_ctor_bare_generic_head_cannot_infer():
     # the constructor sugar's cannot-infer error -- family or no family.
     for extra in (
         "",
-        "fn point<T>::constructor(mut self: point<T>, x: T, y: T) {"
+        "fn point<T>::constructor(self: &point<T>, x: T, y: T) {"
         " self.x = x; self.y = y; }\n",
     ):
         with pytest.raises(
@@ -938,7 +938,7 @@ def test_implicit_empty_ctor_is_zero_arg_only():
         compile_ir(
             """
             struct point<T> { x: T; y: T; }
-            fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+            fn point<T>::constructor(self: &point<T>, x: T, y: T) {
                 self.x = x; self.y = y;
             }
             fn main() -> int32 { let p = point<int32>(1); return 0; }
@@ -961,7 +961,7 @@ def test_inherited_zero_arg_ctor_claims_the_derived_call(capfd):
         import "std/io";
         struct b { n: int32 = 7; }
         struct d extends b { extra: int32 = 1; }
-        fn b::constructor(mut self: b) { self.n = 99; }
+        fn b::constructor(self: &b) { self.n = 99; }
         fn main() -> int32 {
             let v = d();
             println(f"{v.n} {v.extra}");

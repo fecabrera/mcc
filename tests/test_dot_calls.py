@@ -39,10 +39,10 @@ def test_acceptance_ctor_and_dot_call_through_fstring(capfd):
         import "std/io";
         import "libc/math";
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
             self.x = x; self.y = y;
         }
-        fn point<T>::constructor<U>(mut self: struct point<T>, x: U, y: U) {
+        fn point<T>::constructor<U>(self: &struct point<T>, x: U, y: U) {
             self.x = x as T; self.y = y as T;
         }
         fn point<T>::magnitude(const self: struct point<T>) -> float64 {
@@ -64,7 +64,7 @@ def test_mut_self_dot_call_mutates_the_receiver(capfd):
         """
         import "std/io";
         struct counter { n: int32; }
-        fn counter::bump(mut self: counter) { self.n += 1; }
+        fn counter::bump(self: &counter) { self.n += 1; }
         fn counter::get(const self: counter) -> int32 { return self.n; }
         fn main() -> int32 {
             let c: counter; c.n = 0;
@@ -82,7 +82,7 @@ def test_explicit_qualified_call_stays_valid():
     assert run(
         """
         struct counter { n: int32; }
-        fn counter::bump(mut self: counter) { self.n += 1; }
+        fn counter::bump(self: &counter) { self.n += 1; }
         fn main() -> int32 {
             let c: counter; c.n = 0;
             c.bump();
@@ -216,7 +216,7 @@ def test_pointer_receiver_auto_derefs(capfd):
         """
         import "std/io";
         struct counter { n: int32; }
-        fn counter::bump(mut self: counter) { self.n += 1; }
+        fn counter::bump(self: &counter) { self.n += 1; }
         fn counter::get(const self: counter) -> int32 { return self.n; }
         fn main() -> int32 {
             let c: counter; c.n = 0;
@@ -236,7 +236,7 @@ def test_double_pointer_receiver_stays_an_error():
         compile_ir(
             """
             struct counter { n: int32; }
-            fn counter::bump(mut self: counter) { self.n += 1; }
+            fn counter::bump(self: &counter) { self.n += 1; }
             fn main() -> int32 {
                 let c: counter; c.n = 0;
                 let q = &c;
@@ -376,7 +376,7 @@ def test_mut_self_on_a_temporary_errors():
         compile_ir(
             """
             struct counter { n: int32; }
-            fn counter::bump(mut self: counter) { self.n += 1; }
+            fn counter::bump(self: &counter) { self.n += 1; }
             fn counter::mk(n: int32) -> counter {
                 let c: counter; c.n = n;
                 return c;
@@ -392,8 +392,8 @@ def test_mut_return_receiver_re_lends():
     assert run(
         """
         struct box { v: int32; }
-        fn box::grow(mut self: box) { self.v += 1; }
-        fn box::ref(mut self: box) -> mut box { return self; }
+        fn box::grow(self: &box) { self.v += 1; }
+        fn box::ref(self: &box) -> &box { return self; }
         fn main() -> int32 {
             let b: box; b.v = 0;
             b.ref().grow();
@@ -411,7 +411,7 @@ def test_dot_call_is_an_assignment_and_compound_target(capfd):
         """
         import "std/io";
         struct list8 { data: int32[8]; }
-        fn list8::at(mut self: list8, i: int32) -> mut int32 {
+        fn list8::at(self: &list8, i: int32) -> &int32 {
             return self.data[i];
         }
         fn main() -> int32 {
@@ -430,10 +430,10 @@ def test_chained_mut_return_dot_calls_form_a_store_target():
     assert run(
         """
         struct arena { data: int32[8]; }
-        fn arena::at(mut self: arena, i: int32) -> mut int32 {
+        fn arena::at(self: &arena, i: int32) -> &int32 {
             return self.data[i];
         }
-        fn arena::view(mut self: arena) -> mut arena { return self; }
+        fn arena::view(self: &arena) -> &arena { return self; }
         fn main() -> int32 {
             let a: arena;
             a.view().at(2) = 7;
@@ -449,12 +449,12 @@ def test_formation_chain_through_dot_methods():
     assert run(
         """
         struct arena { data: int32[8]; }
-        fn arena::at(mut self: arena, i: int32) -> mut int32 {
+        fn arena::at(self: &arena, i: int32) -> &int32 {
             return self.data[i];
         }
         struct outer { a: arena; }
-        fn outer::inner(mut self: outer) -> mut arena { return self.a; }
-        fn outer::pick(mut self: outer, i: int32) -> mut int32 {
+        fn outer::inner(self: &outer) -> &arena { return self.a; }
+        fn outer::pick(self: &outer, i: int32) -> &int32 {
             return self.inner().at(i);
         }
         fn main() -> int32 {
@@ -475,12 +475,12 @@ def test_formation_chain_through_a_non_mut_method_rejects():
         compile_ir(
             """
             struct arena { data: int32[8]; }
-            fn arena::at(mut self: arena, i: int32) -> mut int32 {
+            fn arena::at(self: &arena, i: int32) -> &int32 {
                 return self.data[i];
             }
             struct outer { a: arena; }
-            fn outer::snapshot(mut self: outer) -> arena { return self.a; }
-            fn outer::pick(mut self: outer, i: int32) -> mut int32 {
+            fn outer::snapshot(self: &outer) -> arena { return self.a; }
+            fn outer::pick(self: &outer, i: int32) -> &int32 {
                 return self.snapshot().at(i);
             }
             fn main() -> int32 { return 0; }
@@ -497,7 +497,7 @@ def test_non_mut_dot_call_is_not_assignable():
         compile_ir(
             """
             struct counter { n: int32; }
-            fn counter::get(mut self: counter) -> int32 { return self.n; }
+            fn counter::get(self: &counter) -> int32 { return self.n; }
             fn main() -> int32 {
                 let c: counter; c.n = 1;
                 c.get() = 5;
@@ -516,7 +516,7 @@ def test_inline_bodies_with_sugar_round_trip_through_mci(tmp_path):
     lib = tmp_path / "lib.mc"
     lib.write_text(
         "struct point<T> { x: T; y: T; }\n"
-        "fn point<T>::constructor(mut self: struct point<T>, x: T, y: T)"
+        "fn point<T>::constructor(self: &struct point<T>, x: T, y: T)"
         " { self.x = x; self.y = y; }\n"
         "fn point<T>::sum(const self: struct point<T>) -> T"
         " { return self.x + self.y; }\n"
@@ -551,8 +551,8 @@ def test_inline_bodies_with_sugar_round_trip_through_mci(tmp_path):
 
 PAIR = """
 struct res { id: int32; }
-fn res::constructor(mut self: res, id: int32) { self.id = id; }
-fn res::destructor(mut self: res) { }
+fn res::constructor(self: &res, id: int32) { self.id = id; }
+fn res::destructor(self: &res) { }
 """
 
 
@@ -609,7 +609,7 @@ def test_dot_ban_on_a_generic_receiver_names_the_template():
         compile_ir(
             """
             struct point<T> { x: T; y: T; }
-            fn point<T>::destructor(mut self: struct point<T>) { }
+            fn point<T>::destructor(self: &struct point<T>) { }
             fn main() -> int32 {
                 let p: point<float64>;
                 p.destructor();
@@ -632,7 +632,7 @@ def test_dot_ban_through_an_alias_receiver():
         compile_ir(
             """
             struct point<T> { x: T; y: T; }
-            fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+            fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
                 self.x = x; self.y = y;
             }
             type pointf = point<float64>;
@@ -655,7 +655,7 @@ def test_dot_ban_on_a_builtin_receiver():
     ):
         compile_ir(
             """
-            fn int32::destructor(mut self: int32) { }
+            fn int32::destructor(self: &int32) { }
             fn main() -> int32 {
                 let x: int32 = 1;
                 x.destructor();
@@ -734,11 +734,11 @@ def test_qualified_chaining_spellings_stay_legal(capfd):
         + PAIR
         + """
         struct tagged extends res { tag: int32; }
-        fn tagged::constructor(mut self: tagged, id: int32, tag: int32) {
+        fn tagged::constructor(self: &tagged, id: int32, tag: int32) {
             res::constructor(self, id);
             self.tag = tag;
         }
-        fn tagged::destructor(mut self: tagged) {
+        fn tagged::destructor(self: &tagged) {
             println(f"drop tag {self.tag}");
             res::destructor(self);
         }
@@ -883,7 +883,7 @@ def test_string_literal_receiver_preserves_the_two_name_guard():
         compile_ir(
             """
             import "std/slice";
-            fn slice::constructor(mut self: slice<const char>) { }
+            fn slice::constructor(self: &slice<const char>) { }
             fn main() -> int32 {
                 "hi".constructor();
                 return 0;

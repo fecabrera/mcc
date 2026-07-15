@@ -68,7 +68,7 @@ def test_struct_is_emitted_in_full():
 def test_mut_param_is_re_emitted():
     # A proto keeps the mcc convention, so the hidden-reference marker
     # travels: the consumer's call site passes a pointer, like the definition.
-    out = iface("fn set(mut out: int32) -> bool { out = 7; return true; }")
+    out = iface("fn set(out: &int32) -> bool { out = 7; return true; }")
     assert "fn set(out: &int32) -> bool;" in out
 
 
@@ -676,7 +676,7 @@ def test_unreachable_alias_is_dropped():
 # ------------------------------------------- bodyless prototypes (the form)
 
 def test_handwritten_proto_parses():
-    src = "fn set(@nonnull const p: int32*, mut out: int32) -> bool;"
+    src = "fn set(@nonnull const p: int32*, out: &int32) -> bool;"
     program = Parser(tokenize(src)).parse_program()
     (fn,) = program.functions
     assert fn.proto and not fn.extern and fn.body == []
@@ -704,7 +704,7 @@ def test_proto_call_uses_hidden_references():
     # `const &T` spelling; a plain `const T` is a by-value copy.)
     ir_text = compile_ir(
         "struct big { a: int64; b: int64; }\n"
-        "fn set(mut out: int32) -> bool;\n"
+        "fn set(out: &int32) -> bool;\n"
         "fn peek(const s: &struct big) -> int64;\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
@@ -726,7 +726,7 @@ def test_mut_proto_round_trips_through_mci(tmp_path):
     # external declaration (no linkonce_odr -- illegal on a declaration) and
     # the call site must pass the hidden reference.
     lib = tmp_path / "lib.mc"
-    lib.write_text("fn bump(mut n: int32) { n = n + 1; }")
+    lib.write_text("fn bump(n: &int32) { n = n + 1; }")
     out = tmp_path / "lib.mci"
     assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
     assert "fn bump(n: &int32);" in out.read_text()
@@ -792,7 +792,7 @@ def test_function_value_of_mut_proto():
     # proto's function value spells the mut convention exactly as a local
     # definition's does.
     out = compile_ir(
-        "fn set(mut out: int32);\n"
+        "fn set(out: &int32);\n"
         "fn main() -> int32 { let p = set; return 0; }"
     )
     assert "void (i32*)*" in out

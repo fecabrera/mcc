@@ -922,7 +922,7 @@ def test_mut_slice_parameter_still_rejects_literal():
     ):
         compile_ir(
             """
-            fn f(mut s: slice<int32>) -> int32 { return 0; }
+            fn f(s: &slice<int32>) -> int32 { return 0; }
             fn main() -> int32 { return f([1, 2, 3]); }
             """
         )
@@ -1738,7 +1738,7 @@ def test_string_literal_assignment_to_struct_field():
 
 def test_string_literal_assignment_through_mut_return():
     source = """
-    fn pick(xs: slice<char>*, i: int32) -> mut slice<char> { return xs[i]; }
+    fn pick(xs: slice<char>*, i: int32) -> &slice<char> { return xs[i]; }
     fn main() -> int32 {
         let arr: slice<char>[2] = ["a", "b"];
         pick(arr, 1) = "second";

@@ -39,25 +39,25 @@ from helpers import compile_ir, run, run_path
 # A non-generic resource type with a deterministic destructor trace.
 RES = """
 struct res { id: int32; }
-fn res::constructor(mut self: res, id: int32) { self.id = id; }
-fn res::destructor(mut self: res) { println(f"drop {self.id}"); }
+fn res::constructor(self: &res, id: int32) { self.id = id; }
+fn res::destructor(self: &res) { println(f"drop {self.id}"); }
 """
 
 # The same shape with a silent destructor, for compile-only error tests
 # (no ``import "std/io"`` needed).
 RES_QUIET = """
 struct res { id: int32; }
-fn res::constructor(mut self: res, id: int32) { self.id = id; }
-fn res::destructor(mut self: res) { }
+fn res::constructor(self: &res, id: int32) { self.id = id; }
+fn res::destructor(self: &res) { }
 """
 
 # The acceptance shape: a generic struct, both methods, an f-string body.
 POINT = """
 struct point<T> { x: T; y: T; }
-fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+fn point<T>::constructor(self: &point<T>, x: T, y: T) {
     self.x = x; self.y = y;
 }
-fn point<T>::destructor(mut self: point<T>) {
+fn point<T>::destructor(self: &point<T>) {
     println(f"destroying point<T>({self.x}, {self.y})");
 }
 """
@@ -299,7 +299,7 @@ def test_inherited_destructor_auto_defers_on_the_derived_value(capfd):
         + RES
         + """
         struct tagged extends res { tag: int32; }
-        fn tagged::constructor(mut self: tagged, id: int32, tag: int32) {
+        fn tagged::constructor(self: &tagged, id: int32, tag: int32) {
             res::constructor(self, id);
             self.tag = tag;
         }
@@ -321,11 +321,11 @@ def test_derived_destructor_chains_the_base_manually(capfd):
         + RES
         + """
         struct tagged extends res { tag: int32; }
-        fn tagged::constructor(mut self: tagged, id: int32, tag: int32) {
+        fn tagged::constructor(self: &tagged, id: int32, tag: int32) {
             res::constructor(self, id);
             self.tag = tag;
         }
-        fn tagged::destructor(mut self: tagged) {
+        fn tagged::destructor(self: &tagged) {
             println(f"drop tag {self.tag}");
             res::destructor(self);
         }
@@ -400,8 +400,8 @@ def test_any_annotated_ctor_let_does_not_schedule(capfd):
         """
         import "std/io";
         type handle = int32;
-        fn int32::constructor(mut self: int32, v: int32) { self = v; }
-        fn int32::destructor(mut self: int32) { println(f"drop {self}"); }
+        fn int32::constructor(self: &int32, v: int32) { self = v; }
+        fn int32::destructor(self: &int32) { println(f"drop {self}"); }
         fn main() -> int32 {
             let x: any = handle(5);
             println("end");
@@ -418,7 +418,7 @@ def test_no_destructor_family_means_zero_ir():
     ir_text = compile_ir(
         """
         struct plain { n: int32; }
-        fn plain::constructor(mut self: plain, n: int32) { self.n = n; }
+        fn plain::constructor(self: &plain, n: int32) { self.n = n; }
         fn main() -> int32 {
             let p = plain(3);
             return p.n - 3;
@@ -631,8 +631,8 @@ def test_destructor_needing_extra_arguments_errors_at_the_let():
         compile_ir(
             """
 struct big { id: int32; }
-fn big::constructor(mut self: big, id: int32) { self.id = id; }
-fn big::destructor(mut self: big, flag: int32) { }
+fn big::constructor(self: &big, id: int32) { self.id = id; }
+fn big::destructor(self: &big, flag: int32) { }
 fn main() -> int32 { let b = big(1); return 0; }
 """
         )
@@ -642,8 +642,8 @@ def test_cross_module_destructor_runs(capfd, tmp_path):
     (tmp_path / "r.mc").write_text(
         'import "std/io";\n'
         "struct res { id: int32; }\n"
-        "fn res::constructor(mut self: res, id: int32) { self.id = id; }\n"
-        'fn res::destructor(mut self: res) { println(f"drop {self.id}"); }\n'
+        "fn res::constructor(self: &res, id: int32) { self.id = id; }\n"
+        'fn res::destructor(self: &res) { println(f"drop {self.id}"); }\n'
     )
     main = tmp_path / "main.mc"
     main.write_text(
@@ -659,9 +659,9 @@ def test_cross_module_private_destructor_is_access_checked(tmp_path):
     # let's line with the existing visibility diagnostic.
     (tmp_path / "r.mc").write_text(
         "struct res { id: int32; }\n"
-        "fn res::constructor(mut self: res, id: int32) { self.id = id; }\n"
+        "fn res::constructor(self: &res, id: int32) { self.id = id; }\n"
         "@private\n"
-        "fn res::destructor(mut self: res) { }\n"
+        "fn res::destructor(self: &res) { }\n"
     )
     main = tmp_path / "main.mc"
     main.write_text(
@@ -682,9 +682,9 @@ def test_destructor_round_trips_through_mci(capfd, tmp_path):
         'import "std/io";\n'
         "struct res { id: int32; }\n"
         "@inline\n"
-        "fn res::constructor(mut self: res, id: int32) { self.id = id; }\n"
+        "fn res::constructor(self: &res, id: int32) { self.id = id; }\n"
         "@inline\n"
-        'fn res::destructor(mut self: res) { println(f"drop {self.id}"); }\n'
+        'fn res::destructor(self: &res) { println(f"drop {self.id}"); }\n'
     )
     out = tmp_path / "lib.mci"
     assert emit_interface(lib, (tmp_path, STDLIB_DIR), None, {}, out) == 0

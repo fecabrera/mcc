@@ -872,7 +872,7 @@ def test_const_parameter_elements_read_by_hidden_reference():
 
 def test_mut_parameter_element_writes_reach_the_caller():
     source = """
-    fn fill(mut t: tuple<int32, int32>) { t[0] = 40; t[1] = 2; }
+    fn fill(t: &tuple<int32, int32>) { t[0] = 40; t[1] = 2; }
     fn main() -> int32 { let t = (0, 0); fill(t); return t[0] + t[1]; }
     """
     assert run(source) == 42
@@ -885,7 +885,7 @@ def test_address_of_a_mut_parameter_element_is_rejected():
         LangError, match="cannot take the address of a reference parameter"
     ):
         compile_ir(
-            "fn f(mut t: tuple<int32, int32>) { let p = &t[0]; }\n"
+            "fn f(t: &tuple<int32, int32>) { let p = &t[0]; }\n"
             "fn main() -> int32 { return 0; }"
         )
 

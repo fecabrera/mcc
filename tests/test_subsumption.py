@@ -47,11 +47,11 @@ def test_int_literals_into_float_slots_pick_the_converting_overload(capfd):
             """
             import "std/io";
             struct point<T> { x: T; y: T; }
-            fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+            fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
                 self.x = x;
                 self.y = y;
             }
-            fn point<T>::constructor<U>(mut self: struct point<T>, x: U, y: U) {
+            fn point<T>::constructor<U>(self: &struct point<T>, x: U, y: U) {
                 self.x = x as T;
                 self.y = y as T;
             }
@@ -78,11 +78,11 @@ def test_agreeing_receiver_picks_the_diagonal_constructor(capfd):
             """
             import "std/io";
             struct point<T> { x: T; y: T; }
-            fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+            fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
                 self.x = x + 100;
                 self.y = y + 100;
             }
-            fn point<T>::constructor<U>(mut self: struct point<T>, x: U, y: U) {
+            fn point<T>::constructor<U>(self: &struct point<T>, x: U, y: U) {
                 self.x = x as T;
                 self.y = y as T;
             }
@@ -113,7 +113,7 @@ def test_lone_diagonal_with_float_receiver_is_a_coercion_error():
         compile_ir(
             """
             struct point<T> { x: T; y: T; }
-            fn point<T>::constructor(mut self: struct point<T>, x: T, y: T) {
+            fn point<T>::constructor(self: &struct point<T>, x: T, y: T) {
                 self.x = x;
                 self.y = y;
             }
@@ -276,8 +276,8 @@ def test_mut_position_mismatch_blocks_subsumption():
     ):
         compile_ir(
             """
-            fn f<T>(mut x: T, y: T) -> int32 { return 1; }
-            fn f<A, B>(x: A, mut y: B) -> int32 { return 2; }
+            fn f<T>(x: &T, y: T) -> int32 { return 1; }
+            fn f<A, B>(x: A, y: &B) -> int32 { return 2; }
             fn main() -> int32 {
                 let a: int32 = 1;
                 let b: int32 = 2;

@@ -7,10 +7,10 @@ import "std/utils";
 // the memory-safe replacement for an out-pointer parameter (`out: int32*`)
 // -- no address is ever handed out.
 //
-// `&T` is the blessed spelling. The legacy binder form `mut out: int32`
-// still compiles (it means exactly the same thing) but is deprecated: it
-// warns under -Wdeprecated-mut (part of -Wall). Write the marker in the
-// type slot instead, as in `-> &T` returns (reference_returns.mc).
+// `&T` is the blessed spelling: the reference marker goes in the type slot,
+// as in `-> &T` returns (reference_returns.mc). (`mut` was once an
+// accepted-but-deprecated alias for it; it is no longer a keyword at all, so
+// it is now an ordinary identifier -- see main.)
 fn set(out: &int32) {
     out = 7;               // writes the caller's variable
 }
@@ -79,6 +79,10 @@ fn main() -> int32 {
 
     let old = replace(a, 100);
     println(f"replace(a)  -> a={a} old={old}");
+
+    // `mut` is no longer a keyword, so it is usable as an ordinary name.
+    let mut: int32 = 42;
+    println(f"mut (ident) -> {mut}");
 
     return 0;
 }

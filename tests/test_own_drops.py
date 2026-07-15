@@ -29,12 +29,12 @@ import "std/io";
 
 struct res { fd: int32; }
 
-fn res::constructor(mut self: res, fd: int32) {
+fn res::constructor(self: &res, fd: int32) {
     self.fd = fd;
     println(f"open {fd}");
 }
 
-fn res::destructor(mut self: res) {
+fn res::destructor(self: &res) {
     println(f"close {self.fd}");
     self.fd = -1;
 }
@@ -187,7 +187,7 @@ def test_compound_assignment_drops_a_scalar_temp(capfd):
     # the right-hand side is computed, before the combined store.
     src = """
     import "std/io";
-    fn int32::destructor(mut self: int32) { println(f"dint {self}"); }
+    fn int32::destructor(self: &int32) { println(f"dint {self}"); }
     fn mkint() -> own int32 {
         let v: int32 = 7;
         return move(v);

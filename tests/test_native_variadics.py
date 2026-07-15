@@ -460,7 +460,7 @@ def test_a_mut_fixed_parameter_collects_through_the_set_path():
     assert run(
         """
         fn bump(name: char*) -> int32 { return -1; }
-        fn bump(mut acc: int32, args...) -> int32 {
+        fn bump(acc: &int32, args...) -> int32 {
             for a in args {
                 case type (a) { when int32 v: acc = acc + v; else: acc = -1000; }
             }
@@ -569,7 +569,7 @@ def test_a_mut_trailing_slice_does_not_collect():
     # synthesize, so such a function stays explicit-slice.
     with pytest.raises(LangError, match=r"'f' expects 1 argument\(s\), got 2"):
         compile_ir(
-            "fn f(mut args: slice<const any>) {}\n"
+            "fn f(args: &slice<const any>) {}\n"
             "fn main() -> int32 { f(1, 2); return 0; }"
         )
 

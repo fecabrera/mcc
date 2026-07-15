@@ -981,22 +981,16 @@ class Parser:
                     )
                 is_nonnull = True
                 self.advance()
-            # `&T` (or the deprecated `mut T`) in the type slot marks a
-            # by-reference writable parameter, riding on the TypeRef's `mut`
-            # flag; the declaration-side compose bans apply verbatim. A leading
-            # `const` marks the read-only view: `fn(const &T)` composes the
-            # `const` and the `&` reference into the read-only hidden reference
-            # (parse_type_ref only consumes a leading `&`, so `const` is read
-            # here to sit in front of it, then folded onto the TypeRef).
+            # `&T` in the type slot marks a by-reference writable parameter,
+            # riding on the TypeRef's `mut` flag; the declaration-side compose
+            # bans apply verbatim. A leading `const` marks the read-only view:
+            # `fn(const &T)` composes the `const` and the `&` reference into the
+            # read-only hidden reference (parse_type_ref only consumes a leading
+            # `&`, so `const` is read here to sit in front of it, then folded
+            # onto the TypeRef).
             slot_line = self.cur.line
             const_kw = bool(self.accept("const"))
-            mut_kw = self.cur.kind == "mut"
-            if mut_kw:
-                self.advance()
             ref = self.parse_type_ref(allow_ref=True)
-            if mut_kw:
-                ref.mut = True
-                ref.mut_deprecated = True
             if const_kw:
                 ref.const = True
             if is_nonnull and ref.mut:
@@ -1017,27 +1011,13 @@ class Parser:
         if self.accept("->"):
             # `-> &T`: the type spells a reference return (a call through the
             # value is an lvalue expression), riding on the return TypeRef's
-            # `mut` flag exactly as a parameter's does. The deprecated `-> mut`
-            # keyword sets the same flag. `-> own T` spells an own return (a
-            # call through the value hands the caller the cleanup obligation);
-            # the two never combine.
+            # `mut` flag exactly as a parameter's does. `-> own T` spells an own
+            # return (a call through the value hands the caller the cleanup
+            # obligation); the two never combine.
             slot_line = self.cur.line
-            mut_kw = self.cur.kind == "mut"
-            if mut_kw:
-                self.advance()
             own_tok = self.cur if self.cur.kind == "own" else None
             is_own = bool(self.accept("own"))
-            if mut_kw and is_own:
-                raise LangError(
-                    "a return cannot be both a reference and own (a reference "
-                    "lends the caller a view of existing storage, own hands it "
-                    "an owned value)",
-                    own_tok.line,
-                )
             ret = self.parse_type_ref(allow_ref=True)
-            if mut_kw:
-                ret.mut = True
-                ret.mut_deprecated = True
             if is_own and ret.mut:
                 raise LangError(
                     "a return cannot be both own and a reference (a reference "
@@ -1722,8 +1702,6 @@ class Parser:
         noalias_params: set[str] = set()
         nonnull_params: set[str] = set()
         format_params: set[str] = set()
-        mut_kw_param_lines: list[int] = []  # deprecated `mut` binder sites
-        mut_kw_return_line: int | None = None  # a deprecated `-> mut` site
         variadic = False
         while self.cur.kind != ")":
             if params:
@@ -1756,12 +1734,6 @@ class Parser:
                     is_format = True
                 self.advance()
             is_const = bool(self.accept("const"))
-            # The deprecated `mut x: T` binder spelling: `mut` before the name.
-            # The blessed spelling puts the reference marker in the type slot
-            # (`x: &T`), read off the parsed TypeRef's `mut` flag below.
-            mut_kw_tok = self.cur if self.cur.kind == "mut" else None
-            if mut_kw_tok is not None:
-                self.advance()
             pname = self.expect("IDENT").text
             if self.cur.kind == "...":
                 # `args...` -- native variadic sugar: a const parameter of type
@@ -1770,7 +1742,6 @@ class Parser:
                 ellipsis = self.advance()
                 if (
                     is_const
-                    or mut_kw_tok is not None
                     or is_noalias
                     or is_nonnull
                     or is_format
@@ -1799,10 +1770,9 @@ class Parser:
             ptype = self.parse_type_ref(allow_ref=True)
             # A parameter's mutability lives in `mut_params`, not on the stored
             # TypeRef, so a `&T` marker is lifted off the type and the ref is
-            # left pristine (zero representation change from `mut x: T`).
-            is_mut = ptype.mut or mut_kw_tok is not None
+            # left pristine.
+            is_mut = ptype.mut
             ptype.mut = False
-            ptype.mut_deprecated = False
             # `const x: &T` is the read-only reference view (Phase B): the
             # `const` binder annotation applied to a `&T` reference type. It is
             # read-only (in const_params) yet passed by hidden reference (in
@@ -1836,8 +1806,6 @@ class Parser:
                 constref_params.add(pname)
             elif is_mut:
                 mut_params.add(pname)
-                if mut_kw_tok is not None:
-                    mut_kw_param_lines.append(mut_kw_tok.line)
             if is_noalias:
                 noalias_params.add(pname)
             if is_nonnull:
@@ -1852,31 +1820,17 @@ class Parser:
         if self.accept("->"):
             # `-> &T`: the function returns an lvalue (a reference to
             # caller-reachable storage). A flag on the declaration; the
-            # fn(...) -> &T pointer type spells the same convention. The
-            # deprecated `-> mut T` keyword spells the same thing. `-> own T`:
+            # fn(...) -> &T pointer type spells the same convention. `-> own T`:
             # the function returns an owned value (the caller adopts the
             # cleanup obligation). Also a flag, and the two are mutually
             # exclusive: a reference lends a view, own hands over a value.
             ret_slot_line = self.cur.line
-            mut_kw_tok = self.cur if self.cur.kind == "mut" else None
-            if mut_kw_tok is not None:
-                self.advance()
             own_tok = self.cur if self.cur.kind == "own" else None
             own_return = bool(self.accept("own"))
-            if mut_kw_tok is not None and own_return:
-                raise LangError(
-                    "a return cannot be both a reference and own (a reference "
-                    "lends the caller a view of existing storage, own hands it "
-                    "an owned value)",
-                    own_tok.line,
-                )
             ret_type = self.parse_type_ref(allow_ref=True)
-            mut_return = ret_type.mut or mut_kw_tok is not None
+            mut_return = ret_type.mut
             # Mutability lives in the `mut_return` flag, not on the TypeRef.
             ret_type.mut = False
-            ret_type.mut_deprecated = False
-            if mut_kw_tok is not None:
-                mut_kw_return_line = mut_kw_tok.line
             if own_return and mut_return:
                 raise LangError(
                     "a return cannot be both own and a reference (a reference "
@@ -2105,8 +2059,6 @@ class Parser:
                 struct_arg_groups=struct_arg_groups,
                 struct_arg_bounds=struct_arg_bounds,
                 struct_arg_defaults=struct_arg_defaults,
-                mut_kw_param_lines=mut_kw_param_lines,
-                mut_kw_return_line=mut_kw_return_line,
             )
         if prop:
             if "::" not in name:
@@ -2215,8 +2167,6 @@ class Parser:
             struct_arg_groups=struct_arg_groups,
             struct_arg_bounds=struct_arg_bounds,
             struct_arg_defaults=struct_arg_defaults,
-            mut_kw_param_lines=mut_kw_param_lines,
-            mut_kw_return_line=mut_kw_return_line,
         )
 
     def parse_asm(self):

@@ -42,7 +42,7 @@ def test_nonnull_combines_with_noalias_in_either_order():
 def test_nonnull_and_mut_rejected():
     message = "a parameter cannot be both @nonnull and a reference"
     with pytest.raises(LangError, match=message):
-        parse("fn f(@nonnull mut p: int32) {}")
+        parse("fn f(@nonnull p: &int32) {}")
 
 
 def test_nonnull_on_extern_parses():
@@ -523,7 +523,7 @@ def test_nonnull_param_as_mut_argument_rejected():
         LangError, match="cannot pass a @nonnull parameter as a reference argument"
     ):
         compile_ir(
-            "fn clobber(mut q: int32*) { q = null; }\n"
+            "fn clobber(q: &int32*) { q = null; }\n"
             "fn f(@nonnull p: int32*) { clobber(p); }\n"
             "fn main() -> int32 { return 0; }"
         )
@@ -536,7 +536,7 @@ def test_nonnull_param_as_generic_mut_argument_rejected():
         LangError, match="cannot pass a @nonnull parameter as a reference argument"
     ):
         compile_ir(
-            "fn clobber<T>(mut q: T) { }\n"
+            "fn clobber<T>(q: &T) { }\n"
             "fn f(@nonnull p: int32*) { clobber(p); }\n"
             "fn main() -> int32 { return 0; }"
         )
@@ -546,7 +546,7 @@ def test_plain_pointer_still_passes_to_mut():
     # The ban is specific to @nonnull parameters; an ordinary pointer
     # variable is still a fine mut argument.
     assert run(
-        "fn clobber(mut q: int32*) { q = null; }\n"
+        "fn clobber(q: &int32*) { q = null; }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 1;\n"
         "    let p: int32* = &x;\n"
@@ -777,7 +777,7 @@ def test_mut_param_does_not_narrow():
     # call could null it without naming it at this site.
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
-            FIRST + "fn f(mut p: int32*) -> int32 {\n"
+            FIRST + "fn f(p: &int32*) -> int32 {\n"
             "    if (p != null) { return first(p); }\n"
             "    return 0;\n"
             "}\n"
@@ -834,7 +834,7 @@ def test_mut_argument_invalidates_narrowing():
     # the reference; the fact dies at the call.
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
-            "fn clobber(mut q: int32*) { q = null; }\n"
+            "fn clobber(q: &int32*) { q = null; }\n"
             + FIRST + "fn main() -> int32 {\n"
             "    let x: int32 = 1;\n"
             "    let p: int32* = &x;\n"
@@ -973,7 +973,7 @@ def test_for_body_assignment_kills_fact_at_entry():
 def test_loop_body_mut_lend_kills_fact_at_entry():
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
-            "fn clobber(mut q: int32*) { q = null; }\n"
+            "fn clobber(q: &int32*) { q = null; }\n"
             + FIRST + "fn get(p: int32*) -> int32 {\n"
             "    if (p == null) { return 0; }\n"
             "    let i: int32 = 0;\n"
@@ -993,7 +993,7 @@ def test_loop_body_generic_mut_lend_kills_fact_at_entry():
     # overload -- before overload resolution, over-approximating is safe.
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
-            "fn clobber<T>(mut q: T) { }\n"
+            "fn clobber<T>(q: &T) { }\n"
             + FIRST + "fn get(p: int32*) -> int32 {\n"
             "    if (p == null) { return 0; }\n"
             "    let i: int32 = 0;\n"
@@ -1009,7 +1009,7 @@ def test_loop_body_static_mut_lend_kills_fact_at_entry():
     # feed the pre-scan too.
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
-            "@static fn clobber(mut q: int32*) { q = null; }\n"
+            "@static fn clobber(q: &int32*) { q = null; }\n"
             + FIRST + "fn get(p: int32*) -> int32 {\n"
             "    if (p == null) { return 0; }\n"
             "    let i: int32 = 0;\n"
@@ -1024,7 +1024,7 @@ def test_loop_condition_mut_lend_kills_fact_at_entry():
     # The condition re-runs on the back edge too; a mut lend there kills.
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
-            "fn advance(mut q: int32*) -> bool { q = null; return false; }\n"
+            "fn advance(q: &int32*) -> bool { q = null; return false; }\n"
             + FIRST + "fn get(p: int32*) -> int32 {\n"
             "    if (p == null) { return 0; }\n"
             "    while (advance(p)) { first(p); }\n"
@@ -1545,7 +1545,7 @@ def test_projection_mut_param_base_narrows():
     # A mut parameter is an ineligible *name* fact, but a fine path base:
     # the blanket call/store kills cover the aliasing that bans the name.
     assert run(
-        BUF + FIRST + "fn peek(mut b: Buf) -> int32 {\n"
+        BUF + FIRST + "fn peek(b: &Buf) -> int32 {\n"
         "    if (b.data == null) { return 0; }\n"
         "    return first(b.data);\n"
         "}\n"
@@ -2070,7 +2070,7 @@ def test_mut_param_assignment_taints():
     # the caller's storage: a swap-shaped helper is never write-free.
     with pytest.raises(LangError, match="cannot pass a possibly-null pointer"):
         compile_ir(
-            BUF + FIRST + "fn reset(mut n: int32) { n = 0; }\n"
+            BUF + FIRST + "fn reset(n: &int32) { n = 0; }\n"
             "fn peek(b: Buf*) -> int32 {\n"
             "    let k: int32 = 1;\n"
             "    if (b == null or b->data == null) { return 0; }\n"
@@ -2259,7 +2259,7 @@ def test_projection_narrowing_compiles_generic_sizeof_repro():
 def test_guarded_projection_decays_into_mut():
     # A proven projection decays into a mut slot like a proven local does.
     assert run(
-        BUF + "fn bump(mut n: int32) { n = n + 1; }\n"
+        BUF + "fn bump(n: &int32) { n = n + 1; }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 4;\n"
         "    let b = struct Buf { data = &x };\n"

@@ -36,7 +36,7 @@ def test_noalias_with_const_parses():
 def test_noalias_and_mut_rejected():
     message = "a parameter cannot be both @noalias and a reference"
     with pytest.raises(LangError, match=message):
-        parse("fn f(@noalias mut p: int32) {}")
+        parse("fn f(@noalias p: &int32) {}")
 
 
 def test_noalias_on_extern_parses():

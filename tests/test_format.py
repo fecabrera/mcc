@@ -466,7 +466,7 @@ def test_user_overload_joins_the_set_cross_module(tmp_path, capfd):
 
         struct point { x: int32; y: int32; }
 
-        fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
+        fn format(str: &string, value: struct point*, const modifier: slice<char>) {
             str.push('(');
             format(str, value->x, modifier);
             str.append(", ");

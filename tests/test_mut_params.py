@@ -10,14 +10,14 @@ from helpers import compile_ir, parse, run
 
 
 def test_mut_param_parses():
-    (func,) = parse("fn set(mut out: int32) { out = 7; }").functions
+    (func,) = parse("fn set(out: &int32) { out = 7; }").functions
     assert func.mut_params == {"out"}
     assert func.const_params == set()
 
 
 def test_mut_and_const_params_coexist():
     (func,) = parse(
-        "fn f(a: int32, const b: struct s, mut c: int32) {}"
+        "fn f(a: int32, const b: struct s, c: &int32) {}"
     ).functions
     assert func.const_params == {"b"} and func.mut_params == {"c"}
 
@@ -34,18 +34,20 @@ def test_const_mut_combination_is_the_read_only_view():
 def test_mut_rejected_on_extern():
     message = "reference parameters are not allowed on @extern functions"
     with pytest.raises(LangError, match=message):
-        parse("@extern fn f(mut n: int32);")
+        parse("@extern fn f(n: &int32);")
 
 
 def test_mut_rejected_on_asm():
     message = "reference parameters are not allowed on @asm functions"
     with pytest.raises(LangError, match=message):
-        parse('@asm fn f(mut n: int32) { "nop" }')
+        parse('@asm fn f(n: &int32) { "nop" }')
 
 
-def test_mut_keyword_is_reserved():
-    with pytest.raises(LangError):
-        parse("fn main() -> int32 { let mut = 1; return 0; }")
+def test_mut_is_now_an_ordinary_identifier():
+    # Phase C de-keyworded `mut`; it is a usable identifier now, not reserved.
+    assert run(
+        "fn main() -> int32 { let mut: int32 = 41; return mut + 1; }"
+    ) == 42
 
 
 # ---------------------------------------------------------------- convention
@@ -53,7 +55,7 @@ def test_mut_keyword_is_reserved():
 
 def test_mut_scalar_lowers_to_pointer_parameter():
     ir_text = compile_ir(
-        "fn set(mut out: int32) { out = 7; }\n"
+        "fn set(out: &int32) { out = 7; }\n"
         "fn main() -> int32 { let x: int32 = 0; set(x); return x; }"
     )
     assert 'define void @"set"(i32* ' in ir_text
@@ -61,7 +63,7 @@ def test_mut_scalar_lowers_to_pointer_parameter():
 
 def test_mut_argument_shares_callers_storage():
     ir_text = compile_ir(
-        "fn set(mut out: int32) { out = 7; }\n"
+        "fn set(out: &int32) { out = 7; }\n"
         "fn main() -> int32 { let x: int32 = 0; set(x); return x; }"
     )
     # The call passes the variable's own alloca, not a spilled temporary.
@@ -73,21 +75,21 @@ def test_mut_argument_shares_callers_storage():
 
 def test_mut_scalar_write_reaches_caller():
     assert run(
-        "fn set(mut out: int32) { out = 7; }\n"
+        "fn set(out: &int32) { out = 7; }\n"
         "fn main() -> int32 { let x: int32 = 0; set(x); return x; }"
     ) == 7
 
 
 def test_mut_rvalue_use_reads_current_value():
     assert run(
-        "fn bump(mut n: int32) -> int32 { n = n + 1; return n * 10; }\n"
+        "fn bump(n: &int32) -> int32 { n = n + 1; return n * 10; }\n"
         "fn main() -> int32 { let x: int32 = 4; return bump(x) + x; }"
     ) == 55  # returns 50, and the caller's x is now 5
 
 
 def test_mut_compound_assignment_writes_through():
     assert run(
-        "fn double(mut n: int32) { n *= 2; }\n"
+        "fn double(n: &int32) { n *= 2; }\n"
         "fn main() -> int32 { let x: int32 = 21; double(x); return x; }"
     ) == 42
 
@@ -95,7 +97,7 @@ def test_mut_compound_assignment_writes_through():
 def test_mut_struct_field_projection():
     assert run(
         "struct point { x: int32; y: int32; }\n"
-        "fn mirror(mut p: struct point) {\n"
+        "fn mirror(p: &struct point) {\n"
         "    let t = p.x;\n"
         "    p.x = p.y;\n"
         "    p.y = t;\n"
@@ -110,7 +112,7 @@ def test_mut_struct_field_projection():
 
 def test_mut_array_element_write():
     assert run(
-        "fn fill(mut a: int32[3]) { a[0] = 1; a[1] = 2; a[2] = 3; }\n"
+        "fn fill(a: &int32[3]) { a[0] = 1; a[1] = 2; a[2] = 3; }\n"
         "fn main() -> int32 {\n"
         "    let a: int32[3] = [0, 0, 0];\n"
         "    fill(a);\n"
@@ -121,7 +123,7 @@ def test_mut_array_element_write():
 
 def test_mut_pointer_param_repoints_callers_pointer():
     assert run(
-        "fn repoint(mut p: int32*, target: int32*) { p = target; }\n"
+        "fn repoint(p: &int32*, target: int32*) { p = target; }\n"
         "fn main() -> int32 {\n"
         "    let a: int32[2] = [7, 9];\n"
         "    let p = &a[0];\n"
@@ -133,7 +135,7 @@ def test_mut_pointer_param_repoints_callers_pointer():
 
 def test_mut_write_inside_defer_reaches_caller():
     assert run(
-        "fn f(mut n: int32) -> int32 {\n"
+        "fn f(n: &int32) -> int32 {\n"
         "    defer n = 42;\n"
         "    return n;\n"
         "}\n"
@@ -147,9 +149,9 @@ def test_mut_write_inside_defer_reaches_caller():
 
 def test_mut_relending_and_recursion():
     assert run(
-        "fn bump(mut n: int32) { n += 1; }\n"
-        "fn twice(mut n: int32) { bump(n); bump(n); }\n"
-        "fn count(mut n: int32, steps: int32) {\n"
+        "fn bump(n: &int32) { n += 1; }\n"
+        "fn twice(n: &int32) { bump(n); bump(n); }\n"
+        "fn count(n: &int32, steps: int32) {\n"
         "    if (steps == 0) { return; }\n"
         "    n += 1;\n"
         "    count(n, steps - 1);\n"
@@ -168,7 +170,7 @@ def test_mut_field_of_by_value_param_is_allowed():
     # mut argument is consistent with `s.field = x` being legal there.
     assert run(
         "struct s { x: int32; }\n"
-        "fn set(mut n: int32) { n = 9; }\n"
+        "fn set(n: &int32) { n = 9; }\n"
         "fn touch(v: struct s) -> int32 { set(v.x); return v.x; }\n"
         "fn main() -> int32 {\n"
         "    let v = s { x = 1 };\n"
@@ -181,7 +183,7 @@ def test_mut_field_of_by_value_param_is_allowed():
 def test_mut_aliasing_two_params_same_variable():
     # Both references share the storage, like two C pointers; last write wins.
     assert run(
-        "fn f(mut a: int32, mut b: int32) { a = 1; b = 2; }\n"
+        "fn f(a: &int32, b: &int32) { a = 1; b = 2; }\n"
         "fn main() -> int32 { let x: int32 = 0; f(x, x); return x; }"
     ) == 2
 
@@ -191,7 +193,7 @@ def test_mut_aliasing_two_params_same_variable():
 
 def test_generic_swap():
     assert run(
-        "fn swap<T>(mut a: T, mut b: T) { let t = a; a = b; b = t; }\n"
+        "fn swap<T>(a: &T, b: &T) { let t = a; a = b; b = t; }\n"
         "fn main() -> int32 {\n"
         "    let u: int32 = 3;\n"
         "    let v: int32 = 9;\n"
@@ -207,7 +209,7 @@ def test_generic_swap():
 def test_generic_mut_struct():
     assert run(
         "struct box<T> { value: T; }\n"
-        "fn clear<T>(mut b: struct box<T>) { b.value = 0 as T; }\n"
+        "fn clear<T>(b: &struct box<T>) { b.value = 0 as T; }\n"
         "fn main() -> int32 {\n"
         "    let b = box { value = 7 as int32 };\n"
         "    clear(b);\n"
@@ -221,7 +223,7 @@ def test_generic_mut_type_must_match_instantiation():
     # inference (from `b`) succeeds, so the exact-lvalue check fires.
     with pytest.raises(LangError, match="expected a int64 lvalue, got int32"):
         compile_ir(
-            "fn f<T>(mut a: int64, b: T) {}\n"
+            "fn f<T>(a: &int64, b: T) {}\n"
             "fn main() -> int32 {\n"
             "    let x: int32 = 1;\n"
             "    let y: int64 = 2;\n"
@@ -239,7 +241,7 @@ def test_mixed_overloads_lvalue_picks_mut_rvalue_picks_pointer():
     # goes to the mut one (int32 does not match T*), a pointer rvalue to the
     # pointer one (no address is formed for &y, ruling the mut overload out).
     assert run(
-        "fn set<T>(mut a: T) { a = 7 as T; }\n"
+        "fn set<T>(a: &T) { a = 7 as T; }\n"
         "fn set<T>(p: T*) { *p = 9 as T; }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
@@ -255,7 +257,7 @@ def test_mixed_overloads_rvalue_selects_the_value_overload():
     # A literal is not assignable, so the mut overload is not viable and the
     # same-shape by-value one wins without ambiguity.
     assert run(
-        "fn pick<T>(mut a: T) -> int32 { return 1; }\n"
+        "fn pick<T>(a: &T) -> int32 { return 1; }\n"
         "fn pick<T>(a: T) -> int32 { return 2; }\n"
         "fn main() -> int32 { return pick(3); }"
     ) == 2
@@ -267,7 +269,7 @@ def test_mixed_same_shape_overloads_ambiguous_for_lvalue():
     message = "call to 'pick' is ambiguous between overloads"
     with pytest.raises(LangError, match=message):
         compile_ir(
-            "fn pick<T>(mut a: T) -> int32 { return 1; }\n"
+            "fn pick<T>(a: &T) -> int32 { return 1; }\n"
             "fn pick<T>(a: T) -> int32 { return 2; }\n"
             "fn main() -> int32 { let x: int32 = 0; return pick(x); }"
         )
@@ -279,7 +281,7 @@ def test_rvalue_into_single_generic_mut_is_not_assignable():
         "variable, field, element, or dereference"
     )
     with pytest.raises(LangError, match=message):
-        compile_ir("fn f<T>(mut a: T) {}\nfn main() -> int32 { f(3); return 0; }")
+        compile_ir("fn f<T>(a: &T) {}\nfn main() -> int32 { f(3); return 0; }")
 
 
 def test_rvalue_failing_one_mut_overload_is_not_assignable():
@@ -291,8 +293,8 @@ def test_rvalue_failing_one_mut_overload_is_not_assignable():
     )
     with pytest.raises(LangError, match=message):
         compile_ir(
-            "fn f<T>(mut a: T) {}\n"
-            "fn f<T>(mut a: T, b: T) {}\n"
+            "fn f<T>(a: &T) {}\n"
+            "fn f<T>(a: &T, b: T) {}\n"
             "fn main() -> int32 { f(3); return 0; }"
         )
 
@@ -306,8 +308,8 @@ def test_rvalue_failing_several_mut_overloads_is_no_match():
         compile_ir(
             "struct box<T> { value: T; }\n"
             "fn make() -> struct box<int32> { return box { value = 1 as int32 }; }\n"
-            "fn f<T>(mut a: struct box<T>) {}\n"
-            "fn f<T>(mut a: T) {}\n"
+            "fn f<T>(a: &struct box<T>) {}\n"
+            "fn f<T>(a: &T) {}\n"
             "fn main() -> int32 { f(make()); return 0; }"
         )
 
@@ -317,8 +319,8 @@ def test_pointer_rvalue_decays_into_the_mut_overload():
     # the proven-non-null pointer decays into `mut a: T` (T = int32) once no
     # candidate matches the pointer type directly.
     assert run(
-        "fn f<T>(mut a: T) { a = 7 as T; }\n"
-        "fn f<T>(mut a: slice<T>) {}\n"
+        "fn f<T>(a: &T) { a = 7 as T; }\n"
+        "fn f<T>(a: &slice<T>) {}\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
         "    f(&x);\n"
@@ -331,7 +333,7 @@ def test_const_lvalue_compiles_when_the_value_overload_wins():
     # The legality checks run after resolution: lending a const parameter is
     # fine when the chosen overload only reads it.
     assert run(
-        "fn f<T>(mut a: T, b: T) -> int32 { a = b; return 1; }\n"
+        "fn f<T>(a: &T, b: T) -> int32 { a = b; return 1; }\n"
         "fn f<T>(a: char, b: T) -> int32 { return 2; }\n"
         "fn g(const c: char) -> int32 { return f(c, 'x'); }\n"
         "fn main() -> int32 { return g('q'); }"
@@ -342,7 +344,7 @@ def test_const_lvalue_still_rejected_when_the_mut_overload_wins():
     message = "cannot pass a const parameter as a reference argument; it is read-only"
     with pytest.raises(LangError, match=message):
         compile_ir(
-            "fn f<T>(mut a: T, b: T) -> int32 { a = b; return 1; }\n"
+            "fn f<T>(a: &T, b: T) -> int32 { a = b; return 1; }\n"
             "fn f<T>(a: char, b: T) -> int32 { return 2; }\n"
             "fn g(const c: int32) -> int32 { return f(c, 5); }\n"
             "fn main() -> int32 { return 0; }"
@@ -354,7 +356,7 @@ def test_volatile_lvalue_gets_a_volatile_read_when_value_overload_wins():
     # and the single up-front load must be (and stay) volatile.
     ir_text = compile_ir(
         "@extern @volatile let r: char;\n"
-        "fn f<T>(mut a: T, b: T) -> int32 { a = b; return 1; }\n"
+        "fn f<T>(a: &T, b: T) -> int32 { a = b; return 1; }\n"
         "fn f<T>(a: char, b: T) -> int32 { return 2; }\n"
         "fn main() -> int32 { return f(r, 'x'); }"
     )
@@ -366,7 +368,7 @@ def test_volatile_lvalue_still_rejected_when_the_mut_overload_wins():
     with pytest.raises(LangError, match=message):
         compile_ir(
             "@extern @volatile let r: int32;\n"
-            "fn f<T>(mut a: T, b: T) -> int32 { a = b; return 1; }\n"
+            "fn f<T>(a: &T, b: T) -> int32 { a = b; return 1; }\n"
             "fn f<T>(a: char, b: T) -> int32 { return 2; }\n"
             "fn main() -> int32 { return f(r, 5); }"
         )
@@ -377,7 +379,7 @@ def test_function_name_argument_still_selects_the_value_overload():
     # lower as a function value, ruling out the mut overload.
     assert run(
         "fn three() -> int32 { return 3; }\n"
-        "fn pick<T>(mut a: T) -> int32 { return 1; }\n"
+        "fn pick<T>(a: &T) -> int32 { return 1; }\n"
         "fn pick<T>(a: T) -> int32 { return a(); }\n"
         "fn main() -> int32 { return pick(three); }"
     ) == 3
@@ -387,8 +389,8 @@ def test_mixed_overload_argument_is_evaluated_once():
     # The address (base and index included) is formed once, before the
     # overload is chosen; the side effect must not run twice.
     assert run(
-        "fn next(mut n: int32) -> int32 { n += 1; return n - 1; }\n"
-        "fn set<T>(mut a: T) { a = 7 as T; }\n"
+        "fn next(n: &int32) -> int32 { n += 1; return n - 1; }\n"
+        "fn set<T>(a: &T) { a = 7 as T; }\n"
         "fn set<T>(p: T*) { *p = 9 as T; }\n"
         "fn main() -> int32 {\n"
         "    let a: int32[2] = [0, 0];\n"
@@ -401,8 +403,8 @@ def test_mixed_overload_argument_is_evaluated_once():
 
 def test_agreeing_mut_overloads_still_work():
     assert run(
-        "fn f<T>(mut a: T) { a = 1 as T; }\n"
-        "fn f<T>(mut a: T, b: T) { a = b; }\n"
+        "fn f<T>(a: &T) { a = 1 as T; }\n"
+        "fn f<T>(a: &T, b: T) { a = b; }\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
         "    let y: int32 = 0;\n"
@@ -422,14 +424,14 @@ def test_mut_argument_must_be_an_lvalue():
         "variable, field, element, or dereference"
     )
     with pytest.raises(LangError, match=message):
-        compile_ir("fn f(mut n: int32) {}\nfn main() -> int32 { f(3); return 0; }")
+        compile_ir("fn f(n: &int32) {}\nfn main() -> int32 { f(3); return 0; }")
 
 
 def test_mut_argument_rejects_call_result():
     with pytest.raises(LangError, match="is not assignable"):
         compile_ir(
             "fn g() -> int32 { return 1; }\n"
-            "fn f(mut n: int32) {}\n"
+            "fn f(n: &int32) {}\n"
             "fn main() -> int32 { f(g()); return 0; }"
         )
 
@@ -438,7 +440,7 @@ def test_mut_argument_rejects_const_param():
     message = "cannot pass a const parameter as a reference argument; it is read-only"
     with pytest.raises(LangError, match=message):
         compile_ir(
-            "fn f(mut n: int32) {}\n"
+            "fn f(n: &int32) {}\n"
             "fn g(const c: int32) { f(c); }\n"
             "fn main() -> int32 { return 0; }"
         )
@@ -447,7 +449,7 @@ def test_mut_argument_rejects_const_param():
 def test_mut_argument_requires_exact_type():
     with pytest.raises(LangError, match="expected a int64 lvalue, got int32"):
         compile_ir(
-            "fn f(mut n: int64) {}\n"
+            "fn f(n: &int64) {}\n"
             "fn main() -> int32 { let x: int32 = 1; f(x); return 0; }"
         )
 
@@ -457,7 +459,7 @@ def test_mut_argument_rejects_signedness_mismatch():
     # silently alias the wrong signedness, so the LangTypes must match.
     with pytest.raises(LangError, match="expected a uint32 lvalue, got int32"):
         compile_ir(
-            "fn f(mut n: uint32) {}\n"
+            "fn f(n: &uint32) {}\n"
             "fn main() -> int32 { let x: int32 = 1; f(x); return 0; }"
         )
 
@@ -466,7 +468,7 @@ def test_address_of_mut_param_rejected():
     message = "cannot take the address of a reference parameter"
     with pytest.raises(LangError, match=message):
         compile_ir(
-            "fn f(mut n: int32) { let p = &n; }\nfn main() -> int32 { return 0; }"
+            "fn f(n: &int32) { let p = &n; }\nfn main() -> int32 { return 0; }"
         )
 
 
@@ -474,7 +476,7 @@ def test_address_of_mut_param_field_rejected():
     with pytest.raises(LangError, match="cannot take the address of a reference parameter"):
         compile_ir(
             "struct s { x: int32; }\n"
-            "fn f(mut v: struct s) { let p = &v.x; }\n"
+            "fn f(v: &struct s) { let p = &v.x; }\n"
             "fn main() -> int32 { return 0; }"
         )
 
@@ -484,7 +486,7 @@ def test_mut_function_is_a_function_value():
     # hidden-reference convention (`fn(mut int32)`), so the LLVM slot holds a
     # `void (i32*)*` and calls through it pass the argument's address.
     out = compile_ir(
-        "fn f(mut n: int32) {}\n"
+        "fn f(n: &int32) {}\n"
         "fn main() -> int32 { let g = f; let x: int32 = 1; g(x); return 0; }"
     )
     assert "void (i32*)*" in out
@@ -495,7 +497,7 @@ def test_mut_argument_rejects_volatile_storage():
     with pytest.raises(LangError, match=message):
         compile_ir(
             "@extern @volatile let r: int32;\n"
-            "fn f(mut n: int32) {}\n"
+            "fn f(n: &int32) {}\n"
             "fn main() -> int32 { f(r); return 0; }"
         )
 
@@ -505,7 +507,7 @@ def test_mut_argument_rejects_packed_field():
     with pytest.raises(LangError, match=message):
         compile_ir(
             "@packed struct w { a: uint8; n: int32; }\n"
-            "fn f(mut n: int32) {}\n"
+            "fn f(n: &int32) {}\n"
             "fn main() -> int32 { let v: struct w; f(v.n); return 0; }"
         )
 
@@ -513,14 +515,14 @@ def test_mut_argument_rejects_packed_field():
 def test_string_literal_does_not_adapt_to_mut_slice():
     with pytest.raises(LangError, match="is not assignable"):
         compile_ir(
-            'fn f(mut s: slice<char>) {}\nfn main() -> int32 { f("hi"); return 0; }'
+            'fn f(s: &slice<char>) {}\nfn main() -> int32 { f("hi"); return 0; }'
         )
 
 
 def test_mut_argument_rejects_const_slice_element():
     with pytest.raises(LangError, match="cannot pass a read-only const "):
         compile_ir(
-            "fn f(mut c: char) {}\n"
+            "fn f(c: &char) {}\n"
             "fn g(s: slice<const char>) { f(s[0]); }\n"
             "fn main() -> int32 { return 0; }"
         )

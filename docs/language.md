@@ -205,12 +205,9 @@ struct field — is a compile error (`a '&' reference type is only allowed in
 a parameter or return type`). There are no reference locals, and `&` stays
 unambiguously the address-of operator in expressions.
 
-> **Deprecated spelling.** The reference marker used to be written as a
-> `mut` binder before the name — `fn find(key: int32, mut out: int32)`. That
-> form still compiles and means exactly the same thing, but is deprecated in
-> favor of `&T` in the type slot. It warns under the opt-in `-Wdeprecated-mut`
-> class (included in `-Wall`); the `mut` keyword will be removed in a later
-> release.
+`mut` is not a keyword: the reference marker used to have a deprecated
+`mut`-binder spelling (`fn find(key: int32, mut out: int32)`), removed once
+the deprecation window closed, so `mut` is now an ordinary identifier.
 
 See [examples/functions/reference_params.mc](../examples/functions/reference_params.mc)
 and, for overloads mixing `&`,
@@ -301,11 +298,6 @@ full expression, or between forming the reference and the surrounding
 statement's store, invalidates the reference. The formation rule prevents
 frame escapes, not heap staleness; keep the access and the mutation in
 separate statements, exactly as with an in-flight cursor.
-
-> **Deprecated spelling.** The return marker used to be written `-> mut T`.
-> That form still compiles and means exactly the same thing, but is
-> deprecated in favor of `-> &T`. It warns under the opt-in
-> `-Wdeprecated-mut` class (included in `-Wall`).
 
 See [examples/functions/reference_returns.mc](../examples/functions/reference_returns.mc).
 

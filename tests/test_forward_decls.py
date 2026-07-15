@@ -67,9 +67,9 @@ def test_hidden_reference_conventions_pair():
     # convention: the definition's write reaches the caller's variable.
     src = """
     struct pair { x: int32; y: int32; }
-    fn bump(mut n: int32);
+    fn bump(n: &int32);
     fn total(const p: struct pair) -> int32;
-    fn bump(mut n: int32) { n = n + 1; }
+    fn bump(n: &int32) { n = n + 1; }
     fn total(const p: struct pair) -> int32 { return p.x + p.y; }
     fn main() -> int32 {
         let v: int32 = 40;
@@ -106,7 +106,7 @@ def test_mut_convention_mismatch_is_an_error():
     # (ret, params, variadic) agree; only the derived mut/hidden-reference
     # convention differs -- still a mismatch, the call ABIs are different.
     with pytest.raises(LangError) as err:
-        compile_ir("fn f(a: int32);\nfn f(mut a: int32) { a = 1; }")
+        compile_ir("fn f(a: int32);\nfn f(a: &int32) { a = 1; }")
     assert err.value.message == "definition of 'f' does not match its prototype"
 
 

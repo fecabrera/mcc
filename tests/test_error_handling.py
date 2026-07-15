@@ -853,7 +853,7 @@ def test_mut_result_return_needs_an_lvalue():
         LangError, match="a reference return must be formed from a reference or pointer"
     ):
         compile_ir(
-            DECL + "fn f() -> mut result<int32, my_error> { return ok(1); }"
+            DECL + "fn f() -> &result<int32, my_error> { return ok(1); }"
         )
 
 

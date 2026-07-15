@@ -29,7 +29,7 @@ def test_index_reads_through_the_accessor():
     assert run(
         """
         struct box { items: int32[4]; }
-        @accessor fn box::at(mut self: box, i: uint64) -> mut int32 {
+        @accessor fn box::at(self: &box, i: uint64) -> &int32 {
             return self.items[i];
         }
         fn main() -> int32 {
@@ -46,7 +46,7 @@ def test_both_spellings_reach_the_method():
     assert run(
         """
         struct box { items: int32[4]; }
-        @accessor fn box::at(mut self: box, i: uint64) -> mut int32 {
+        @accessor fn box::at(self: &box, i: uint64) -> &int32 {
             return self.items[i];
         }
         fn main() -> int32 {
@@ -65,7 +65,7 @@ def test_mut_accessor_is_an_assignable_lvalue():
     assert run(
         """
         struct box { items: int32[4]; }
-        @accessor fn box::at(mut self: box, i: uint64) -> mut int32 {
+        @accessor fn box::at(self: &box, i: uint64) -> &int32 {
             return self.items[i];
         }
         fn main() -> int32 {
@@ -83,7 +83,7 @@ def test_multi_index_maps_to_the_argument_list():
     assert run(
         """
         struct grid { cells: int32[16]; }
-        @accessor fn grid::at(mut self: grid, r: uint64, c: uint64) -> mut int32 {
+        @accessor fn grid::at(self: &grid, r: uint64, c: uint64) -> &int32 {
             return self.cells[r * 4 + c];
         }
         fn main() -> int32 {
@@ -102,10 +102,10 @@ def test_non_integer_index_dispatches_by_type():
     assert run(
         """
         struct table { pos: int32[4]; neg: int32[4]; }
-        @accessor fn table::at(mut self: table, i: uint64) -> mut int32 {
+        @accessor fn table::at(self: &table, i: uint64) -> &int32 {
             return self.pos[i];
         }
-        @accessor fn table::at(mut self: table, flip: bool) -> mut int32 {
+        @accessor fn table::at(self: &table, flip: bool) -> &int32 {
             if (flip)
                 return self.neg[0];
             return self.pos[0];
@@ -150,7 +150,7 @@ def test_generic_accessor_monomorphizes():
     assert run(
         """
         struct pair<T> { a: T; b: T; }
-        @accessor fn pair<T>::at(mut self: pair<T>, i: uint64) -> mut T {
+        @accessor fn pair<T>::at(self: &pair<T>, i: uint64) -> &T {
             if (i == 0)
                 return self.a;
             return self.b;
@@ -172,7 +172,7 @@ def test_accessor_inherited_through_extends():
     assert run(
         """
         struct base { vals: int32[4]; }
-        @accessor fn base::at(mut self: base, i: uint64) -> mut int32 {
+        @accessor fn base::at(self: &base, i: uint64) -> &int32 {
             return self.vals[i];
         }
         struct derived extends base { extra: int32; }
@@ -191,7 +191,7 @@ def test_native_indexing_wins_for_pointers_and_arrays():
     assert run(
         """
         struct box { v: int32; }
-        @accessor fn box::at(mut self: box, i: uint64) -> mut int32 {
+        @accessor fn box::at(self: &box, i: uint64) -> &int32 {
             return self.v;
         }
         fn main() -> int32 {
@@ -211,7 +211,7 @@ struct celsius { kelvin: float64; }
 @accessor("get") fn celsius::deg(const self: celsius, i: uint64) -> float64 {
     return self.kelvin - 273.15;
 }
-@accessor("set") fn celsius::deg(mut self: celsius, i: uint64, v: float64) {
+@accessor("set") fn celsius::deg(self: &celsius, i: uint64, v: float64) {
     self.kelvin = v + 273.15;
 }
 """
@@ -255,7 +255,7 @@ def test_setter_return_value_is_ignored():
         @accessor("get") fn cell::at(const self: cell, i: uint64) -> int32 {
             return self.v;
         }
-        @accessor("set") fn cell::at(mut self: cell, i: uint64, v: int32) -> int32 {
+        @accessor("set") fn cell::at(self: &cell, i: uint64, v: int32) -> int32 {
             self.v = v;
             return -1;                     // ignored by `c[i] = v`
         }
@@ -276,7 +276,7 @@ def test_read_of_write_only_accessor_is_rejected():
         compile_ir(
             """
             struct cell { v: int32; }
-            @accessor("set") fn cell::at(mut self: cell, i: uint64, v: int32) {
+            @accessor("set") fn cell::at(self: &cell, i: uint64, v: int32) {
                 self.v = v;
             }
             fn main() -> int32 {
@@ -317,7 +317,7 @@ def test_compound_on_write_only_accessor_is_rejected():
         compile_ir(
             """
             struct cell { v: int32; }
-            @accessor("set") fn cell::at(mut self: cell, i: uint64, v: int32) {
+            @accessor("set") fn cell::at(self: &cell, i: uint64, v: int32) {
                 self.v = v;
             }
             fn main() -> int32 {
@@ -341,10 +341,10 @@ def test_two_accessor_names_on_one_type_are_rejected():
         compile_ir(
             """
             struct box { v: int32; }
-            @accessor fn box::at(mut self: box, i: uint64) -> mut int32 {
+            @accessor fn box::at(self: &box, i: uint64) -> &int32 {
                 return self.v;
             }
-            @accessor fn box::item(mut self: box, i: uint64) -> mut int32 {
+            @accessor fn box::item(self: &box, i: uint64) -> &int32 {
                 return self.v;
             }
             fn main() -> int32 {
@@ -363,10 +363,10 @@ def test_mixing_bare_with_pair_is_rejected():
         compile_ir(
             """
             struct box { v: int32; }
-            @accessor fn box::at(mut self: box, i: uint64) -> mut int32 {
+            @accessor fn box::at(self: &box, i: uint64) -> &int32 {
                 return self.v;
             }
-            @accessor("set") fn box::at(mut self: box, i: uint64, v: int32) {
+            @accessor("set") fn box::at(self: &box, i: uint64, v: int32) {
                 self.v = v;
             }
             fn main() -> int32 {
@@ -400,7 +400,7 @@ def test_accessor_without_an_index_is_rejected():
         compile_ir(
             """
             struct box { v: int32; }
-            @accessor fn box::at(mut self: box) -> mut int32 { return self.v; }
+            @accessor fn box::at(self: &box) -> &int32 { return self.v; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -414,7 +414,7 @@ def test_setter_arity_is_checked():
         compile_ir(
             """
             struct box { v: int32; }
-            @accessor("set") fn box::at(mut self: box, v: int32) { self.v = v; }
+            @accessor("set") fn box::at(self: &box, v: int32) { self.v = v; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -428,7 +428,7 @@ def test_accessor_returning_void_is_rejected():
         compile_ir(
             """
             struct box { v: int32; }
-            @accessor fn box::at(mut self: box, i: uint64) { self.v = 0; }
+            @accessor fn box::at(self: &box, i: uint64) { self.v = 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -442,7 +442,7 @@ def test_get_returning_mut_is_rejected():
         compile_ir(
             """
             struct box { v: int32; }
-            @accessor("get") fn box::at(mut self: box, i: uint64) -> mut int32 {
+            @accessor("get") fn box::at(self: &box, i: uint64) -> &int32 {
                 return self.v;
             }
             fn main() -> int32 { return 0; }
@@ -458,7 +458,7 @@ def test_unknown_accessor_kind_is_rejected():
         compile_ir(
             """
             struct box { v: int32; }
-            @accessor("put") fn box::at(mut self: box, i: uint64) -> mut int32 {
+            @accessor("put") fn box::at(self: &box, i: uint64) -> &int32 {
                 return self.v;
             }
             fn main() -> int32 { return 0; }
@@ -474,7 +474,7 @@ def test_combining_property_and_accessor_is_rejected():
         compile_ir(
             """
             struct box { v: int32; }
-            @property @accessor fn box::at(mut self: box, i: uint64) -> mut int32 {
+            @property @accessor fn box::at(self: &box, i: uint64) -> &int32 {
                 return self.v;
             }
             fn main() -> int32 { return 0; }

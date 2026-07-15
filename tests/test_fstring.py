@@ -218,7 +218,7 @@ def test_a_struct_literal_expression_in_a_hole(capfd):
         IO
         + """
         struct point { x: int32; y: int32; }
-        fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
+        fn format(str: &string, value: struct point*, const modifier: slice<char>) {
             format(str, value!->x, modifier);
             str.push(',');
             format(str, value!->y, modifier);
@@ -412,10 +412,10 @@ PROBE = (
     IO
     + """
     struct probe { id: int32; }
-    fn probe::constructor(mut self: probe, id: int32) { self.id = id; }
-    fn probe::destructor(mut self: probe) { println(f"drop {self.id}"); }
+    fn probe::constructor(self: &probe, id: int32) { self.id = id; }
+    fn probe::destructor(self: &probe) { println(f"drop {self.id}"); }
     fn mk(id: int32) -> own probe { return probe(id); }
-    fn format(mut str: string, const value: probe, const modifier: slice<char>) {
+    fn format(str: &string, const value: probe, const modifier: slice<char>) {
         format(str, value.id, modifier);
     }
     """

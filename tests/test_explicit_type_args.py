@@ -163,11 +163,11 @@ def test_constructor_chains_with_enclosing_type_parameter(capfd):
         """
         import "std/io";
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &point<T>, x: T, y: T) {
             self.x = x;
             self.y = y;
         }
-        fn point<T>::constructor<U>(mut self: point<T>, x: U, y: U) {
+        fn point<T>::constructor<U>(self: &point<T>, x: U, y: U) {
             point<T>::constructor(self, x as T, y as T);
         }
         fn main() -> int32 {
@@ -188,15 +188,15 @@ def test_destructor_chains_with_enclosing_type_parameter(capfd):
         """
         import "std/io";
         struct inner<T> { v: T; }
-        fn inner<T>::constructor(mut self: inner<T>, v: T) { self.v = v; }
-        fn inner<T>::destructor(mut self: inner<T>) {
+        fn inner<T>::constructor(self: &inner<T>, v: T) { self.v = v; }
+        fn inner<T>::destructor(self: &inner<T>) {
             println(f"inner down {self.v}");
         }
         struct outer<T> { i: inner<T>; }
-        fn outer<T>::constructor(mut self: outer<T>, v: T) {
+        fn outer<T>::constructor(self: &outer<T>, v: T) {
             inner<T>::constructor(self.i, v);
         }
-        fn outer<T>::destructor(mut self: outer<T>) {
+        fn outer<T>::destructor(self: &outer<T>) {
             println("outer down");
             inner<T>::destructor(self.i);
         }
@@ -239,8 +239,8 @@ def test_diagonal_beats_converting_under_a_pin():
     assert run(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::mk(mut self: point<T>, x: T, y: T) -> int32 { return 1; }
-        fn point<T>::mk<U>(mut self: point<T>, x: U, y: U) -> int32 { return 2; }
+        fn point<T>::mk(self: &point<T>, x: T, y: T) -> int32 { return 1; }
+        fn point<T>::mk<U>(self: &point<T>, x: U, y: U) -> int32 { return 2; }
         fn main() -> int32 {
             let p: point<float64>;
             return point<float64>::mk(p, 1.0, 2.0);
@@ -257,7 +257,7 @@ def test_untyped_literals_adapt_to_the_pinned_parameter():
     assert run(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::fill(mut self: point<T>, x: T, y: T) { self.x = x; self.y = y; }
+        fn point<T>::fill(self: &point<T>, x: T, y: T) { self.x = x; self.y = y; }
         fn main() -> int32 {
             let p: point<int8>;
             point<int8>::fill(p, 1, 2);
@@ -610,7 +610,7 @@ def test_ctor_sugar_still_parses_before_the_qualified_form():
     assert run(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+        fn point<T>::constructor(self: &point<T>, x: T, y: T) {
             self.x = x;
             self.y = y;
         }
@@ -665,10 +665,10 @@ def test_generic_body_with_the_spelling_round_trips_through_mci(tmp_path):
     lib = tmp_path / "lib.mc"
     lib.write_text(
         "struct point<T> { x: T; y: T; }\n"
-        "fn point<T>::constructor(mut self: point<T>, x: T, y: T) {\n"
+        "fn point<T>::constructor(self: &point<T>, x: T, y: T) {\n"
         "    self.x = x; self.y = y;\n"
         "}\n"
-        "fn point<T>::constructor<U>(mut self: point<T>, x: U, y: U) {\n"
+        "fn point<T>::constructor<U>(self: &point<T>, x: U, y: U) {\n"
         "    point<T>::constructor(self, x as T, y as T);\n"
         "}\n"
     )

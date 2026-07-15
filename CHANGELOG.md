@@ -8,19 +8,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Deprecated
-
-- **The `mut` / `-> mut` mutability spelling** — the legacy binder form
-  `fn f(mut x: T)` and return form `fn f() -> mut T` are superseded by the
-  `&T` reference types (see Added). They still compile and mean exactly the
-  same thing, but now emit a warning under the new opt-in `-Wdeprecated-mut`
-  class (included in `-Wall`): `the 'mut' parameter spelling is deprecated;
-  write the type as '&T' instead` (and the matching `-> &T` message for
-  returns). Migrate by moving the marker into the type slot. The `mut`
-  keyword itself is not yet removed — that closes the deprecation window in a
-  later release (Phase C of the `&`-reference redesign).
-
 ### Removed
+
+- **BREAKING: the legacy `mut` / `-> mut` mutability spelling and its
+  `-Wdeprecated-mut` warning class** — the deprecation window opened by the
+  Phase-A `&T` respell (see the reference-parameter entry under Added) is now
+  closed: the `mut`-binder parameter form `fn f(mut x: T)` and the `-> mut T`
+  return form no longer parse, and `-Wdeprecated-mut` is gone from the warning
+  registry. Write the reference marker in the type slot instead (`x: &T`,
+  `-> &T`). `mut` is de-keyworded, so it is now an ordinary identifier.
+  (Phase C of the `&`-reference redesign.)
 
 - **BREAKING: the variadic `@format` `print`/`println` overloads** —
   `print(fmt, args...)`, `println(fmt, args...)`, and their `FILE*` forms

@@ -157,7 +157,7 @@ def test_mut_marker_is_part_of_the_template_base():
     # symbols apart -- unlike concrete sets, where marker-only variants are
     # uncallable duplicates.
     out = compile_ir(
-        "fn bump<T>(mut a: T) { a = a + (1 as T); }\n"
+        "fn bump<T>(a: &T) { a = a + (1 as T); }\n"
         "fn main() -> int32 { let x: int32 = 1; bump(x); return x - 2; }"
     )
     assert 'define void @"bump<$0>(&$0)<int32>"(' in out
@@ -272,17 +272,17 @@ def test_instance_symbols_are_import_order_independent(tmp_path):
 COUNTER = """
 struct counter { value: int32; step: int32; }
 
-fn counter_init(mut self: counter) {
+fn counter_init(self: &counter) {
     self.value = 0;
     self.step = 1;
 }
 
-fn counter_init(mut self: counter, start: int32) {
+fn counter_init(self: &counter, start: int32) {
     self.value = start;
     self.step = 1;
 }
 
-fn counter_init(mut self: counter, start: int32, step: int32) {
+fn counter_init(self: &counter, start: int32, step: int32) {
     self.value = start;
     self.step = step;
 }
@@ -393,7 +393,7 @@ def test_marker_only_variant_is_a_duplicate():
     with pytest.raises(LangError) as err:
         compile_ir(
             "fn f(x: int32) -> int32 { return x; }\n"
-            "fn f(mut x: int32) -> int32 { x = 0; return x; }\n"
+            "fn f(x: &int32) -> int32 { x = 0; return x; }\n"
             "fn main() -> int32 { return 0; }"
         )
     assert err.value.message == (

@@ -1080,35 +1080,6 @@ class CodeGen:
             line, wclass="unused-result",
         )
 
-    def warn_deprecated_mut(self, line: int, is_return: bool) -> None:
-        """Warn under ``-Wdeprecated-mut`` that a ``mut`` spelling was used.
-
-        The single formatter for the ``deprecated-mut`` class: a parameter or
-        return whose reference marker was written with the legacy ``mut``
-        keyword rather than the blessed ``&T`` spelling funnels through here.
-        Like every opt-in class it never changes the code generated -- ``mut``
-        and ``&`` compile identically -- it only steers migration ahead of
-        ``mut``'s eventual retirement. The driver deduplicates repeats of one
-        ``(source, line, message)`` triple at print time, so a template
-        re-analyzed per instantiation warns once per source site.
-
-        Args:
-            line: The declaration site's 1-based source line.
-            is_return: The marker was a ``-> mut`` return (else a parameter).
-        """
-        if is_return:
-            self.warn(
-                "the '-> mut' return spelling is deprecated; write the return "
-                "type as '-> &T' instead",
-                line, wclass="deprecated-mut",
-            )
-        else:
-            self.warn(
-                "the 'mut' parameter spelling is deprecated; write the type "
-                "as '&T' instead",
-                line, wclass="deprecated-mut",
-            )
-
     def warn_destructor_copy(self, expr, t: LangType, line: int) -> None:
         """Warn under ``-Wdestructor-copy`` that an owning value is bit-copied.
 
@@ -3292,13 +3263,6 @@ class CodeGen:
             mutref = frozenset(i for i, p in enumerate(ref.params) if p.mut)
             mutret = ref.ret is not None and ref.ret.mut
             ownret = ref.ret is not None and getattr(ref.ret, "own", False)
-            # A `mut`/`-> mut` spelling anywhere in the fn type is deprecated;
-            # the driver dedups per (source, line, message), so a type used
-            # repeatedly (or re-resolved per instantiation) warns once.
-            if any(getattr(p, "mut_deprecated", False) for p in ref.params):
-                self.warn_deprecated_mut(line, is_return=False)
-            if ref.ret is not None and getattr(ref.ret, "mut_deprecated", False):
-                self.warn_deprecated_mut(line, is_return=True)
             if mutret:
                 # Per use, like the @nonnull rule below, so a generic alias
                 # like `type getter<T> = fn() -> &T` is validated against
@@ -5284,16 +5248,6 @@ class CodeGen:
                     overload_keys.add((source, name))
         declared: set[tuple[str | None, str]] = set()
         for func in self.program.functions:
-            # A deprecated `mut`/`-> mut` spelling in this declaration's
-            # signature warns once per source site (params and return).
-            if func.mut_kw_param_lines or func.mut_kw_return_line is not None:
-                self.current_source = func.source
-                for mline in func.mut_kw_param_lines:
-                    self.warn_deprecated_mut(mline, is_return=False)
-                if func.mut_kw_return_line is not None:
-                    self.warn_deprecated_mut(
-                        func.mut_kw_return_line, is_return=True
-                    )
             if func.removed_msg is not None:
                 # An @removed tombstone registers its name and message only.
                 # It deliberately skips the declare path: the signature is

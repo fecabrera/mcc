@@ -81,7 +81,7 @@ def test_mut_property_is_an_assignable_lvalue():
     assert run(
         """
         struct box { v: int32; }
-        @property fn box::value(mut self: box) -> mut int32 { return self.v; }
+        @property fn box::value(self: &box) -> &int32 { return self.v; }
         fn main() -> int32 {
             let b = box { v = 5 };
             b.value = 40;                  // property write
@@ -199,7 +199,7 @@ struct gauge { raw: int32; }
 @property("get")
 fn gauge::level(const self: gauge) -> int32 { return self.raw; }
 @property("set")
-fn gauge::level(mut self: gauge, value: int32) -> int32 {
+fn gauge::level(self: &gauge, value: int32) -> int32 {
     let old = self.raw;
     self.raw = value < 0 ? 0 : (value > 100 ? 100 : value);
     return old;    // a setter may return; the assignment discards it
@@ -285,7 +285,7 @@ def test_generic_pair_and_inheritance():
         @property("get")
         fn wrap<T>::value(const self: wrap<T>) -> T { return self.inner; }
         @property("set")
-        fn wrap<T>::value(mut self: wrap<T>, v: T) { self.inner = v; }
+        fn wrap<T>::value(self: &wrap<T>, v: T) { self.inner = v; }
         struct tagged extends wrap<int32> { tag: char; }
         fn main() -> int32 {
             let w = wrap<int32> { inner = 3 };
@@ -306,7 +306,7 @@ def test_read_of_write_only_property_is_rejected():
         compile_ir(
             """
             struct b { n: int32; }
-            @property("set") fn b::v(mut self: b, x: int32) { self.n = x; }
+            @property("set") fn b::v(self: &b, x: int32) { self.n = x; }
             fn main() -> int32 {
                 let t = b { n = 1 };
                 return t.v;
@@ -323,7 +323,7 @@ def test_compound_on_write_only_property_is_rejected():
         compile_ir(
             """
             struct b { n: int32; }
-            @property("set") fn b::v(mut self: b, x: int32) { self.n = x; }
+            @property("set") fn b::v(self: &b, x: int32) { self.n = x; }
             fn main() -> int32 {
                 let t = b { n = 1 };
                 t.v += 2;
@@ -358,8 +358,8 @@ def test_mixing_bare_with_pair_is_rejected():
         compile_ir(
             """
             struct b { n: int32; }
-            @property fn b::v(mut self: b) -> mut int32 { return self.n; }
-            @property("set") fn b::v(mut self: b, x: int32) { self.n = x; }
+            @property fn b::v(self: &b) -> &int32 { return self.n; }
+            @property("set") fn b::v(self: &b, x: int32) { self.n = x; }
             fn main() -> int32 {
                 let t = b { n = 1 };
                 return t.v;
@@ -375,7 +375,7 @@ def test_get_returning_mut_is_rejected():
         compile_ir(
             """
             struct b { n: int32; }
-            @property("get") fn b::v(mut self: b) -> mut int32 {
+            @property("get") fn b::v(self: &b) -> &int32 {
                 return self.n;
             }
             fn main() -> int32 { return 0; }
@@ -391,7 +391,7 @@ def test_setter_arity_is_checked():
         compile_ir(
             """
             struct b { n: int32; }
-            @property("set") fn b::v(mut self: b) { }
+            @property("set") fn b::v(self: &b) { }
             fn main() -> int32 { return 0; }
             """
         )

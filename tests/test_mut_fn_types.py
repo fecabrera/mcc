@@ -1,6 +1,6 @@
-"""``mut``/``const``-carrying function types: ``fn(mut T)`` / ``fn(const T)``.
+"""``mut``/``const``-carrying function types: ``fn(&T)`` / ``fn(const T)``.
 
-The function type spells the per-parameter calling convention (`fn(mut char)`,
+The function type spells the per-parameter calling convention (`fn(&char)`,
 `fn(const big)`), so a function with ``mut`` or hidden-reference ``const``
 parameters is a legal function value and calls through the value pass the
 same by-reference arguments -- and run the same lvalue/storage checks -- as a
@@ -21,7 +21,7 @@ from mcc.parser import Parser
 from helpers import compile_ir, parse, run
 
 
-BUMP = "fn bump(mut a: char) { a = a + 1; }\n"
+BUMP = "fn bump(a: &char) { a = a + 1; }\n"
 PLAIN = "fn plain(a: char) {}\n"
 BIG = "struct big { a: int64; b: int64; c: int64; }\n"
 SUM = "fn sum(const s: &struct big) -> int64 { return s.a + s.b + s.c; }\n"
@@ -48,7 +48,7 @@ def _iface(source: str) -> str:
 
 
 def test_fn_type_mut_param_parses():
-    (func,) = parse("fn apply(cb: fn(mut char, int32)) {}").functions
+    (func,) = parse("fn apply(cb: fn(&char, int32)) {}").functions
     cb_type = func.params[0][1]
     assert str(cb_type) == "fn(&char, int32) -> void"
     assert cb_type.params[0].mut and not cb_type.params[1].mut
@@ -70,7 +70,7 @@ def test_fn_type_nonnull_and_mut_rejected():
             "(a reference parameter is passed by hidden reference and is never null)"
         ),
     ):
-        parse("fn f(cb: fn(@nonnull mut char*)) {}")
+        parse("fn f(cb: fn(@nonnull &char*)) {}")
 
 
 def test_fn_type_const_ref_is_the_read_only_view():
@@ -119,7 +119,7 @@ def test_const_struct_fn_value_runs():
 def test_explicit_annotated_type_accepts_matching_function():
     assert run(
         BUMP + "fn main() -> int32 {\n"
-        "    let f: fn(mut char) = bump;\n"
+        "    let f: fn(&char) = bump;\n"
         "    let c: char = 'x';\n"
         "    f(c);\n"
         "    return (c == 'y') ? 3 : 0;\n"
@@ -130,7 +130,7 @@ def test_explicit_annotated_type_accepts_matching_function():
 def test_fn_type_parameter_passes_callback():
     # A fn(mut T) parameter takes the callback and calls through it.
     assert run(
-        BUMP + "fn twice(cb: fn(mut char), mut c: char) { cb(c); cb(c); }\n"
+        BUMP + "fn twice(cb: fn(&char), c: &char) { cb(c); cb(c); }\n"
         "fn main() -> int32 {\n"
         "    let c: char = 'a';\n"
         "    twice(bump, c);\n"
@@ -141,7 +141,7 @@ def test_fn_type_parameter_passes_callback():
 
 def test_struct_field_carries_convention():
     assert run(
-        BUMP + "struct holder { cb: fn(mut char); }\n"
+        BUMP + "struct holder { cb: fn(&char); }\n"
         "fn main() -> int32 {\n"
         "    let h: holder = holder{cb = bump};\n"
         "    let c: char = '0';\n"
@@ -154,8 +154,8 @@ def test_struct_field_carries_convention():
 def test_static_table_of_mut_fn_values():
     # The constant-initializer path (const_coerce) admits the exact type.
     assert run(
-        BUMP + "fn drop2(mut a: char) { a = a - 2; }\n"
-        "@static let ops: (fn(mut char))[] = [bump, drop2];\n"
+        BUMP + "fn drop2(a: &char) { a = a - 2; }\n"
+        "@static let ops: (fn(&char))[] = [bump, drop2];\n"
         "fn main() -> int32 {\n"
         "    let c: char = 'M';\n"
         "    ops[0](c);\n"
@@ -168,7 +168,7 @@ def test_static_table_of_mut_fn_values():
 def test_mixed_convention_indices_are_per_parameter():
     # Only the marked indices change convention; the plain one stays by value.
     assert run(
-        BIG + "fn mix(n: int32, mut acc: int64, const s: struct big) {\n"
+        BIG + "fn mix(n: int32, acc: &int64, const s: struct big) {\n"
         "    acc = acc + s.a + (n as int64);\n"
         "}\n"
         "fn main() -> int32 {\n"
@@ -202,7 +202,7 @@ def test_indirect_mut_argument_rejects_const_parameter():
         match="cannot pass a const parameter as a reference argument; it is read-only",
     ):
         compile_ir(
-            "fn setv(mut n: int32) { n = 7; }\n"
+            "fn setv(n: &int32) { n = 7; }\n"
             "fn outer(const n: int32) { let f = setv; f(n); }\n"
             "fn main() -> int32 { return 0; }"
         )
@@ -264,7 +264,7 @@ def test_plain_fn_value_does_not_lift_to_mut():
         ),
     ):
         compile_ir(
-            PLAIN + "fn main() -> int32 { let g: fn(mut char) = plain; return 0; }"
+            PLAIN + "fn main() -> int32 { let g: fn(&char) = plain; return 0; }"
         )
 
 
@@ -387,7 +387,7 @@ def test_as_same_shape_reinterpret_still_works():
     # argument by reference, so the cast changes only the spelled type.
     assert run(
         BUMP + "fn main() -> int32 {\n"
-        "    let g = bump as fn(mut uint8);\n"
+        "    let g = bump as fn(&uint8);\n"
         "    let u: uint8 = 65;\n"
         "    g(u);\n"
         "    return (u == 66) ? 7 : 0;\n"
@@ -569,7 +569,7 @@ def test_collecting_fn_value_spells_the_slice_parameter():
 def test_mut_fn_type_round_trips_through_interface():
     # The stub renders the fn-type parameter through TypeRef.__str__, so the
     # convention ships in the .mci and re-parses into the same type.
-    src = "fn twice(cb: fn(mut char), mut c: char) { cb(c); cb(c); }\n"
+    src = "fn twice(cb: fn(&char), c: &char) { cb(c); cb(c); }\n"
     out = _iface(src)
     assert "fn twice(cb: fn(&char) -> void, c: &char);" in out
     caller = out + (

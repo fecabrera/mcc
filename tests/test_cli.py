@@ -42,7 +42,7 @@ def test_native_build_links_template_pattern_symbols(tmp_path):
     src.write_text(
         "fn g<T>(x: T) -> int32 { return 1; }\n"
         "fn g<T>(x: T*) -> int32 { return 2; }\n"
-        "fn bump<T>(mut a: T) { a = a + (1 as T); }\n"
+        "fn bump<T>(a: &T) { a = a + (1 as T); }\n"
         "fn main() -> int32 {\n"
         "    let v: int32 = 5;\n"
         "    bump(v);\n"
@@ -1211,7 +1211,7 @@ def test_interface_roundtrip_with_mut_and_const_struct(tmp_path):
     lib.write_text(
         "struct pair { a: int64; b: int64; }\n"
         "fn total(const p: struct pair) -> int64 { return p.a + p.b; }\n"
-        "fn bump(mut n: int32) { n = n + 1; }\n"
+        "fn bump(n: &int32) { n = n + 1; }\n"
     )
     assert mcc(lib, "-c", "-o", tmp_path / "statlib.o").returncode == 0
     assert mcc(lib, "--emit-interface").returncode == 0
