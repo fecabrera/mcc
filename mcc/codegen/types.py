@@ -67,6 +67,13 @@ class LangType:
             function-pointer type -- passed by hidden reference like ``mut``,
             but read-only. Spelled into the ``name`` and reflected in the LLVM
             parameter type; excluded from equality/hash like ``nonnull``.
+        own: Indices of the ``own`` by-value parameters of a function-pointer
+            type -- a call through the value transfers ownership of the
+            argument (the callee drops it), so it enforces the same move-in
+            discipline as a direct call. Pure policy: spelled into the
+            ``name`` (so ``fn(own box)`` is distinct from ``fn(box)``) but no
+            ABI change (the value passes by value either way); excluded from
+            equality/hash like ``nonnull``.
         mutret: ``True`` for a function-pointer type with a ``mut`` return
             (``fn(...) -> mut T``) -- the call returns a pointer to
             caller-reachable storage, so a call through the value is an
@@ -116,6 +123,7 @@ class LangType:
     nonnull: frozenset = field(default=frozenset(), compare=False)
     mutref: frozenset = field(default=frozenset(), compare=False)
     constref: frozenset = field(default=frozenset(), compare=False)
+    own: frozenset = field(default=frozenset(), compare=False)
     mutret: bool = field(default=False, compare=False)
     ownret: bool = field(default=False, compare=False)
     element: "LangType | None" = None
@@ -346,6 +354,7 @@ def function_type(
     nonnull: frozenset = frozenset(),
     mutref: frozenset = frozenset(),
     constref: frozenset = frozenset(),
+    own: frozenset = frozenset(),
     mutret: bool = False,
     ownret: bool = False,
 ) -> LangType:
@@ -385,6 +394,9 @@ def function_type(
             pointer to the returned storage (never erased: a ``mut`` return
             always changes the return convention), spelled into the name and
             reflected in the LLVM return type.
+        own: Indices of ``own`` by-value parameters -- a call through the
+            value transfers ownership of the argument. Spelled into the name
+            only (no ABI change; the value passes by value either way).
         ownret: ``True`` for an ``-> own`` return -- the call hands the
             caller the cleanup obligation. Spelled into the name only (no
             ABI change).
@@ -416,6 +428,7 @@ def function_type(
     )
     parts = [
         ("@nonnull " if i in nonnull else "")
+        + ("own " if i in own else "")
         + ("const " if i in constref else "")
         + ("&" if i in hidden else "")
         + p.name
@@ -437,6 +450,7 @@ def function_type(
         nonnull=nonnull,
         mutref=mutref,
         constref=constref,
+        own=own,
         mutret=mutret,
         ownret=ownret,
     )

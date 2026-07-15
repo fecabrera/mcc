@@ -103,6 +103,10 @@ fn main() -> int32 {
     return 0;
 }
 
+// `own` works beyond the direct call too -- on generic functions, methods of
+// generic structs (a container's consuming method), overloaded sets, and as a
+// function value (`fn(own box)`). See own_generic.mc for those forms.
+//
 // Not in this phase, each a compile error today:
 //   * `own self: &T`, the owned-reference receiver (own moves a value in,
 //     a reference lends a view): "a parameter cannot be both own and a
@@ -110,12 +114,9 @@ fn main() -> int32 {
 //     a later phase".
 //   * `own` on an @extern parameter: "own parameters are not allowed on
 //     @extern functions (C has no ownership obligation to take)".
-//   * `own` on a generic function or a method of a generic struct: "own
-//     parameters are not yet supported on generic functions or methods of
-//     generic structs (the consuming receiver is monomorphic; generic own
-//     is a follow-up)".
 //
-// See also: own_returns.mc (the move-OUT return this mirrors, and
+// See also: own_generic.mc (`own` on generic/overloaded/function-value
+// paths), own_returns.mc (the move-OUT return this mirrors, and
 // `move(...)`), destructors.mc (the scheduled drop this runs and cancels),
 // own_drops.mc (where an UNadopted `-> own` temporary drops instead -- a
 // consuming `own` parameter adopts its temporary, it does not drop it at

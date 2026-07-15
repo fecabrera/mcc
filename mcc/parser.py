@@ -987,8 +987,13 @@ class Parser:
             # `fn(const &T)` composes the `const` and the `&` reference into the
             # read-only hidden reference (parse_type_ref only consumes a leading
             # `&`, so `const` is read here to sit in front of it, then folded
-            # onto the TypeRef).
+            # onto the TypeRef). A leading `own` marks a by-value consuming
+            # parameter -- a call through the value transfers ownership of the
+            # argument (the callee drops it), so the value's type carries the
+            # move-in contract exactly as a declaration does. It precedes
+            # `const`, mirroring the declaration side's `own const self: T`.
             slot_line = self.cur.line
+            is_own = bool(self.accept("own"))
             const_kw = bool(self.accept("const"))
             ref = self.parse_type_ref(allow_ref=True)
             if const_kw:
@@ -1000,6 +1005,17 @@ class Parser:
                     "and is never null)",
                     slot_line,
                 )
+            if is_own and ref.mut:
+                # `fn(own &T)`: the owned-*reference* parameter is a later
+                # phase, exactly as on the declaration side.
+                raise LangError(
+                    "a parameter cannot be both own and a reference (own "
+                    "moves a value in and drops it; a reference lends a view); "
+                    "the owned-reference receiver `own self: &T` arrives in a "
+                    "later phase",
+                    slot_line,
+                )
+            ref.own = is_own
             # `const &T` in a function type is the read-only reference view
             # (Phase B): the const rides on the TypeRef's `const` flag, the
             # reference on its `mut` flag, and function_type reconciles the pair
@@ -1916,19 +1932,6 @@ class Parser:
             raise LangError(
                 "own parameters are not allowed on @extern functions "
                 "(C has no ownership obligation to take)",
-                line,
-            )
-        if own_params and (type_params or struct_type_args is not None):
-            # An own by-value receiver is monomorphic by nature (you consume a
-            # value whose concrete type you know), and the call-site
-            # move-in/adopt discipline is emitted on the direct-call path.
-            # Generic functions and methods of generic structs marshal their
-            # arguments before the winner is known, so sound own-transfer there
-            # is a follow-up; reject for now.
-            raise LangError(
-                "own parameters are not yet supported on generic functions or "
-                "methods of generic structs (the consuming receiver is "
-                "monomorphic; generic own is a follow-up)",
                 line,
             )
         if (mut_params or constref_params) and extern:
