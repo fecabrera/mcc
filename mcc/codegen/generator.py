@@ -9495,9 +9495,16 @@ class CodeGen:
         self.builder.store(arg.value, src_slot)
         hidden = "0for.iterable"
         self.bind_local(hidden, src_slot, arg.type)
+        # The iterable pointer is non-null by construction -- an `alloca`
+        # address (the by-value branch) or a live reference/pointer the loop is
+        # about to walk. The `_it` producer's `@nonnull self` is a stdlib-
+        # internal ABI detail; vouch for the compiler-formed argument here so it
+        # does not leak out as a null constraint on the user's `for ... in`.
+        self.nonnull_locals.add(hidden)
         iterator = self.gen_call(Call(it_name, [], [Var(hidden, stmt.line)], stmt.line))
         del self.locals[hidden]
         self.scope_names.discard(hidden)
+        self.nonnull_locals.discard(hidden)
         it_slot = self.builder.alloca(iterator.type.ir, name="for.iter")
         self.builder.store(iterator.value, it_slot)
 

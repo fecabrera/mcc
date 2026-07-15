@@ -16,7 +16,7 @@ Two families:
   owned string the caller adopts. `string::format` is the `string`-receiver
   delegate. A bare string-literal receiver reaches it via the
   string-literal-to-`slice<const char>` dot-call adaptation.
-- `fn slice<T>::equals(const self: slice<T>, const str: slice<T>) -> bool`
+- `fn slice<T>::equals(const self: &slice<T>, const str: slice<T>) -> bool`
   -- element-by-element slice equality (different lengths never equal), plus
   the `slice<const char>`-vs-`string` overload that bridges to `string`.
 """

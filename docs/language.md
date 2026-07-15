@@ -980,7 +980,7 @@ the [dot-call sugar](#calling-methods-dot-syntax), `p.magnitude()`:
 ```c
 struct point { x: float64; y: float64; }
 
-fn point::magnitude(self: point) -> float64 {
+fn point::magnitude(const self: &point) -> float64 {
     return sqrt(self.x * self.x + self.y * self.y);
 }
 
@@ -992,13 +992,21 @@ fn main() -> int32 {
 
 This is the foundational, **explicit-call** form. Its rules today:
 
-- **The qualifier is purely a namespace.** `point::` names the struct the
-  method belongs to and nothing more. The receiver is an ordinary parameter:
-  mcc enforces **no `self` convention** — no required parameter named `self`,
-  no required first-parameter type, no required receiver at all.
-  `fn point::origin() -> point` and `fn point::of(x: float64, y: float64)`
-  are legal. `self` above is a convention, not a keyword, and `reference self` is
-  just a `&` parameter whose mutations are visible to the caller.
+- **`self` is a checked receiver.** A first parameter named `self` is the
+  method's *receiver*, and a receiver must be **reference-shaped**:
+  `const self: &T` reads the receiver, `self: &T` mutates it in place (the write
+  is visible to the caller), and `@nonnull self: T*` is the pointer-class
+  receiver. A **by-value copy receiver** (`self: T`) is rejected — it would copy
+  the receiver, slicing a derived value and never reaching a dynamic-dispatch
+  entry. The caller never writes the `&`: an ordinary value argument
+  (`point::magnitude(p)`, or the dot-call `p.magnitude()`) forms the hidden
+  reference automatically. The check is *name-based*, so a **receiverless**
+  method — one whose first parameter is not named `self` — is untouched:
+  `fn point::origin() -> point` and `fn point::of(x: float64, y: float64)` are
+  legal.
+- **The qualifier is a namespace.** `point::` names the struct the method
+  belongs to and nothing more — the only rule on the qualifier itself is that it
+  is a declared, complete type (below).
 - **The qualifier must be a declared, complete type.** The segment before
   `::` must name a type in scope: a struct, a builtin type
   (`fn int32::m` — see [methods on type
@@ -1026,7 +1034,7 @@ parameters written *before* the `::`:
 ```c
 struct point<T> { x: T; y: T; }
 
-fn point<T>::magnitude(self: point<T>) -> float64 {
+fn point<T>::magnitude(const self: &point<T>) -> float64 {
     return sqrt((self.x * self.x + self.y * self.y) as float64);
 }
 
@@ -1056,15 +1064,15 @@ monomorphized per element type, so `point::magnitude` over `point<int32>` and
   [pins the instantiation](#explicit-type-arguments-at-a-qualified-call).
 - **The receiver is explicit.** There is no `point`-means-`point<T>` sugar:
   inside a `point<T>::` method the receiver (and every parameter and the return
-  type) must name its type arguments — `self: point<T>`. A bare `self: point`
-  keeps the ordinary generic arity error
+  type) must name its type arguments — `const self: &point<T>`. A bare
+  `self: &point` keeps the ordinary generic arity error
   (`struct 'point' expects 1 type argument(s), got 0`). Type arguments are
   **inferred** from the call arguments as usual (`point::magnitude(p)` binds
   `T` from `p`) — or the call qualifier may
   [spell the instantiation](#explicit-type-arguments-at-a-qualified-call)
   (`point<float64>::magnitude(p)`), pinning the receiver instantiation.
 - **A method may declare its own type parameters**, written *after* `::method`:
-  `fn box<T>::combine<U>(const self: box<T>, extra: U) -> U`. The struct's
+  `fn box<T>::combine<U>(const self: &box<T>, extra: U) -> U`. The struct's
   parameters and the method's own parameters merge into one uniform template
   (concatenated names, merged defaults, groups, and bounds), so both are
   inferred at the call. A method type parameter may **not shadow** one of the
@@ -1129,9 +1137,9 @@ that agree on the concrete positions:
 ```c
 struct pair<A, B> { a: A; b: B; }
 
-fn pair<T, U>::describe(self: pair<T, U>) -> int32 { return 0; }        // any pair
-fn pair<int32, U>::describe(self: pair<int32, U>) -> int32 { return 1; } // pair<int32, X>
-fn pair<int32, int8>::describe(self: pair<int32, int8>) -> int32 { return 2; }
+fn pair<T, U>::describe(const self: &pair<T, U>) -> int32 { return 0; }        // any pair
+fn pair<int32, U>::describe(const self: &pair<int32, U>) -> int32 { return 1; } // pair<int32, X>
+fn pair<int32, int8>::describe(const self: &pair<int32, int8>) -> int32 { return 2; }
 ```
 
 A `pair<int32, int8>` receiver runs the full specialization, a
@@ -1255,7 +1263,7 @@ errors like any other use of it. The rules:
   special case.
 - **Generic alias spellings are transparent to inference.** A parameter
   pattern written through a generic alias unifies as the type it names:
-  `fn diag<V>::grab(const self: diag<V>) -> V` unifies and shape-checks as
+  `fn diag<V>::grab(const self: &diag<V>) -> V` unifies and shape-checks as
   `pair<V, V>`, binding `V` from a `pair<int32, int32>` argument (and
   enforcing the diagonal).
 - **Builtin types are qualifiers too.** `fn int32::clamp(...)` (or any
@@ -1360,7 +1368,7 @@ the desugared call's own:
 ```c
 struct counter { n: int32; }
 fn counter::bump(self: &counter) { self.n += 1; }
-fn counter::get(const self: counter) -> int32 { return self.n; }
+fn counter::get(const self: &counter) -> int32 { return self.n; }
 
 fn main() -> int32 {
     let c: counter;
@@ -1429,7 +1437,7 @@ overload machinery, inheritance, and pointer auto-deref all carry through.
 struct temperature { celsius: int32; }
 
 @property
-fn temperature::fahrenheit(const self: temperature) -> int32 {
+fn temperature::fahrenheit(const self: &temperature) -> int32 {
     return self.celsius * 9 / 5 + 32;
 }
 
@@ -1467,7 +1475,7 @@ path. For accessors that must — validation, clamping, bookkeeping —
 struct gauge { raw: int32; }
 
 @property("get")
-fn gauge::level(const self: gauge) -> int32 { return self.raw; }
+fn gauge::level(const self: &gauge) -> int32 { return self.raw; }
 
 @property("set")
 fn gauge::level(self: &gauge, value: int32) {
@@ -1989,7 +1997,7 @@ fn point<T>::constructor(self: &point<T>, x: T, y: T) {
 fn pointf::constructor<U>(self: &pointf, x: U, y: U) {   // converting
     self.x = x as float64; self.y = y as float64;
 }
-fn point<T>::magnitude(const self: point<T>) -> float64 {
+fn point<T>::magnitude(const self: &point<T>) -> float64 {
     return sqrt(pow(self.x, 2.0) + pow(self.y, 2.0));
 }
 
@@ -2034,12 +2042,13 @@ the receiver binding `T`, bare-head constructor inference included
 
 **The receiver upcasts — and only the receiver.** In the receiver position
 (the first argument) of any method-family call, a derived value passes where
-the resolved parameter is a declared base of its lineage: a `&` or
-`const` (hidden-reference) receiver **lends its base prefix in place** — the
-same storage viewed as the base, so a `reference self` method's writes land in the
-derived value's leading fields — and a by-value receiver **prefix-copies**
-(the honest data slicing the [`as` upcast](#structs) performs; the derived
-tail is simply not passed). This covers the explicit qualified spelling too:
+the resolved parameter is a declared base of its lineage: a `self: &T` or
+`const self: &T` (hidden-reference) receiver **lends its base prefix in place** —
+the same storage viewed as the base, so a `self: &T` method's writes land in the
+derived value's leading fields. Every receiver is reference-shaped (a by-value
+copy receiver is rejected precisely because it would slice the derived value),
+so the base prefix is always lent, never copied. This covers the explicit
+qualified spelling too:
 `point::magnitude(p)` accepts a `pointf`, and a derived constructor
 **chains** by calling the base's directly:
 
@@ -2403,7 +2412,7 @@ bound the parameters it names:
 ```c
 // The stdlib shape that motivates it: accept anything that extends slice<T>,
 // with T the container's own element type -- no `as` at the call site.
-fn list<T>::equals<U extends slice<T>>(const self: list<T>, const lst: U) -> bool {
+fn list<T>::equals<U extends slice<T>>(const self: &list<T>, const lst: U) -> bool {
     return self.equals(lst as slice<const T>);
 }
 
@@ -3429,7 +3438,7 @@ dispatches by name. For an `obj` of type `struct list<T>` it calls `list_it`
 and `list_next`:
 
 ```c
-fn list_it<T>(self: struct list<T>*) -> struct iterator<list<T>>;  // make a cursor
+fn list_it<T>(@nonnull self: struct list<T>*) -> struct iterator<list<T>>;  // make a cursor
 fn list_next<T>(it: struct iterator<list<T>>*, out: T*) -> bool;    // false when done
 ```
 

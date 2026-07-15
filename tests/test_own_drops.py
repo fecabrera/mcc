@@ -136,7 +136,7 @@ def test_collected_extra_temp_drops(capfd):
 
 def test_chained_receiver_drops_after_the_chain(capfd):
     src = RES + """
-    fn res::poke(self: res) -> int32 { println(f"poke {self.fd}"); return self.fd; }
+    fn res::poke(const self: &res) -> int32 { println(f"poke {self.fd}"); return self.fd; }
     fn main() -> int32 {
         let n = make(7).poke();
         println(f"got {n}");

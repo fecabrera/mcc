@@ -61,7 +61,7 @@ fn outer(x: int32) -> int32 {
     return x;
 }
 
-fn res::poke(self: res) -> int32 {
+fn res::poke(const self: &res) -> int32 {
     println(f"  poke {self.id}");
     return self.id;
 }

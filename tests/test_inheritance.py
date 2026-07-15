@@ -10,9 +10,10 @@ instantiation -- ``pointf extends point<float64>`` inherits the diagonal
 inherited exact match beats a derived generic), the hop beats specificity (a
 derived same-shape member shadows an inherited one). Emission always
 instantiates the ORIGIN template -- one shared instance and symbol -- and the
-receiver coerces at the boundary: a ``mut``/``const`` receiver lends its base
-prefix in place, a by-value receiver prefix-copies (the honest data slicing
-the ``as`` upcast performs). The upcast applies to the RECEIVER position of
+receiver coerces at the boundary: a ``&``/``const &`` receiver lends its base
+prefix in place. A by-value copy receiver is rejected by construction (it
+would slice the derived value), so every receiver is reference-shaped and the
+prefix is always lent, never copied. The upcast applies to the RECEIVER position of
 method-family calls only (explicit qualified calls included, so
 ``point::constructor(self, ...)`` chains from a derived constructor);
 every other argument keeps the explicit ``as``.
@@ -34,7 +35,7 @@ POINT = """
     fn pointf::constructor<U>(self: &pointf, x: U, y: U) {
         self.x = x as float64; self.y = y as float64;
     }
-    fn point<T>::magnitude(const self: struct point<T>) -> float64 {
+    fn point<T>::magnitude(const self: &struct point<T>) -> float64 {
         return sqrt(pow(self.x as float64, 2.0) + pow(self.y as float64, 2.0));
     }
 """
@@ -95,7 +96,7 @@ def test_concrete_base_method_callable_on_derived(capfd):
         import "std/io";
         struct b { tag: int32; }
         struct d extends b { extra: int32; }
-        fn b::describe(const self: b) -> int32 { return self.tag * 10; }
+        fn b::describe(const self: &b) -> int32 { return self.tag * 10; }
         fn main() -> int32 {
             let v: d = { tag = 3, extra = 9 };
             println(f"{v.describe()} {d::describe(v)} {b::describe(v)}");
@@ -128,23 +129,23 @@ def test_mut_self_write_through_lands_in_the_base_prefix(capfd):
     assert capfd.readouterr().out == "7 7\n"
 
 
-def test_by_value_receiver_prefix_copies(capfd):
-    # A by-value (plain `self`) receiver slices: the callee gets a COPY of
-    # the base prefix, so its writes never reach the caller's derived value.
-    assert run(
-        """
-        import "std/io";
-        struct b { n: int32; }
-        struct d extends b { extra: int32; }
-        fn b::probe(self: b) -> int32 { self.n = 99; return self.n; }
-        fn main() -> int32 {
-            let v: d = { n = 5, extra = 7 };
-            println(f"{v.probe()} {v.n}");
-            return 0;
-        }
-        """
-    ) == 0
-    assert capfd.readouterr().out == "99 5\n"
+def test_by_value_copy_receiver_is_rejected():
+    # A by-value (plain `self`) receiver would slice a derived value into the
+    # base prefix -- the footgun the receiver-kind ruling forbids by
+    # construction. It is a hard error, not a silent copy: use `const self: &b`
+    # to read or `self: &b` to mutate.
+    with pytest.raises(
+        LangError,
+        match=r"a by-value copy receiver 'self' is not allowed",
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            struct d extends b { extra: int32; }
+            fn b::probe(self: b) -> int32 { return self.n; }
+            fn main() -> int32 { return 0; }
+            """
+        )
 
 
 def test_pointer_receiver_auto_derefs_into_the_inherited_method(capfd):
@@ -198,8 +199,8 @@ def test_derived_same_shape_override_shadows_the_inherited_member(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b {}
-        fn b::describe(const self: b) -> int32 { return 1; }
-        fn d::describe(const self: d) -> int32 { return 2; }
+        fn b::describe(const self: &b) -> int32 { return 1; }
+        fn d::describe(const self: &d) -> int32 { return 2; }
         fn main() -> int32 {
             let v: d = { n = 0 };
             let w: b = { n = 0 };
@@ -220,8 +221,8 @@ def test_derived_generic_does_not_shadow_an_inherited_concrete_exact_match(capfd
         import "std/io";
         struct b { n: int32; }
         struct d extends b {}
-        fn b::take(const self: b, x: int32) -> int32 { return 1; }
-        fn d::take<U>(const self: d, x: U) -> int32 { return 2; }
+        fn b::take(const self: &b, x: int32) -> int32 { return 1; }
+        fn d::take<U>(const self: &d, x: U) -> int32 { return 2; }
         fn main() -> int32 {
             let v: d = { n = 0 };
             let x: int32 = 5;
@@ -245,9 +246,9 @@ def test_nearer_hop_shadows_the_farther_one_transitively(capfd):
         struct c { n: int32; }
         struct b extends c { m: int32; }
         struct a extends b { k: int32; }
-        fn c::which(const self: c) -> int32 { return 3; }
-        fn b::which(const self: b) -> int32 { return 2; }
-        fn c::deep(const self: c) -> int32 { return self.n + 30; }
+        fn c::which(const self: &c) -> int32 { return 3; }
+        fn b::which(const self: &b) -> int32 { return 2; }
+        fn c::deep(const self: &c) -> int32 { return self.n + 30; }
         fn main() -> int32 {
             let v: a = { n = 1, m = 2, k = 3 };
             println(f"{v.which()} {v.deep()}");
@@ -298,7 +299,7 @@ def test_generic_derived_over_generic_base_infers_through_the_receiver(capfd):
         import "std/io";
         struct point<T> { x: T; y: T; }
         struct pd<T> extends point<T> { tag: int32; }
-        fn point<T>::sum(const self: point<T>) -> T { return self.x + self.y; }
+        fn point<T>::sum(const self: &point<T>) -> T { return self.x + self.y; }
         fn main() -> int32 {
             let p: pd<int32> = { x = 20, y = 22, tag = 1 };
             let q: pd<int64> = { x = 100, y = 1, tag = 2 };
@@ -343,7 +344,7 @@ def test_method_own_type_param_survives_and_renames_off_a_collision(capfd):
         import "std/io";
         struct point<T> { x: T; y: T; }
         struct pd<U> extends point<U> {}
-        fn point<T>::first_as<U>(const self: point<T>, w: U) -> U {
+        fn point<T>::first_as<U>(const self: &point<T>, w: U) -> U {
             return (self.x as U) + w;
         }
         fn main() -> int32 {
@@ -368,7 +369,7 @@ def test_base_specializations_filter_by_the_declared_instantiation(capfd):
         import "std/io";
         struct point<T> { x: T; y: T; }
         struct pi extends point<int32> {}
-        fn point<int32>::only_i(const self: point<int32>) -> int32 {
+        fn point<int32>::only_i(const self: &point<int32>) -> int32 {
             return self.x + 1;
         }
         fn main() -> int32 {
@@ -389,7 +390,7 @@ def test_base_specialization_for_another_instantiation_is_not_inherited():
             """
             struct point<T> { x: T; y: T; }
             struct pointf extends point<float64> {}
-            fn point<int32>::only_i(const self: point<int32>) -> int32 {
+            fn point<int32>::only_i(const self: &point<int32>) -> int32 {
                 return self.x;
             }
             fn main() -> int32 {
@@ -408,7 +409,7 @@ def test_diagonal_qualifier_filters_on_a_disagreeing_base(capfd):
         import "std/io";
         struct pair2<K, V> { k: K; v: V; }
         struct twin extends pair2<int32, int32> {}
-        fn pair2<A, A>::same(const self: pair2<A, A>) -> A {
+        fn pair2<A, A>::same(const self: &pair2<A, A>) -> A {
             return self.k + self.v;
         }
         fn main() -> int32 {
@@ -429,7 +430,7 @@ def test_diagonal_qualifier_is_not_inherited_where_the_base_disagrees():
             """
             struct pair2<K, V> { k: K; v: V; }
             struct mixed extends pair2<int32, float64> {}
-            fn pair2<A, A>::same(const self: pair2<A, A>) -> A { return self.k; }
+            fn pair2<A, A>::same(const self: &pair2<A, A>) -> A { return self.k; }
             fn main() -> int32 {
                 let t: mixed = { k = 1, v = 2.0 };
                 return t.same();
@@ -450,7 +451,7 @@ def test_bounded_inherited_method_keeps_its_bound_on_a_generic_derivation():
         struct d extends b {{ m: int32; }}
         struct holder<E> {{ item: E; }}
         struct hd<E> extends holder<E> {{}}
-        fn holder<E extends b>::get(const self: holder<E>) -> int32 {{
+        fn holder<E extends b>::get(const self: &holder<E>) -> int32 {{
             return self.item.n;
         }}
         fn main() -> int32 {{
@@ -475,7 +476,7 @@ def test_grouped_inherited_method_is_filtered_where_the_base_violates_it():
     source = """
         struct box<T> {{ v: T; }}
         struct {name} extends box<{arg}> {{}}
-        fn box<T: int32 | int64>::val(const self: box<T>) -> int32 {{
+        fn box<T: int32 | int64>::val(const self: &box<T>) -> int32 {{
             return self.v as int32;
         }}
         fn main() -> int32 {{
@@ -516,7 +517,7 @@ def test_non_receiver_arguments_do_not_upcast():
             """
             struct b { n: int32; }
             struct d extends b {}
-            fn b::plus(const self: b, other: b) -> int32 {
+            fn b::plus(const self: &b, other: b) -> int32 {
                 return self.n + other.n;
             }
             fn main() -> int32 {
@@ -534,7 +535,7 @@ def test_non_receiver_argument_upcasts_with_an_explicit_as(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b {}
-        fn b::plus(const self: b, other: b) -> int32 {
+        fn b::plus(const self: &b, other: b) -> int32 {
             return self.n + other.n;
         }
         fn main() -> int32 {
@@ -601,7 +602,7 @@ def test_builtin_base_family_is_inherited(capfd):
         """
         import "std/io";
         struct named<T> extends slice<T> { tag: int32; }
-        fn slice<T>::head(const self: slice<T>) -> T { return self[0]; }
+        fn slice<T>::head(const self: &slice<T>) -> T { return self[0]; }
         fn main() -> int32 {
             let backing: int32[3] = [7, 8, 9];
             let v: named<int32> = { data = &backing[0], length = 3, tag = 1 };
@@ -626,7 +627,7 @@ def test_bare_type_parameter_base_inherits_nothing():
             """
             struct b { n: int32; }
             struct entry<T> extends T { next: int32; }
-            fn b::describe(const self: b) -> int32 { return self.n; }
+            fn b::describe(const self: &b) -> int32 { return self.n; }
             fn main() -> int32 {
                 let e: entry<b> = { n = 1, next = 0 };
                 return e.describe();
@@ -643,7 +644,7 @@ def test_unknown_method_on_a_derived_struct_keeps_the_bespoke_error():
             """
             struct b { n: int32; }
             struct d extends b {}
-            fn b::real(const self: b) -> int32 { return 0; }
+            fn b::real(const self: &b) -> int32 { return 0; }
             fn main() -> int32 {
                 let v: d = { n = 1 };
                 return v.ghost();
@@ -664,8 +665,8 @@ def test_ambiguity_note_names_the_base_the_member_was_inherited_from():
             """
             struct b { n: int32; }
             struct d extends b {}
-            fn b::pick<T>(const self: b, x: T, y: int32) -> int32 { return 1; }
-            fn b::pick<T>(const self: b, x: int32, y: T) -> int32 { return 2; }
+            fn b::pick<T>(const self: &b, x: T, y: int32) -> int32 { return 1; }
+            fn b::pick<T>(const self: &b, x: int32, y: T) -> int32 { return 2; }
             fn main() -> int32 {
                 let v: d = { n = 0 };
                 let a: int32 = 1;
@@ -689,9 +690,9 @@ def test_derived_call_shadows_the_would_be_base_ambiguity(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b {}
-        fn b::pick<T>(const self: b, x: T, y: int32) -> int32 { return 1; }
-        fn b::pick<T>(const self: b, x: int32, y: T) -> int32 { return 2; }
-        fn d::pick<T>(const self: d, x: T, y: int32) -> int32 { return 3; }
+        fn b::pick<T>(const self: &b, x: T, y: int32) -> int32 { return 1; }
+        fn b::pick<T>(const self: &b, x: int32, y: T) -> int32 { return 2; }
+        fn d::pick<T>(const self: &d, x: T, y: int32) -> int32 { return 3; }
         fn main() -> int32 {
             let v: d = { n = 0 };
             let a: int32 = 1;
@@ -715,7 +716,7 @@ def test_lone_inherited_member_keeps_the_direct_coercion_error():
             """
             struct b { n: int32; }
             struct d extends b {}
-            fn b::describe(const self: b, x: int32) -> int32 { return 1; }
+            fn b::describe(const self: &b, x: int32) -> int32 { return 1; }
             fn main() -> int32 {
                 let v: d = { n = 0 };
                 return v.describe(1.5);
@@ -736,7 +737,7 @@ def test_inherited_methods_resolve_through_an_interface_stub(capfd, tmp_path):
         "fn point<T>::constructor(self: &point<T>, x: T, y: T) {\n"
         "    self.x = x; self.y = y;\n"
         "}\n"
-        "fn point<T>::sum(const self: point<T>) -> T {\n"
+        "fn point<T>::sum(const self: &point<T>) -> T {\n"
         "    return self.x + self.y;\n"
         "}\n"
     )
@@ -766,7 +767,7 @@ def test_derived_struct_in_a_stub_inherits_a_local_base_family(capfd, tmp_path):
     lib.write_text(
         "struct b { n: int32; }\n"
         "struct d extends b { m: int32; }\n"
-        "fn b::total(const self: b) -> int32 { return self.n + 1; }\n"
+        "fn b::total(const self: &b) -> int32 { return self.n + 1; }\n"
     )
     out = tmp_path / "shapes.mci"
     assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
@@ -797,7 +798,7 @@ def test_extends_through_a_plain_alias_inherits(capfd):
         struct point<T> { x: T; y: T; }
         type pf = point<float64>;
         struct pointf extends pf {}
-        fn point<T>::sum(const self: point<T>) -> T { return self.x + self.y; }
+        fn point<T>::sum(const self: &point<T>) -> T { return self.x + self.y; }
         fn main() -> int32 {
             let p: pointf = { x = 1.5, y = 2.5 };
             println(f"{p.sum() as int32}");
@@ -817,7 +818,7 @@ def test_extends_through_a_generic_alias_inherits(capfd):
         struct point<T> { x: T; y: T; }
         type boxed<T> = point<T>;
         struct pi extends boxed<int32> {}
-        fn point<T>::sum(const self: point<T>) -> T { return self.x + self.y; }
+        fn point<T>::sum(const self: &point<T>) -> T { return self.x + self.y; }
         fn main() -> int32 {
             let p: pi = { x = 40, y = 2 };
             println(f"{p.sum()}");
@@ -839,8 +840,8 @@ def test_concrete_base_overload_set_is_inherited_whole(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b {}
-        fn b::get(const self: b) -> int32 { return self.n; }
-        fn b::get(const self: b, bias: int32) -> int32 { return self.n + bias; }
+        fn b::get(const self: &b) -> int32 { return self.n; }
+        fn b::get(const self: &b, bias: int32) -> int32 { return self.n + bias; }
         fn main() -> int32 {
             let v: d = { n = 40 };
             println(f"{v.get()} {v.get(2)}");
@@ -858,7 +859,7 @@ def test_grouped_seed_transfers_onto_a_generic_derivation():
     source = """
         struct box<T> {{ v: T; }}
         struct pd<T> extends box<T> {{}}
-        fn box<T: int32 | int64>::val(const self: box<T>) -> int32 {{
+        fn box<T: int32 | int64>::val(const self: &box<T>) -> int32 {{
             return self.v as int32;
         }}
         fn main() -> int32 {{
@@ -884,7 +885,7 @@ def test_bound_violating_concrete_derivation_is_not_inherited():
             struct s { n: int32; }
             struct holder<E> { item: E; }
             struct hb extends holder<int32> {}
-            fn holder<E extends s>::get(const self: holder<E>) -> int32 {
+            fn holder<E extends s>::get(const self: &holder<E>) -> int32 {
                 return self.item.n;
             }
             fn main() -> int32 {
@@ -901,7 +902,7 @@ def test_method_own_constraint_rides_the_clone():
     source = """
         struct point<T> {{ x: T; y: T; }}
         struct pi extends point<int32> {{}}
-        fn point<T>::sum_as<U: int64 | float64>(const self: point<T>, w: U) -> U {{
+        fn point<T>::sum_as<U: int64 | float64>(const self: &point<T>, w: U) -> U {{
             return (self.x as U) + (self.y as U) + w;
         }}
         fn main() -> int32 {{
@@ -930,7 +931,7 @@ def test_explicit_qualified_call_two_hops_up_the_chain(capfd):
         struct c { n: int32; }
         struct b extends c { m: int32; }
         struct a extends b { k: int32; }
-        fn c::deep(const self: c) -> int32 { return self.n + 30; }
+        fn c::deep(const self: &c) -> int32 { return self.n + 30; }
         fn main() -> int32 {
             let v: a = { n = 1, m = 2, k = 3 };
             println(f"{c::deep(v)}");
@@ -953,7 +954,7 @@ def test_base_specialization_is_not_inherited_through_a_generic_derivation():
             """
             struct point<T> { x: T; y: T; }
             struct pd<T> extends point<T> {}
-            fn point<int32>::only_i(const self: point<int32>) -> int32 {
+            fn point<int32>::only_i(const self: &point<int32>) -> int32 {
                 return self.x;
             }
             fn main() -> int32 {
@@ -975,7 +976,7 @@ def test_rvalue_derived_receiver_spills_and_upcasts(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b { extra: int32; }
-        fn b::get(const self: b) -> int32 { return self.n; }
+        fn b::get(const self: &b) -> int32 { return self.n; }
         fn mk(n: int32) -> d {
             let v: d = { n = n, extra = 0 };
             return v;
@@ -997,7 +998,7 @@ def test_mut_returning_receiver_re_lends_upcast_on_the_direct_path(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b { extra: int32; }
-        fn b::get(const self: b) -> int32 { return self.n; }
+        fn b::get(const self: &b) -> int32 { return self.n; }
         fn b::bump(self: &b) { self.n = self.n + 1; }
         fn d::ref(self: &d) -> &d { return self; }
         fn main() -> int32 {
@@ -1046,7 +1047,7 @@ def test_fields_still_shadow_inherited_methods():
             """
             struct b { n: int32; }
             struct d extends b { probe: int32; }
-            fn b::probe(const self: b) -> int32 { return self.n; }
+            fn b::probe(const self: &b) -> int32 { return self.n; }
             fn main() -> int32 {
                 let v: d = { n = 1, probe = 2 };
                 return v.probe();
@@ -1063,7 +1064,7 @@ def test_return_types_stay_spelled_at_the_base(capfd):
         import "std/io";
         struct point<T> { x: T; y: T; }
         struct pi extends point<int32> {}
-        fn point<T>::flipped(const self: point<T>) -> point<T> {
+        fn point<T>::flipped(const self: &point<T>) -> point<T> {
             let r: point<T> = { x = self.y, y = self.x };
             return r;
         }
@@ -1086,8 +1087,8 @@ def test_inherited_and_derived_different_shapes_overload(capfd):
         import "std/io";
         struct b { n: int32; }
         struct d extends b {}
-        fn b::get(const self: b) -> int32 { return self.n; }
-        fn d::get(const self: d, bias: int32) -> int32 { return self.n + bias; }
+        fn b::get(const self: &b) -> int32 { return self.n; }
+        fn d::get(const self: &d, bias: int32) -> int32 { return self.n + bias; }
         fn main() -> int32 {
             let v: d = { n = 40 };
             println(f"{v.get()} {v.get(2)}");
@@ -1107,7 +1108,7 @@ def test_one_origin_instance_is_shared_across_derived_types():
         struct point<T> { x: T; y: T; }
         struct pa extends point<int32> {}
         struct pb extends point<int32> {}
-        fn point<T>::sum(const self: point<T>) -> T { return self.x + self.y; }
+        fn point<T>::sum(const self: &point<T>) -> T { return self.x + self.y; }
         fn main() -> int32 {
             let a: pa = { x = 1, y = 2 };
             let b: pb = { x = 3, y = 4 };

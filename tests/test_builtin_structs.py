@@ -26,7 +26,7 @@ def test_iterator_needs_no_import(capfd):
         """
         import "libc/stdio";
         struct count { limit: uint64; }
-        fn count_it(self: struct count*) -> struct iterator<count> {
+        fn count_it(@nonnull self: struct count*) -> struct iterator<count> {
             return struct iterator { obj = self, idx = 0 };
         }
         fn count_next(it: struct iterator<count>*, out: uint64*) -> bool {

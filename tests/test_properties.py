@@ -26,7 +26,7 @@ def test_property_read_without_parens():
     assert run(
         """
         struct counter { n: int32; }
-        @property fn counter::doubled(const self: counter) -> int32 {
+        @property fn counter::doubled(const self: &counter) -> int32 {
             return self.n * 2;
         }
         fn main() -> int32 {
@@ -42,7 +42,7 @@ def test_both_spellings_reach_the_method():
     assert run(
         """
         struct counter { n: int32; }
-        @property fn counter::value(const self: counter) -> int32 {
+        @property fn counter::value(const self: &counter) -> int32 {
             return self.n;
         }
         fn main() -> int32 {
@@ -102,7 +102,7 @@ def test_write_to_read_only_property_is_rejected():
         compile_ir(
             """
             struct box { v: int32; }
-            @property fn box::value(const self: box) -> int32 { return self.v; }
+            @property fn box::value(const self: &box) -> int32 { return self.v; }
             fn main() -> int32 {
                 let b = box { v = 1 };
                 b.value = 9;
@@ -121,7 +121,7 @@ def test_a_real_field_shadows_a_property():
     assert run(
         """
         struct b { v: int32; }
-        @property fn b::v(const self: b) -> int32 { return 999; }
+        @property fn b::v(const self: &b) -> int32 { return 999; }
         fn main() -> int32 {
             let x = b { v = 7 };
             return x.v * 100 + b::v(x);    // field 7 -> 700, method 999 -> 1699
@@ -135,7 +135,7 @@ def test_property_inherited_through_extends():
     assert run(
         """
         struct base { n: int32; }
-        @property fn base::doubled(const self: base) -> int32 {
+        @property fn base::doubled(const self: &base) -> int32 {
             return self.n * 2;
         }
         struct derived extends base { extra: int32; }
@@ -153,7 +153,7 @@ def test_property_through_pointer_and_deref():
     assert run(
         """
         struct b { v: int32; }
-        @property fn b::val(const self: b) -> int32 { return self.v; }
+        @property fn b::val(const self: &b) -> int32 { return self.v; }
         fn main() -> int32 {
             let x = b { v = 7 };
             let p = &x;
@@ -168,7 +168,7 @@ def test_generic_property_monomorphizes():
     assert run(
         """
         struct pair<T> { a: T; b: T; }
-        @property fn pair<T>::first(const self: pair<T>) -> T { return self.a; }
+        @property fn pair<T>::first(const self: &pair<T>) -> T { return self.a; }
         fn main() -> int32 {
             let p = pair<int32> { a = 9, b = 3 };
             return p.first;                // -> 9
@@ -197,7 +197,7 @@ def test_unknown_field_still_errors_normally():
 GAUGE = """
 struct gauge { raw: int32; }
 @property("get")
-fn gauge::level(const self: gauge) -> int32 { return self.raw; }
+fn gauge::level(const self: &gauge) -> int32 { return self.raw; }
 @property("set")
 fn gauge::level(self: &gauge, value: int32) -> int32 {
     let old = self.raw;
@@ -283,7 +283,7 @@ def test_generic_pair_and_inheritance():
         """
         struct wrap<T> { inner: T; }
         @property("get")
-        fn wrap<T>::value(const self: wrap<T>) -> T { return self.inner; }
+        fn wrap<T>::value(const self: &wrap<T>) -> T { return self.inner; }
         @property("set")
         fn wrap<T>::value(self: &wrap<T>, v: T) { self.inner = v; }
         struct tagged extends wrap<int32> { tag: char; }
@@ -341,7 +341,7 @@ def test_write_to_get_only_property_is_rejected():
         compile_ir(
             """
             struct b { n: int32; }
-            @property("get") fn b::v(const self: b) -> int32 { return self.n; }
+            @property("get") fn b::v(const self: &b) -> int32 { return self.n; }
             fn main() -> int32 {
                 let t = b { n = 1 };
                 t.v = 5;
@@ -404,7 +404,7 @@ def test_unknown_property_kind_is_rejected():
         compile_ir(
             """
             struct b { n: int32; }
-            @property("fetch") fn b::v(const self: b) -> int32 {
+            @property("fetch") fn b::v(const self: &b) -> int32 {
                 return self.n;
             }
             fn main() -> int32 { return 0; }
@@ -434,7 +434,7 @@ def test_property_with_extra_parameters_is_rejected():
         compile_ir(
             """
             struct b { v: int32; }
-            @property fn b::at(const self: b, i: int32) -> int32 {
+            @property fn b::at(const self: &b, i: int32) -> int32 {
                 return self.v;
             }
             fn main() -> int32 { return 0; }
@@ -449,7 +449,7 @@ def test_property_returning_void_is_rejected():
         compile_ir(
             """
             struct b { v: int32; }
-            @property fn b::go(const self: b) { }
+            @property fn b::go(const self: &b) { }
             fn main() -> int32 { return 0; }
             """
         )
@@ -460,7 +460,7 @@ def test_property_on_a_prototype_is_rejected():
         compile_ir(
             """
             struct b { v: int32; }
-            @property fn b::val(const self: b) -> int32;
+            @property fn b::val(const self: &b) -> int32;
             fn main() -> int32 { return 0; }
             """
         )

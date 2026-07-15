@@ -118,7 +118,7 @@ def test_user_defined_range_function_takes_precedence(capfd):
         struct one { hit: bool; }
         struct one_iter { obj: struct one*; done: bool; }
         fn range(x: int32) -> struct one { return struct one { hit = false }; }
-        fn one_it(self: struct one*) -> struct one_iter {
+        fn one_it(@nonnull self: struct one*) -> struct one_iter {
             let it: struct one_iter; it.obj = self; it.done = false; return it;
         }
         fn one_next(it: struct one_iter*, out: int32*) -> bool {

@@ -4,9 +4,9 @@ import "std/char";
 // The std/char module: character classification and case conversion as
 // methods ON the builtin `char` type, thin @inline wrappers over libc's
 // <ctype.h>. Seven predicates -- char::is_alpha, is_alnum, is_digit,
-// is_hex, is_space, is_upper, is_lower, each `(const self: char) -> bool`
+// is_hex, is_space, is_upper, is_lower, each `(const self: &char) -> bool`
 // -- and two conversions, char::upper / char::lower
-// (`(const self: char) -> char`, a character with no other case comes
+// (`(const self: &char) -> char`, a character with no other case comes
 // back unchanged). This file is about the LIBRARY; the language feature
 // it stands on (methods whose qualifier is a builtin type) is
 // types/method_alias.mc.

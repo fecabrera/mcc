@@ -1702,6 +1702,7 @@ class Parser:
         noalias_params: set[str] = set()
         nonnull_params: set[str] = set()
         format_params: set[str] = set()
+        recv_line = line  # line of a `self` receiver, for the receiver-kind check
         variadic = False
         while self.cur.kind != ")":
             if params:
@@ -1734,7 +1735,10 @@ class Parser:
                     is_format = True
                 self.advance()
             is_const = bool(self.accept("const"))
-            pname = self.expect("IDENT").text
+            name_tok = self.expect("IDENT")
+            pname = name_tok.text
+            if not params and pname == "self":
+                recv_line = name_tok.line
             if self.cur.kind == "...":
                 # `args...` -- native variadic sugar: a const parameter of type
                 # slice<const any>, the trailing type that marks a collecting
@@ -1814,6 +1818,31 @@ class Parser:
                 format_params.add(pname)
             params.append((pname, ptype))
         self.expect(")")
+        # Receiver-kind check (SIE-100 Phase 1): a function whose first
+        # parameter is named `self` has a *receiver*, and a receiver must be
+        # reference-shaped -- a by-value copy receiver slices derived values
+        # and can never be a dispatch (vtable) entry. The allowed kinds are
+        # `const self: &T` (read), `self: &T` (mutate), and the pointer-class
+        # `@nonnull self: T*`; the by-value copy `self: T` is forbidden by
+        # construction. (`own self` kinds arrive in later phases.)
+        if params and params[0][0] == "self" and not (
+            "self" in constref_params
+            or "self" in mut_params
+            or "self" in nonnull_params
+        ):
+            if params[0][1].stars:
+                raise LangError(
+                    "a pointer receiver 'self' must be spelled "
+                    "'@nonnull self: T*' (a nullable receiver cannot "
+                    "dispatch)",
+                    recv_line,
+                )
+            raise LangError(
+                "a by-value copy receiver 'self' is not allowed (it slices "
+                "derived values and can never dispatch); use 'const self: &T' "
+                "to read or 'self: &T' to mutate",
+                recv_line,
+            )
         ret_type = TypeRef("void")
         mut_return = False
         own_return = False

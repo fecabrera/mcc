@@ -45,7 +45,7 @@ def test_acceptance_ctor_and_dot_call_through_fstring(capfd):
         fn point<T>::constructor<U>(self: &struct point<T>, x: U, y: U) {
             self.x = x as T; self.y = y as T;
         }
-        fn point<T>::magnitude(const self: struct point<T>) -> float64 {
+        fn point<T>::magnitude(const self: &struct point<T>) -> float64 {
             return sqrt(pow(self.x as float64, 2.0)
                         + pow(self.y as float64, 2.0));
         }
@@ -65,7 +65,7 @@ def test_mut_self_dot_call_mutates_the_receiver(capfd):
         import "std/io";
         struct counter { n: int32; }
         fn counter::bump(self: &counter) { self.n += 1; }
-        fn counter::get(const self: counter) -> int32 { return self.n; }
+        fn counter::get(const self: &counter) -> int32 { return self.n; }
         fn main() -> int32 {
             let c: counter; c.n = 0;
             c.bump();
@@ -103,7 +103,7 @@ def test_fn_typed_field_shadows_the_method():
         """
         struct holder { cb: fn(int32) -> int32; }
         fn double(v: int32) -> int32 { return v * 2; }
-        fn holder::cb(const self: holder, v: int32) -> int32 {
+        fn holder::cb(const self: &holder, v: int32) -> int32 {
             return v * 100;
         }
         fn main() -> int32 {
@@ -121,7 +121,7 @@ def test_non_fn_field_keeps_the_not_callable_diagnostics():
         compile_ir(
             """
             struct s { v: int32; }
-            fn s::v(const self: s) -> int32 { return 1; }
+            fn s::v(const self: &s) -> int32 { return 1; }
             fn main() -> int32 {
                 let x: s; x.v = 3;
                 return x.v(1);
@@ -171,7 +171,7 @@ def test_bare_member_access_keeps_the_field_error():
         compile_ir(
             """
             struct point { x: int32; }
-            fn point::get(const self: point) -> int32 { return self.x; }
+            fn point::get(const self: &point) -> int32 { return self.x; }
             fn main() -> int32 {
                 let p: point; p.x = 1;
                 let f = p.get;
@@ -186,7 +186,7 @@ def test_arrow_stays_fields_only():
         compile_ir(
             """
             struct point { x: int32; }
-            fn point::get(const self: point) -> int32 { return self.x; }
+            fn point::get(const self: &point) -> int32 { return self.x; }
             fn main() -> int32 {
                 let p: point; p.x = 3;
                 let q = &p;
@@ -217,7 +217,7 @@ def test_pointer_receiver_auto_derefs(capfd):
         import "std/io";
         struct counter { n: int32; }
         fn counter::bump(self: &counter) { self.n += 1; }
-        fn counter::get(const self: counter) -> int32 { return self.n; }
+        fn counter::get(const self: &counter) -> int32 { return self.n; }
         fn main() -> int32 {
             let c: counter; c.n = 0;
             let q = &c;
@@ -299,7 +299,7 @@ def test_alias_typed_receiver_uses_the_canonical_family():
     assert run(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::sum(const self: struct point<T>) -> T {
+        fn point<T>::sum(const self: &struct point<T>) -> T {
             return self.x + self.y;
         }
         type pointi = point<int32>;
@@ -317,8 +317,8 @@ def test_generic_receiver_specialization_outranks_the_generic(capfd):
         """
         import "std/io";
         struct box<T> { v: T; }
-        fn box<T>::tag(self: box<T>) -> int32 { return 1; }
-        fn box<float64>::tag(self: box<float64>) -> int32 { return 2; }
+        fn box<T>::tag(const self: &box<T>) -> int32 { return 1; }
+        fn box<float64>::tag(const self: &box<float64>) -> int32 { return 2; }
         fn main() -> int32 {
             let bi: box<int32> = { v = 7 };
             let bf: box<float64> = { v = 1.0 };
@@ -333,7 +333,7 @@ def test_generic_receiver_specialization_outranks_the_generic(capfd):
 def test_slice_receiver_dispatches_a_builtin_family():
     assert run(
         """
-        fn slice<T>::first(self: slice<T>) -> T { return self[0]; }
+        fn slice<T>::first(const self: &slice<T>) -> T { return self[0]; }
         fn main() -> int32 {
             let xs: slice<int32> = [42, 1, 2];
             return xs.first() - 42;
@@ -351,7 +351,7 @@ def test_chained_calls_evaluate_the_receiver_once(capfd):
         import "std/io";
         import "std/char";
         struct wrap { c: char; }
-        fn wrap::get(const self: wrap) -> char { return self.c; }
+        fn wrap::get(const self: &wrap) -> char { return self.c; }
         fn wrap::mk(c: char) -> wrap {
             println("mk");
             let w: wrap; w.c = c;
@@ -518,7 +518,7 @@ def test_inline_bodies_with_sugar_round_trip_through_mci(tmp_path):
         "struct point<T> { x: T; y: T; }\n"
         "fn point<T>::constructor(self: &struct point<T>, x: T, y: T)"
         " { self.x = x; self.y = y; }\n"
-        "fn point<T>::sum(const self: struct point<T>) -> T"
+        "fn point<T>::sum(const self: &struct point<T>) -> T"
         " { return self.x + self.y; }\n"
         "@inline\n"
         "fn diagsum<T>(v: T) -> T {\n"
@@ -804,10 +804,10 @@ def test_string_literal_receiver_dispatches_a_user_slice_family(capfd):
         """
         import "std/io";
         import "std/slice";
-        fn slice::first_byte(const self: slice<const char>) -> char {
+        fn slice::first_byte(const self: &slice<const char>) -> char {
             return self[0];
         }
-        fn slice::size(const self: slice<const char>) -> uint64 {
+        fn slice::size(const self: &slice<const char>) -> uint64 {
             return self.length;
         }
         fn main() -> int32 {
@@ -843,7 +843,7 @@ def test_named_char_array_receiver_is_not_adapted():
         compile_ir(
             """
             import "std/slice";
-            fn slice::size(const self: slice<const char>) -> uint64 {
+            fn slice::size(const self: &slice<const char>) -> uint64 {
                 return self.length;
             }
             fn main() -> int32 {
