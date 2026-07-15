@@ -2521,6 +2521,16 @@ already do).
             semantics superseded it same-day and the class was
             deleted (nothing leaks at those sites anymore); the
             surviving diagnostic direction is this item. The
+            planned [null-on-move safety](#functions-and-methods) item
+            below reframes this whole effort: once `move(v)` nulls the
+            source's owning pointers and `@nonnull` flow-narrowing forces
+            a null-check before any post-move use, this compile-time
+            diagnosis drops from soundness-critical to ERGONOMIC (it warns
+            you you are observing an empty moved-from value rather than
+            being the sole guard against a use-after-free); the runtime
+            soundness backstop moves to null-on-move, and
+            `-Wdestructor-copy` stays needed because nulling fires on
+            `move` only, never on a plain aliasing copy. The
             ordering below is an inference (mine, not a ruling): the
             two copy-site classes first (each judges one statement
             in isolation, no flow analysis), the path-sensitive
@@ -2573,6 +2583,44 @@ already do).
               ergonomic for containers, and it needs an explicit
               rule). Also open, never ruled: the exact
               path-sensitivity machinery
+      - [ ] null-on-move safety — upgrade `move(v)` from the shipped
+            zero-cost aliasing assertion into a runtime operation that
+            NULLS the source's owning pointer(s), making value ownership
+            runtime-SOUND without a borrow checker. USER RULING
+            (2026-07-14, accepting the costs, verbatim: these "exist in
+            other languages even Rust, I can live with it"): after a
+            `move(v)`, the source's owning pointer fields are set null, so
+            a later destructor on the moved-from value is a no-op
+            (`free(NULL)` is safe) — no double-free — and because owning
+            pointer fields are nullable-typed, the shipped
+            [`@nonnull` flow-narrowing](#functions-and-methods) (a deref of
+            an un-narrowed nullable pointer is already an error) FORCES a
+            null-check before any post-move use, so use-after-move degrades
+            from use-after-free to a checked empty state. This EXPLICITLY
+            REVERSES the shipped move-out returns ruling that `move(v)` is
+            a "zero-cost assertion; a wrong move is recorded aliasing
+            double-free UB made visible" — recorded here as a deliberate
+            reversal with the new rationale, not slipped into that item.
+            Accepted costs (USER RULING): (1) `move` is no longer
+            zero-cost, it gains a runtime null-store; (2) owning pointer
+            fields must be nullable-typed, so null-checks pervade normal
+            container use, not only post-move, and destructors must be
+            null/zero-safe. PAYOFF, and the reframing it forces on the
+            use-after-move detection item above: with null-on-move plus
+            `@nonnull` flow-narrowing as the runtime soundness backstop,
+            that item's compile-time diagnosis drops from soundness-critical
+            to ERGONOMIC (it warns you you are observing an empty
+            moved-from value rather than being the only guard against a
+            use-after-free). `-Wdestructor-copy` is STILL needed and
+            unaffected: nulling happens on `move` only, so a plain aliasing
+            copy (`let b = a;` where `a` has a destructor) still
+            double-frees, exactly that class's archetype. Strictly depends
+            on the shipped `move(v)` and destructors (above) and the
+            shipped [`@nonnull` flow-narrowing](#functions-and-methods)
+            (the checked item below); independent of the reference /
+            `const` redesign below (it couples to this use-after-move
+            effort, not to the `&` respell), so it can land on its own
+            schedule
     - [ ] `new <struct>(...)` sugar — heap construction: desugars to a
           block that allocates with `new<<struct>>()`, runs the shipped
           constructor family on the allocation, and emits the pointer
@@ -2984,6 +3032,152 @@ already do).
           care the shipped
           [function overloading](docs/language.md#function-overloading)
           gave the plain-vs-mangled symbol choice
+- [ ] `&` reference parameters and the `const` split — a wholesale respell
+      and refinement of the parameter/return mutability convention, the
+      capstone of the shipped `const`/`mut`/`own` surface it depends on
+      (`const`/`mut` parameters and returns, `-> own` move-out, and the
+      destructor machinery all above). MAINTAINER's design sketch,
+      recorded verbatim as the umbrella: rename `mut` → `&`, and split
+      `const` into a by-value read-only copy and a by-hidden-reference
+      read-only view:
+  ```c
+  fn f(const x: T)     // read-only, by value (all types)
+  fn f(const x: &T)    // read-only, by hidden reference (today's `const x: T` on a struct, now on all types)
+  fn f(x: T)           // read-write, by value
+  fn f(x: &T)          // read-write, by reference (today's `mut x: T`)
+  fn f() -> T          // return by value
+  fn f() -> &T         // return by reference (today's `-> mut T`)
+  fn f() -> own &T     // return by reference, handing the cleanup obligation to the caller
+  ```
+      A `&` parameter disallows dereference (as `mut` does today), except
+      for `-> own &T`. For `fn f() -> own &T`, `let a = f();` binds `a` as
+      a reference (C++ `T&`-like) that adopts the obligation; for
+      `fn f() -> own T`, `let a = f();` binds a value copy that adopts it.
+      The explorer's decomposition, maintainer agreed: this is THREE
+      separable things — a pure respell, one real ABI/semantics change, and
+      a genuinely new escape hatch — staged below in dependency order.
+      FIRST OPEN, gates everything and costs nothing to decide (MAINTAINER'S
+      CALL, the identity/taste question): the docs market `mut`/`const` as
+      the alternative to pointer spelling, and `&` re-imports C++-reference
+      connotations while `&` stays address-of in expressions — no parse
+      conflict (`&` never starts a type today), pure taste. Sequencing
+      (explorer, maintainer-aligned): rule the taste question first;
+      Phase A soon if approved (churn grows monotonically with every
+      convention-touching feature shipped in the `mut` spelling); Phase B
+      after A's migration, co-timed with the `-Wdestructor-copy` scope
+      decision; Phase C when the alias window closes; Phase D last and
+      separately. The [null-on-move safety](#functions-and-methods) pillar
+      above is independent of this respell (it couples to the use-after-move
+      effort, not to `&`) and lands on its own schedule:
+  - [ ] Phase A — the respell (`mut` → `&`, `-> mut` → `-> &`): pure,
+        semantics-preserving. The whole convention is keyed on name-set
+        registries (`mut_params`/`const_params`/`mut_ret`), not types, so
+        `x: &T` and `-> &T` map onto existing machinery with ZERO codegen
+        change. USER RULING (2026-07-14): in a parameter, `&` is part of
+        the TYPE (`fn f(x: &T)`), parsed in the type slot exactly as it is
+        in `-> &T` and `own &T` — it is NOT a binder annotation like
+        `mut`/`const` and is never written `fn f(&x: T)`; `const` alone
+        stays a binder annotation, so `const x: &T` reads as the `const`
+        annotation applied to a binder of type `&T`. Grammar is free
+        (`&` never starts a type today); keep `&` OUT of general type
+        positions (no `let r: &T`, no `list<&T>`, no `x as &T`) —
+        param-type and return-type slots ONLY — which preserves the
+        no-reference-locals invariant and avoids any address-of / `&&`
+        ambiguity. Cost is churn, not parser work:
+        ~940 param sites + ~250 return sites + docs (~220 `mut` mentions) +
+        ~69 pinned error strings + `.mci` emission + tree-sitter. Effort M
+        (dominated by the shipping set). OPEN (blocks starting Phase A,
+        MAINTAINER'S CALL) — migration strategy: big-bang rename vs. a
+        deprecation window where `mut` is accepted as a warned alias (the
+        shipped warning-class framework carries this for free); pre-1.0
+        permits either. OPEN (recommend "no", inference): is `&T` a general
+        type (locals/fields/generic-args/casts)? Keeping it to param/return
+        slots is what keeps the grammar clean and the no-reference-locals
+        invariant intact. Sub-point: error-message vocabulary
+        ("mut argument" → "& argument" / "reference"?) and whether `mut`
+        de-keywords at the end (freeing it as an identifier)
+  - [ ] Phase B — the `const` flip (the ONE real ABI/semantics change):
+        `const x: T` on an aggregate flips from today's hidden-reference
+        view to a genuine by-value read-only COPY; `const x: &T` takes over
+        the view role. Available uniformly on all types (today a by-value
+        read-only struct param does not exist; a `const &` scalar is new
+        too). Depends on Phase A having migrated stdlib/examples to
+        `const &` wherever a view was intended. Bare `x: T` is ALREADY
+        read-write by-value (verified) — NOT a change, so nobody should
+        "implement" it. RISK/coupling: an unmigrated view-intended
+        `const s: string` silently becomes an untracked alias copy of a
+        destructor-owning value, so the
+        [`-Wdestructor-copy`](#functions-and-methods) SCOPE decision (does
+        it fire at by-value-param call sites?) must be made before/with
+        Phase B — see the use-after-move detection effort above. Pleasant
+        consequence: a by-value `const` is pure callee-side discipline with
+        no caller contract, so `const` can ERASE from function types
+        entirely (generalizing the shipped const-scalar-erase
+        canonicalization), deleting a special case. The `@extern`
+        const-param ban (docs ~82) exists only because today's const-struct
+        is hidden-reference; a by-value `const` has no ABI issue, so the ban
+        can lift. Does NOT touch type-level `const` (`slice<const char>`
+        elements, `let x: const T`, the shipped `extends slice<const E>`
+        covariant bound) — the same keyword now means three things, spelled
+        out in migration docs. Effort S mechanically, M with the shipping
+        set. OPEN (deferrable): allow `-> const &T` (read-only reference
+        return)? The split makes it expressible for the first time (today's
+        `-> mut` / `-> &` is writable-only), a symmetry point not in the
+        original sketch. OPEN (deferrable, recommend yes): `const` erases
+        from fn types entirely
+  - [ ] Phase C — retire `mut`: either big-bang or after the Phase-A alias
+        window closes. De-keywording frees `mut` as an identifier. Effort
+        S. May fold into Phase A depending on the migration-strategy ruling
+  - [ ] Phase D — `-> own &T` (genuinely new; sequenced LAST; an expert
+        escape hatch, NOT a headline): return a reference that hands the
+        caller the cleanup obligation without copying. `new<T>()` (a `T*`)
+        does NOT enter the picture (MAINTAINER, emphatic): `own &T`
+        references an existing scalar/struct and transfers ONLY the
+        destructor obligation, never a memory-free — a struct's destructor
+        frees its own contents (a container frees its elements, a string
+        frees its `char*`), no dealloc, DECOUPLED from the new-sugar / heap
+        / pointer track. `own &T` is the reference-vs-copy axis of `own`,
+        orthogonal to the pointer track. FORMATION RULE (MAINTAINER
+        RULING): an `own &T` return is an LVALUE of `T` rooted in stable
+        storage, NEVER an address-of or pointer value — `return
+        move(&buffer[len])` is a `T*`-as-`&T` type error rejected by
+        construction (extending the `-> &T` / `-> mut T` lvalue-return
+        formation rule), the checkable half of the safety story. `pop` is
+        DISQUALIFIED as an `own &T` use (MAINTAINER): returning a `&T` to a
+        slot the container has abandoned (`len--` stopped tracking it)
+        references untracked memory — a programmer LOGIC ERROR, the same UB
+        bucket as a wrong `move(v)` (diagnosed where cheap; the
+        lvalue-spelling version is uncatchable since `len--` is runtime
+        state); the correct `pop` returns `own T` (value move-out). `own T`
+        is the SAFE DEFAULT for every ordinary move-out; `own &T` is the
+        no-copy EXPERT hatch. Two shipped rulings must be RE-RULED
+        explicitly (required decisions, not slipped in): (1) the own / `mut`
+        exclusivity ruling ("`mut` lends a view, `own` hands over a value")
+        — `own &T` legalizes exactly own + reference; the clean
+        reconciliation is that the old rule conflated convention with
+        policy, and `own &` is "lend-shaped convention + hand-over policy";
+        (2) the "there are no reference locals" invariant — the `own &` let
+        creates one. Residual hazard: reference-aliasing (a container
+        mutates/reuses the moved-from slot while an `own &T` borrow is live)
+        is NOT closed by null-on-move (you cannot null what a reference
+        needs live), which is why `own &T` stays a narrow expert tool and
+        needs a borrow-lifetime contract. Warning to record (MAINTAINER,
+        "worth a warning"): forming an `own &T` from `move(*p)` where `p` is
+        a heap/local pointer orphans the memory-free obligation (`own &`
+        carries only destruction) → leak (or dangle if freed elsewhere);
+        the right fix is handing out the pointer itself (a future
+        owned-pointer concept on the new-sugar track), and the warning
+        steers there. Co-design consideration with the
+        [`new <struct>(...)` sugar](#functions-and-methods), but per the
+        maintainer NOT blocked on it. OPEN (blocks Phase D): `own &T` needs
+        a CONCRETE motivating example that is NOT `pop` (likely a
+        static/arena hand-off where storage is permanent and only
+        destruction transfers) before it earns its slot — if the only good
+        use is contrived, `own &T` earns less than `own T`. OPEN: the
+        `own &` let's capabilities — dereferenceable/consumable (the
+        sketch's "except for `own &T`" exception), reassignable,
+        re-lendable as a `&` argument, and chainable into another `own &`
+        function
 - [x] `@nonnull` parameters — a checked "definitely non-null" refinement over
       C's nullable-by-default `T*`, opt-in per parameter: the callee is
       statically guaranteed a non-null argument and skips the re-check, and the
