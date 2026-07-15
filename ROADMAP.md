@@ -2544,7 +2544,16 @@ already do).
               relinquishing spelling such a warning would exempt.
               Scoped by the separation ruling above: the
               copy-of-destroyed assignment case is `-Wown-assign`'s,
-              not this class's
+              not this class's. SCOPE RULED (USER, 2026-07-14): fires
+              not only at explicit `let b = a` copies but also at
+              BY-VALUE-PARAM CALL SITES — the implicit copies Phase B
+              of the [`&`/`const` redesign](#functions-and-methods)
+              creates when `const T` on an aggregate flips to by-value.
+              A bitwise copy of a destructor-owning type is essentially
+              always wrong (no copy-constructor → both copies
+              double-free), so every such site must be `const &` or an
+              explicit `move`; must land with Phase B to avoid a
+              silent-aliasing gap
         - [ ] `-Wown-assign` — a DEDICATED diagnostic (USER RULING:
               its own named class, severity separable from generic
               destructor copies; the warning-class option chosen
@@ -3106,12 +3115,33 @@ already do).
         too). Depends on Phase A having migrated stdlib/examples to
         `const &` wherever a view was intended. Bare `x: T` is ALREADY
         read-write by-value (verified) — NOT a change, so nobody should
-        "implement" it. RISK/coupling: an unmigrated view-intended
-        `const s: string` silently becomes an untracked alias copy of a
-        destructor-owning value, so the
-        [`-Wdestructor-copy`](#functions-and-methods) SCOPE decision (does
-        it fire at by-value-param call sites?) must be made before/with
-        Phase B — see the use-after-move detection effort above. Pleasant
+        "implement" it. MIGRATION RULING (USER, 2026-07-14): the Phase-B
+        stdlib migration mechanically rewrites EVERY existing `const x: T`
+        where `T` is a struct/aggregate into `const x: &T`, preserving the
+        exact hidden-reference view behavior those params have today — the
+        by-value `const T` copy is opt-IN going forward, never silently
+        inherited by code written under the old semantics. RISK/coupling: an
+        unmigrated view-intended `const s: string` silently becomes an
+        untracked alias copy of a destructor-owning value, so the
+        [`-Wdestructor-copy`](#functions-and-methods) SCOPE decision is now
+        RULED (USER, 2026-07-14): it FIRES AT BY-VALUE-PARAM CALL SITES, not
+        only at explicit `let b = a` copies — a bitwise by-value copy of a
+        destructor-owning type is essentially always wrong with no
+        copy-constructor (both copies double-free), so every such site must
+        become `const &` or an explicit `move`. This closes the
+        silent-aliasing gap Phase B would otherwise open; decided with Phase B
+        per the co-timing above — see the use-after-move detection effort.
+        RECEIVERS
+        ARE THE PRIMARY MIGRATION TARGET (mcc has no special receiver syntax —
+        `self` is an ordinary first parameter, so `const self: T` IS a `const`
+        aggregate param and flips like any other): view-intended aggregate
+        receivers must move to `const self: &T` or they silently become a
+        full-struct copy per call — concretely `string::format`,
+        `string::equals`, `slice::equals` (`const self: string` /
+        `const self: slice<const char>`), where the string copy also drags in
+        the owned `char*` → the `-Wdestructor-copy` case above. Scalar
+        receivers (`char::is_*`, `char::upper`, … `const self: char`) STAY
+        PUT — scalar `const` is already by-value. Pleasant
         consequence: a by-value `const` is pure callee-side discipline with
         no caller contract, so `const` can ERASE from function types
         entirely (generalizing the shipped const-scalar-erase
