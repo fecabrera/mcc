@@ -438,6 +438,26 @@ def test_own_generic_use_after_move_is_diagnosed():
         )
 
 
+def test_own_struct_literal_argument_on_the_generic_path(capfd):
+    # A bare struct literal at an own slot on the generic/overloaded path is a
+    # fresh built value the callee drops -- built through the winner-emission
+    # literal-adaptation arm (as on the direct path), adopted with no move and
+    # never queued for a caller-side drop. Overloaded, so it routes through
+    # gen_generic_call.
+    assert run(
+        BOX
+        + """
+        fn box::eat(own self: box) -> int32 { return self.tag; }
+        fn box::eat(own self: box, n: int32) -> int32 { return self.tag + n; }
+        fn main() -> int32 {
+            println(f"{box::eat({ tag = 5 })}");
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "drop 5\n5\n"
+
+
 def test_own_on_overloaded_function_consumes(capfd):
     # An overloaded own family dispatches on the generic path; each winner's
     # own positions consume their argument. The members agree on the own

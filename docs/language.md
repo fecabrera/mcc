@@ -2006,10 +2006,12 @@ fn adder::total(own self: adder) -> int32 { return self.sum; }   // consume, dro
 let t = adder().plus(3).plus(4).total();                   // one value, one drop
 ```
 
-Because a by-value receiver can never be a vtable entry, `own self: T` is
-**monomorphic by nature** — you consume a value whose concrete type you know —
-so, unlike the reference receivers, it is **not dispatch-eligible** (and nothing
-is lost, since consumption is always a direct call).
+Because a by-value receiver can never be a vtable entry, `own self: T` is,
+unlike the reference receivers, **not dispatch-eligible** — a consuming call is
+a deliberate ownership transfer to a statically known type, never resolved
+dynamically. It is an ordinary call in every other respect: it may be generic,
+overloaded, or reached through a function value — see the non-direct call
+paths described below.
 
 **At the call site**, the argument to an `own` parameter must be a value this
 frame owns to give away — the same relinquish discipline as a `-> own` return:

@@ -37,11 +37,15 @@ class TypeRef:
             ``fn(...)`` type: in a parameter position it spells a by-reference
             writable parameter, as in ``fn(&char) -> void``; on the ``ret``
             type it spells a reference return, as in ``fn(uint64) -> &char``.
-        own: A leading ``own`` keyword -- meaningful only on the ``ret``
-            type of a ``fn(...)`` type, spelling an ``own`` return
-            (``fn() -> own res``): a call through the value hands the
-            caller the cleanup obligation, so an adopting let vouches
-            through the type exactly as it does through a declaration.
+        own: A leading ``own`` keyword -- meaningful only inside a ``fn(...)``
+            type. On the ``ret`` type it spells an ``own`` return
+            (``fn() -> own res``): a call through the value hands the caller
+            the cleanup obligation, so an adopting let vouches through the type
+            exactly as through a declaration. In a parameter position it spells
+            a by-value consuming parameter (``fn(own box)``): a call through
+            the value transfers ownership of the argument (the callee drops
+            it), enforcing the same move-in discipline a declaration's ``own``
+            parameter does.
     """
 
     name: str

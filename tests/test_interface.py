@@ -161,6 +161,56 @@ def test_const_is_emitted_in_full():
     assert "const VERSION = 3;" in iface("const VERSION = 3;")
 
 
+def test_own_fn_type_parameter_is_re_emitted():
+    # A function-pointer type spells its `own` consuming positions (SIE-180),
+    # part of the call contract, so the marker rides the proto: `fn(own box)`
+    # is distinct from `fn(box)` and must survive the .mci boundary.
+    out = iface(
+        "struct box { tag: int32; }\n"
+        "fn register(cb: fn(own box) -> int32) -> int32 { return 0; }"
+    )
+    assert "fn register(cb: fn(own box) -> int32) -> int32;" in out
+
+
+def test_own_fn_type_round_trips_through_mci(tmp_path):
+    # The `own` positions of a function-pointer type survive the stub verbatim
+    # (`type consumer = fn(own box) -> int32;`), and re-importing re-registers
+    # the contract: a consumer forms a value of the aliased type from a
+    # matching own function (accepted) but a plain function is refused on the
+    # far side, exactly as within one file.
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "struct box { tag: int32; }\n"
+        "type consumer = fn(own box) -> int32;\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    assert "type consumer = fn(own box) -> int32;" in out.read_text()
+    lib.unlink()  # force the import to resolve through the stub
+    ok = tmp_path / "ok.mc"
+    ok.write_text(
+        'import "lib";\n'
+        "fn drain(own b: box) -> int32 { return b.tag; }\n"
+        "fn main() -> int32 {\n"
+        "    let f: consumer = drain;\n"       # accepts the matching own value
+        "    return f({ tag = 21 });\n"        # calls through the aliased type
+        "}\n"
+    )
+    assert compile_to_ir(ok, (tmp_path,)) is not None
+    bad = tmp_path / "bad.mc"
+    bad.write_text(
+        'import "lib";\n'
+        "fn plain(b: box) -> int32 { return b.tag; }\n"
+        "fn main() -> int32 { let f: consumer = plain; return 0; }\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"expected fn\(own box\) -> int32, got fn\(box\) -> int32 .*"
+        r"not convertible",
+    ):
+        compile_to_ir(bad, (tmp_path,))
+
+
 def test_generic_fn_ships_full_source():
     src = "fn id<T>(x: T) -> T { return x; }"
     out = iface(src)
