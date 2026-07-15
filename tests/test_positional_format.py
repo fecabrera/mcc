@@ -443,7 +443,7 @@ def test_format_cannot_be_mut():
 def test_the_collecting_sugar_rejects_format():
     with pytest.raises(
         LangError,
-        match=r"'args\.\.\.' cannot take const, a reference, @noalias, @nonnull, "
+        match=r"'args\.\.\.' cannot take const, own, a reference, @noalias, @nonnull, "
         r"or @format",
     ):
         compile_ir("fn f(@format args...) {}")

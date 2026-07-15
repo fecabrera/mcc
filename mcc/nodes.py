@@ -581,6 +581,7 @@ class Func:
     noalias_params: set[str] = field(default_factory=set)
     nonnull_params: set[str] = field(default_factory=set)
     format_params: set[str] = field(default_factory=set)
+    own_params: set[str] = field(default_factory=set)
     noreturn: bool = False
     mut_return: bool = False
     own_return: bool = False

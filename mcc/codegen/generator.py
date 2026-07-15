@@ -651,6 +651,17 @@ class CodeGen:
         # must prove the argument non-null (a checked refinement, unlike the
         # unchecked @noalias promise).
         self.nonnull_ref: dict[str, frozenset[int]] = {}
+        # symbol -> indices of `own` by-value parameters: the argument is
+        # consumed (moved in, dropped by the callee), so at each call site an
+        # owned local must be relinquished with move(x) -- its scheduled
+        # destructor is cancelled -- and a fresh own value is adopted rather
+        # than queued for a caller-side drop (see :meth:`own_move_arg`).
+        self.own_ref: dict[str, frozenset[int]] = {}
+        # Names of locals relinquished into an `own` parameter in the body
+        # under emission; a later read is a use-after-move error. Reset per
+        # body, initialized here for expression emission outside any body
+        # (global initializers, constant folding).
+        self.moved_locals: set[str] = set()
         # Symbols whose last fixed parameter is @format: a string literal
         # bound to it is scanned at the call site, desugaring positional
         # `{n}` placeholders into the sequential runtime form (see
@@ -1399,6 +1410,13 @@ class CodeGen:
         """Indices of ``func``'s ``@nonnull`` parameters."""
         return frozenset(
             i for i, (name, _) in enumerate(func.params) if name in func.nonnull_params
+        )
+
+    @staticmethod
+    def own_indices(func: Func) -> frozenset[int]:
+        """Indices of ``func``'s ``own`` (by-value consuming) parameters."""
+        return frozenset(
+            i for i, (name, _) in enumerate(func.params) if name in func.own_params
         )
 
     @staticmethod
@@ -2723,6 +2741,7 @@ class CodeGen:
             or self.hidden_ref[symbol] != self.hidden_ref_indices(func, params)
             or self.mut_ref[symbol] != self.mut_indices(func)
             or self.nonnull_ref[symbol] != self.nonnull_indices(func)
+            or self.own_ref[symbol] != self.own_indices(func)
             or self.noalias_indices(prior) != self.noalias_indices(func)
             # An @format mismatch would let a stub and its definition
             # disagree on the call-site positional desugar.
@@ -5341,6 +5360,7 @@ class CodeGen:
                 self.funcs[func.name] = fn
                 self.signatures[func.name] = (ret, params, func.variadic)
                 self.nonnull_ref[func.name] = self.nonnull_indices(func)
+                self.own_ref[func.name] = self.own_indices(func)
                 self.func_privacy[func.name] = (func.private, func.source)
                 self.extern_decls.add(func.name)
                 if plan is not None:
@@ -5428,6 +5448,7 @@ class CodeGen:
                 self.hidden_ref[symbol] = hidden
                 self.mut_ref[symbol] = self.mut_indices(func)
                 self.nonnull_ref[symbol] = self.nonnull_indices(func)
+                self.own_ref[symbol] = self.own_indices(func)
                 if func.format_params:
                     self.format_syms.add(symbol)
                 if func.mut_return:
@@ -5674,6 +5695,7 @@ class CodeGen:
                 self.hidden_ref[symbol] = hidden
                 self.mut_ref[symbol] = self.mut_indices(func)
                 self.nonnull_ref[symbol] = self.nonnull_indices(func)
+                self.own_ref[symbol] = self.own_indices(func)
                 if func.mut_return:
                     self.mut_ret.add(symbol)
                 if func.own_return:
@@ -5781,6 +5803,7 @@ class CodeGen:
             self.hidden_ref[func.name] = hidden
             self.mut_ref[func.name] = self.mut_indices(func)
             self.nonnull_ref[func.name] = self.nonnull_indices(func)
+            self.own_ref[func.name] = self.own_indices(func)
             if func.format_params:
                 self.format_syms.add(func.name)
             if func.mut_return:
@@ -5967,6 +5990,7 @@ class CodeGen:
         self.defer_marks = []  # a body instantiated mid-defer is not "in" it
         self.auto_destroyed = {}  # per body, like the defer stack it mirrors
         self.pending_drops = []  # per body, like the defer stack
+        self.moved_locals = set()  # locals relinquished into an `own` parameter
         self.drop_marks = []
         self.expr_depth = 0  # a body instantiated mid-expression starts fresh
         hidden = self.hidden_ref_indices(func, params)
@@ -6007,7 +6031,14 @@ class CodeGen:
         prev_in_deprecated = self.in_deprecated_body
         self.in_deprecated_body = func.deprecated_msg is not None
         try:
-            self.gen_block(func.body)
+            self.gen_block(
+                func.body,
+                on_enter=(
+                    (lambda: self.schedule_own_param_drops(func))
+                    if func.own_params
+                    else None
+                ),
+            )
         finally:
             self.in_deprecated_body = prev_in_deprecated
         if not self.builder.block.is_terminated:
@@ -6029,7 +6060,7 @@ class CodeGen:
                     f"function {func.name!r} may end without a return", func.line
                 )
 
-    def gen_block(self, statements: list):
+    def gen_block(self, statements: list, on_enter=None):
         """Generate a block of statements in its own name scope.
 
         Outer names stay visible, names declared here vanish at the end (an
@@ -6039,6 +6070,11 @@ class CodeGen:
 
         Args:
             statements: The statements to emit.
+            on_enter: An optional callback run once this block's defer scope
+                is open, before any statement -- used by a function body to
+                schedule its ``own`` parameters' destructors as the scope's
+                first (so LIFO-last) entries, so they drop after everything
+                the body registers and a ``return self`` can still cancel them.
         """
         # Each block is its own scope: outer names stay visible, names declared
         # here vanish at the end, and an inner declaration may shadow an outer
@@ -6049,6 +6085,8 @@ class CodeGen:
         outer_paths = set(self.narrowed_paths)
         self.scope_names = set()
         self.defer_stack.append([])
+        if on_enter is not None:
+            on_enter()
         # Statement context: each statement's expressions flush their own
         # temporaries at their roots, so expression nesting restarts here
         # (a block expression's body runs mid-expression), and the drop
@@ -6077,6 +6115,10 @@ class CodeGen:
             del self.pending_drops[drop_base:]
             self.expr_depth = outer_depth
             self.defer_stack.pop()
+            # A local moved out inside this block leaves scope with it, so its
+            # name is free to be rebound in a sibling block; a moved *outer*
+            # local (not in this block's names) stays moved past the block.
+            self.moved_locals -= self.scope_names
             self.locals, self.scope_names = outer_locals, outer_names
             # Narrowed facts established inside the block (early-guard
             # narrowing, shadowed names) end with it; invalidations from
@@ -6369,7 +6411,7 @@ class CodeGen:
         # keeps today's plain-copy behavior for it.
         if stmt.name != "0except" and self.own_call_initializer(expr.value):
             self.schedule_auto_destructor(
-                stmt, slot, strip_const(declared), declared
+                stmt.line, slot, strip_const(declared), declared
             )
         if expr.otherwise is not None:
             self.gen_block(expr.otherwise)
@@ -7425,6 +7467,10 @@ class CodeGen:
         # A shadowing let over a plain parameter is a local: it must not
         # keep qualifying as a mut-return formation root.
         self.formation_params.pop(name, None)
+        # A fresh binding of the name is a new value, so a use-after-move
+        # recorded for the prior binding no longer applies (a rebinding in a
+        # sibling scope, or a shadowing let, starts un-moved).
+        self.moved_locals.discard(name)
 
     def coerce(
         self, tv: TypedValue, expected: LangType, line: int, context: str
@@ -8043,7 +8089,7 @@ class CodeGen:
                             self.builder.store(tv.value, slot)
                             final = tv.type
                     self.bind_local(stmt.name, slot, final)
-                    self.schedule_auto_destructor(stmt, slot, built, final)
+                    self.schedule_auto_destructor(stmt.line, slot, built, final)
                     return
             if stmt.value is None:  # let x: T; -- uninitialized, like a C local
                 declared = self.lang_type(stmt.type_name, stmt.line)
@@ -8218,7 +8264,7 @@ class CodeGen:
             # whose type has no family -- also a no-op.
             if self.own_call_initializer(stmt.value):
                 self.schedule_auto_destructor(
-                    stmt, slot, strip_const(tv.type), tv.type
+                    stmt.line, slot, strip_const(tv.type), tv.type
                 )
             # Fact-seeding through let: a pointer local initialized from a
             # provably non-null value (`let q = p!`, `let q = p` under a
@@ -10589,6 +10635,17 @@ class CodeGen:
         Raises:
             LangError: When the name is a constant (not assignable) or undefined.
         """
+        if name in self.moved_locals:
+            # The value was relinquished into an `own` parameter (its ownership
+            # transferred, its scheduled destructor cancelled); naming it again
+            # -- to read it, project a field, or take its address -- would touch
+            # a value the callee now owns. This is the single use-after-move
+            # gate: every name resolution funnels through here.
+            raise LangError(
+                f"{name!r} was moved into an own parameter and cannot be used "
+                "again (its ownership was transferred)",
+                line,
+            )
         if name in self.locals:
             slot, var_type = self.locals[name]
             return slot, var_type, var_type.volatile
@@ -15446,8 +15503,35 @@ class CodeGen:
         """
         return self.method_family_exists(f"{t.template or t.name}::destructor")
 
+    def schedule_own_param_drops(self, func: Func) -> None:
+        """Schedule the body's ``own`` by-value parameters for destruction.
+
+        An ``own self: T`` (or ``own x: T``) parameter takes ownership of its
+        argument, so the callee drops it at end of body -- the by-value
+        counterpart of a constructor-sugar ``let``. Run as the function
+        body's :meth:`gen_block` ``on_enter`` hook, so each destructor is
+        scheduled as one of the body scope's first entries (LIFO-last, after
+        everything the body itself registers) and recorded in
+        ``auto_destroyed`` -- so a ``return self`` in an ``-> own`` method
+        cancels it on the transferring path exactly like a returned local.
+        A destructor-less type is the documented no-op (the scheduler
+        self-gates on :meth:`type_owns_cleanup`).
+
+        Args:
+            func: The function whose body scope is being entered.
+        """
+        for pname, _ in func.params:
+            if pname not in func.own_params:
+                continue
+            bound = self.locals.get(pname)
+            if bound is None:
+                continue  # a destructor-less own param never binds a drop slot
+            slot, ptype = bound
+            built = strip_const(ptype)
+            self.schedule_auto_destructor(func.line, slot, built, built)
+
     def schedule_auto_destructor(
-        self, stmt: Let, slot, built: LangType, final: LangType
+        self, line: int, slot, built: LangType, final: LangType
     ) -> None:
         """Register a constructed let's automatic destructor call, if any.
 
@@ -15478,7 +15562,9 @@ class CodeGen:
         spelling would.
 
         Args:
-            stmt: The ``let`` statement, for its name and line.
+            line: Source line of the construction, for the deferred call's
+                diagnostics (the ``let``'s line, or the function line for an
+                ``own`` parameter's drop).
             slot: The constructed value's storage (the bound slot).
             built: The constructed type (already const-stripped).
             final: The bound type -- ``built`` or a const view of it.
@@ -15497,8 +15583,8 @@ class CodeGen:
         self.locals[hidden] = (slot, built)
         entry = [
             ExprStmt(
-                Call(family, [], [Var(hidden, stmt.line)], stmt.line),
-                stmt.line,
+                Call(family, [], [Var(hidden, line)], line),
+                line,
             )
         ]
         self.defer_stack[-1].append(entry)
@@ -15802,6 +15888,19 @@ class CodeGen:
             symbol = name
         if symbol is None:
             return None
+        # An `own` parameter's move-in/adopt discipline is emitted on the
+        # direct-call path (:meth:`own_move_arg`), so a function-pointer type
+        # cannot carry it: an indirect call would drop the callee's copy while
+        # the caller still runs the source's scheduled destructor (a double
+        # free). Reject function-value formation, mirroring the generic and
+        # overloaded guards; indirect own transfer is a follow-up.
+        if self.own_ref.get(symbol, frozenset()):
+            raise LangError(
+                f"{name!r} has own parameters and cannot be used as a function "
+                "value (ownership transfer is a direct-call discipline; "
+                "indirect calls are a follow-up)",
+                line,
+            )
         # A function value is a call site in waiting: warn here, since calls
         # through the pointer are indirect and can no longer be attributed.
         self.warn_deprecated(name, self.deprecated_syms.get(symbol), line)
@@ -15921,6 +16020,7 @@ class CodeGen:
             self.hidden_ref.get(symbol, frozenset()),
             mut,
             self.nonnull_ref.get(symbol, frozenset()),
+            self.own_ref.get(symbol, frozenset()),
             # The trailing slice<const any> type is the collecting marker
             # (function-pointer calls stay explicit-slice; overload sets
             # collect through gen_generic_call), and a mut trailing
@@ -16169,6 +16269,82 @@ class CodeGen:
         pieces.append(text[copied:])
         return "".join(pieces), slots if pos_text is not None else None
 
+    def own_move_arg(self, arg_expr, param_t: LangType, line: int, context: str):
+        """Marshal an argument consumed by an ``own`` by-value parameter.
+
+        An ``own`` parameter over a type with a destructor takes ownership of
+        its argument (a move, not a copy) and drops it at the end of the
+        callee's body, so exactly one of the caller and callee may hold the
+        cleanup obligation. The transferable sources, mirroring the ``-> own``
+        return discipline:
+
+        * A **named owned local** with a scheduled auto-destructor (a
+          constructor-sugar ``let`` or a let that adopted an ``-> own`` call),
+          relinquished with an explicit ``move(x)``: its scheduled destructor
+          is cancelled outright and the name is marked moved (a later read is
+          a use-after-move error). A bare ``x`` is refused -- the relinquish
+          must be visible, as with ``move(...)`` elsewhere.
+        * A **fresh own value** -- a constructor expression or an ``-> own``
+          call (:meth:`own_transfer_source`) -- which the callee adopts. It is
+          *not* queued for a caller-side drop (unlike an ordinary own-call
+          argument), so it is destroyed once, in the callee.
+
+        Anything else (a field, an element, a reference-bound local, a
+        ``move`` of a non-owned value) is not a value this frame owns to give
+        away, and is refused rather than risk a double free.
+
+        Args:
+            arg_expr: The argument expression, ``move(x)`` included.
+            param_t: The (owning) parameter type to coerce to.
+            line: The call site's line.
+            context: A description of the argument slot, for diagnostics.
+
+        Returns:
+            The marshalled LLVM value to pass.
+
+        Raises:
+            LangError: When the value is not a relinquishable owned value.
+        """
+        consumed = arg_expr
+        asserted = isinstance(consumed, Move)
+        if asserted:
+            consumed = consumed.value
+        tv = self.gen_expr(consumed)
+        tv = self.coerce(tv, param_t, line, context)
+        if isinstance(consumed, Var):
+            if consumed.name[:1].isdigit():
+                # A synthetic spill of an rvalue receiver -- a chained or
+                # temporary own value bound to a hidden `0recv` local by the
+                # dot-call sugar (`make().consume()`, `x.plus(1).total()`).
+                # It is a fresh owned temporary the callee adopts; the spill
+                # itself schedules no cleanup, so dropping it in the callee is
+                # the one and only drop.
+                return tv.value
+            bound = self.locals.get(consumed.name)
+            if bound is not None and bound[0] in self.auto_destroyed:
+                if not asserted:
+                    raise LangError(
+                        f"{consumed.name!r} is an owned value; passing it to an "
+                        f"own parameter relinquishes it -- spell the transfer "
+                        f"move({consumed.name})",
+                        line,
+                    )
+                scope_idx, entry = self.auto_destroyed.pop(bound[0])
+                self.defer_stack[scope_idx].remove(entry)
+                self.moved_locals.add(consumed.name)
+                return tv.value
+        if self.own_transfer_source(consumed):
+            # A fresh constructor expression or `-> own` call: the callee
+            # adopts it, so (unlike an ordinary own-call argument) it is not
+            # queued for a caller-side drop -- destroyed once, in the callee.
+            return tv.value
+        raise LangError(
+            "an own parameter takes ownership of its argument, but this value "
+            "is not one this frame owns to give away; pass a freshly "
+            "constructed value, an `-> own` call, or move(x) on an owned local",
+            line,
+        )
+
     def marshal_args(
         self,
         arg_exprs: list,
@@ -16179,6 +16355,7 @@ class CodeGen:
         hidden: frozenset[int] = frozenset(),
         mut: frozenset[int] = frozenset(),
         nonnull: frozenset[int] = frozenset(),
+        own: frozenset[int] = frozenset(),
         collecting: bool = False,
         format: bool = False,
         extern: bool = False,
@@ -16207,6 +16384,11 @@ class CodeGen:
                 be the caller's own writable storage, never a temporary.
             nonnull: Indices of ``@nonnull`` parameters: the argument must be
                 provably non-null (see :meth:`check_nonnull_arg`).
+            own: Indices of ``own`` by-value parameters: the argument is
+                consumed (see :meth:`own_move_arg`) -- an owned local
+                relinquished with ``move(x)`` (its scheduled destructor
+                cancelled), or a fresh own value the callee adopts. Empty on
+                the indirect path (own transfer is a direct-call discipline).
             collecting: Whether the callee's trailing ``slice<const any>``
                 parameter collects the extra arguments (native variadics).
             format: Whether the callee's last fixed parameter is ``@format``:
@@ -16343,6 +16525,16 @@ class CodeGen:
                 # A va_list is handed over in its platform-specific passed form,
                 # derived from its storage; coerce/decay do not apply.
                 args.append(self.valist_arg(arg_expr, line))
+                continue
+            if (
+                i in own
+                and i < len(params)
+                and self.type_owns_cleanup(strip_const(params[i]))
+            ):
+                # An `own` parameter over an owning type consumes its argument:
+                # the callee drops it, so the source must be relinquished (an
+                # owned local via move(x), a fresh own value adopted).
+                args.append(self.own_move_arg(arg_expr, params[i], line, context))
                 continue
             # `f(move(a))`: the sanctioned relinquishing spelling blesses the
             # by-value copy (no -Wdestructor-copy), passing the same value the
@@ -17505,6 +17697,21 @@ class CodeGen:
             LangError: When no overload matches, the choice is ambiguous, a type
                 parameter binds to ``void``, or access is denied.
         """
+        # An `own` by-value parameter's move-in/adopt discipline is emitted on
+        # the direct-call path (:meth:`marshal_args` / :meth:`own_move_arg`).
+        # A generic candidate carrying it is already rejected at parse, so an
+        # own candidate reaching here belongs to an *overloaded* set, whose
+        # arguments this path evaluates and queues before the winner is known
+        # -- sound own-transfer there is a follow-up. Reject uniformly (over
+        # the whole set: mixing own and plain members under one name is itself
+        # out of scope for now).
+        if any(f.own_params for f in candidates):
+            raise LangError(
+                "own parameters are not yet supported on overloaded functions "
+                "(the consuming receiver's move-in discipline is emitted on "
+                "the direct-call path; overloaded own is a follow-up)",
+                expr.line,
+            )
         # -Wnoreturn-own bookkeeping: every own temporary queued while this
         # call's arguments evaluate and marshal is provably leaked when the
         # resolved winner never returns, so snapshot the queue for the
@@ -19255,6 +19462,7 @@ class CodeGen:
             self.hidden_ref[mangled] = hidden
             self.mut_ref[mangled] = self.mut_indices(func)
             self.nonnull_ref[mangled] = self.nonnull_indices(func)
+            self.own_ref[mangled] = self.own_indices(func)
             if func.mut_return:
                 self.mut_ret.add(mangled)
             if func.own_return:

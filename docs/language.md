@@ -993,17 +993,19 @@ fn main() -> int32 {
 This is the foundational, **explicit-call** form. Its rules today:
 
 - **`self` is a checked receiver.** A first parameter named `self` is the
-  method's *receiver*, and a receiver must be **reference-shaped**:
+  method's *receiver*, and a receiver must be either **reference-shaped** or the
+  consuming **`own self: T`**:
   `const self: &T` reads the receiver, `self: &T` mutates it in place (the write
-  is visible to the caller), and `@nonnull self: T*` is the pointer-class
-  receiver. A **by-value copy receiver** (`self: T`) is rejected — it would copy
-  the receiver, slicing a derived value and never reaching a dynamic-dispatch
-  entry. The caller never writes the `&`: an ordinary value argument
-  (`point::magnitude(p)`, or the dot-call `p.magnitude()`) forms the hidden
-  reference automatically. The check is *name-based*, so a **receiverless**
-  method — one whose first parameter is not named `self` — is untouched:
-  `fn point::origin() -> point` and `fn point::of(x: float64, y: float64)` are
-  legal.
+  is visible to the caller), `@nonnull self: T*` is the pointer-class
+  receiver, and `own self: T` **consumes** it — see
+  [consuming receivers](#consuming-receivers-own-self) below. A **by-value copy
+  receiver** (`self: T`) is rejected — it would copy the receiver, slicing a
+  derived value and never reaching a dynamic-dispatch entry. The caller never
+  writes the `&`: an ordinary value argument (`point::magnitude(p)`, or the
+  dot-call `p.magnitude()`) forms the hidden reference automatically. The check
+  is *name-based*, so a **receiverless** method — one whose first parameter is
+  not named `self` — is untouched: `fn point::origin() -> point` and
+  `fn point::of(x: float64, y: float64)` are legal.
 - **The qualifier is a namespace.** `point::` names the struct the method
   belongs to and nothing more — the only rule on the qualifier itself is that it
   is a declared, complete type (below).
@@ -1977,6 +1979,70 @@ would destroy a value the callee never handed over), and an explicit
 See [examples/types/own_returns.mc](../examples/types/own_returns.mc) for
 the feature, and [examples/types/own_drops.mc](../examples/types/own_drops.mc)
 for the drop rule walked form by form with print-stamped destruction.
+
+#### Consuming receivers: `own self`
+
+`own` is also a **by-value parameter** marker — the receiver-side mirror of
+[`-> own`](#move-out-returns-own). A method whose receiver is `own self: T`
+**consumes** it: the method takes ownership of the value by **move** (never a
+copy) and drops it — runs its [destructor](#destructors) — at the **end of the
+body**, exactly as an owning constructor-sugar `let` would at its scope exit.
+It is the fourth [receiver kind](#calling-methods-explicitly), alongside
+`const self: &T`, `self: &T`, and `@nonnull self: T*`. The marker precedes the
+name like `const` (`own self: T`, or the read-only-in-body `own const self: T`),
+and it is not receiver-only: any by-value parameter may be `own`
+(`fn drain(own b: box)`).
+
+```c
+struct adder { sum: int32; }
+fn adder::destructor(self: &adder) { /* release resources */ }
+
+fn adder::plus(own self: adder, n: int32) -> own adder {   // consume, hand back
+    self.sum = self.sum + n;
+    return self;                                           // transfers self out
+}
+fn adder::total(own self: adder) -> int32 { return self.sum; }   // consume, drop
+
+let t = adder().plus(3).plus(4).total();                   // one value, one drop
+```
+
+Because a by-value receiver can never be a vtable entry, `own self: T` is
+**monomorphic by nature** — you consume a value whose concrete type you know —
+so, unlike the reference receivers, it is **not dispatch-eligible** (and nothing
+is lost, since consumption is always a direct call).
+
+**At the call site**, the argument to an `own` parameter must be a value this
+frame owns to give away — the same relinquish discipline as a `-> own` return:
+
+- A **fresh** owned value — a constructor expression (`adder()`), an `-> own`
+  call, or a dot-call's spilled rvalue receiver (`adder().plus(3)`,
+  `box(4).consume()`) — is **adopted** by the callee with no `move`. This is
+  what makes the builder chain above work: each step's receiver is the previous
+  step's owned result. Such a fresh value is *not* additionally dropped by the
+  caller, so it is destroyed exactly once, inside the callee.
+- A **named owned local** is relinquished with an explicit
+  [`move(x)`](#move-out-returns-own) (`adder::total(move(a))`): its scheduled
+  destructor is cancelled, and reading the local afterward — a whole value, a
+  field, its address — is a **use-after-move** error. A bare `adder::total(a)`,
+  and equally the dot spelling `a.total()`, is refused, directing to `move(a)`;
+  the relinquish must be visible, since a plain call does not otherwise read as
+  an ending. (Move tracking is per binding: the same name rebound in a sibling
+  scope is a fresh, un-moved value.)
+
+Anything else whose type owns a destructor (a field extracted with
+`move(p.a)`, an arbitrary copy) is not a value the frame owns and is refused
+rather than risk a double free. `own` over a **destructor-less type is a
+no-op** — nothing to move or drop — so it needs no `move` and passes by value
+like a plain parameter. The marker rides `.mci` interface stubs
+(`fn drain(own b: box) -> int32;`). Because the relinquish discipline is a
+**direct-call** property, a function with `own` parameters cannot be taken as a
+**function value** (an indirect call could not enforce the move, so it would
+double-free) — it is rejected at value formation. Not in this phase: the
+owned-**reference** receiver `own self: &T` (an escaping borrow, rejected for
+now), and `own` parameters on `@extern`/`@asm` functions, on generic functions
+or methods of generic structs, and on overloaded functions.
+
+See [examples/types/own_receivers.mc](../examples/types/own_receivers.mc).
 
 #### Inherited methods
 

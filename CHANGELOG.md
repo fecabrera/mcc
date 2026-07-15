@@ -209,6 +209,34 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`own self: T` — the consuming (by-value move) receiver, and `own`
+  by-value parameters** — Phase 2 of the [receiver-kind](ROADMAP.md) redesign
+  adds a fourth receiver kind: a method whose receiver is `own self: T` takes
+  ownership of the value by **move** (never a copy) and drops it — runs its
+  `destructor` — at the **end of the body**, the receiver-side mirror of
+  `-> own`. `own` is a general by-value owning-parameter marker (placed before
+  the name like `const`, `own const self: T` allowed), so any by-value
+  parameter may be `own` (`fn drain(own b: box)`). A consuming builder step
+  hands the value back with `return self` (`fn t::plus(own self: t, n: int32)
+  -> own t`), and a chain over fresh temporaries — `t().plus(3).plus(4)
+  .total()` — constructs and drops the value exactly once. At the call site the
+  relinquish discipline mirrors `-> own`: a **fresh** owned value (a constructor
+  expression, an `-> own` call, or a dot-call's spilled rvalue receiver) is
+  **adopted** with no `move`, while a **named owned local** is relinquished with
+  an explicit `move(x)` — its scheduled destructor is cancelled (no double free)
+  and a later use is a **use-after-move** error (a bare `t::consume(a)` or
+  `a.consume()` is refused, directing to `move(a)`; move tracking is per
+  binding, so a name rebound in a sibling scope is fresh). `own self: T` is
+  monomorphic and **not dispatch-eligible** (a by-value receiver is never a
+  vtable entry); `own` over a destructor-less type is a no-op and needs no
+  `move`. The marker rides `.mci` interface stubs and its prototype mismatch is
+  rejected, and a function with `own` parameters cannot be taken as a function
+  value (the move discipline is direct-call only, so an indirect call would
+  double-free). Not yet: the owned-**reference** receiver `own self: &T` (a
+  later phase, rejected for now), and `own` on `@extern`/`@asm`, on generic
+  functions / methods of generic structs, or on overloaded functions. See
+  [examples/types/own_receivers.mc](examples/types/own_receivers.mc).
+
 - **`-Wdestructor-copy` — a new opt-in warning class for bitwise copies of
   owning values** — mcc has no copy constructor, so a bitwise copy of a value
   whose type declares a `destructor` makes two names alias one live resource

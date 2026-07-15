@@ -43,7 +43,7 @@ def test_sugar_must_be_the_last_parameter():
 def test_sugar_rejects_parameter_modifiers():
     with pytest.raises(
         LangError,
-        match=r"'args\.\.\.' cannot take const, a reference, @noalias, @nonnull, "
+        match=r"'args\.\.\.' cannot take const, own, a reference, @noalias, @nonnull, "
         r"or @format \(it is already a const slice<const any>\)",
     ):
         parse("fn f(const args...) {}")

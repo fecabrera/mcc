@@ -1702,6 +1702,7 @@ class Parser:
         noalias_params: set[str] = set()
         nonnull_params: set[str] = set()
         format_params: set[str] = set()
+        own_params: set[str] = set()
         recv_line = line  # line of a `self` receiver, for the receiver-kind check
         variadic = False
         while self.cur.kind != ")":
@@ -1734,6 +1735,13 @@ class Parser:
                 else:
                     is_format = True
                 self.advance()
+            # `own` marks a by-value *owning* parameter: the callee takes
+            # ownership of the argument (a move, not a copy) and drops it at
+            # the end of the body. It precedes `const` (`own const self: T` is
+            # an owned, read-only-in-body receiver), mirroring the `-> own`
+            # return marker. It is by-value only -- the owned-*reference*
+            # receiver `own self: &T` is a later phase (rejected below).
+            is_own = bool(self.accept("own"))
             is_const = bool(self.accept("const"))
             name_tok = self.expect("IDENT")
             pname = name_tok.text
@@ -1746,12 +1754,13 @@ class Parser:
                 ellipsis = self.advance()
                 if (
                     is_const
+                    or is_own
                     or is_noalias
                     or is_nonnull
                     or is_format
                 ):
                     raise LangError(
-                        f"'{pname}...' cannot take const, a reference, "
+                        f"'{pname}...' cannot take const, own, a reference, "
                         "@noalias, @nonnull, or @format (it is already a const "
                         "slice<const any>)",
                         ellipsis.line,
@@ -1783,6 +1792,20 @@ class Parser:
             # constref_params), never writable -- so it does NOT join
             # mut_params. A plain `&T` (no const) stays the writable reference.
             is_constref = is_const and is_mut
+            if is_own and is_mut:
+                # `own self: &T` (and `own const self: &T`): an owned
+                # *reference* -- a non-null, dereferenceable borrow the result
+                # may keep. It needs the intra-procedural confinement check
+                # that its own phase brings; for now own is by-value only.
+                # (Mirrors the return-side rule "a return cannot be both own
+                # and a reference".)
+                raise LangError(
+                    "a parameter cannot be both own and a reference (own "
+                    "moves a value in and drops it; a reference lends a view); "
+                    "the owned-reference receiver `own self: &T` arrives in a "
+                    "later phase",
+                    slot_line,
+                )
             if is_noalias and is_mut:
                 raise LangError(
                     "a parameter cannot be both @noalias and a reference "
@@ -1806,6 +1829,8 @@ class Parser:
                 )
             if is_const:
                 const_params.add(pname)
+            if is_own:
+                own_params.add(pname)
             if is_constref:
                 constref_params.add(pname)
             elif is_mut:
@@ -1822,13 +1847,15 @@ class Parser:
         # parameter is named `self` has a *receiver*, and a receiver must be
         # reference-shaped -- a by-value copy receiver slices derived values
         # and can never be a dispatch (vtable) entry. The allowed kinds are
-        # `const self: &T` (read), `self: &T` (mutate), and the pointer-class
-        # `@nonnull self: T*`; the by-value copy `self: T` is forbidden by
-        # construction. (`own self` kinds arrive in later phases.)
+        # `const self: &T` (read), `self: &T` (mutate), the pointer-class
+        # `@nonnull self: T*`, and the consuming `own self: T` (a by-value
+        # move); the by-value *copy* `self: T` is forbidden by construction.
+        # (`own self: &T`, the owned-reference receiver, is a later phase.)
         if params and params[0][0] == "self" and not (
             "self" in constref_params
             or "self" in mut_params
             or "self" in nonnull_params
+            or "self" in own_params
         ):
             if params[0][1].stars:
                 raise LangError(
@@ -1885,6 +1912,25 @@ class Parser:
                 )
         if variadic and type_params:
             raise LangError("a generic function cannot be variadic", line)
+        if own_params and extern:
+            raise LangError(
+                "own parameters are not allowed on @extern functions "
+                "(C has no ownership obligation to take)",
+                line,
+            )
+        if own_params and (type_params or struct_type_args is not None):
+            # An own by-value receiver is monomorphic by nature (you consume a
+            # value whose concrete type you know), and the call-site
+            # move-in/adopt discipline is emitted on the direct-call path.
+            # Generic functions and methods of generic structs marshal their
+            # arguments before the winner is known, so sound own-transfer there
+            # is a follow-up; reject for now.
+            raise LangError(
+                "own parameters are not yet supported on generic functions or "
+                "methods of generic structs (the consuming receiver is "
+                "monomorphic; generic own is a follow-up)",
+                line,
+            )
         if (mut_params or constref_params) and extern:
             # A by-value `const x: T` is the ordinary C by-value convention, so
             # it is allowed on @extern (a callee-side read-only discipline C
@@ -1984,6 +2030,10 @@ class Parser:
             if format_params:
                 raise LangError(
                     "@format parameters are not allowed on @asm functions", line
+                )
+            if own_params:
+                raise LangError(
+                    "own parameters are not allowed on @asm functions", line
                 )
             template = self.parse_asm_body(line)
             inputs = [Var(pname, line) for pname, _ in params]
@@ -2181,6 +2231,7 @@ class Parser:
             noalias_params=noalias_params,
             nonnull_params=nonnull_params,
             format_params=format_params,
+            own_params=own_params,
             noreturn=noreturn,
             mut_return=mut_return,
             own_return=own_return,

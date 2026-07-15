@@ -339,6 +339,7 @@ class InterfaceWriter:
             f"{'@noalias ' if pname in func.noalias_params else ''}"
             f"{'@nonnull ' if pname in func.nonnull_params else ''}"
             f"{'@format ' if pname in func.format_params else ''}"
+            f"{'own ' if pname in func.own_params else ''}"
             f"{'const ' if pname in func.const_params else ''}"
             f"{pname}: "
             f"{'&' if pname in func.mut_params or pname in func.constref_params else ''}"
