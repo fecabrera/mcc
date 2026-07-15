@@ -80,6 +80,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **Editor grammars caught up to the compiler** (Phase C of the
+  `&`-reference redesign, editor half). Across all three integrations
+  (`editors/vscode`, `editors/neovim`, `editors/helix`): dropped the retired
+  `mut` keyword, added `own` as a reserved keyword (so `-> own T` / `-> own
+  &T` returns highlight) and the `move(...)` transfer operator, and taught the
+  shared tree-sitter grammar tuple literals (`(a, b)`, the 1-tuple `(x,)`,
+  `()`) and tuple indexing (`t.0`), which previously parsed as errors. The
+  helix `parser.c` was regenerated and the corpus tests extended.
+
 - **BREAKING: `const` on a struct parameter is now a by-value read-only copy,
   and `const &T` is the read-only reference view** (Phase B of the
   `&`-reference redesign — the one real ABI change of the series). A plain

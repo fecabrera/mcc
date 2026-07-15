@@ -33,11 +33,33 @@ fn buf_at(self: &struct buf, i: uint64) -> &char {
             (identifier)))))))
 
 ================================================================================
-deprecated mut binder and -> mut return still parse
+own return (-> own T)
 ================================================================================
 
-fn set(mut out: int32) -> mut int32 {
-    return out;
+fn take() -> own res {
+    return make();
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list)
+    (type_identifier)
+    (block
+      (return_statement
+        (call_expression
+          (identifier_expression
+            (identifier))
+          (argument_list))))))
+
+================================================================================
+own reference return (-> own &T)
+================================================================================
+
+fn view(r: &res) -> own &res {
+    return r;
 }
 
 --------------------------------------------------------------------------------
@@ -48,8 +70,10 @@ fn set(mut out: int32) -> mut int32 {
     (parameter_list
       (parameter
         (identifier)
-        (type_identifier)))
-    (type_identifier)
+        (reference_type
+          (type_identifier))))
+    (reference_type
+      (type_identifier))
     (block
       (return_statement
         (identifier_expression

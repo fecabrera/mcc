@@ -34,6 +34,13 @@
 (call_expression function: (identifier_expression (identifier) @function.call))
 (call_expression function: (member_expression field: (identifier) @function.method.call))
 
+; `move(...)` is the ownership-transfer operator (an ordinary identifier
+; elsewhere), so it is highlighted only as a call callee. Comes after the
+; @function.call capture above so Neovim's later-wins priority gives it the
+; operator token.
+((call_expression function: (identifier_expression (identifier) @keyword.operator))
+ (#eq? @keyword.operator "move"))
+
 ; --------------------------------------------------------- vars and members
 (parameter name: (identifier) @variable.parameter)
 (variadic_parameter) @variable.parameter
@@ -57,7 +64,7 @@
 
 [
   "const"
-  "mut"
+  "own"
 ] @keyword.modifier
 
 [

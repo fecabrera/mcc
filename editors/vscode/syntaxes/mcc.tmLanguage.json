@@ -151,8 +151,13 @@
           "match": "\\b(and|or|as|sizeof|alignof|offsetof|typename|len)\\b"
         },
         {
+          "comment": "`move(...)` is the ownership-transfer operator of an `-> own` return. Contextual (only before `(`), since `move` is an ordinary identifier elsewhere.",
+          "name": "keyword.operator.word.mcc",
+          "match": "\\bmove\\b(?=\\s*\\()"
+        },
+        {
           "name": "storage.type.mcc",
-          "match": "\\b(fn|let|const|mut|struct|enum|union)\\b"
+          "match": "\\b(fn|let|const|struct|enum|union|own)\\b"
         },
         {
           "comment": "`type` is contextual: only a keyword as `type <name> = …`.",

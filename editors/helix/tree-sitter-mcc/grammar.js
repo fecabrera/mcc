@@ -71,6 +71,9 @@ module.exports = grammar({
     // win (pointer_type's dynamic precedence breaks genuine ties toward
     // multiplication, matching the compiler's lookahead rule).
     [$.pointer_type, $.cast_expression],
+    // An empty `()` is an empty tuple as a primary, or the empty argument list
+    // of a call (`f()`); a preceding callable settles which, so let GLR fork.
+    [$.argument_list, $.tuple_expression],
   ],
 
   rules: {
@@ -235,9 +238,10 @@ module.exports = grammar({
         optional($.type_parameters),
         $.parameter_list,
         // `-> &T` marks a reference return (a function returning an lvalue);
-        // the fn(...) -> &T pointer *type* below spells it too. The legacy
-        // `-> mut T` keyword spelling stays accepted (deprecated).
-        optional(seq('->', optional('mut'), field('return_type', $._return_type))),
+        // the fn(...) -> &T pointer *type* below spells it too. `-> own T`
+        // (and `-> own &T`) marks an owned return, handing the caller the
+        // cleanup obligation.
+        optional(seq('->', optional('own'), field('return_type', $._return_type))),
         field('body', choice($.block, $.asm_block)),
       ),
 
@@ -254,9 +258,9 @@ module.exports = grammar({
         field('name', $.identifier),
         optional($.type_parameters),
         $.parameter_list,
-        // Interface stubs re-emit `-> &` on prototypes, so it parses here
-        // (the legacy `-> mut` keyword too, deprecated).
-        optional(seq('->', optional('mut'), field('return_type', $._return_type))),
+        // Interface stubs re-emit `-> &` / `-> own` on prototypes, so they
+        // parse here too.
+        optional(seq('->', optional('own'), field('return_type', $._return_type))),
         ';',
       ),
 
@@ -266,10 +270,10 @@ module.exports = grammar({
     parameter: ($) =>
       seq(
         // Per-parameter annotations stack (`@noalias @nonnull p: T*`).
-        // The blessed reference marker rides the type slot (`p: &T`); the
-        // legacy `mut` binder stays accepted (deprecated).
+        // The reference marker rides the type slot (`p: &T`); a leading
+        // `const` marks the read-only view (`const p: &T`).
         repeat($.annotation),
-        optional(choice('const', 'mut')),
+        optional('const'),
         field('name', $.identifier),
         ':',
         $._param_type,
@@ -331,10 +335,10 @@ module.exports = grammar({
         $.grouped_type,
       ),
 
-    // A reference type `&T` -- the by-hidden-reference convention (the
-    // blessed spelling of the legacy `mut`). It is a type only in a
-    // parameter- or return-type slot (`_param_type` / `_return_type`), never
-    // a general type, which keeps `&` the address-of operator everywhere else.
+    // A reference type `&T` -- the by-hidden-reference convention. It is a
+    // type only in a parameter- or return-type slot (`_param_type` /
+    // `_return_type`), never a general type, which keeps `&` the address-of
+    // operator everywhere else.
     reference_type: ($) => prec.right(seq('&', $._type)),
 
     _param_type: ($) => choice($._type, $.reference_type),
@@ -376,18 +380,18 @@ module.exports = grammar({
           // A parameter type takes the per-parameter annotation slot
           // (`fn(@nonnull char*) -> int32` carries the @nonnull contract)
           // and the reference marker in the type slot (`fn(&char)` spells
-          // the by-reference convention; the legacy `fn(mut char)` keyword
-          // stays accepted, deprecated); `const` rides in through
-          // const_type. The return slot takes `&` too (`fn(uint64) -> &char`
-          // spells a reference return), like the declaration rules above.
+          // the by-reference convention); `const` rides in through
+          // const_type. The return slot takes `&`/`own` too
+          // (`fn(uint64) -> &char`, `fn() -> own res`), like the declaration
+          // rules above.
           commaSep(
             choice(
-              seq(repeat($.annotation), optional('mut'), $._param_type),
+              seq(repeat($.annotation), $._param_type),
               $.variadic_parameter,
             ),
           ),
           ')',
-          optional(seq('->', optional('mut'), $._return_type)),
+          optional(seq('->', optional('own'), $._return_type)),
         ),
       ),
 
@@ -625,6 +629,7 @@ module.exports = grammar({
         $.index_expression,
         $.slice_expression,
         $.member_expression,
+        $.tuple_index_expression,
         $.call_expression,
         $.nonnull_assert_expression,
         $._primary_expression,
@@ -660,6 +665,12 @@ module.exports = grammar({
     member_expression: ($) =>
       prec(PREC.postfix, seq(field('base', $._expression), field('operator', choice('.', '->')), field('field', $.identifier))),
 
+    // Tuple element access by constant index: `t.0`. The `.` is followed by a
+    // number rather than a field name (a member access), so lookahead after
+    // the dot tells the two apart.
+    tuple_index_expression: ($) =>
+      prec(PREC.postfix, seq(field('base', $._expression), '.', field('index', $.number))),
+
     call_expression: ($) =>
       prec(PREC.call, seq(field('function', $._expression), optional($.type_arguments), field('arguments', $.argument_list))),
 
@@ -678,6 +689,7 @@ module.exports = grammar({
         $.struct_literal,
         $.identifier_expression,
         $.parenthesized_expression,
+        $.tuple_expression,
         $.block_expression,
         $.array_expression,
         $.sizeof_expression,
@@ -717,6 +729,22 @@ module.exports = grammar({
 
     identifier_expression: ($) => $.identifier,
     parenthesized_expression: ($) => seq('(', $._expression, ')'),
+
+    // A tuple literal: `()`, the 1-tuple `(x,)` (the trailing comma is what
+    // sets it apart from a parenthesized `(x)`), and `(a, b, ...)`. A tuple
+    // always carries a comma or is empty, so the comma/`)` after the first
+    // element decides tuple-vs-parenthesized. The comma list is spelled with
+    // `repeat1(',' expr?)` -- distinct from the `commaSep` an argument list
+    // uses -- so the two do not share a repeat symbol (the declared
+    // argument_list/tuple_expression conflict then lets GLR fork cleanly).
+    tuple_expression: ($) =>
+      seq(
+        '(',
+        optional(
+          seq($._expression, repeat1(seq(',', optional($._expression)))),
+        ),
+        ')',
+      ),
     block_expression: ($) => prec.dynamic(-1, seq('{', repeat($._statement), '}')),
     array_expression: ($) => seq('[', commaSep($._expression), optional(','), ']'),
     sizeof_expression: ($) => seq('sizeof', '(', $._type, ')'),

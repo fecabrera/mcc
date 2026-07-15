@@ -34,6 +34,12 @@
 (call_expression function: (identifier_expression (identifier) @function.call))
 (call_expression function: (member_expression field: (identifier) @function.method))
 
+; `move(...)` is the ownership-transfer operator (an ordinary identifier
+; elsewhere), so it is highlighted only as a call callee. Comes after the
+; @function.call capture above so last-wins gives it the operator color.
+((call_expression function: (identifier_expression (identifier) @keyword.operator))
+ (#eq? @keyword.operator "move"))
+
 ; --------------------------------------------------------- vars and members
 (parameter name: (identifier) @variable.parameter)
 (variadic_parameter) @variable.parameter
@@ -50,7 +56,7 @@
   "fn"
   "let"
   "const"
-  "mut"
+  "own"
   "struct"
   "union"
   "enum"

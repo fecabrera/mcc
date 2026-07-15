@@ -1,0 +1,64 @@
+================================================================================
+tuple literals, the 1-tuple trailing comma, and empty tuple
+================================================================================
+
+fn f() {
+    let t = (1, 2, 3);
+    let u = (9,);
+    let e = ();
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        (identifier)
+        (tuple_expression
+          (number)
+          (number)
+          (number)))
+      (let_statement
+        (identifier)
+        (tuple_expression
+          (number)))
+      (let_statement
+        (identifier)
+        (tuple_expression)))))
+
+================================================================================
+tuple index access (t.0) vs a parenthesized expression
+================================================================================
+
+fn f() {
+    let x = t.0 + t.2;
+    let y = (1 + 2);
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list)
+    (block
+      (let_statement
+        (identifier)
+        (binary_expression
+          (tuple_index_expression
+            (identifier_expression
+              (identifier))
+            (number))
+          (tuple_index_expression
+            (identifier_expression
+              (identifier))
+            (number))))
+      (let_statement
+        (identifier)
+        (parenthesized_expression
+          (binary_expression
+            (number)
+            (number)))))))
