@@ -208,7 +208,7 @@ fn set<K, V>::grow(self: &set<K, V>) {
  *
  * @return an iterator positioned before the first occupied entry
  */
-fn set_it<K, V>(self: struct set<K, V>*) -> struct iterator<struct set<K, V>> {
+fn set_it<K, V>(@nonnull self: struct set<K, V>*) -> struct iterator<struct set<K, V>> {
     return struct iterator<struct set<K, V>> { obj = self, idx = 0 };
 }
 

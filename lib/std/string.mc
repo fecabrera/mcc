@@ -110,7 +110,7 @@ fn slice::equals(const self: &slice<const char>, const str: &string) -> bool {
  * @return an iterator positioned at the first byte
  */
 @inline
-fn string_it(self: string*) -> struct iterator<string> {
+fn string_it(@nonnull self: string*) -> struct iterator<string> {
     return list_it(self);
 }
 

@@ -130,7 +130,7 @@ def test_write_to_non_mut_bare_accessor_is_rejected():
         compile_ir(
             """
             struct box { v: int32; }
-            @accessor fn box::at(const self: box, i: uint64) -> int32 {
+            @accessor fn box::at(const self: &box, i: uint64) -> int32 {
                 return self.v;
             }
             fn main() -> int32 {
@@ -208,7 +208,7 @@ def test_native_indexing_wins_for_pointers_and_arrays():
 
 PAIR = """
 struct celsius { kelvin: float64; }
-@accessor("get") fn celsius::deg(const self: celsius, i: uint64) -> float64 {
+@accessor("get") fn celsius::deg(const self: &celsius, i: uint64) -> float64 {
     return self.kelvin - 273.15;
 }
 @accessor("set") fn celsius::deg(self: &celsius, i: uint64, v: float64) {
@@ -252,7 +252,7 @@ def test_setter_return_value_is_ignored():
     assert run(
         """
         struct cell { v: int32; }
-        @accessor("get") fn cell::at(const self: cell, i: uint64) -> int32 {
+        @accessor("get") fn cell::at(const self: &cell, i: uint64) -> int32 {
             return self.v;
         }
         @accessor("set") fn cell::at(self: &cell, i: uint64, v: int32) -> int32 {
@@ -295,7 +295,7 @@ def test_write_to_get_only_accessor_is_rejected():
         compile_ir(
             """
             struct cell { v: int32; }
-            @accessor("get") fn cell::at(const self: cell, i: uint64) -> int32 {
+            @accessor("get") fn cell::at(const self: &cell, i: uint64) -> int32 {
                 return self.v;
             }
             fn main() -> int32 {

@@ -80,6 +80,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **BREAKING: a method receiver (`self`) is now a checked kind and must be
+  reference-shaped** — a first parameter named `self` is formally a *receiver*,
+  and the allowed kinds are `const self: &T` (read), `self: &T` (mutate), and
+  the pointer-class `@nonnull self: T*`. A **by-value copy receiver** (`self: T`,
+  including `const self: T` and scalars like `const self: char`) is now a hard
+  error: it would copy the receiver — slicing a derived value and never reaching
+  a dynamic-dispatch entry — so the footgun is unwritable rather than merely
+  warned. The check is *name-based* (it fires on a first parameter named `self`,
+  leaving receiverless methods like `point::origin()` untouched); a nullable
+  `self: T*` is rejected too, steering to `@nonnull self: T*`. This reverses the
+  previously-documented "no `self` convention" rule. **Migration is
+  declaration-side only** — call sites are unchanged, since a value argument to
+  a `const self: &T` receiver forms the hidden reference automatically; respell
+  `self: T` receivers to `const self: &T` (read) or `self: &T` (mutate). Every
+  stdlib (`char` methods, the `list`/`dict`/`set`/`queue`/`string` iterator
+  producers), example, test, and doc receiver migrated. (Phase 1 of the
+  receiver-kind item; `own self` receivers are later phases.)
+
 - **Editor grammars caught up to the compiler** (Phase C of the
   `&`-reference redesign, editor half). Across all three integrations
   (`editors/vscode`, `editors/neovim`, `editors/helix`): dropped the retired

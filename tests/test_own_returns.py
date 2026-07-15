@@ -488,7 +488,7 @@ def test_own_on_a_property_is_rejected():
         compile_ir(
             RES
             + """
-            @property fn res::v(const self: res) -> own int32 {
+            @property fn res::v(const self: &res) -> own int32 {
                 return self.h;
             }
             fn main() -> int32 { return 0; }

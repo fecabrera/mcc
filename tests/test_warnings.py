@@ -1641,7 +1641,7 @@ def test_chained_own_receiver_is_not_a_copy():
     src = (
         DC_PRELUDE
         + "fn make() -> own res { return move(res { id = 5 }); }\n"
-        "fn res::poke(self: res) -> int32 { return self.id; }\n"
+        "fn res::poke(const self: &res) -> int32 { return self.id; }\n"
         "fn main() -> int32 {\n"
         "    return make().poke();\n"
         "}\n"

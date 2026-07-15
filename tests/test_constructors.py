@@ -192,9 +192,9 @@ def test_bare_generic_lone_concrete_specialization_fixes_the_slot(capfd):
 
 
 def test_resolved_ctor_must_take_the_constructed_type_first():
-    # `Type::` enforces no self convention, so a family whose winner does not
-    # take the constructed type first can exist -- but the bare sugar cannot
-    # type its slot from it.
+    # `Type::` imposes no receiver-role convention, so a family whose winner
+    # does not take the constructed type first can exist -- but the bare sugar
+    # cannot type its slot from it.
     with pytest.raises(
         LangError,
         match=r"cannot construct 'point': the resolved 'fn point::constructor' "
@@ -568,13 +568,13 @@ def test_default_fields_initialize_before_the_ctor_runs():
 
 
 def test_const_self_ctor_is_the_dumb_desugar():
-    # `Type::` enforces no self convention: a const-self "constructor"
-    # compiles, receives a spilled borrow, and initializes nothing -- the
-    # object keeps its declared defaults.
+    # `Type::` imposes no receiver-role convention: a `const self: &config`
+    # "constructor" compiles, receives a spilled borrow, and initializes
+    # nothing -- the object keeps its declared defaults.
     assert run(
         """
         struct config { verbose: int32 = 7; }
-        fn config::constructor(const self: config, v: int32) { }
+        fn config::constructor(const self: &config, v: int32) { }
         fn main() -> int32 {
             let c = config(3);
             return c.verbose - 7;
@@ -885,7 +885,7 @@ def test_implicit_empty_ctor_fully_defaulted_generic_bare():
 
 
 def test_self_less_zero_param_ctor_never_claims_the_call():
-    # `Type::` enforces no self convention, so a literal zero-PARAMETER
+    # `Type::` requires no receiver at all, so a literal zero-PARAMETER
     # member is declarable -- but the desugared `T()` always passes the
     # receiver, which such a member cannot accept, so it never claims the
     # zero-argument call: the implicit empty constructor applies instead

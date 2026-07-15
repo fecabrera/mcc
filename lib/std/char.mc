@@ -8,7 +8,7 @@ import "libc/ctype";
  * @return true if self is a letter
  */
 @inline
-fn char::is_alpha(const self: char) -> bool {
+fn char::is_alpha(const self: &char) -> bool {
     return isalpha(self as int32) != 0;
 }
 
@@ -20,7 +20,7 @@ fn char::is_alpha(const self: char) -> bool {
  * @return true if self is a letter or a decimal digit
  */
 @inline
-fn char::is_alnum(const self: char) -> bool {
+fn char::is_alnum(const self: &char) -> bool {
     return isalnum(self as int32) != 0;
 }
 
@@ -32,7 +32,7 @@ fn char::is_alnum(const self: char) -> bool {
  * @return true if self is one of '0'..'9'
  */
 @inline
-fn char::is_digit(const self: char) -> bool {
+fn char::is_digit(const self: &char) -> bool {
     return isdigit(self as int32) != 0;
 }
 
@@ -44,7 +44,7 @@ fn char::is_digit(const self: char) -> bool {
  * @return true if self is one of '0'..'9', 'a'..'f', or 'A'..'F'
  */
 @inline
-fn char::is_hex(const self: char) -> bool {
+fn char::is_hex(const self: &char) -> bool {
     return isxdigit(self as int32) != 0;
 }
 
@@ -57,7 +57,7 @@ fn char::is_hex(const self: char) -> bool {
  * @return true if self is a whitespace character
  */
 @inline
-fn char::is_space(const self: char) -> bool {
+fn char::is_space(const self: &char) -> bool {
     return isspace(self as int32) != 0;
 }
 
@@ -69,7 +69,7 @@ fn char::is_space(const self: char) -> bool {
  * @return true if self is an uppercase letter
  */
 @inline
-fn char::is_upper(const self: char) -> bool {
+fn char::is_upper(const self: &char) -> bool {
     return isupper(self as int32) != 0;
 }
 
@@ -81,7 +81,7 @@ fn char::is_upper(const self: char) -> bool {
  * @return true if self is a lowercase letter
  */
 @inline
-fn char::is_lower(const self: char) -> bool {
+fn char::is_lower(const self: &char) -> bool {
     return islower(self as int32) != 0;
 }
 
@@ -94,7 +94,7 @@ fn char::is_lower(const self: char) -> bool {
  * @return the uppercase equivalent of self, or self itself
  */
 @inline
-fn char::upper(const self: char) -> char {
+fn char::upper(const self: &char) -> char {
     return toupper(self as int32) as char;
 }
 
@@ -107,6 +107,6 @@ fn char::upper(const self: char) -> char {
  * @return the lowercase equivalent of self, or self itself
  */
 @inline
-fn char::lower(const self: char) -> char {
+fn char::lower(const self: &char) -> char {
     return tolower(self as int32) as char;
 }

@@ -328,7 +328,7 @@ fn dict<V>::grow(self: &dict<V>) {
  *
  * @return an iterator positioned before the first occupied entry
  */
-fn dict_it<V>(self: dict<V>*) -> struct iterator<struct dict<V>> {
+fn dict_it<V>(@nonnull self: dict<V>*) -> struct iterator<struct dict<V>> {
     return struct iterator<struct dict<V>> { obj = self, idx = 0 };
 }
 

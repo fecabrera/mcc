@@ -254,7 +254,7 @@ fn list<T>::grow(self: &list<T>) {
  *
  * @return an iterator positioned at the first element
  */
-fn list_it<T>(self: list<T>*) -> struct iterator<list<T>> {
+fn list_it<T>(@nonnull self: list<T>*) -> struct iterator<list<T>> {
     return struct iterator { obj = self, idx = 0 };
 }
 

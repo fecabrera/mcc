@@ -7,8 +7,10 @@ string (``"point::magnitude"``) everywhere in the compiler -- as the function
 name, the call name, the registration key, and the LLVM symbol -- so
 overloading, ``@private``, and direct-call resolution all work unchanged.
 
-``Type::`` is purely a namespace in this slice: no ``self`` convention is
-enforced. The only validation is that the qualifier names a declared TYPE --
+``Type::`` is purely a namespace: a first parameter named ``self`` is a checked
+receiver (reference-shaped -- ``const self: &T`` / ``self: &T`` / ``@nonnull
+self: T*``; a by-value copy receiver is rejected, see test_receiver_kind.py),
+but the qualifier itself imposes nothing beyond naming a declared TYPE --
 a struct, a builtin type, or a type alias of either (an alias qualifier
 canonicalizes to the type it names: registering a method for ``pointf`` IS
 registering it for ``point<float64>``, and both spellings call one family) --
@@ -38,7 +40,7 @@ def test_qualified_def_and_call_returns_a_value(capfd):
         """
         import "std/io";
         struct point { x: int32; y: int32; }
-        fn point::sum(self: point) -> int32 {
+        fn point::sum(const self: &point) -> int32 {
             return self.x + self.y;
         }
         fn main() -> int32 {
@@ -80,7 +82,7 @@ def test_llvm_symbol_is_the_qualified_name():
     ir = compile_ir(
         """
         struct point { x: int32; y: int32; }
-        fn point::mag2(self: point) -> int32 {
+        fn point::mag2(const self: &point) -> int32 {
             return self.x * self.x + self.y * self.y;
         }
         fn main() -> int32 {
@@ -100,8 +102,8 @@ def test_same_method_name_on_two_structs(capfd):
         import "std/io";
         struct square { side: int32; }
         struct rect { w: int32; h: int32; }
-        fn square::area(self: square) -> int32 { return self.side * self.side; }
-        fn rect::area(self: rect) -> int32 { return self.w * self.h; }
+        fn square::area(const self: &square) -> int32 { return self.side * self.side; }
+        fn rect::area(const self: &rect) -> int32 { return self.w * self.h; }
         fn main() -> int32 {
             let s: square = { side = 5 };
             let r: rect = { w = 2, h = 3 };
@@ -122,8 +124,8 @@ def test_overloaded_qualified_method_dispatches_by_arg(capfd):
         """
         import "std/io";
         struct point { x: int32; y: int32; }
-        fn point::shift(self: point, dx: int32) -> int32 { return self.x + dx; }
-        fn point::shift(self: point, dx: int32, dy: int32) -> int32 {
+        fn point::shift(const self: &point, dx: int32) -> int32 { return self.x + dx; }
+        fn point::shift(const self: &point, dx: int32, dy: int32) -> int32 {
             return self.x + dx + self.y + dy;
         }
         fn main() -> int32 {
@@ -144,8 +146,8 @@ def test_private_qualified_method(capfd, tmp_path):
     (tmp_path / "geo.mc").write_text(
         "import \"std/io\";\n"
         "struct point { x: int32; y: int32; }\n"
-        "@private fn point::secret(self: point) -> int32 { return self.x; }\n"
-        "fn point::show(self: point) -> int32 { return point::secret(self); }\n"
+        "@private fn point::secret(const self: &point) -> int32 { return self.x; }\n"
+        "fn point::show(const self: &point) -> int32 { return point::secret(self); }\n"
     )
     main = tmp_path / "main.mc"
     main.write_text(
@@ -218,7 +220,7 @@ def test_generic_method_def_and_inference_call_returns_a_value(capfd):
         """
         import "std/io";
         struct point<T> { x: T; y: T; }
-        fn point<T>::sum(self: point<T>) -> T {
+        fn point<T>::sum(const self: &point<T>) -> T {
             return self.x + self.y;
         }
         fn main() -> int32 {
@@ -260,7 +262,7 @@ def test_generic_method_monomorphizes_across_two_instantiations(capfd):
         """
         import "std/io";
         struct point<T> { x: T; y: T; }
-        fn point<T>::sum(self: point<T>) -> T {
+        fn point<T>::sum(const self: &point<T>) -> T {
             return self.x + self.y;
         }
         fn main() -> int32 {
@@ -283,7 +285,7 @@ def test_generic_method_with_own_type_param(capfd):
         """
         import "std/io";
         struct box<T> { v: T; }
-        fn box<T>::combine<U>(const self: box<T>, extra: U) -> U {
+        fn box<T>::combine<U>(const self: &box<T>, extra: U) -> U {
             return self.v as U + extra;
         }
         fn main() -> int32 {
@@ -306,7 +308,7 @@ def test_method_type_param_shadowing_struct_param_is_an_error():
         compile_ir(
             """
             struct point<T> { x: T; y: T; }
-            fn point<T>::m<T>(self: point<T>) -> int32 { return 0; }
+            fn point<T>::m<T>(const self: &point<T>) -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -318,8 +320,8 @@ def test_generic_const_self_and_private_method(capfd, tmp_path):
     (tmp_path / "geo.mc").write_text(
         'import "std/io";\n'
         "struct point<T> { x: T; y: T; }\n"
-        "@private fn point<T>::first(const self: point<T>) -> T { return self.x; }\n"
-        "fn point<T>::show(const self: point<T>) -> T { return point::first(self); }\n"
+        "@private fn point<T>::first(const self: &point<T>) -> T { return self.x; }\n"
+        "fn point<T>::show(const self: &point<T>) -> T { return point::first(self); }\n"
     )
     main = tmp_path / "main.mc"
     main.write_text(
@@ -348,7 +350,7 @@ def test_bare_generic_receiver_still_requires_type_args():
         run(
             """
             struct point<T> { x: T; y: T; }
-            fn point<T>::sum(self: point, x: T) -> int32 { return x; }
+            fn point<T>::sum(const self: &point, x: T) -> int32 { return x; }
             fn main() -> int32 {
                 let p: point<int32> = { x = 1, y = 2 };
                 return point::sum(p, 5);
@@ -394,8 +396,8 @@ def test_specialization_dispatches_a_distinct_body(capfd):
         """
         import "std/io";
         struct box<T> { v: T; }
-        fn box<T>::tag(self: box<T>) -> int32 { return 1; }
-        fn box<float64>::tag(self: box<float64>) -> int32 { return 2; }
+        fn box<T>::tag(const self: &box<T>) -> int32 { return 1; }
+        fn box<float64>::tag(const self: &box<float64>) -> int32 { return 2; }
         fn main() -> int32 {
             let bi: box<int32> = { v = 7 };
             let bf: box<float64> = { v = 1.0 };
@@ -415,8 +417,8 @@ def test_specialization_on_a_user_struct_argument(capfd):
         import "std/io";
         struct widget { n: int32; }
         struct holder<T> { item: T; }
-        fn holder<T>::code(self: holder<T>) -> int32 { return 0; }
-        fn holder<widget>::code(self: holder<widget>) -> int32 { return 42; }
+        fn holder<T>::code(const self: &holder<T>) -> int32 { return 0; }
+        fn holder<widget>::code(const self: &holder<widget>) -> int32 { return 42; }
         fn main() -> int32 {
             let w: holder<widget> = { item = { n = 5 } };
             let i: holder<int32> = { item = 9 };
@@ -435,7 +437,7 @@ def test_lone_specialization_without_a_generic_base(capfd):
         """
         import "std/io";
         struct box<T> { v: T; }
-        fn box<int32>::only(self: box<int32>) -> int32 { return self.v + 5; }
+        fn box<int32>::only(const self: &box<int32>) -> int32 { return self.v + 5; }
         fn main() -> int32 {
             let b: box<int32> = { v = 3 };
             println(f"{box::only(b)}");
@@ -458,9 +460,9 @@ def test_partial_specialization_three_tier_dispatch(capfd):
         """
         import "std/io";
         struct pair<A, B> { a: A; b: B; }
-        fn pair<T, U>::which(self: pair<T, U>) -> int32 { return 0; }
-        fn pair<int32, U>::which(self: pair<int32, U>) -> int32 { return 1; }
-        fn pair<int32, int8>::which(self: pair<int32, int8>) -> int32 { return 2; }
+        fn pair<T, U>::which(const self: &pair<T, U>) -> int32 { return 0; }
+        fn pair<int32, U>::which(const self: &pair<int32, U>) -> int32 { return 1; }
+        fn pair<int32, int8>::which(const self: &pair<int32, int8>) -> int32 { return 2; }
         fn main() -> int32 {
             let g: pair<int64, int64> = { a = 1, b = 2 };
             let p: pair<int32, int64> = { a = 1, b = 2 };
@@ -483,8 +485,8 @@ def test_duplicate_specialization_collides():
         compile_ir(
             """
             struct box<T> { v: T; }
-            fn box<float64>::tag(self: box<float64>) -> int32 { return 1; }
-            fn box<float64>::tag(self: box<float64>) -> int32 { return 2; }
+            fn box<float64>::tag(const self: &box<float64>) -> int32 { return 1; }
+            fn box<float64>::tag(const self: &box<float64>) -> int32 { return 2; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -499,7 +501,7 @@ def test_specialization_wrong_arity_is_an_error():
         compile_ir(
             """
             struct box<T> { v: T; }
-            fn box<int32, int32>::m(self: box<int32>) -> int32 { return 0; }
+            fn box<int32, int32>::m(const self: &box<int32>) -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -507,7 +509,7 @@ def test_specialization_wrong_arity_is_an_error():
 
 def test_specialization_round_trips_through_mci(tmp_path):
     # A specialization exports as a concrete prototype that re-spells the
-    # qualifier's annotation, `fn box<float64>::tag(self: box<float64>)` -- a
+    # qualifier's annotation, `fn box<float64>::tag(const self: &box<float64>)` -- a
     # bare `fn box::tag` would not re-parse (a generic qualifier must be
     # annotated). Re-parsing and re-compiling that stub classifies it straight
     # back to the same concrete overload (its body lives in the compiled
@@ -516,13 +518,13 @@ def test_specialization_round_trips_through_mci(tmp_path):
     lib = tmp_path / "lib.mc"
     lib.write_text(
         "struct box<T> { v: T; }\n"
-        "fn box<T>::tag(self: box<T>) -> int32 { return 1; }\n"
-        "fn box<float64>::tag(self: box<float64>) -> int32 { return 2; }\n"
+        "fn box<T>::tag(const self: &box<T>) -> int32 { return 1; }\n"
+        "fn box<float64>::tag(const self: &box<float64>) -> int32 { return 2; }\n"
     )
     out = tmp_path / "lib.mci"
     assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
     stub = out.read_text()
-    assert "fn box<float64>::tag(self: box<float64>) -> int32;" in stub
+    assert "fn box<float64>::tag(const self: &box<float64>) -> int32;" in stub
     # Re-parsing and re-compiling the stub round-trips: the annotated
     # prototype classifies as the same concrete box<float64> overload (a
     # plain-symbol declaration whose body lives in the object) -- the binding
@@ -538,7 +540,7 @@ def test_lone_partial_specialization(capfd):
         """
         import "std/io";
         struct pair<A, B> { a: A; b: B; }
-        fn pair<int32, U>::second(self: pair<int32, U>) -> U { return self.b; }
+        fn pair<int32, U>::second(const self: &pair<int32, U>) -> U { return self.b; }
         fn main() -> int32 {
             let p: pair<int32, int64> = { a = 1, b = 40 };
             println(f"{pair::second(p) + 2}");
@@ -556,8 +558,8 @@ def test_partial_mismatched_receiver_falls_to_generic(capfd):
         """
         import "std/io";
         struct pair<A, B> { a: A; b: B; }
-        fn pair<T, U>::which(self: pair<T, U>) -> int32 { return 0; }
-        fn pair<int32, U>::which(self: pair<int32, U>) -> int32 { return 1; }
+        fn pair<T, U>::which(const self: &pair<T, U>) -> int32 { return 0; }
+        fn pair<int32, U>::which(const self: &pair<int32, U>) -> int32 { return 1; }
         fn main() -> int32 {
             let p: pair<int64, int8> = { a = 1, b = 2 };
             println(f"{pair::which(p)}");
@@ -580,7 +582,7 @@ def test_lone_partial_wrong_receiver_is_a_coercion_error():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<int32, U>::m(self: pair<int32, U>) -> int32 { return 1; }
+            fn pair<int32, U>::m(const self: &pair<int32, U>) -> int32 { return 1; }
             fn main() -> int32 {
                 let p: pair<int64, int8> = { a = 1, b = 2 };
                 return pair::m(p);
@@ -597,8 +599,8 @@ def test_bounded_partial_specialization(capfd):
         """
         import "std/io";
         struct pair<A, B> { a: A; b: B; }
-        fn pair<T, U>::which(self: pair<T, U>) -> int32 { return 0; }
-        fn pair<int32, U: int8 | int16>::which(self: pair<int32, U>) -> int32 {
+        fn pair<T, U>::which(const self: &pair<T, U>) -> int32 { return 0; }
+        fn pair<int32, U: int8 | int16>::which(const self: &pair<int32, U>) -> int32 {
             return 1;
         }
         fn main() -> int32 {
@@ -621,8 +623,8 @@ def test_bounded_generic_beats_unbounded_partial(capfd):
         """
         import "std/io";
         struct pair<A, B> { a: A; b: B; }
-        fn pair<K: int8 | int32, V>::which(self: pair<K, V>) -> int32 { return 1; }
-        fn pair<int32, U>::which(self: pair<int32, U>) -> int32 { return 2; }
+        fn pair<K: int8 | int32, V>::which(const self: &pair<K, V>) -> int32 { return 1; }
+        fn pair<int32, U>::which(const self: &pair<int32, U>) -> int32 { return 2; }
         fn main() -> int32 {
             let p: pair<int32, int64> = { a = 1, b = 2 };
             println(f"{pair::which(p)}");
@@ -640,8 +642,8 @@ def test_bounded_partial_beats_bounded_generic(capfd):
         """
         import "std/io";
         struct pair<A, B> { a: A; b: B; }
-        fn pair<K: int8 | int32, V>::which(self: pair<K, V>) -> int32 { return 1; }
-        fn pair<int32, U: int8 | int64>::which(self: pair<int32, U>) -> int32 {
+        fn pair<K: int8 | int32, V>::which(const self: &pair<K, V>) -> int32 { return 1; }
+        fn pair<int32, U: int8 | int64>::which(const self: &pair<int32, U>) -> int32 {
             return 2;
         }
         fn main() -> int32 {
@@ -693,8 +695,8 @@ def test_two_rank_tied_partials_are_ambiguous():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<int32, U>::m(self: pair<int32, U>) -> int32 { return 1; }
-            fn pair<T, int8>::m(self: pair<T, int8>) -> int32 { return 2; }
+            fn pair<int32, U>::m(const self: &pair<int32, U>) -> int32 { return 1; }
+            fn pair<T, int8>::m(const self: &pair<T, int8>) -> int32 { return 2; }
             fn main() -> int32 {
                 let p: pair<int32, int8> = { a = 1, b = 2 };
                 return pair::m(p);
@@ -715,7 +717,7 @@ def test_partial_fresh_name_capturing_bound_struct_param_is_an_error():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<int32, A>::m(self: pair<int32, A>) -> int32 { return 0; }
+            fn pair<int32, A>::m(const self: &pair<int32, A>) -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -728,7 +730,7 @@ def test_partial_fresh_name_may_reuse_its_own_position(capfd):
         """
         import "std/io";
         struct pair<A, B> { a: A; b: B; }
-        fn pair<int32, B>::second(self: pair<int32, B>) -> B { return self.b; }
+        fn pair<int32, B>::second(const self: &pair<int32, B>) -> B { return self.b; }
         fn main() -> int32 {
             let p: pair<int32, int64> = { a = 1, b = 7 };
             println(f"{pair::second(p)}");
@@ -752,7 +754,7 @@ def test_decorated_concrete_struct_argument_is_an_error():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<int32: int8 | int16, U>::m(self: pair<int32, U>) -> int32 {
+            fn pair<int32: int8 | int16, U>::m(const self: &pair<int32, U>) -> int32 {
                 return 0;
             }
             fn main() -> int32 { return 0; }
@@ -770,7 +772,7 @@ def test_partial_wrong_arity_is_an_error():
         compile_ir(
             """
             struct triple<A, B, C> { a: A; b: B; c: C; }
-            fn triple<int32, U>::m(self: triple<int32, U, U>) -> int32 {
+            fn triple<int32, U>::m(const self: &triple<int32, U, U>) -> int32 {
                 return 0;
             }
             fn main() -> int32 { return 0; }
@@ -789,7 +791,7 @@ def test_partial_fresh_name_shadowing_own_type_param_is_an_error():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<int32, U>::m<U>(self: pair<int32, U>) -> int32 { return 0; }
+            fn pair<int32, U>::m<U>(const self: &pair<int32, U>) -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -802,7 +804,7 @@ def test_partial_with_method_own_type_param(capfd):
         """
         import "std/io";
         struct pair<A, B> { a: A; b: B; }
-        fn pair<int32, U>::pick<W>(self: pair<int32, U>, w: W) -> W { return w; }
+        fn pair<int32, U>::pick<W>(const self: &pair<int32, U>, w: W) -> W { return w; }
         fn main() -> int32 {
             let p: pair<int32, int8> = { a = 1, b = 2 };
             println(f"{pair::pick(p, 42)}");
@@ -821,8 +823,8 @@ def test_partial_on_user_struct_concrete_argument(capfd):
         import "std/io";
         struct vec2 { x: int32; y: int32; }
         struct table<K, V> { k: K; v: V; }
-        fn table<T, U>::kind(self: table<T, U>) -> int32 { return 0; }
-        fn table<vec2, U>::kind(self: table<vec2, U>) -> int32 { return 33; }
+        fn table<T, U>::kind(const self: &table<T, U>) -> int32 { return 0; }
+        fn table<vec2, U>::kind(const self: &table<vec2, U>) -> int32 { return 33; }
         fn main() -> int32 {
             let t: table<vec2, int8> = { k = { x = 1, y = 2 }, v = 3 };
             let u: table<int32, int8> = { k = 1, v = 3 };
@@ -860,8 +862,8 @@ def test_duplicate_partial_specialization_collides():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<int32, U>::m(self: pair<int32, U>) -> int32 { return 1; }
-            fn pair<int32, W>::m(self: pair<int32, W>) -> int32 { return 2; }
+            fn pair<int32, U>::m(const self: &pair<int32, U>) -> int32 { return 1; }
+            fn pair<int32, W>::m(const self: &pair<int32, W>) -> int32 { return 2; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -874,20 +876,20 @@ def test_partial_specialization_round_trips_through_mci(tmp_path):
     lib = tmp_path / "lib.mc"
     lib.write_text(
         "struct pair<A, B> { a: A; b: B; }\n"
-        "fn pair<T, U>::which(self: pair<T, U>) -> int32 { return 0; }\n"
-        "fn pair<int32, U>::which(self: pair<int32, U>) -> int32 { return 1; }\n"
-        "fn pair<int64, U: int8 | int16>::which(self: pair<int64, U>) -> int32"
+        "fn pair<T, U>::which(const self: &pair<T, U>) -> int32 { return 0; }\n"
+        "fn pair<int32, U>::which(const self: &pair<int32, U>) -> int32 { return 1; }\n"
+        "fn pair<int64, U: int8 | int16>::which(const self: &pair<int64, U>) -> int32"
         " { return 2; }\n"
     )
     out = tmp_path / "lib.mci"
     assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
     stub = out.read_text()
     assert (
-        "fn pair<int32, U>::which(self: pair<int32, U>) -> int32 { return 1; }"
+        "fn pair<int32, U>::which(const self: &pair<int32, U>) -> int32 { return 1; }"
         in stub
     )
     assert (
-        "fn pair<int64, U: int8 | int16>::which(self: pair<int64, U>) -> int32"
+        "fn pair<int64, U: int8 | int16>::which(const self: &pair<int64, U>) -> int32"
         " { return 2; }" in stub
     )
     lib.unlink()  # force the import to resolve through the stub
@@ -913,7 +915,7 @@ def test_decorated_all_fresh_list_still_works(capfd):
         """
         import "std/io";
         struct pair<A, B> { a: A; b: B; }
-        fn pair<K: int32 | int64, V>::sum(self: pair<K, V>) -> K {
+        fn pair<K: int32 | int64, V>::sum(const self: &pair<K, V>) -> K {
             return self.a + self.b as K;
         }
         fn main() -> int32 {
@@ -938,7 +940,7 @@ def test_decorated_all_fresh_validation_still_applies():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<K = int32, V>::m(self: pair<K, V>) -> int32 { return 0; }
+            fn pair<K = int32, V>::m(const self: &pair<K, V>) -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -953,7 +955,7 @@ def test_decorated_all_fresh_validation_still_applies():
             """
             struct shape { kind: int32; }
             struct pair<A, B> { a: A; b: B; }
-            fn pair<K: int8 | int16 extends shape, V>::m(self: pair<K, V>)
+            fn pair<K: int8 | int16 extends shape, V>::m(const self: &pair<K, V>)
                 -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
@@ -967,7 +969,7 @@ def test_decorated_all_fresh_validation_still_applies():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<K = K, V = int32>::m(self: pair<K, V>) -> int32 {
+            fn pair<K = K, V = int32>::m(const self: &pair<K, V>) -> int32 {
                 return 0;
             }
             fn main() -> int32 { return 0; }
@@ -982,7 +984,7 @@ def test_decorated_all_fresh_validation_still_applies():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<K: V | int8, V>::m(self: pair<K, V>) -> int32 { return 0; }
+            fn pair<K: V | int8, V>::m(const self: &pair<K, V>) -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -995,7 +997,7 @@ def test_decorated_all_fresh_validation_still_applies():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<V, K: int8 | int16 = V>::m(self: pair<V, K>) -> int32 {
+            fn pair<V, K: int8 | int16 = V>::m(const self: &pair<V, K>) -> int32 {
                 return 0;
             }
             fn main() -> int32 { return 0; }
@@ -1010,7 +1012,7 @@ def test_decorated_all_fresh_validation_still_applies():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<K extends V, V>::m(self: pair<K, V>) -> int32 { return 0; }
+            fn pair<K extends V, V>::m(const self: &pair<K, V>) -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -1024,7 +1026,7 @@ def test_malformed_struct_arg_list_still_reports_parse_errors():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<K | V>::m(self: pair<K, V>) -> int32 { return 0; }
+            fn pair<K | V>::m(const self: &pair<K, V>) -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -1033,7 +1035,7 @@ def test_malformed_struct_arg_list_still_reports_parse_errors():
         compile_ir(
             """
             struct pair<A, B> { a: A; b: B; }
-            fn pair<3, V>::m(self: pair<int32, V>) -> int32 { return 0; }
+            fn pair<3, V>::m(const self: &pair<int32, V>) -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -1047,7 +1049,7 @@ def test_specialization_coexists_with_own_type_param_generic(capfd):
         """
         import "std/io";
         struct box<T> { v: T; }
-        fn box<T>::labeled<U>(self: box<T>, label: U) -> U { return label; }
+        fn box<T>::labeled<U>(const self: &box<T>, label: U) -> U { return label; }
         fn main() -> int32 {
             let b: box<int32> = { v = 7 };
             println(f"{box::labeled(b, 99)}");
@@ -1077,8 +1079,8 @@ def test_alias_declared_specialization_outranks_generic(capfd):
         import "std/io";
         struct point<T> { x: T; y: T; }
         type pointf = point<float64>;
-        fn pointf::tag(self: pointf) -> int32 { return 2; }
-        fn point<T>::tag(self: point<T>) -> int32 { return 1; }
+        fn pointf::tag(const self: &pointf) -> int32 { return 2; }
+        fn point<T>::tag(const self: &point<T>) -> int32 { return 1; }
         fn main() -> int32 {
             let pi: point<int64>;
             let pf: pointf;
@@ -1122,7 +1124,7 @@ def test_alias_of_alias_chain_canonicalizes():
             struct point<T> { x: T; y: T; }
             type pf1 = point<float64>;
             type pf2 = pf1;
-            fn pf2::code(self: pf2) -> int32 { return 42; }
+            fn pf2::code(const self: &pf2) -> int32 { return 42; }
             fn main() -> int32 {
                 let p: pf1;
                 return point::code(p) + pf2::code(p) - 42 * 2;
@@ -1143,7 +1145,7 @@ def test_permuting_generic_alias_becomes_a_partial_specialization():
             """
             struct pair2<A, B> { a: A; b: B; }
             type swap<X, Y> = pair2<Y, X>;
-            fn swap<int32, U>::pick(self: swap<int32, U>) -> U {
+            fn swap<int32, U>::pick(const self: &swap<int32, U>) -> U {
                 return self.a;
             }
             fn main() -> int32 {
@@ -1244,8 +1246,8 @@ def test_fully_defaulted_struct_qualifier_may_be_bare():
         run(
             """
             struct box<T = int32> { v: T; }
-            fn box<T>::tag(self: box<T>) -> int32 { return 1; }
-            fn box::tag(self: box<int32>) -> int32 { return 2; }
+            fn box<T>::tag(const self: &box<T>) -> int32 { return 1; }
+            fn box::tag(const self: &box<int32>) -> int32 { return 2; }
             fn main() -> int32 {
                 let a: box<int64>;
                 let b: box<int32>;
@@ -1266,8 +1268,8 @@ def test_fully_defaulted_alias_qualifier_may_be_bare():
             """
             struct point<T> { x: T; y: T; }
             type pf<T = float64> = point<T>;
-            fn point<T>::m(self: point<T>) -> int32 { return 1; }
-            fn pf::m(self: point<float64>) -> int32 { return 2; }
+            fn point<T>::m(const self: &point<T>) -> int32 { return 1; }
+            fn pf::m(const self: &point<float64>) -> int32 { return 2; }
             fn main() -> int32 {
                 let a: point<int32>;
                 let b: point<float64>;
@@ -1355,7 +1357,7 @@ def test_duplicate_position_alias_is_a_diagonal_constraint(capfd):
         import "std/io";
         struct pair2<A, B> { a: A; b: B; }
         type diag<T> = pair2<T, T>;
-        fn diag<U>::first(self: diag<U>) -> U { return self.a; }
+        fn diag<U>::first(const self: &diag<U>) -> U { return self.a; }
         fn main() -> int32 {
             let p: pair2<int32, int32>;
             p.a = 41;
@@ -1377,7 +1379,7 @@ def test_duplicate_position_alias_is_a_diagonal_constraint(capfd):
             """
             struct pair2<A, B> { a: A; b: B; }
             type diag<T> = pair2<T, T>;
-            fn diag<U>::first(self: diag<U>) -> U { return self.a; }
+            fn diag<U>::first(const self: &diag<U>) -> U { return self.a; }
             fn main() -> int32 {
                 let p: pair2<int32, float64>;
                 return pair2::first(p) as int32;
@@ -1395,8 +1397,8 @@ def test_diagonal_alias_beside_a_generic_sibling():
             """
             struct pair2<A, B> { a: A; b: B; }
             type diag<T> = pair2<T, T>;
-            fn diag<U>::which(self: diag<U>) -> int32 { return 1; }
-            fn pair2<A, B>::which(self: pair2<A, B>) -> int32 { return 0; }
+            fn diag<U>::which(const self: &diag<U>) -> int32 { return 1; }
+            fn pair2<A, B>::which(const self: &pair2<A, B>) -> int32 { return 0; }
             fn main() -> int32 {
                 let mixed: pair2<int32, float64>;
                 return pair2::which(mixed);
@@ -1417,8 +1419,8 @@ def test_diagonal_alias_beside_a_generic_sibling():
             """
             struct pair2<A, B> { a: A; b: B; }
             type diag<T> = pair2<T, T>;
-            fn diag<U>::which(self: diag<U>) -> int32 { return 1; }
-            fn pair2<A, B>::which(self: pair2<A, B>) -> int32 { return 0; }
+            fn diag<U>::which(const self: &diag<U>) -> int32 { return 1; }
+            fn pair2<A, B>::which(const self: &pair2<A, B>) -> int32 { return 0; }
             fn main() -> int32 {
                 let same: pair2<int32, int32>;
                 return pair2::which(same);
@@ -1441,8 +1443,8 @@ def test_alias_and_canonical_spellings_collide_as_duplicates():
             """
             struct point<T> { x: T; y: T; }
             type pointf = point<float64>;
-            fn pointf::m(self: pointf) -> int32 { return 1; }
-            fn point<float64>::m(self: point<float64>) -> int32 { return 2; }
+            fn pointf::m(const self: &pointf) -> int32 { return 1; }
+            fn point<float64>::m(const self: &point<float64>) -> int32 { return 2; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -1458,7 +1460,7 @@ def test_generic_alias_qualifier_arity_error():
             """
             struct point<T> { x: T; y: T; }
             type pf<T> = point<T>;
-            fn pf<A, B>::m(self: point<A>) -> int32 { return 0; }
+            fn pf<A, B>::m(const self: &point<A>) -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -1472,7 +1474,7 @@ def test_plain_alias_qualifier_with_args_is_not_generic():
             """
             struct point<T> { x: T; y: T; }
             type pointf = point<float64>;
-            fn pointf<float64>::m(self: pointf) -> int32 { return 0; }
+            fn pointf<float64>::m(const self: &pointf) -> int32 { return 0; }
             fn main() -> int32 { return 0; }
             """
         )
@@ -1514,7 +1516,7 @@ def test_private_alias_qualifier_is_access_checked(tmp_path):
     decl = tmp_path / "decl.mc"
     decl.write_text(
         'import "geo";\n'
-        "fn pointf::m(self: point<float64>) -> int32 { return 0; }\n"
+        "fn pointf::m(const self: &point<float64>) -> int32 { return 0; }\n"
         "fn main() -> int32 { return 0; }\n"
     )
     with pytest.raises(
@@ -1573,12 +1575,12 @@ def test_alias_specialization_prototype_round_trips_through_mci(tmp_path):
     lib.write_text(
         "struct point<T> { x: T; y: T; }\n"
         "type pointf = point<float64>;\n"
-        "fn pointf::mag(self: pointf) -> float64 { return self.x; }\n"
+        "fn pointf::mag(const self: &pointf) -> float64 { return self.x; }\n"
     )
     out = tmp_path / "lib.mci"
     assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
     stub = out.read_text()
-    assert "fn point<float64>::mag(self: pointf) -> float64;" in stub  # canonical, annotated
+    assert "fn point<float64>::mag(const self: &pointf) -> float64;" in stub  # canonical, annotated
     assert "type pointf = point<float64>;" in stub
     compile_ir(stub)  # the stub is self-contained and compiles
 
@@ -1610,12 +1612,12 @@ def test_override_pairs_across_alias_and_canonical_spellings(tmp_path):
     (tmp_path / "base.mc").write_text(
         "struct point<T> { x: T; y: T; }\n"
         "type pointf = point<float64>;\n"
-        "fn point<float64>::m(self: point<float64>) -> int32 { return 1; }\n"
+        "fn point<float64>::m(const self: &point<float64>) -> int32 { return 1; }\n"
     )
     main = tmp_path / "main.mc"
     main.write_text(
         'import "base";\n'
-        "@override fn pointf::m(self: pointf) -> int32 { return 2; }\n"
+        "@override fn pointf::m(const self: &pointf) -> int32 { return 2; }\n"
         "fn main() -> int32 {\n"
         "    let p: pointf;\n"
         "    return point::m(p) - 2;\n"
@@ -1645,7 +1647,7 @@ def test_defaulted_generic_alias_qualifier_fills_the_tail():
             """
             struct pair2<A, B> { a: A; b: B; }
             type box2<T, U = int32> = pair2<U, T>;
-            fn box2<float64>::code(self: pair2<int32, float64>) -> int32 {
+            fn box2<float64>::code(const self: &pair2<int32, float64>) -> int32 {
                 return 42;
             }
             fn main() -> int32 {
@@ -1665,7 +1667,7 @@ def test_defaulted_generic_alias_qualifier_fills_the_tail():
             """
             struct pair2<A, B> { a: A; b: B; }
             type box2<T, U = int32> = pair2<U, T>;
-            fn pair2<int32, V>::grab(self: box2<V>) -> V { return self.b; }
+            fn pair2<int32, V>::grab(const self: &box2<V>) -> V { return self.b; }
             fn main() -> int32 {
                 let p: pair2<int32, int64>;
                 p.b = 42;

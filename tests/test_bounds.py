@@ -431,7 +431,7 @@ def test_reimported_bound_still_rejects_a_non_subtype(tmp_path):
 # that extends slice<T>" with no explicit borrow at the call site.
 DEP = """
 struct box<T> extends slice<T> { cap: uint64; }
-fn box<T>::eq<U extends slice<T>>(const self: box<T>, const o: U) -> bool {
+fn box<T>::eq<U extends slice<T>>(const self: &box<T>, const o: U) -> bool {
     return self.length == (o as slice<const T>).length;
 }
 """
@@ -566,10 +566,10 @@ def test_unbounded_fallback_catches_what_the_dependent_bound_excludes():
     assert run(
         """
         struct box<T> extends slice<T> { cap: uint64; }
-        fn box<T>::tag<U extends slice<T>>(const self: box<T>, const o: U) -> int32 {
+        fn box<T>::tag<U extends slice<T>>(const self: &box<T>, const o: U) -> int32 {
             return 1;                    // the bounded member
         }
-        fn box<T>::tag<U>(const self: box<T>, const o: U) -> int32 {
+        fn box<T>::tag<U>(const self: &box<T>, const o: U) -> int32 {
             return 2;                    // the unbounded fallback
         }
         fn main() -> int32 {
@@ -587,7 +587,7 @@ def test_dependent_bound_round_trips_through_an_interface(tmp_path):
     lib.write_text(
         "struct box<T> extends slice<T> { cap: uint64; }\n"
         "fn box<T>::eq<U extends slice<T>>"
-        "(const self: box<T>, const o: U) -> bool {\n"
+        "(const self: &box<T>, const o: U) -> bool {\n"
         "    return self.length == (o as slice<const T>).length;\n"
         "}\n"
     )

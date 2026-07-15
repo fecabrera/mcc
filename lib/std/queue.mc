@@ -113,7 +113,7 @@ fn queue<T>::is_empty(const self: &queue<T>) -> bool {
  * @param self: queue to iterate
  * @return iterator yielding values from oldest to newest (FIFO order)
  */
-fn queue_it<T>(self: queue<T>*) -> queue_iterator<T> {
+fn queue_it<T>(@nonnull self: queue<T>*) -> queue_iterator<T> {
     return queue_iterator<T> { current = self!->head };
 }
 

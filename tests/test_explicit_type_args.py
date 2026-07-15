@@ -38,7 +38,7 @@ def test_written_qualifier_pins_and_calls():
     assert run(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::sum(const self: point<T>) -> T { return self.x + self.y; }
+        fn point<T>::sum(const self: &point<T>) -> T { return self.x + self.y; }
         fn main() -> int32 {
             let p: point<int32> = { x = 3, y = 4 };
             return point<int32>::sum(p);
@@ -57,8 +57,8 @@ def test_written_qualifier_dispatches_to_a_full_specialization(capfd):
         """
         import "std/io";
         struct box<T> { v: T; }
-        fn box<T>::tag(self: box<T>) -> int32 { return 1; }
-        fn box<float64>::tag(self: box<float64>) -> int32 { return 2; }
+        fn box<T>::tag(const self: &box<T>) -> int32 { return 1; }
+        fn box<float64>::tag(const self: &box<float64>) -> int32 { return 2; }
         fn main() -> int32 {
             let bi: box<int32> = { v = 7 };
             let bf: box<float64> = { v = 1.0 };
@@ -77,7 +77,7 @@ def test_lone_specialization_family_accepts_a_matching_pin():
     assert run(
         """
         struct box<T> { v: T; }
-        fn box<int32>::get(const self: box<int32>) -> int32 { return self.v; }
+        fn box<int32>::get(const self: &box<int32>) -> int32 { return self.v; }
         fn main() -> int32 {
             let b: box<int32> = { v = 5 };
             return box<int32>::get(b);
@@ -98,7 +98,7 @@ def test_lone_specialization_family_rejects_a_mismatched_pin():
         compile_ir(
             """
             struct box<T> { v: T; }
-            fn box<int32>::get(const self: box<int32>) -> int32 { return self.v; }
+            fn box<int32>::get(const self: &box<int32>) -> int32 { return self.v; }
             fn main() -> int32 {
                 let b: box<int32> = { v = 5 };
                 return box<float64>::get(b);
@@ -127,7 +127,7 @@ def test_builtin_generic_qualifier_pins():
     # structs: `slice<int32>::first(s)`.
     assert run(
         """
-        fn slice<T>::first(const self: slice<T>) -> T { return self[0]; }
+        fn slice<T>::first(const self: &slice<T>) -> T { return self[0]; }
         fn main() -> int32 {
             let s: slice<int32> = [7, 8, 9];
             return slice<int32>::first(s);
@@ -142,7 +142,7 @@ def test_defaulted_tail_fills_from_the_struct_defaults():
     assert run(
         """
         struct box<T, U = int32> { t: T; u: U; }
-        fn box<T, U>::second(const self: box<T, U>) -> U { return self.u; }
+        fn box<T, U>::second(const self: &box<T, U>) -> U { return self.u; }
         fn main() -> int32 {
             let b: box<float64> = { t = 1.0, u = 9 };
             return box<float64>::second(b);
@@ -219,8 +219,8 @@ def test_partial_specialization_family_ranks_under_a_pin(capfd):
         """
         import "std/io";
         struct pair<A, B> { a: A; b: B; }
-        fn pair<A, B>::pick(const self: pair<A, B>) -> int32 { return 1; }
-        fn pair<int32, U>::pick(const self: pair<int32, U>) -> int32 { return 2; }
+        fn pair<A, B>::pick(const self: &pair<A, B>) -> int32 { return 1; }
+        fn pair<int32, U>::pick(const self: &pair<int32, U>) -> int32 { return 2; }
         fn main() -> int32 {
             let p: pair<int32, float64> = { a = 1, b = 2.0 };
             let q: pair<int8, float64> = { a = 1, b = 2.0 };
@@ -280,7 +280,7 @@ def test_receiver_mismatching_the_pin_is_a_coercion_error():
         compile_ir(
             """
             struct point<T> { x: T; }
-            fn point<T>::get(const self: point<T>) -> T { return self.x; }
+            fn point<T>::get(const self: &point<T>) -> T { return self.x; }
             fn main() -> int32 {
                 let p: point<float64> = { x = 1.0 };
                 return point<int32>::get(p) as int32;
@@ -300,8 +300,8 @@ def test_overload_set_miss_names_the_pin():
         compile_ir(
             """
             struct box<T> { v: T; }
-            fn box<T>::get(const self: box<T>) -> T { return self.v; }
-            fn box<T>::get(const self: box<T>, d: T) -> T { return self.v; }
+            fn box<T>::get(const self: &box<T>) -> T { return self.v; }
+            fn box<T>::get(const self: &box<T>, d: T) -> T { return self.v; }
             fn main() -> int32 {
                 let b: box<int32> = { v = 5 };
                 return box<float64>::get(b, 1);
@@ -319,7 +319,7 @@ def test_qualifier_arity_error_is_the_type_use_error():
         compile_ir(
             """
             struct point<T> { x: T; }
-            fn point<T>::get(const self: point<T>) -> T { return self.x; }
+            fn point<T>::get(const self: &point<T>) -> T { return self.x; }
             fn main() -> int32 {
                 let p: point<int32> = { x = 1 };
                 return point<int32, int8>::get(p);
@@ -341,7 +341,7 @@ def test_second_type_argument_list_is_a_parse_error():
         compile_ir(
             """
             struct point<T> { x: T; }
-            fn point<T>::conv<U>(const self: point<T>, v: U) -> T { return v as T; }
+            fn point<T>::conv<U>(const self: &point<T>, v: U) -> T { return v as T; }
             fn main() -> int32 {
                 let p: point<int32> = { x = 1 };
                 return point<int32>::conv<int8>(p, 5);
@@ -378,7 +378,7 @@ def test_written_args_generic_alias_qualifier_substitutes():
     assert run(
         """
         struct pair<A, B> { a: A; b: B; }
-        fn pair<A, B>::second(const self: pair<A, B>) -> B { return self.b; }
+        fn pair<A, B>::second(const self: &pair<A, B>) -> B { return self.b; }
         type pd<X> = pair<X, int32>;
         fn main() -> int32 {
             let p: pair<float64, int32> = { a = 1.5, b = 40 };
@@ -395,7 +395,7 @@ def test_permuting_alias_qualifier_honors_the_permutation():
     assert run(
         """
         struct pair<A, B> { a: A; b: B; }
-        fn pair<A, B>::first(const self: pair<A, B>) -> A { return self.a; }
+        fn pair<A, B>::first(const self: &pair<A, B>) -> A { return self.a; }
         type swap<X, Y> = pair<Y, X>;
         fn main() -> int32 {
             let p: pair<float64, int32> = { a = 1.5, b = 40 };
@@ -412,7 +412,7 @@ def test_bare_complete_alias_injects_its_instantiation():
     assert run(
         """
         struct point<T> { x: T; }
-        fn point<T>::get(const self: point<T>) -> T { return self.x; }
+        fn point<T>::get(const self: &point<T>) -> T { return self.x; }
         type pointf = point<float64>;
         fn main() -> int32 {
             let p: point<float64> = { x = 41.5 };
@@ -435,7 +435,7 @@ def test_bare_complete_alias_rejects_a_cross_instantiation_receiver():
         compile_ir(
             """
             struct point<T> { x: T; }
-            fn point<T>::get(const self: point<T>) -> T { return self.x; }
+            fn point<T>::get(const self: &point<T>) -> T { return self.x; }
             type pointf = point<float64>;
             fn main() -> int32 {
                 let q: point<int32> = { x = 7 };
@@ -452,7 +452,7 @@ def test_bare_generic_alias_still_chases_by_name():
     assert run(
         """
         struct point<T> { x: T; }
-        fn point<T>::get(const self: point<T>) -> T { return self.x; }
+        fn point<T>::get(const self: &point<T>) -> T { return self.x; }
         type pf = point;
         fn main() -> int32 {
             let p: point<int32> = { x = 6 };
@@ -474,7 +474,7 @@ def test_fully_defaulted_alias_is_complete_and_injects():
         compile_ir(
             """
             struct point<T> { x: T; }
-            fn point<T>::get(const self: point<T>) -> T { return self.x; }
+            fn point<T>::get(const self: &point<T>) -> T { return self.x; }
             type pf<T = float64> = point<T>;
             fn main() -> int32 {
                 let q: point<int32> = { x = 7 };
@@ -506,7 +506,7 @@ def test_inherited_member_matches_the_derived_pin():
     assert run(
         """
         struct base<T> { v: T; }
-        fn base<T>::get(const self: base<T>) -> T { return self.v; }
+        fn base<T>::get(const self: &base<T>) -> T { return self.v; }
         struct der<T> extends base<T> { extra: int32; }
         fn main() -> int32 {
             let d: der<float64> = { v = 6.0, extra = 1 };
@@ -523,7 +523,7 @@ def test_base_pin_upcasts_a_derived_receiver():
     assert run(
         """
         struct base<T> { v: T; }
-        fn base<T>::get(const self: base<T>) -> T { return self.v; }
+        fn base<T>::get(const self: &base<T>) -> T { return self.v; }
         struct der<T> extends base<T> { extra: int32; }
         fn main() -> int32 {
             let d: der<float64> = { v = 6.0, extra = 1 };
@@ -542,7 +542,7 @@ def test_static_specialization_takes_a_matching_pin():
         """
         struct point<T> { x: T; }
         @static
-        fn point<int32>::get(const self: point<int32>) -> int32 { return self.x; }
+        fn point<int32>::get(const self: &point<int32>) -> int32 { return self.x; }
         fn main() -> int32 {
             let p: point<int32> = { x = 3 };
             return point<int32>::get(p);
@@ -561,7 +561,7 @@ def test_static_specialization_rejects_a_mismatched_pin():
             """
             struct point<T> { x: T; }
             @static
-            fn point<int32>::get(const self: point<int32>) -> int32 { return self.x; }
+            fn point<int32>::get(const self: &point<int32>) -> int32 { return self.x; }
             fn main() -> int32 {
                 let p: point<int32> = { x = 3 };
                 return point<float64>::get(p);
@@ -577,7 +577,7 @@ def test_static_generic_member_takes_the_pin():
         """
         struct point<T> { x: T; }
         @static
-        fn point<T>::get(const self: point<T>) -> T { return self.x; }
+        fn point<T>::get(const self: &point<T>) -> T { return self.x; }
         fn main() -> int32 {
             let p: point<int32> = { x = 8 };
             return point<int32>::get(p);
@@ -594,7 +594,7 @@ def test_bare_qualified_call_still_infers():
     assert run(
         """
         struct point<T> { x: T; y: T; }
-        fn point<T>::sum(const self: point<T>) -> T { return self.x + self.y; }
+        fn point<T>::sum(const self: &point<T>) -> T { return self.x + self.y; }
         fn main() -> int32 {
             let p: point<int32> = { x = 3, y = 4 };
             return point::sum(p);
@@ -645,7 +645,7 @@ def test_fstring_hole_takes_the_qualified_spelling(capfd):
         """
         import "std/io";
         struct point<T> { x: T; }
-        fn point<T>::get(const self: point<T>) -> T { return self.x; }
+        fn point<T>::get(const self: &point<T>) -> T { return self.x; }
         fn main() -> int32 {
             let p: point<int32> = { x = 5 };
             println(f"got {point<int32>::get(p)}");

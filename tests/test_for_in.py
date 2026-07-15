@@ -12,7 +12,7 @@ from helpers import compile_ir, run
 PREAMBLE = """
 struct count { limit: int32; }
 struct count_iter { obj: struct count*; i: int32; }
-fn count_it(self: struct count*) -> struct count_iter {
+fn count_it(@nonnull self: struct count*) -> struct count_iter {
     let it: struct count_iter;
     it.obj = self;
     it.i = 0;
