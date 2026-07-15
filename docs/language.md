@@ -2034,10 +2034,13 @@ Anything else whose type owns a destructor (a field extracted with
 rather than risk a double free. `own` over a **destructor-less type is a
 no-op** — nothing to move or drop — so it needs no `move` and passes by value
 like a plain parameter. The marker rides `.mci` interface stubs
-(`fn drain(own b: box) -> int32;`). Not in this phase: the owned-**reference**
-receiver `own self: &T` (an escaping borrow, rejected for now), and `own`
-parameters on `@extern`/`@asm` functions and on generic functions or methods of
-generic structs.
+(`fn drain(own b: box) -> int32;`). Because the relinquish discipline is a
+**direct-call** property, a function with `own` parameters cannot be taken as a
+**function value** (an indirect call could not enforce the move, so it would
+double-free) — it is rejected at value formation. Not in this phase: the
+owned-**reference** receiver `own self: &T` (an escaping borrow, rejected for
+now), and `own` parameters on `@extern`/`@asm` functions, on generic functions
+or methods of generic structs, and on overloaded functions.
 
 See [examples/types/own_receivers.mc](../examples/types/own_receivers.mc).
 

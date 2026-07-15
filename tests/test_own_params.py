@@ -373,3 +373,28 @@ def test_own_on_collecting_parameter_is_rejected():
         match=r"'args\.\.\.' cannot take const, own, a reference",
     ):
         compile_ir("fn f(own args...) { }")
+
+
+def test_own_function_cannot_be_taken_as_a_function_value():
+    # The own move-in discipline lives on the direct-call path, so a function
+    # with own parameters cannot become a function-pointer value: an indirect
+    # call would drop the callee's copy while the caller still runs the source's
+    # scheduled destructor (a double free). Rejected at value formation.
+    src = (
+        "struct box { v: int32; }\n"
+        "fn box::constructor(self: &box, v: int32) { self.v = v; }\n"
+        "fn box::destructor(self: &box) { }\n"
+        "fn drain(own b: box) { }\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"'drain' has own parameters and cannot be used as a function "
+        r"value \(ownership transfer is a direct-call discipline; indirect "
+        r"calls are a follow-up\)",
+    ):
+        compile_ir(src + "fn main() -> int32 { let f = drain; return 0; }")
+    # The explicitly-typed function-pointer slot is rejected the same way.
+    with pytest.raises(LangError, match=r"'drain' has own parameters"):
+        compile_ir(
+            src + "fn main() -> int32 { let f: fn(box) -> void = drain; return 0; }"
+        )

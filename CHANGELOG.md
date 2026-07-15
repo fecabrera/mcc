@@ -230,9 +230,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   monomorphic and **not dispatch-eligible** (a by-value receiver is never a
   vtable entry); `own` over a destructor-less type is a no-op and needs no
   `move`. The marker rides `.mci` interface stubs and its prototype mismatch is
-  rejected. Not yet: the owned-**reference** receiver `own self: &T` (a later
-  phase, rejected for now), and `own` on `@extern`/`@asm` or on generic
-  functions / methods of generic structs. See
+  rejected, and a function with `own` parameters cannot be taken as a function
+  value (the move discipline is direct-call only, so an indirect call would
+  double-free). Not yet: the owned-**reference** receiver `own self: &T` (a
+  later phase, rejected for now), and `own` on `@extern`/`@asm`, on generic
+  functions / methods of generic structs, or on overloaded functions. See
   [examples/types/own_receivers.mc](examples/types/own_receivers.mc).
 
 - **`-Wdestructor-copy` — a new opt-in warning class for bitwise copies of

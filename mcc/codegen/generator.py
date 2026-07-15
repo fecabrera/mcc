@@ -15888,6 +15888,19 @@ class CodeGen:
             symbol = name
         if symbol is None:
             return None
+        # An `own` parameter's move-in/adopt discipline is emitted on the
+        # direct-call path (:meth:`own_move_arg`), so a function-pointer type
+        # cannot carry it: an indirect call would drop the callee's copy while
+        # the caller still runs the source's scheduled destructor (a double
+        # free). Reject function-value formation, mirroring the generic and
+        # overloaded guards; indirect own transfer is a follow-up.
+        if self.own_ref.get(symbol, frozenset()):
+            raise LangError(
+                f"{name!r} has own parameters and cannot be used as a function "
+                "value (ownership transfer is a direct-call discipline; "
+                "indirect calls are a follow-up)",
+                line,
+            )
         # A function value is a call site in waiting: warn here, since calls
         # through the pointer are indirect and can no longer be attributed.
         self.warn_deprecated(name, self.deprecated_syms.get(symbol), line)
