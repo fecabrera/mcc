@@ -434,7 +434,7 @@ def test_a_generic_format_is_validated_per_instantiation():
 def test_format_cannot_be_mut():
     with pytest.raises(
         LangError,
-        match=r"a parameter cannot be both @format and mut "
+        match=r"a parameter cannot be both @format and a reference "
         r"\(a format string is read, never written\)",
     ):
         compile_ir("fn f(@format mut fmt: slice<const char>, args...) {}")
@@ -443,7 +443,7 @@ def test_format_cannot_be_mut():
 def test_the_collecting_sugar_rejects_format():
     with pytest.raises(
         LangError,
-        match=r"'args\.\.\.' cannot take const, mut, @noalias, @nonnull, "
+        match=r"'args\.\.\.' cannot take const, a reference, @noalias, @nonnull, "
         r"or @format",
     ):
         compile_ir("fn f(@format args...) {}")

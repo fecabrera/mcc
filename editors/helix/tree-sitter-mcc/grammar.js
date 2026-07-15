@@ -234,9 +234,10 @@ module.exports = grammar({
         field('name', $.identifier),
         optional($.type_parameters),
         $.parameter_list,
-        // `-> mut T` marks a mut return (a function returning an lvalue);
-        // the fn(...) -> mut T pointer *type* below spells it too.
-        optional(seq('->', optional('mut'), field('return_type', $._type))),
+        // `-> &T` marks a reference return (a function returning an lvalue);
+        // the fn(...) -> &T pointer *type* below spells it too. The legacy
+        // `-> mut T` keyword spelling stays accepted (deprecated).
+        optional(seq('->', optional('mut'), field('return_type', $._return_type))),
         field('body', choice($.block, $.asm_block)),
       ),
 
@@ -253,8 +254,9 @@ module.exports = grammar({
         field('name', $.identifier),
         optional($.type_parameters),
         $.parameter_list,
-        // Interface stubs re-emit `-> mut` on prototypes, so it parses here.
-        optional(seq('->', optional('mut'), field('return_type', $._type))),
+        // Interface stubs re-emit `-> &` on prototypes, so it parses here
+        // (the legacy `-> mut` keyword too, deprecated).
+        optional(seq('->', optional('mut'), field('return_type', $._return_type))),
         ';',
       ),
 
@@ -264,11 +266,13 @@ module.exports = grammar({
     parameter: ($) =>
       seq(
         // Per-parameter annotations stack (`@noalias @nonnull p: T*`).
+        // The blessed reference marker rides the type slot (`p: &T`); the
+        // legacy `mut` binder stays accepted (deprecated).
         repeat($.annotation),
         optional(choice('const', 'mut')),
         field('name', $.identifier),
         ':',
-        $._type,
+        $._param_type,
       ),
 
     variadic_parameter: ($) => '...',
@@ -327,6 +331,15 @@ module.exports = grammar({
         $.grouped_type,
       ),
 
+    // A reference type `&T` -- the by-hidden-reference convention (the
+    // blessed spelling of the legacy `mut`). It is a type only in a
+    // parameter- or return-type slot (`_param_type` / `_return_type`), never
+    // a general type, which keeps `&` the address-of operator everywhere else.
+    reference_type: ($) => prec.right(seq('&', $._type)),
+
+    _param_type: ($) => choice($._type, $.reference_type),
+    _return_type: ($) => choice($._type, $.reference_type),
+
     // `const T` -- the read-only qualifier binding the whole following type
     // (the element of a slice<const T>, a const function-type parameter).
     const_type: ($) => prec.right(seq('const', $._type)),
@@ -362,18 +375,19 @@ module.exports = grammar({
           '(',
           // A parameter type takes the per-parameter annotation slot
           // (`fn(@nonnull char*) -> int32` carries the @nonnull contract)
-          // and a `mut` marker (`fn(mut char)` spells the by-reference
-          // convention); `const` rides in through const_type. The return
-          // slot takes `mut` too (`fn(uint64) -> mut char` spells a mut
-          // return), like the declaration rules above.
+          // and the reference marker in the type slot (`fn(&char)` spells
+          // the by-reference convention; the legacy `fn(mut char)` keyword
+          // stays accepted, deprecated); `const` rides in through
+          // const_type. The return slot takes `&` too (`fn(uint64) -> &char`
+          // spells a reference return), like the declaration rules above.
           commaSep(
             choice(
-              seq(repeat($.annotation), optional('mut'), $._type),
+              seq(repeat($.annotation), optional('mut'), $._param_type),
               $.variadic_parameter,
             ),
           ),
           ')',
-          optional(seq('->', optional('mut'), $._type)),
+          optional(seq('->', optional('mut'), $._return_type)),
         ),
       ),
 

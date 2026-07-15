@@ -7,7 +7,7 @@ import "std/io";
 // pre-scans the whole loop (condition and body, nested statements, defer
 // bodies, both branches of an @if) and kills exactly the facts the loop
 // could invalidate: an assignment to the name, a shadowing `let`, or lending
-// the bare name as a mut argument. Every other fact survives, both inside
+// the bare name as a reference argument. Every other fact survives, both inside
 // the loop and past its exit.
 // Prerequisites: nonnull.mc and nonnull_narrowing.mc.
 fn first(@nonnull p: int32*) -> int32 {

@@ -36,7 +36,7 @@ struct point {
 // which is what @override needs: no target, a same-file target, or a
 // prototype-only target is a compile error.
 @override
-fn format(mut str: string, value: bool, const modifier: slice<char>) {
+fn format(str: &string, value: bool, const modifier: slice<char>) {
     str.append(value ? "ON" : "OFF");
 }
 
@@ -46,7 +46,7 @@ fn format(mut str: string, value: bool, const modifier: slice<char>) {
 // candidate never reaches the fallback, so the replacement leaves int, bool
 // (its concrete override above), slices, and the rest untouched.
 @override
-fn format<T>(mut str: string, value: T, const modifier: slice<char>) {
+fn format<T>(str: &string, value: T, const modifier: slice<char>) {
     str.append("<unprintable>");
 }
 

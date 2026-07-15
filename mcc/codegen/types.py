@@ -405,7 +405,7 @@ def function_type(
     )
     parts = [
         ("@nonnull " if i in nonnull else "")
-        + ("mut " if i in mutref else "")
+        + ("&" if i in mutref else "")
         + ("const " if i in constref else "")
         + p.name
         for i, p in enumerate(params)
@@ -414,7 +414,7 @@ def function_type(
         parts.append("...")
     name = (
         "fn(" + ", ".join(parts) + ") -> "
-        + ("mut " if mutret else "")
+        + ("&" if mutret else "")
         + ("own " if ownret else "")
         + ret.name
     )

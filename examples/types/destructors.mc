@@ -35,12 +35,12 @@ struct file {
     fd: int32;
 }
 
-fn file::constructor(mut self: file, fd: int32) {
+fn file::constructor(self: &file, fd: int32) {
     println(f"  open  fd {fd}");
     self.fd = fd;
 }
 
-fn file::destructor(mut self: file) {
+fn file::destructor(self: &file) {
     // The destructor sees the value's LATEST state, mutations after
     // construction included (main reassigns an fd below and the close
     // line proves it).
@@ -66,12 +66,12 @@ struct logfile extends file {
     lines: int32;
 }
 
-fn logfile::constructor(mut self: logfile, fd: int32, lines: int32) {
+fn logfile::constructor(self: &logfile, fd: int32, lines: int32) {
     file::constructor(self, fd);    // base construction chains manually...
     self.lines = lines;
 }
 
-fn logfile::destructor(mut self: logfile) {
+fn logfile::destructor(self: &logfile) {
     println(f"  flush {self.lines} lines");
     file::destructor(self);         // ...and so does base cleanup
 }
@@ -88,12 +88,12 @@ struct handle<T> {
     v: T;
 }
 
-fn handle<T>::constructor(mut self: handle<T>, v: T) {
+fn handle<T>::constructor(self: &handle<T>, v: T) {
     println(f"  grab {v}");
     self.v = v;
 }
 
-fn handle<T>::destructor(mut self: handle<T>) {
+fn handle<T>::destructor(self: &handle<T>) {
     println(f"  drop {self.v}");
 }
 
@@ -109,11 +109,11 @@ struct wrap<T> {
     h: handle<T>;
 }
 
-fn wrap<T>::constructor(mut self: wrap<T>, v: T) {
+fn wrap<T>::constructor(self: &wrap<T>, v: T) {
     handle<T>::constructor(self.h, v);
 }
 
-fn wrap<T>::destructor(mut self: wrap<T>) {
+fn wrap<T>::destructor(self: &wrap<T>) {
     println("  wrap down");
     handle<T>::destructor(self.h);
 }
@@ -225,7 +225,7 @@ fn main() -> int32 {
 // Two more edges. A const view is still destroyed: `let f: const file =
 // file(1);` closes at scope exit, because destruction is scope teardown,
 // not user mutation (a user-written file::destructor(f) on the const
-// value keeps the ordinary mut-receiver error). And the scope is stack
+// value keeps the ordinary reference-receiver error). And the scope is stack
 // lets only: globals, @static values, parameters, heap values, and
 // constructor-expression temporaries (`f(file(1))`, `return file(9);`)
 // are never destroyed automatically -- with one expression-position

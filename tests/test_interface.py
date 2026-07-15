@@ -69,7 +69,7 @@ def test_mut_param_is_re_emitted():
     # A proto keeps the mcc convention, so the hidden-reference marker
     # travels: the consumer's call site passes a pointer, like the definition.
     out = iface("fn set(mut out: int32) -> bool { out = 7; return true; }")
-    assert "fn set(mut out: int32) -> bool;" in out
+    assert "fn set(out: &int32) -> bool;" in out
 
 
 def test_const_struct_param_is_re_emitted():
@@ -715,7 +715,7 @@ def test_mut_proto_round_trips_through_mci(tmp_path):
     lib.write_text("fn bump(mut n: int32) { n = n + 1; }")
     out = tmp_path / "lib.mci"
     assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
-    assert "fn bump(mut n: int32);" in out.read_text()
+    assert "fn bump(n: &int32);" in out.read_text()
     lib.unlink()  # force the import to resolve through the stub
     main = tmp_path / "main.mc"
     main.write_text(

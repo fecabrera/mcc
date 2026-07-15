@@ -23,7 +23,7 @@ struct queue_iterator<T> {
  *
  * @param self: queue to initialise
  */
-fn queue<T>::constructor(mut self: queue<T>) {
+fn queue<T>::constructor(self: &queue<T>) {
     self.head = null;
     self.tail = null;
 }
@@ -34,7 +34,7 @@ fn queue<T>::constructor(mut self: queue<T>) {
  *
  * @param self: queue to destroy
  */
-fn queue<T>::destructor(mut self: queue<T>) {
+fn queue<T>::destructor(self: &queue<T>) {
     until (self.is_empty())
         self.pop();
 
@@ -48,7 +48,7 @@ fn queue<T>::destructor(mut self: queue<T>) {
  * @param self:  queue to push onto
  * @param value: value to enqueue
  */
-fn queue<T>::push(mut self: queue<T>, value: T) {
+fn queue<T>::push(self: &queue<T>, value: T) {
     let node = {
         let tmp = new<queue_node<T>>()!;
         *tmp = queue_node<T> { value = value };
@@ -72,7 +72,7 @@ fn queue<T>::push(mut self: queue<T>, value: T) {
  * @param self: queue to pop from
  * @return the dequeued value
  */
-fn queue<T>::pop(mut self: queue<T>) -> T {
+fn queue<T>::pop(self: &queue<T>) -> T {
     let node = self.head!;
     self.head = node->next;
     

@@ -6,7 +6,7 @@ import "std/queue";
 // The array-backed FIFO this replaced lives on as ring<T> (lib/std/ring.mc).
 
 fn main() -> int32 {
-    // The queue methods take const/mut receivers, so a local queue passes
+    // The queue methods take const/reference receivers, so a local queue passes
     // directly: no & needed. (A queue<T>* still works via pointer decay; see
     // examples/functions/pointer_decay.mc.) The ctor-sugar `let` auto-defers
     // queue<T>::destructor at scope end.

@@ -33,10 +33,15 @@ class TypeRef:
             parameter position of a ``fn(...)`` type, where it spells the
             per-parameter non-null contract the function value carries, as in
             ``fn(@nonnull char*) -> void``.
-        mut: A leading ``mut`` keyword -- meaningful only inside a ``fn(...)``
-            type: in a parameter position it spells a by-reference writable
-            parameter, as in ``fn(mut char) -> void``; on the ``ret`` type it
-            spells a ``mut`` return, as in ``fn(uint64) -> mut char``.
+        mut: A leading ``&`` reference marker -- meaningful only inside a
+            ``fn(...)`` type: in a parameter position it spells a by-reference
+            writable parameter, as in ``fn(&char) -> void``; on the ``ret``
+            type it spells a reference return, as in ``fn(uint64) -> &char``.
+            The legacy ``mut`` keyword sets the same flag (see
+            ``mut_deprecated``).
+        mut_deprecated: The reference marker was written with the deprecated
+            ``mut`` keyword rather than the blessed ``&`` spelling, so a
+            ``deprecated-mut`` warning is due at the declaration.
         own: A leading ``own`` keyword -- meaningful only on the ``ret``
             type of a ``fn(...)`` type, spelling an ``own`` return
             (``fn() -> own res``): a call through the value hands the
@@ -53,7 +58,8 @@ class TypeRef:
     const: bool = False  # a leading `const` read-only qualifier
     variadic: bool = False  # a trailing `...` in a fn(...) type's parameters
     nonnull: bool = False  # a leading `@nonnull` (fn-type parameter position)
-    mut: bool = False  # a leading `mut` (fn-type parameter or return position)
+    mut: bool = False  # a leading `&` (fn-type parameter or return position)
+    mut_deprecated: bool = False  # the `&` marker was spelled with legacy `mut`
     own: bool = False  # a leading `own` (fn-type return position)
 
     def __str__(self) -> str:
@@ -76,7 +82,7 @@ class TypeRef:
         dims = "".join(f"[{render_dim(d)}]" for d in self.dims)
         return (
             ("@nonnull " if self.nonnull else "")
-            + ("mut " if self.mut else "")
+            + ("&" if self.mut else "")
             + ("own " if self.own else "")
             + ("const " if self.const else "")
             + text
@@ -592,6 +598,11 @@ class Func:
     alias_qualifier: str | None = None
     spec_qualifier_args: list[TypeRef] | None = None
     qualifier_args: list[TypeRef] | None = None
+    # Lines where a parameter's mutability was spelled with the deprecated
+    # `mut` keyword rather than `&T`, and the line of a deprecated `-> mut`
+    # return -- each drives a `deprecated-mut` warning at declaration.
+    mut_kw_param_lines: list[int] = field(default_factory=list, compare=False)
+    mut_kw_return_line: int | None = field(default=None, compare=False)
     span: tuple[int, int] | None = field(default=None, compare=False)
 
 

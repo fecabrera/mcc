@@ -78,7 +78,7 @@ fn str_clone(@nonnull s: char*) -> char* {
     return copy;
 }
 
-fn dict<V>::constructor(mut self: dict<V>) {
+fn dict<V>::constructor(self: &dict<V>) {
     dict<V>::constructor(self, DEFAULT_DICT_CAPACITY);
 }
 
@@ -88,7 +88,7 @@ fn dict<V>::constructor(mut self: dict<V>) {
  * @param self:     dict to initialise
  * @param capacity: initial slot count; must be > 0
  */
-fn dict<V>::constructor(mut self: dict<V>, capacity: uint64) {
+fn dict<V>::constructor(self: &dict<V>, capacity: uint64) {
     self.entries = alloc<struct dict_entry<V>>(capacity);
     self.length = 0;
     self.capacity = capacity;
@@ -104,7 +104,7 @@ fn dict<V>::constructor(mut self: dict<V>, capacity: uint64) {
  *
  * @param self: dict to destroy
  */
-fn dict<V>::destructor(mut self: dict<V>) {
+fn dict<V>::destructor(self: &dict<V>) {
     for i in range(self.capacity) {
         if (self.entries![i].state == dict_entry_state::OCCUPIED)
             dealloc(self.entries![i].key);
@@ -125,7 +125,7 @@ fn dict<V>::destructor(mut self: dict<V>) {
  * @param key:   string key; the caller keeps ownership
  * @param value: value to associate with key
  */
-fn dict<V>::set(mut self: dict<V>, @nonnull key: char*, value: V) {
+fn dict<V>::set(self: &dict<V>, @nonnull key: char*, value: V) {
     if (self.length * 10 >= self.capacity * 7)
         self.grow();
 
@@ -166,7 +166,7 @@ fn dict<V>::set(mut self: dict<V>, @nonnull key: char*, value: V) {
  *
  * @return true if key was found, false otherwise
  */
-fn dict<V>::get(const self: dict<V>, @nonnull key: char*, mut out: V) -> bool {
+fn dict<V>::get(const self: dict<V>, @nonnull key: char*, out: &V) -> bool {
     let slot = hash(key) % self.capacity;
 
     while (self.entries![slot].state != dict_entry_state::EMPTY) {
@@ -248,7 +248,7 @@ fn dict<V>::at(const self: dict<V>, @nonnull key: char*) -> V {
  */
 @inline
 @accessor("set")
-fn dict<V>::at(mut self: dict<V>, @nonnull key: char*, value: V) {
+fn dict<V>::at(self: &dict<V>, @nonnull key: char*, value: V) {
     self.set(key, value);
 }
 
@@ -259,7 +259,7 @@ fn dict<V>::at(mut self: dict<V>, @nonnull key: char*, value: V) {
  * @param self: dict to remove from
  * @param key:  string key to remove
  */
-fn dict<V>::remove(mut self: dict<V>, @nonnull key: char*) {
+fn dict<V>::remove(self: &dict<V>, @nonnull key: char*) {
     let slot = hash(key) % self.capacity;
 
     while (self.entries![slot].state != dict_entry_state::EMPTY) {
@@ -285,7 +285,7 @@ fn dict<V>::remove(mut self: dict<V>, @nonnull key: char*) {
  * @param self: dict to grow
  */
 @private
-fn dict<V>::grow(mut self: dict<V>) {
+fn dict<V>::grow(self: &dict<V>) {
     let old_capacity = self.capacity;
     let old_entries = self.entries!;
 

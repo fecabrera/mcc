@@ -23,18 +23,18 @@ def test_mut_and_const_params_coexist():
 
 
 def test_const_mut_combination_rejected():
-    with pytest.raises(LangError, match="a parameter cannot be both const and mut"):
+    with pytest.raises(LangError, match="a parameter cannot be both const and a reference"):
         parse("fn f(const mut n: int32) {}")
 
 
 def test_mut_rejected_on_extern():
-    message = "mut parameters are not allowed on @extern functions"
+    message = "reference parameters are not allowed on @extern functions"
     with pytest.raises(LangError, match=message):
         parse("@extern fn f(mut n: int32);")
 
 
 def test_mut_rejected_on_asm():
-    message = "mut parameters are not allowed on @asm functions"
+    message = "reference parameters are not allowed on @asm functions"
     with pytest.raises(LangError, match=message):
         parse('@asm fn f(mut n: int32) { "nop" }')
 
@@ -271,7 +271,7 @@ def test_mixed_same_shape_overloads_ambiguous_for_lvalue():
 
 def test_rvalue_into_single_generic_mut_is_not_assignable():
     message = (
-        "argument 1 of 'f' is not assignable; a mut parameter needs a "
+        "argument 1 of 'f' is not assignable; a reference parameter needs a "
         "variable, field, element, or dereference"
     )
     with pytest.raises(LangError, match=message):
@@ -282,7 +282,7 @@ def test_rvalue_failing_one_mut_overload_is_not_assignable():
     # Only one candidate matched the call at all, and it failed purely on the
     # rvalue-into-mut rule: the specific error beats "no overload matches".
     message = (
-        "argument 1 of 'f' is not assignable; a mut parameter needs a "
+        "argument 1 of 'f' is not assignable; a reference parameter needs a "
         "variable, field, element, or dereference"
     )
     with pytest.raises(LangError, match=message):
@@ -335,7 +335,7 @@ def test_const_lvalue_compiles_when_the_value_overload_wins():
 
 
 def test_const_lvalue_still_rejected_when_the_mut_overload_wins():
-    message = "cannot pass a const parameter as a mut argument; it is read-only"
+    message = "cannot pass a const parameter as a reference argument; it is read-only"
     with pytest.raises(LangError, match=message):
         compile_ir(
             "fn f<T>(mut a: T, b: T) -> int32 { a = b; return 1; }\n"
@@ -358,7 +358,7 @@ def test_volatile_lvalue_gets_a_volatile_read_when_value_overload_wins():
 
 
 def test_volatile_lvalue_still_rejected_when_the_mut_overload_wins():
-    message = "cannot pass @volatile storage as a mut argument"
+    message = "cannot pass @volatile storage as a reference argument"
     with pytest.raises(LangError, match=message):
         compile_ir(
             "@extern @volatile let r: int32;\n"
@@ -414,7 +414,7 @@ def test_agreeing_mut_overloads_still_work():
 
 def test_mut_argument_must_be_an_lvalue():
     message = (
-        "argument 1 of 'f' is not assignable; a mut parameter needs a "
+        "argument 1 of 'f' is not assignable; a reference parameter needs a "
         "variable, field, element, or dereference"
     )
     with pytest.raises(LangError, match=message):
@@ -431,7 +431,7 @@ def test_mut_argument_rejects_call_result():
 
 
 def test_mut_argument_rejects_const_param():
-    message = "cannot pass a const parameter as a mut argument; it is read-only"
+    message = "cannot pass a const parameter as a reference argument; it is read-only"
     with pytest.raises(LangError, match=message):
         compile_ir(
             "fn f(mut n: int32) {}\n"
@@ -459,7 +459,7 @@ def test_mut_argument_rejects_signedness_mismatch():
 
 
 def test_address_of_mut_param_rejected():
-    message = "cannot take the address of a mut parameter"
+    message = "cannot take the address of a reference parameter"
     with pytest.raises(LangError, match=message):
         compile_ir(
             "fn f(mut n: int32) { let p = &n; }\nfn main() -> int32 { return 0; }"
@@ -467,7 +467,7 @@ def test_address_of_mut_param_rejected():
 
 
 def test_address_of_mut_param_field_rejected():
-    with pytest.raises(LangError, match="cannot take the address of a mut parameter"):
+    with pytest.raises(LangError, match="cannot take the address of a reference parameter"):
         compile_ir(
             "struct s { x: int32; }\n"
             "fn f(mut v: struct s) { let p = &v.x; }\n"
@@ -487,7 +487,7 @@ def test_mut_function_is_a_function_value():
 
 
 def test_mut_argument_rejects_volatile_storage():
-    message = "cannot pass @volatile storage as a mut argument"
+    message = "cannot pass @volatile storage as a reference argument"
     with pytest.raises(LangError, match=message):
         compile_ir(
             "@extern @volatile let r: int32;\n"
@@ -497,7 +497,7 @@ def test_mut_argument_rejects_volatile_storage():
 
 
 def test_mut_argument_rejects_packed_field():
-    message = "cannot pass a @packed field as a mut argument"
+    message = "cannot pass a @packed field as a reference argument"
     with pytest.raises(LangError, match=message):
         compile_ir(
             "@packed struct w { a: uint8; n: int32; }\n"

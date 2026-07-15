@@ -1,0 +1,77 @@
+================================================================================
+reference parameter and reference return (&T)
+================================================================================
+
+fn buf_at(self: &struct buf, i: uint64) -> &char {
+    return self.data![i];
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (reference_type
+          (type_identifier)))
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (reference_type
+      (type_identifier))
+    (block
+      (return_statement
+        (index_expression
+          (nonnull_assert_expression
+            (member_expression
+              (identifier_expression
+                (identifier))
+              (identifier)))
+          (identifier_expression
+            (identifier)))))))
+
+================================================================================
+deprecated mut binder and -> mut return still parse
+================================================================================
+
+fn set(mut out: int32) -> mut int32 {
+    return out;
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (type_identifier)))
+    (type_identifier)
+    (block
+      (return_statement
+        (identifier_expression
+          (identifier))))))
+
+================================================================================
+reference marker in a function type (fn(&char) -> &int32)
+================================================================================
+
+fn apply(cb: fn(&char) -> &int32) {}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_definition
+    (identifier)
+    (parameter_list
+      (parameter
+        (identifier)
+        (function_type
+          (reference_type
+            (type_identifier))
+          (reference_type
+            (type_identifier)))))
+    (block)))

@@ -53,7 +53,7 @@ fn main() -> int32 {
 // concrete member leaves that member's plain C-linkable symbol intact.
 
 // See also: overloading.mc (concrete sets and their rules), mut_overloads.mc
-// (specificity and mut inside a generic set), overload_subsumption.mc (the
+// (specificity and reference markers inside a generic set), overload_subsumption.mc (the
 // subsumption tie-break among rank-tied templates), types/generics.mc
 // (monomorphization), types/type_groups.mc (closed type groups adding a
 // bounded tier between the concrete and generic ranks here),

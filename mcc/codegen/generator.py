@@ -1080,6 +1080,35 @@ class CodeGen:
             line, wclass="unused-result",
         )
 
+    def warn_deprecated_mut(self, line: int, is_return: bool) -> None:
+        """Warn under ``-Wdeprecated-mut`` that a ``mut`` spelling was used.
+
+        The single formatter for the ``deprecated-mut`` class: a parameter or
+        return whose reference marker was written with the legacy ``mut``
+        keyword rather than the blessed ``&T`` spelling funnels through here.
+        Like every opt-in class it never changes the code generated -- ``mut``
+        and ``&`` compile identically -- it only steers migration ahead of
+        ``mut``'s eventual retirement. The driver deduplicates repeats of one
+        ``(source, line, message)`` triple at print time, so a template
+        re-analyzed per instantiation warns once per source site.
+
+        Args:
+            line: The declaration site's 1-based source line.
+            is_return: The marker was a ``-> mut`` return (else a parameter).
+        """
+        if is_return:
+            self.warn(
+                "the '-> mut' return spelling is deprecated; write the return "
+                "type as '-> &T' instead",
+                line, wclass="deprecated-mut",
+            )
+        else:
+            self.warn(
+                "the 'mut' parameter spelling is deprecated; write the type "
+                "as '&T' instead",
+                line, wclass="deprecated-mut",
+            )
+
     def warn_deprecated(self, name: str, msg: str | None, line: int) -> None:
         """Warn that a ``@deprecated`` function was resolved, when ``msg`` is set.
 
@@ -1317,14 +1346,14 @@ class CodeGen:
             return
         if func.name == "main":
             raise LangError(
-                "function 'main' cannot return mut (the C runtime receives "
-                "its result by value)",
+                "function 'main' cannot return a reference (the C runtime "
+                "receives its result by value)",
                 func.line,
             )
         if ret is VOID:
             raise LangError(
-                f"function {func.name!r} cannot return mut void (there is "
-                "no storage to reference)",
+                f"function {func.name!r} cannot return a reference to void "
+                "(there is no storage to reference)",
                 func.line,
             )
 
@@ -1542,7 +1571,7 @@ class CodeGen:
                 piece += f" = {subst(default)}"
             head.append(piece)
         patterns = ", ".join(
-            ("mut " if pname in func.mut_params else "") + str(subst(ptype))
+            ("&" if pname in func.mut_params else "") + str(subst(ptype))
             for pname, ptype in func.params
         )
         return f"{func.name}<{', '.join(head)}>({patterns})"
@@ -3221,23 +3250,30 @@ class CodeGen:
             mutref = frozenset(i for i, p in enumerate(ref.params) if p.mut)
             mutret = ref.ret is not None and ref.ret.mut
             ownret = ref.ret is not None and getattr(ref.ret, "own", False)
+            # A `mut`/`-> mut` spelling anywhere in the fn type is deprecated;
+            # the driver dedups per (source, line, message), so a type used
+            # repeatedly (or re-resolved per instantiation) warns once.
+            if any(getattr(p, "mut_deprecated", False) for p in ref.params):
+                self.warn_deprecated_mut(line, is_return=False)
+            if ref.ret is not None and getattr(ref.ret, "mut_deprecated", False):
+                self.warn_deprecated_mut(line, is_return=True)
             if mutret:
                 # Per use, like the @nonnull rule below, so a generic alias
-                # like `type getter<T> = fn() -> mut T` is validated against
+                # like `type getter<T> = fn() -> &T` is validated against
                 # each binding (mirroring check_mut_return_decl's per-instance
                 # placement on the declaration side).
                 if ret is VOID:
                     raise LangError(
-                        "a function type cannot return mut void (there is "
-                        "no storage to reference)",
+                        "a function type cannot return a reference to void "
+                        "(there is no storage to reference)",
                         line,
                     )
                 if ret.const:
                     # The parse-time compose ban, re-checked here for a
                     # const that rides in through a generic binding.
                     raise LangError(
-                        "a return cannot be both mut and const "
-                        "(a mut return must be writable)",
+                        "a return cannot be both a reference and const "
+                        "(a reference return must be writable)",
                         line,
                     )
             if ownret:
@@ -5206,6 +5242,16 @@ class CodeGen:
                     overload_keys.add((source, name))
         declared: set[tuple[str | None, str]] = set()
         for func in self.program.functions:
+            # A deprecated `mut`/`-> mut` spelling in this declaration's
+            # signature warns once per source site (params and return).
+            if func.mut_kw_param_lines or func.mut_kw_return_line is not None:
+                self.current_source = func.source
+                for mline in func.mut_kw_param_lines:
+                    self.warn_deprecated_mut(mline, is_return=False)
+                if func.mut_kw_return_line is not None:
+                    self.warn_deprecated_mut(
+                        func.mut_kw_return_line, is_return=True
+                    )
             if func.removed_msg is not None:
                 # An @removed tombstone registers its name and message only.
                 # It deliberately skips the declare path: the signature is
@@ -7534,7 +7580,9 @@ class CodeGen:
             and src.signature == expected.signature
         ):
             if src.mutref != expected.mutref or src.constref != expected.constref:
-                kind = "mut" if src.mutref != expected.mutref else "const"
+                kind = (
+                    "reference" if src.mutref != expected.mutref else "const"
+                )
                 raise LangError(
                     f"{context}: expected {expected}, got {src} (a {kind} "
                     "parameter is passed by hidden reference, a different "
@@ -7543,7 +7591,7 @@ class CodeGen:
                 )
             if src.mutret != expected.mutret:
                 raise LangError(
-                    f"{context}: expected {expected}, got {src} (a mut "
+                    f"{context}: expected {expected}, got {src} (a reference "
                     "return is passed as a pointer to the returned storage, "
                     "a different calling convention; the types are not "
                     "convertible)",
@@ -8625,7 +8673,7 @@ class CodeGen:
                 value = self.gen_expr(stmt.value)
                 self.drop_own_temp(stmt.value, value)
                 value = self.coerce(
-                    value, t, stmt.line, "assignment through a mut return"
+                    value, t, stmt.line, "assignment through a reference return"
                 )
             self.gen_store(value.value, addr)
             # A store through a returned reference can land in any guarded
@@ -10599,8 +10647,8 @@ class CodeGen:
     # The mut-return formation error's fixed head; each rejection appends a
     # per-root-kind tail naming the offender.
     MUT_RETURN_FORMATION = (
-        "a mut return must be formed from a mut or pointer parameter or a "
-        "global"
+        "a reference return must be formed from a reference or pointer "
+        "parameter or a global"
     )
 
     def gen_mut_return(self, stmt):
@@ -10627,11 +10675,11 @@ class CodeGen:
         # return).
         addr, t, align, volatile = self.gen_addr(stmt.value, stmt.line)
         self.check_mut_storage(
-            stmt.value, t, align, volatile, stmt.line, what="a mut return"
+            stmt.value, t, align, volatile, stmt.line, what="a reference return"
         )
         if t != self.ret_type:
             raise LangError(
-                f"mut return: expected a {self.ret_type} lvalue, got {t}",
+                f"reference return: expected a {self.ret_type} lvalue, got {t}",
                 stmt.line,
             )
         self.run_defers_through(0)
@@ -10746,7 +10794,7 @@ class CodeGen:
                 return
             raise LangError(
                 f"{base}; the chain passes through a call to "
-                f"{expr.name!r} that does not return mut",
+                f"{expr.name!r} that does not return a reference",
                 line,
             )
         if isinstance(expr, CallExpr):
@@ -10773,7 +10821,7 @@ class CodeGen:
                         return
                     raise LangError(
                         f"{base}; the chain passes through a call to "
-                        f"{plan.name!r} that does not return mut",
+                        f"{plan.name!r} that does not return a reference",
                         line,
                     )
             callee_t = self.lvalue_type(expr.callee)
@@ -10787,12 +10835,12 @@ class CodeGen:
                 return
             raise LangError(
                 f"{base}; the chain passes through an indirect call that "
-                "does not return mut",
+                "does not return a reference",
                 line,
             )
         raise LangError(
             f"{base}; the returned expression must be an lvalue chain "
-            "(members, elements, dereferences, and calls that return mut)",
+            "(members, elements, dereferences, and calls that return a reference)",
             line,
         )
 
@@ -11587,7 +11635,7 @@ class CodeGen:
             tv = self.gen_call(expr)
             if tv.lvalue is None:
                 raise LangError(
-                    f"the call to {expr.name!r} does not return mut, so "
+                    f"the call to {expr.name!r} does not return a reference, so "
                     "its result is not assignable",
                     line,
                 )
@@ -11606,7 +11654,8 @@ class CodeGen:
                     if tv.lvalue is None:
                         raise LangError(
                             f"the call to {expr.callee.field!r} does not "
-                            "return mut, so its result is not assignable",
+                            "return a reference, so its result is not "
+                            "assignable",
                             line,
                         )
                     return tv.lvalue, tv.type, None, False
@@ -11625,7 +11674,7 @@ class CodeGen:
             if tv.lvalue is None:
                 raise LangError(
                     f"the call to a {callee.type} value does not return "
-                    "mut, so its result is not assignable",
+                    "a reference, so its result is not assignable",
                     line,
                 )
             return tv.lvalue, tv.type, None, False
@@ -12274,7 +12323,7 @@ class CodeGen:
                 # non-escape guarantee every mut reference carries. A plain
                 # call result was never addressable, so nothing is lost.
                 raise LangError(
-                    "cannot take the address of a call result; a mut "
+                    "cannot take the address of a call result; a reference "
                     "return must not escape its full expression",
                     expr.line,
                 )
@@ -12285,7 +12334,7 @@ class CodeGen:
                 )
             if self.roots_in_mut(expr.operand):
                 raise LangError(
-                    "cannot take the address of a mut parameter; "
+                    "cannot take the address of a reference parameter; "
                     "its reference must not escape the call",
                     expr.line,
                 )
@@ -12513,7 +12562,7 @@ class CodeGen:
             and is_function(target)
             and (src.mutref != target.mutref or src.constref != target.constref)
         ):
-            kind = "mut" if src.mutref != target.mutref else "const"
+            kind = "reference" if src.mutref != target.mutref else "const"
             raise LangError(
                 f"cannot cast {src} to {target}: a {kind} parameter is "
                 "passed by hidden reference, a different calling "
@@ -12525,11 +12574,11 @@ class CodeGen:
             and is_function(target)
             and src.mutret != target.mutret
         ):
-            # A mut return is the same class of carve-out: the return
+            # A reference return is the same class of carve-out: the return
             # conventions differ (a pointer to storage versus the value),
             # so no call sequence an `as` produced could be correct.
             raise LangError(
-                f"cannot cast {src} to {target}: a mut return is passed "
+                f"cannot cast {src} to {target}: a reference return is passed "
                 "as a pointer to the returned storage, a different "
                 "calling convention; the types are not convertible",
                 expr.line,
@@ -16975,8 +17024,8 @@ class CodeGen:
     ):
         """Require proof that a pointer decaying into ``const``/``mut`` is non-null.
 
-        A decay is a two-sided promise: the callee's ``const``/``mut``
-        keyword promises reference discipline, and the caller must promise
+        A decay is a two-sided promise: the callee's ``const``/``&``
+        marker promises reference discipline, and the caller must promise
         the pointer is non-null -- the reference formed from it is never
         null by construction. The proof is the shipped ``@nonnull``
         machinery (:meth:`proves_nonnull`).
@@ -16984,7 +17033,7 @@ class CodeGen:
         Args:
             arg_expr: The argument expression.
             arg_type: The argument's (pointer) type, for the message.
-            kind: ``"const"`` or ``"mut"``, the receiving slot's marker.
+            kind: ``"const"`` or ``"reference"``, the receiving slot's marker.
             ptype: The parameter type the pointer decays into.
             context: A label describing the site, for the error message.
             line: Source line for diagnostics.
@@ -17000,9 +17049,9 @@ class CodeGen:
         if not proven:
             raise LangError(
                 f"cannot pass a possibly-null {arg_type} as {context}: "
-                f"decaying into a {kind} {ptype} parameter forms a reference, "
-                "which is never null (narrow with a null check or assert "
-                "with postfix '!')",
+                f"decaying into a {kind} {ptype} parameter forms a hidden "
+                "reference, which is never null (narrow with a null check or "
+                "assert with postfix '!')",
                 line,
             )
 
@@ -17079,7 +17128,7 @@ class CodeGen:
 
     def check_mut_storage(
         self, arg_expr, t: LangType, align: int | None, volatile: bool,
-        line: int, what: str = "a mut argument",
+        line: int, what: str = "a reference argument",
     ):
         """Check that already-addressed storage may be lent as a ``mut`` argument.
 
@@ -17098,7 +17147,8 @@ class CodeGen:
             volatile: The volatility flag, as returned by :meth:`gen_addr`.
             line: Source line for diagnostics.
             what: What the storage is being lent as, for the messages --
-                ``"a mut argument"`` (the default) or ``"a mut return"``.
+                ``"a reference argument"`` (the default) or ``"a reference
+                return"``.
 
         Raises:
             LangError: When the storage is read-only, is ``@volatile``, sits
@@ -17188,7 +17238,7 @@ class CodeGen:
             addr, t, align, volatile = self.gen_addr(arg_expr, line)
             if self.decays_to(t, ptype, mut=True):
                 self.check_decay_arg(
-                    arg_expr, strip_const(t), "mut", ptype, context, line
+                    arg_expr, strip_const(t), "reference", ptype, context, line
                 )
                 return self.gen_load(addr, align=align, volatile=volatile)
             self.check_mut_storage(arg_expr, t, align, volatile, line)
@@ -17207,7 +17257,7 @@ class CodeGen:
             tv = self.gen_expr(arg_expr)
             if self.decays_to(tv.type, ptype, mut=True):
                 self.check_decay_arg(
-                    arg_expr, tv.type, "mut", ptype, context, line
+                    arg_expr, tv.type, "reference", ptype, context, line
                 )
                 return tv.value
             if tv.lvalue is not None:
@@ -17229,7 +17279,7 @@ class CodeGen:
                     )
                 return tv.lvalue
         raise LangError(
-            f"{context} is not assignable; a mut parameter needs a "
+            f"{context} is not assignable; a reference parameter needs a "
             "variable, field, element, or dereference",
             line,
         )
@@ -17858,7 +17908,7 @@ class CodeGen:
                 _, t, align, volatile = addrs[i]
                 if self.decays_to(t, p, mut=True):
                     self.check_decay_arg(
-                        expr.args[i], strip_const(t), "mut", p, context,
+                        expr.args[i], strip_const(t), "reference", p, context,
                         expr.line, proven=proofs[i],
                     )
                     decayed.add(i)
@@ -17895,7 +17945,7 @@ class CodeGen:
                 expr.args[i], StrLit
             ):
                 self.check_decay_arg(
-                    expr.args[i], tv.type, "mut", p, context, expr.line,
+                    expr.args[i], tv.type, "reference", p, context, expr.line,
                     proven=proofs[i],
                 )
                 decayed.add(i)
@@ -18155,8 +18205,9 @@ class CodeGen:
     def not_assignable(position: int, name: str) -> str:
         """The error message for an rvalue argument in a ``mut`` position."""
         return (
-            f"argument {position + 1} of {name!r} is not assignable; a mut "
-            "parameter needs a variable, field, element, or dereference"
+            f"argument {position + 1} of {name!r} is not assignable; a "
+            "reference parameter needs a variable, field, element, or "
+            "dereference"
         )
 
     def decay_viable(

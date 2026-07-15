@@ -28,11 +28,11 @@ struct probe {
     id: int32;
 }
 
-fn probe::constructor(mut self: probe, id: int32) {
+fn probe::constructor(self: &probe, id: int32) {
     self.id = id;
 }
 
-fn probe::destructor(mut self: probe) {
+fn probe::destructor(self: &probe) {
     println(f"  drop {self.id}");
 }
 
@@ -40,7 +40,7 @@ fn mk(id: int32) -> own probe {
     return probe(id);
 }
 
-fn format(mut str: string, const value: probe, const modifier: slice<char>) {
+fn format(str: &string, const value: probe, const modifier: slice<char>) {
     format(str, value.id, modifier);
 }
 

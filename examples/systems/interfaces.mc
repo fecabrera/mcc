@@ -5,10 +5,10 @@
 // A plain `fn` may end with `;` instead of a body. Where `@extern` means "a
 // symbol with the C calling convention" (see extern.mc), a bodyless prototype
 // means "a concrete mcc function defined in another linked object, called
-// with the mcc convention". The difference matters for `mut` and `const`
+// with the mcc convention". The difference matters for `&` and `const`
 // struct parameters: their hidden-reference passing is part of the mcc
 // convention, so a prototype carries it while `@extern` deliberately rejects
-// it. Every signature marker (`const`, `mut`, `@noalias`, `@nonnull`) means
+// it. Every signature marker (`const`, `&`, `@noalias`, `@nonnull`) means
 // exactly what it does on a definition.
 //
 // You rarely write a prototype by hand: `--emit-interface` writes them for
@@ -32,7 +32,7 @@
 //
 //     fn total(const p: pair) -> int64;
 //
-//     fn bump(mut n: int32);
+//     fn bump(n: &int32);
 //
 //     fn larger<T>(a: T, b: T) -> T {
 //         if (a > b) { return a; }
@@ -81,9 +81,9 @@ fn total(const p: struct pair) -> int64 {
     return (p.a + p.b) * SCALE;
 }
 
-// A mut parameter writes the caller's variable through a hidden reference;
-// also inexpressible as @extern, exported cleanly as `fn bump(mut n: int32);`.
-fn bump(mut n: int32) {
+// A reference parameter writes the caller's variable through a hidden reference;
+// also inexpressible as @extern, exported cleanly as `fn bump(n: &int32);`.
+fn bump(n: &int32) {
     n = n + 1;
 }
 

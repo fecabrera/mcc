@@ -17,7 +17,7 @@ fn apply(op: fn(int32, int32) -> int32, x: int32, y: int32) -> int32 {
 // so a printf-style function can be passed and called through with varargs.
 // (A function type can also spell the per-parameter `@nonnull` contract, so
 // a @nonnull function is a legal value too -- see nonnull_callbacks.mc --
-// and the `mut`/`const` hidden-reference conventions -- see
+// and the `&`/`const` hidden-reference conventions -- see
 // mut_callbacks.mc. Overload sets and generic functions stay direct-call
 // names: mcc's own `println`, an overload set with generic members since
 // print/println became verbatim single-string writers, is not a value.)

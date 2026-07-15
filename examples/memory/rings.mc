@@ -7,7 +7,7 @@ import "std/ring";
 // For the linked-list FIFO with one node per value, see queues.mc.
 
 fn main() -> int32 {
-    // The ring methods take const/mut receivers, so a local ring passes
+    // The ring methods take const/reference receivers, so a local ring passes
     // directly: no & needed. (A ring<T>* still works via pointer decay; see
     // examples/functions/pointer_decay.mc.) The ctor-sugar `let` auto-defers
     // ring<T>::destructor at scope end.

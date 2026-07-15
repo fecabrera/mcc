@@ -43,7 +43,7 @@ fn fnv1a<T>(key: slice<T>) -> uint64 {
  * @param k:    element to fold in
  */
 @private
-fn fnv1a_k(mut hash: uint64, k: uint64) {
+fn fnv1a_k(hash: &uint64, k: uint64) {
     hash ^= k;
     hash *= 1099511628211;
 }

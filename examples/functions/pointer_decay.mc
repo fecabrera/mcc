@@ -1,9 +1,9 @@
 import "std/io";
 import "std/memory";
 
-// Pointer decay into `const`/`mut` parameters: a proven-non-null `T*`
+// Pointer decay into `const`/`&` parameters: a proven-non-null `T*`
 // argument at a hidden-reference slot (a `const T` struct parameter, or a
-// `mut T` parameter of any type) implicitly dereferences. The pointer value
+// `&T` parameter of any type) implicitly dereferences. The pointer value
 // is forwarded as the hidden reference, so a stack value and a heap pointer
 // call the same function with the same spelling, no `*p` at the call site.
 // Prerequisites: mut_params.mc and const_params.mc for the two slots,
@@ -14,7 +14,7 @@ struct point { x: int32; y: int32; }
 
 // Both parameters travel as hidden references: `p` is written through,
 // `by` is read-only. Nothing here is decay-specific; the call sites decide.
-fn shift(mut p: struct point, const by: struct point) {
+fn shift(p: &struct point, const by: struct point) {
     p.x += by.x;
     p.y += by.y;
 }
@@ -22,7 +22,7 @@ fn shift(mut p: struct point, const by: struct point) {
 fn main() -> int32 {
     let delta = point { x = 10, y = 20 };
 
-    // A stack value: the ordinary mut/const call from mut_params.mc.
+    // A stack value: the ordinary &/const call from mut_params.mc.
     let s = point { x = 1, y = 2 };
     shift(s, delta);
     println(f"stack -> ({s.x}, {s.y})");
@@ -36,7 +36,7 @@ fn main() -> int32 {
     h->x = 1;
     h->y = 2;
 
-    // The same call shape as the stack value: `h` decays into the mut slot.
+    // The same call shape as the stack value: `h` decays into the reference slot.
     shift(h, delta);
 
     // The pointer passed by value, so the narrowed fact survives the call:

@@ -22,7 +22,7 @@ type string = list<char>;
  * @param self: uninitialized string to build into
  * @param str:  NUL-terminated bytes to copy from
  */
-fn string::constructor(mut self: string, @nonnull str: char*) {
+fn string::constructor(self: &string, @nonnull str: char*) {
     string::constructor(self);
     self.append(str);
 }
@@ -35,7 +35,7 @@ fn string::constructor(mut self: string, @nonnull str: char*) {
  * @param str:  NUL-terminated bytes to append
  **/
 @inline
-fn string::append(mut self: string, @nonnull str: char*) {
+fn string::append(self: &string, @nonnull str: char*) {
     let i: uint64 = 0;
     until (str[i] == '\0') {
         self.push(str[i]);

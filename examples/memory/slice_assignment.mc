@@ -10,7 +10,7 @@ import "std/io";
 // A string constant has static lifetime, so the reborrow stays valid even when
 // the target outlives the current frame. That is what lets assignment reach
 // every lvalue form, including ones an array literal cannot (see the closing
-// note): a plain name, a member, a deref, an index, and a mut return.
+// note): a plain name, a member, a deref, an index, and a reference return.
 //
 // Prerequisites: the slice<T> view and borrowing (memory/slices.mc) and string
 // literals with their NUL-dropping borrow (types/strings.mc).
@@ -28,9 +28,9 @@ fn set_label(out: slice<const char>*) {
     *out! = "labelled";
 }
 
-// A mut-return accessor, for the mut-return form: its call is an assignable
-// lvalue. Array parameters cannot be `mut`, so the run is passed by pointer.
-fn slot(rows: slice<char>*, i: int32) -> mut slice<char> {
+// A reference-return accessor, for the reference-return form: its call is an assignable
+// lvalue. Array parameters cannot be `&`, so the run is passed by pointer.
+fn slot(rows: slice<char>*, i: int32) -> &slice<char> {
     return rows![i];
 }
 
@@ -69,7 +69,7 @@ fn main() -> int32 {
     rows[1] = "row";
     print(rows[0]); writechar(' '); println(rows[1]);          // first row
 
-    // Form 5, a mut return. slot(rows, 1) is an lvalue, so it is assignable; the
+    // Form 5, a reference return. slot(rows, 1) is an lvalue, so it is assignable; the
     // reborrow lands in rows[1].
     slot(rows, 1) = "second";
     println(rows[1]);                                             // second

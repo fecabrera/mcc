@@ -5,7 +5,7 @@ import "std/list";
 // buffer that doubles when it fills, so it starts small and grows as needed.
 
 fn main() -> int32 {
-    // The list methods take const/mut receivers, so a local list passes
+    // The list methods take const/reference receivers, so a local list passes
     // directly: no & needed. (A list<T>* still works via pointer decay; see
     // examples/functions/pointer_decay.mc.)
     let nums = list<int32>(2);             // initial capacity of 2; the ctor-sugar
@@ -17,7 +17,7 @@ fn main() -> int32 {
         i += 1;
     }
 
-    // get writes the element through a `mut` parameter -- no & at the call.
+    // get writes the element through a `&` parameter -- no & at the call.
     let value: int32 = 0;
     if (nums.get(6, value))
         println(f"length {nums.length}, nums[6] = {value}");

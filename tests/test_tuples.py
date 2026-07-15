@@ -882,7 +882,7 @@ def test_address_of_a_mut_parameter_element_is_rejected():
     # An element lives in the parameter's own storage, so & would leak the
     # non-escaping mut reference -- exactly as for an array element.
     with pytest.raises(
-        LangError, match="cannot take the address of a mut parameter"
+        LangError, match="cannot take the address of a reference parameter"
     ):
         compile_ir(
             "fn f(mut t: tuple<int32, int32>) { let p = &t[0]; }\n"

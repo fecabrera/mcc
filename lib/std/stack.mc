@@ -9,7 +9,7 @@ struct stack<T> {
     capacity: uint64; // total allocated slots
 }
 
-fn stack<T>::constructor(mut self: stack<T>) {
+fn stack<T>::constructor(self: &stack<T>) {
     stack<T>::constructor(self, DEFAULT_STACK_CAPACITY);
 }
 
@@ -19,7 +19,7 @@ fn stack<T>::constructor(mut self: stack<T>) {
  * @param self:     stack to initialize
  * @param capacity: initial slot count
  */
-fn stack<T>::constructor(mut self: stack<T>, capacity: uint64) {
+fn stack<T>::constructor(self: &stack<T>, capacity: uint64) {
     self.data = alloc<T>(capacity);
     self.top = 0;
     self.capacity = capacity;
@@ -30,7 +30,7 @@ fn stack<T>::constructor(mut self: stack<T>, capacity: uint64) {
  *
  * @param self: stack to destroy
  */
-fn stack<T>::destructor(mut self: stack<T>) {
+fn stack<T>::destructor(self: &stack<T>) {
     dealloc(self.data);
 
     self.data = null;
@@ -44,7 +44,7 @@ fn stack<T>::destructor(mut self: stack<T>) {
  * @param self:  stack to push onto
  * @param value: value to push
  */
-fn stack<T>::push(mut self: stack<T>, value: T) {
+fn stack<T>::push(self: &stack<T>, value: T) {
     if (self.top == self.capacity)
         self.grow();
 
@@ -60,7 +60,7 @@ fn stack<T>::push(mut self: stack<T>, value: T) {
  *
  * @return the popped value
  */
-fn stack<T>::pop(mut self: stack<T>) -> T {
+fn stack<T>::pop(self: &stack<T>) -> T {
     self.top -= 1;
     return self.data![self.top];
 }
@@ -107,7 +107,7 @@ fn stack<T>::is_empty(const self: stack<T>) -> bool {
  * @param self: stack whose buffer to grow
  */
 @private
-fn stack<T>::grow(mut self: stack<T>) {
+fn stack<T>::grow(self: &stack<T>) {
     let new_capacity: uint64 = self.capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;

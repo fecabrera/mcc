@@ -224,7 +224,7 @@ def test_unproven_pointer_at_mut_slot_error_is_pinned():
         compile_ir(source)
     assert str(err.value) == (
         "line 3: cannot pass a possibly-null box* as argument 1 of 'f': "
-        "decaying into a mut box parameter forms a reference, which is "
+        "decaying into a reference box parameter forms a hidden reference, which is "
         "never null (narrow with a null check or assert with postfix '!')"
     )
 
@@ -240,7 +240,7 @@ def test_unproven_pointer_at_const_slot_error_is_pinned():
         compile_ir(source)
     assert str(err.value) == (
         "line 3: cannot pass a possibly-null box* as argument 1 of 'f': "
-        "decaying into a const box parameter forms a reference, which is "
+        "decaying into a const box parameter forms a hidden reference, which is "
         "never null (narrow with a null check or assert with postfix '!')"
     )
 
@@ -438,7 +438,7 @@ def test_generic_unproven_pointer_error_is_pinned():
         compile_ir(source)
     assert str(err.value) == (
         "line 3: cannot pass a possibly-null box<int32>* as argument 1 of "
-        "'get': decaying into a const box<int32> parameter forms a "
+        "'get': decaying into a const box<int32> parameter forms a hidden "
         "reference, which is never null (narrow with a null check or "
         "assert with postfix '!')"
     )

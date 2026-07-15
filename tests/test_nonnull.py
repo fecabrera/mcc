@@ -40,7 +40,7 @@ def test_nonnull_combines_with_noalias_in_either_order():
 
 
 def test_nonnull_and_mut_rejected():
-    message = "a parameter cannot be both @nonnull and mut"
+    message = "a parameter cannot be both @nonnull and a reference"
     with pytest.raises(LangError, match=message):
         parse("fn f(@nonnull mut p: int32) {}")
 
@@ -520,7 +520,7 @@ def test_nonnull_param_as_mut_argument_rejected():
     # A mut callee writes through a hidden reference into the caller's slot;
     # it could store null while the parameter stays "known non-null".
     with pytest.raises(
-        LangError, match="cannot pass a @nonnull parameter as a mut argument"
+        LangError, match="cannot pass a @nonnull parameter as a reference argument"
     ):
         compile_ir(
             "fn clobber(mut q: int32*) { q = null; }\n"
@@ -533,7 +533,7 @@ def test_nonnull_param_as_generic_mut_argument_rejected():
     # The mut legality checks are deferred in a generic call until after
     # overload resolution; the ban must still fire on that path.
     with pytest.raises(
-        LangError, match="cannot pass a @nonnull parameter as a mut argument"
+        LangError, match="cannot pass a @nonnull parameter as a reference argument"
     ):
         compile_ir(
             "fn clobber<T>(mut q: T) { }\n"

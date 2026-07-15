@@ -1129,7 +1129,7 @@ already do).
         machinery `const` uses. The argument must be the caller's own writable
         storage of exactly the parameter's type; generics are supported
         (`swap<T>(mut a: T, mut b: T)`); implemented, see
-        [mut parameters](docs/language.md#mut-parameters)
+        [mut parameters](docs/language.md#reference-parameters)
   - [x] convention-carrying function types — `mut`/`const` became part of the
         function-pointer type: `fn(mut char)` / `fn(const struct big)` is a
         **distinct, non-coercible** type — in either direction, with no `as`
@@ -1148,7 +1148,7 @@ already do).
         values whose calls take the trailing slice explicitly — collection
         and the `@format` desugars stay direct-call affordances; implemented,
         see [mut/const-carrying function
-        types](docs/language.md#mutconst-carrying-function-types):
+        types](docs/language.md#referenceconst-carrying-function-types):
     - [x] `-> mut T` in function types — the return convention joins the
           parameter ones: `fn(...) -> mut T` is a distinct, non-coercible
           type (either direction, no `as` hatch — a mut return is passed as
@@ -1162,7 +1162,7 @@ already do).
           binding) and `-> mut const T` is banned at parse time in both
           the declaration and fn-type slots; implemented, see
           [mut/const-carrying function
-          types](docs/language.md#mutconst-carrying-function-types)
+          types](docs/language.md#referenceconst-carrying-function-types)
   - [x] generic overloads mixing `mut` — overloads of one generic name may
         disagree on which positions are `mut`: at a position any candidate
         marks `mut`, an lvalue argument's address is formed up front and the
@@ -1171,7 +1171,7 @@ already do).
         lvalue rules nothing out, so a same-shape `mut`/non-`mut` pair stays
         ambiguous), and the writability checks (`const`, `@volatile`,
         `@packed`) are judged against the chosen overload only; implemented,
-        see [mut parameters](docs/language.md#mut-parameters)
+        see [mut parameters](docs/language.md#reference-parameters)
   - [x] pointer decay into `const`/`mut` parameters — a `T*` argument in a
         `const T` or `mut T` slot implicitly dereferences, so the callee sees
         the pointee (read-only or writable) without the caller writing
@@ -1239,7 +1239,7 @@ already do).
         `mut` receivers keep one call shape for stack containers and heap
         `T*`s alike before method syntax landed (the migration is the
         item nested below); implemented, see
-        [pointer decay](docs/language.md#pointer-decay-into-constmut-parameters):
+        [pointer decay](docs/language.md#pointer-decay-into-constreference-parameters):
     - [ ] `libmc` receiver migration — flip the standard library's struct
           functions from raw pointer selves to receiver markers: read-only
           accessors become `const self` (the
@@ -1381,7 +1381,7 @@ already do).
         `.mci` is rendered and prototype-paired over the shipped
         [bodyless prototypes](docs/language.md#bodyless-fn-prototypes),
         with stores through a `mut` return tracked by the write effect;
-        implemented, see [mut returns](docs/language.md#mut-returns):
+        implemented, see [mut returns](docs/language.md#reference-returns):
     - [ ] stdlib accessor triad: `_get` / `_has` / `_at` — the settled
           shape of container element access, three names with three
           distinct jobs (supersedes the earlier `_ref`-style sketch:
@@ -1672,7 +1672,7 @@ already do).
         container's storage). The write path through the index
         brackets shipped with the accessor half exactly as predicted
         here, one `-> mut` return serving both sides of `=` over the
-        shipped [`mut` returns](docs/language.md#mut-returns)
+        shipped [`mut` returns](docs/language.md#reference-returns)
         (`list<T>::at`, usable as `lst[i] = v`), with the
         `@accessor("get")`/`("set")` pair form covering the write-path
         logic a raw-storage return cannot.
@@ -2639,7 +2639,7 @@ already do).
           The family call is the shipped desugar's own; the design point
           the shipped receiver shapes add is that `tmp` is a nullable
           `point*` entering a `mut self` slot, which the shipped
-          [pointer decay](docs/language.md#pointer-decay-into-constmut-parameters)
+          [pointer decay](docs/language.md#pointer-decay-into-constreference-parameters)
           admits only proven non-null — the emitted block guards or
           asserts (`tmp!`) at the allocation, or leans on a future
           non-null-returning `new`. The destructor half is now concrete:
@@ -2730,7 +2730,7 @@ already do).
         `@extern`/`@asm`/a bodyless prototype, and a void return or an
         extra parameter rejects. A `-> mut` return makes the access an
         assignable lvalue through the shipped
-        [mut returns](docs/language.md#mut-returns): `s.value = v` is
+        [mut returns](docs/language.md#reference-returns): `s.value = v` is
         `T::value(s) = v`, plain and compound assignment both, while a
         read-only (non-`mut`) property rejects assignment with the
         standard does-not-return-mut error. Dispatch is the dot-call's
@@ -2774,7 +2774,7 @@ already do).
         inheritance, and overload dispatch carry through), with the
         same bare-vs-pair split: the bare form's `-> mut` return makes
         `xs[i]` an assignable lvalue through the shipped
-        [mut returns](docs/language.md#mut-returns) (`xs[i] = v` is
+        [mut returns](docs/language.md#reference-returns) (`xs[i] = v` is
         `Type::at(xs, i) = v`, and `op=` compounds through it), while
         `@accessor("get")` / `@accessor("set")` declare the explicit
         pair for write-path logic (indices first, the assigned value
@@ -2826,7 +2826,7 @@ already do).
         (2) it must reconcile with the fat view's table ABI below (the
         base-typed and interface-typed views): a `mut`-using function is
         now a legal function value of the shipped
-        [mut/const-carrying function types](docs/language.md#mutconst-carrying-function-types),
+        [mut/const-carrying function types](docs/language.md#referenceconst-carrying-function-types),
         and in the dispatch table the receiver is anyway already behind
         the view's `object*`, so the table slot's first param is a
         genuine `T*` under an ABI the compiler controls internally. A `mut` return formed from `self` is then
@@ -3069,33 +3069,35 @@ already do).
       separately. The [null-on-move safety](#functions-and-methods) pillar
       above is independent of this respell (it couples to the use-after-move
       effort, not to `&`) and lands on its own schedule:
-  - [ ] Phase A — the respell (`mut` → `&`, `-> mut` → `-> &`): pure,
-        semantics-preserving. The whole convention is keyed on name-set
-        registries (`mut_params`/`const_params`/`mut_ret`), not types, so
-        `x: &T` and `-> &T` map onto existing machinery with ZERO codegen
-        change. USER RULING (2026-07-14): in a parameter, `&` is part of
-        the TYPE (`fn f(x: &T)`), parsed in the type slot exactly as it is
-        in `-> &T` and `own &T` — it is NOT a binder annotation like
+  - [x] Phase A — the respell (`mut` → `&`, `-> mut` → `-> &`): pure,
+        semantics-preserving. SHIPPED 2026-07-14. The whole convention is
+        keyed on name-set registries (`mut_params`/`const_params`/`mut_ret`),
+        not types, so `x: &T` and `-> &T` map onto existing machinery with
+        ZERO codegen change. USER RULING (2026-07-14): in a parameter, `&` is
+        part of the TYPE (`fn f(x: &T)`), parsed in the type slot exactly as
+        it is in `-> &T` and `own &T` — it is NOT a binder annotation like
         `mut`/`const` and is never written `fn f(&x: T)`; `const` alone
         stays a binder annotation, so `const x: &T` reads as the `const`
         annotation applied to a binder of type `&T`. Grammar is free
-        (`&` never starts a type today); keep `&` OUT of general type
-        positions (no `let r: &T`, no `list<&T>`, no `x as &T`) —
-        param-type and return-type slots ONLY — which preserves the
-        no-reference-locals invariant and avoids any address-of / `&&`
-        ambiguity. Cost is churn, not parser work:
-        ~940 param sites + ~250 return sites + docs (~220 `mut` mentions) +
-        ~69 pinned error strings + `.mci` emission + tree-sitter. Effort M
-        (dominated by the shipping set). OPEN (blocks starting Phase A,
-        MAINTAINER'S CALL) — migration strategy: big-bang rename vs. a
-        deprecation window where `mut` is accepted as a warned alias (the
-        shipped warning-class framework carries this for free); pre-1.0
-        permits either. OPEN (recommend "no", inference): is `&T` a general
-        type (locals/fields/generic-args/casts)? Keeping it to param/return
-        slots is what keeps the grammar clean and the no-reference-locals
-        invariant intact. Sub-point: error-message vocabulary
-        ("mut argument" → "& argument" / "reference"?) and whether `mut`
-        de-keywords at the end (freeing it as an identifier)
+        (`&` never starts a type today); `&` is kept OUT of general type
+        positions (no `let r: &T`, no `list<&T>`, no `x as &T`, no struct
+        fields) — param-type and return-type slots ONLY, a clear error
+        elsewhere (`a '&' reference type is only allowed in a parameter or
+        return type`) — which preserves the no-reference-locals invariant and
+        avoids any address-of / `&&` ambiguity. RESOLVED (MAINTAINER, USER
+        RULING 2026-07-14) — migration strategy: a **deprecation window**,
+        NOT a big-bang rename. `&` is blessed; `mut` / `-> mut` stay accepted
+        and warn under the new opt-in `-Wdeprecated-mut` class (joins
+        `-Wall`), steering to `&T`. All of `lib/` and all of `examples/`
+        migrated to `&`, so the only `mut` in-tree is deliberate
+        deprecation-window test/example fixtures. RESOLVED: `&T` is NOT a
+        general type (param/return slots only, per the ruling above). The
+        error-message vocabulary migrated from "mut" to "reference" (rendered
+        types now show `fn(&int32)` / `-> &int32`); `.mci` emits `&` and
+        round-trips; the tree-sitter grammar gained a `reference_type` node.
+        The remaining sub-point — whether `mut` de-keywords (freeing it as an
+        identifier) — is deferred to Phase C, which now shrinks to just
+        "close the deprecation window" (remove `mut`, de-keyword).
   - [ ] Phase B — the `const` flip (the ONE real ABI/semantics change):
         `const x: T` on an aggregate flips from today's hidden-reference
         view to a genuine by-value read-only COPY; `const x: &T` takes over
@@ -3125,9 +3127,14 @@ already do).
         `-> mut` / `-> &` is writable-only), a symmetry point not in the
         original sketch. OPEN (deferrable, recommend yes): `const` erases
         from fn types entirely
-  - [ ] Phase C — retire `mut`: either big-bang or after the Phase-A alias
-        window closes. De-keywording frees `mut` as an identifier. Effort
-        S. May fold into Phase A depending on the migration-strategy ruling
+  - [ ] Phase C — close the deprecation window: retire `mut` / `-> mut`
+        entirely once the Phase-A window has run its course. Now that Phase A
+        shipped as a deprecation window (not a big-bang), this is purely
+        "delete the accepted-but-warned `mut` spelling and its
+        `-Wdeprecated-mut` class, then de-keyword `mut` (freeing it as an
+        identifier)". Nothing in `lib/` or `examples/` uses `mut` anymore, so
+        the removal only breaks external code still on the old spelling.
+        Effort S.
   - [ ] Phase D — `-> own &T` (genuinely new; sequenced LAST; an expert
         escape hatch, NOT a headline): return a reference that hands the
         caller the cleanup obligation without copying. `new<T>()` (a `T*`)

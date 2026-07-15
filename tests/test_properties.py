@@ -97,7 +97,7 @@ def test_write_to_read_only_property_is_rejected():
     # non-mut-returning call target would.
     with pytest.raises(
         LangError,
-        match=r"the call to 'box::value' does not return mut",
+        match=r"the call to 'box::value' does not return a reference",
     ):
         compile_ir(
             """
@@ -336,7 +336,7 @@ def test_compound_on_write_only_property_is_rejected():
 def test_write_to_get_only_property_is_rejected():
     # A getter-only pair rejects assignment with the standard non-mut error.
     with pytest.raises(
-        LangError, match=r"the call to 'b::v' does not return mut"
+        LangError, match=r"the call to 'b::v' does not return a reference"
     ):
         compile_ir(
             """
@@ -370,7 +370,7 @@ def test_mixing_bare_with_pair_is_rejected():
 
 def test_get_returning_mut_is_rejected():
     with pytest.raises(
-        LangError, match=r'a @property\("get"\) method cannot return mut'
+        LangError, match=r'a @property\("get"\) method cannot return a reference'
     ):
         compile_ir(
             """

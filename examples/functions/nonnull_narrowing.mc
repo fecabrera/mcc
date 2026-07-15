@@ -70,10 +70,10 @@ fn main() -> int32 {
 
 // Narrowing is deliberately conservative: these per-name facts attach only
 // to bare local pointer variables. Globals and index expressions like a[i]
-// never narrow, and a mut parameter never carries a name fact (an aliasing
+// never narrow, and a reference parameter never carries a name fact (an aliasing
 // callee could null it without naming it here); taking &p anywhere in the
 // function disables narrowing of p; and the fact dies on anything that
-// could null the variable: reassigning p, passing p as a mut argument, or a
+// could null the variable: reassigning p, passing p as a reference argument, or a
 // shadowing `let p`. Field projections like s.p and b->data narrow too, as
 // access-path facts with a stricter invalidation model: see
 // nonnull_projections.mc. A loop drops exactly

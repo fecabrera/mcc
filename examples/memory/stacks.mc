@@ -5,7 +5,7 @@ import "std/stack";
 // the other lib containers it owns a heap buffer that doubles when it fills.
 
 fn main() -> int32 {
-    // The stack methods take const/mut receivers, so a local stack passes
+    // The stack methods take const/reference receivers, so a local stack passes
     // directly: no & needed. (A stack<T>* still works via pointer decay; see
     // examples/functions/pointer_decay.mc.) The ctor-sugar `let` auto-defers
     // stack<T>::destructor at scope end.

@@ -13,7 +13,7 @@ import "std/dict";
 //
 // Prerequisites: properties.mc for the same bare-vs-get/set split on field
 // syntax, method_calls.mc for the dot-call desugar, and
-// functions/mut_returns.mc for the `-> mut` lvalue the bare form rides on.
+// functions/mut_returns.mc for the `-> &` lvalue the bare form rides on.
 
 // A 2D grid: TWO indices, mapped onto one backing array. `g[r, c]` is
 // `grid::at(g, r, c)` -- each index becomes one argument.
@@ -21,11 +21,11 @@ struct grid {
     cells: int32[16];
 }
 
-// The bare form: returning `-> mut int32` re-lends the element's storage
+// The bare form: returning `-> &int32` re-lends the element's storage
 // (functions/mut_returns.mc), so `g[r, c]` is an assignable lvalue --
-// `g[r, c] = v` writes through the mut return, `g[r, c] += v` compounds.
+// `g[r, c] = v` writes through the reference return, `g[r, c] += v` compounds.
 @accessor
-fn grid::at(mut self: grid, r: uint64, c: uint64) -> mut int32 {
+fn grid::at(self: &grid, r: uint64, c: uint64) -> &int32 {
     return self.cells[r * 4 + c];
 }
 
@@ -44,7 +44,7 @@ fn bytes::at(const self: bytes, i: uint64) -> int32 {
 }
 
 @accessor("set")
-fn bytes::at(mut self: bytes, i: uint64, value: int32) {
+fn bytes::at(self: &bytes, i: uint64, value: int32) {
     self.raw[i] = value < 0 ? 0 : (value > 255 ? 255 : value);
 }
 

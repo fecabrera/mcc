@@ -28,7 +28,7 @@ struct point {
 // member of the stdlib's `string::append` set. Same name, same receiver
 // shape as the stdlib members; the value parameter's type is what selects
 // it. No annotation, no registration: declaring it is joining.
-fn string::append(mut str: string, const value: struct point) {
+fn string::append(str: &string, const value: struct point) {
     let buf: char[32];
     let n = snprintf(buf, 32, "(%d, %d)", value.x, value.y);
     // Appending the rendered text re-enters the same whole-program set and

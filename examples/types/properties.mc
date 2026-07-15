@@ -10,7 +10,7 @@ import "std/stack";
 // receiver and returns a value.
 //
 // Prerequisites: method_calls.mc for the dot-call desugar a property extends,
-// and functions/mut_returns.mc for the `-> mut` accessors the settable form
+// and functions/mut_returns.mc for the `-> &` accessors the settable form
 // below rides on.
 
 struct temperature {
@@ -24,15 +24,15 @@ fn temperature::fahrenheit(const self: temperature) -> int32 {
     return self.celsius * 9 / 5 + 32;
 }
 
-// A SETTABLE property: returning `-> mut int32` re-lends the field's storage
+// A SETTABLE property: returning `-> &int32` re-lends the field's storage
 // (functions/mut_returns.mc), so `v.value` is an assignable lvalue and
-// `v.value = x` is just `vec2::value(v, ...) = x` through the mut return.
+// `v.value = x` is just `vec2::value(v, ...) = x` through the reference return.
 struct cell {
     n: int32;
 }
 
 @property
-fn cell::value(mut self: cell) -> mut int32 {
+fn cell::value(self: &cell) -> &int32 {
     return self.n;
 }
 
@@ -42,7 +42,7 @@ struct labelled_cell extends cell {
 }
 
 // For accessors that need LOGIC on the write path -- validation, clamping,
-// bookkeeping -- the mut-return form is not enough: it hands out raw storage.
+// bookkeeping -- the reference-return form is not enough: it hands out raw storage.
 // @property("get") / @property("set") declare an explicit pair instead:
 // `g.level` calls the getter, `g.level = v` calls the setter, and
 // `g.level += v` is read-modify-write through both --
@@ -61,7 +61,7 @@ fn gauge::level(const self: gauge) -> int32 {
 // [0, 100]. It may return a value (here the old level), but assignment is a
 // statement, so the return is discarded.
 @property("set")
-fn gauge::level(mut self: gauge, value: int32) -> int32 {
+fn gauge::level(self: &gauge, value: int32) -> int32 {
     let old = self.raw;
     self.raw = value < 0 ? 0 : (value > 100 ? 100 : value);
     return old;
@@ -88,7 +88,7 @@ fn main() -> int32 {
     // Both spellings reach the same method; the call form stays valid.
     println(f"call spelling: {t.fahrenheit()}");       // 212
 
-    // A `-> mut` property is an lvalue: assignable and compound-assignable,
+    // A `-> &` property is an lvalue: assignable and compound-assignable,
     // reading and writing through the same accessor.
     let c = cell { n = 5 };
     println(f"c.value = {c.value}");                   // 5

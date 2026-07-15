@@ -456,7 +456,7 @@ def test_user_destructor_call_on_const_still_errors():
     # error. (The dot spelling is refused before any mut check -- see
     # test_dot_calls.py.)
     with pytest.raises(
-        LangError, match=r"cannot pass a read-only const res as a mut argument"
+        LangError, match=r"cannot pass a read-only const res as a reference argument"
     ):
         compile_ir(
             RES_QUIET

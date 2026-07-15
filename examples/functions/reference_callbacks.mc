@@ -1,23 +1,23 @@
 import "std/io";
 
 // A function type can spell the hidden-reference calling conventions:
-// `fn(mut int32)` types a function that writes through to the caller's own
+// `fn(&int32)` types a function that writes through to the caller's own
 // storage, and `fn(const struct point, const struct point) -> bool` one
 // whose struct parameters travel by read-only reference. A function with
-// mut or const-aggregate parameters is therefore a legal function value,
+// reference or const-aggregate parameters is therefore a legal function value,
 // and a call through the value passes by reference -- and enforces the same
 // call-site rules -- as a direct call would.
-// Prerequisites: function_pointers.mc, mut_params.mc, const_params.mc; the
+// Prerequisites: function_pointers.mc, reference_params.mc, const_params.mc; the
 // comparator alias below uses a generic type alias (types/generic_alias.mc).
 
 // Two in-place transforms: each writes the caller's variable through the
-// hidden reference, exactly as in mut_params.mc.
-fn double_it(mut n: int32) { n *= 2; }
-fn negate(mut n: int32)    { n = -n; }
+// hidden reference, exactly as in reference_params.mc.
+fn double_it(n: &int32) { n *= 2; }
+fn negate(n: &int32)    { n = -n; }
 
-// A @static dispatch table over the mut-taking type. A function name still
+// A @static dispatch table over the reference-taking type. A function name still
 // folds to a constant address, so the constant-initializer path takes both.
-@static let transforms: (fn(mut int32))[] = [double_it, negate];
+@static let transforms: (fn(&int32))[] = [double_it, negate];
 
 // The headline use of const in a function type: one comparator alias for
 // every element type. On a by-value scalar, const is not part of the
@@ -44,8 +44,8 @@ fn closer(const a: struct point, const b: struct point) -> bool {
 }
 
 fn main() -> int32 {
-    // The bare name of a mut-taking function is a value, and `let` infers
-    // the carrying type: f is fn(mut int32) -> void.
+    // The bare name of a reference-taking function is a value, and `let` infers
+    // the carrying type: f is fn(&int32) -> void.
     let f = double_it;
     let n: int32 = 21;
 
@@ -57,10 +57,10 @@ fn main() -> int32 {
     // caller's own writable lvalue of exactly the parameter's type. A
     // literal is rejected just as double_it(7) would be:
     //     f(7);
-    // error: argument 1 of 'f' is not assignable; a mut parameter needs a
+    // error: argument 1 of 'f' is not assignable; a reference parameter needs a
     // variable, field, element, or dereference
 
-    // A proven-non-null pointer decays into the mut slot through the value
+    // A proven-non-null pointer decays into the reference slot through the value
     // too, exactly as at a direct call (pointer_decay.mc): &n always proves.
     let p: int32* = &n;
     f(p);
@@ -73,21 +73,21 @@ fn main() -> int32 {
 
     // The convention is NOT convertible -- in either direction, with no
     // `as` hatch (unlike the @nonnull contract's strip in
-    // nonnull_callbacks.mc). fn(mut int32) and fn(int32) receive their
+    // nonnull_callbacks.mc). fn(&int32) and fn(int32) receive their
     // argument differently at the machine level, so no call sequence
     // through the wrong type could be correct:
     //     let g: fn(int32) = double_it;
-    // error: let g: expected fn(int32) -> void, got fn(mut int32) -> void
-    // (a mut parameter is passed by hidden reference, a different calling
+    // error: let g: expected fn(int32) -> void, got fn(&int32) -> void
+    // (a reference parameter is passed by hidden reference, a different calling
     // convention; the types are not convertible)
     //     let h = double_it as fn(int32);
-    // error: cannot cast fn(mut int32) -> void to fn(int32) -> void: a mut
-    // parameter is passed by hidden reference, a different calling
+    // error: cannot cast fn(&int32) -> void to fn(int32) -> void: a
+    // reference parameter is passed by hidden reference, a different calling
     // convention; the types are not convertible
 
-    // An `as` between fn types whose mut/const shape matches stays open: a
+    // An `as` between fn types whose reference/const shape matches stays open: a
     // same-shape signature reinterpret, like any fn-to-fn cast.
-    let g = double_it as fn(mut uint32);
+    let g = double_it as fn(&uint32);
     let u: uint32 = 5;
     g(u);
     println(f"reinterpret -> {u}");
@@ -106,17 +106,17 @@ fn main() -> int32 {
     // sugar's underlying parameter, fn(const slice<const any>) -> R, and a
     // call through the value takes that trailing slice explicitly --
     // collection is a direct-call affordance (native_variadics.mc). The
-    // return convention rides in the type the same way: fn(...) -> mut T
-    // types a mut-returning function, and a call through the value is the
-    // same lvalue a direct call is (mut_return_callbacks.mc).
+    // return convention rides in the type the same way: fn(...) -> &T
+    // types a reference-returning function, and a call through the value is the
+    // same lvalue a direct call is (reference_return_callbacks.mc).
     return 0;
 }
 
-// See also: mut_params.mc and const_params.mc for the conventions these
+// See also: reference_params.mc and const_params.mc for the conventions these
 // types spell; function_pointers.mc for plain fn(...) values, tables, and
 // callbacks; nonnull_callbacks.mc for the contract-carrying sibling, where
 // the annotation converts contravariantly and `as` strips it (a convention
 // does neither); pointer_decay.mc for the decay rule the indirect call
-// reuses; mut_return_callbacks.mc for the return-side convention,
-// fn(...) -> mut T values written through; types/generic_alias.mc for
+// reuses; reference_return_callbacks.mc for the return-side convention,
+// fn(...) -> &T values written through; types/generic_alias.mc for
 // generic aliases like cmp<T>.

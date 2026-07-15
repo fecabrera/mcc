@@ -6,7 +6,7 @@ import "std/io";
 // family: one `init` name, several ways to seed it. This file keeps the
 // whole set in one module; sets are open, so members may also come from
 // different modules (open_overloads.mc).
-// Builds on functions.mc and mut_params.mc (what `mut self` means);
+// Builds on functions.mc and mut_params.mc (what `reference self` means);
 // generic overload sets, which resolve in the same order, are covered in
 // mut_overloads.mc, and a set mixing concrete members with a generic
 // template in mixed_overloads.mc.
@@ -17,17 +17,17 @@ struct counter {
 }
 
 // Three members differing in ARITY: the argument count alone selects one.
-fn counter_init(mut self: struct counter) {              // zeroed
+fn counter_init(self: &struct counter) {              // zeroed
     self.value = 0;
     self.step = 1;
 }
 
-fn counter_init(mut self: struct counter, start: int32) {  // seeded
+fn counter_init(self: &struct counter, start: int32) {  // seeded
     self.value = start;
     self.step = 1;
 }
 
-fn counter_init(mut self: struct counter, start: int32, step: int32) {
+fn counter_init(self: &struct counter, start: int32, step: int32) {
     self.value = start;
     self.step = step;
 }
@@ -36,13 +36,13 @@ fn counter_init(mut self: struct counter, start: int32, step: int32) {
 // resolution looks at what the argument is, not just how many there are.
 // A string literal at the call site still adapts to a slice<const char>
 // parameter exactly as it would at a non-overloaded call.
-fn counter_init(mut self: struct counter, label: slice<const char>) {
+fn counter_init(self: &struct counter, label: slice<const char>) {
     self.value = label.length as int32;   // seed from the label, why not
     self.step = 1;
 }
 
 // Members must differ in parameter types. Adding a variant that differs
-// only in return type, only in const/mut markers, or only in @nonnull /
+// only in return type, only in const/reference markers, or only in @nonnull /
 // @noalias annotations is a duplicate definition:
 //     error: function 'counter_init(counter, int32)' already defined;
 //     overloads must differ in parameter types
@@ -85,5 +85,5 @@ fn main() -> int32 {
 // order), mixed_overloads.mc (a generic template joining a concrete set),
 // overload_subsumption.mc (the tie-break ordering rank-tied templates),
 // open_overloads.mc (extending a set from another module),
-// mut_params.mc (mut parameters), types/structs.mc (struct types, covered
+// mut_params.mc (reference parameters), types/structs.mc (struct types, covered
 // later in the tour). Full rules: docs/language.md, "Function overloading".

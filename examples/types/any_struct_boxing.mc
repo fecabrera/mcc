@@ -2,7 +2,7 @@ import "std/io";
 
 // A struct boxes into an `any` too, but only into a `const any` target and
 // only BY HIDDEN REFERENCE: the payload holds a pointer to the value's
-// existing storage (the same convention a `const`/`mut` struct parameter
+// existing storage (the same convention a `const`/`&` struct parameter
 // travels through, see functions/const_params.mc), tagged as the struct type
 // itself (`point`, NOT `point*`). `case type` / `with` recover it as a
 // read-only alias with no copy, so the arm reads the caller's live fields and

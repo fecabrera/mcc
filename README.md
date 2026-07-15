@@ -40,8 +40,8 @@ different tool at each end.
   drop to raw pointers and manual memory when you need to. Safety is
   **encouraged through syntax, never enforced by the compiler**: constructs like
   [`const`](docs/language.md#const-parameters) parameters, [slices](docs/language.md#slices),
-  and [`mut`](docs/language.md#mut-parameters) references (parameters and
-  [returns](docs/language.md#mut-returns)) make the safe path the natural, ergonomic one,
+  and [`&T`](docs/language.md#reference-parameters) references (parameters and
+  [returns](docs/language.md#reference-returns)) make the safe path the natural, ergonomic one,
   while the language never forbids the low-level one.
 - **Familiar to C programmers.** The syntax, type system, and
   [C ABI](#c-abi-compatibility) stay close to C, so a C programmer can read mcc
@@ -290,7 +290,7 @@ codegen, so an instantiation obeys the same ABI as a hand-written one.
 **Structs passed or returned by value** are classified for the platform C ABI
 at the `@extern` boundary on **AArch64 (Apple/AAPCS64)**, **x86-64 System V**,
 and **x86-64 Windows (Win64)**. mcc's own calls keep their raw-aggregate
-convention (LLVM lays the struct out whole; `const`/`mut` struct parameters
+convention (LLVM lays the struct out whole; `const`/`&` struct parameters
 travel by a hidden reference) — that is self-consistent but is _not_ the C ABI —
 while a call to an `@extern` C function that takes or returns a struct by value
 now marshals each aggregate the way a C compiler does. On AArch64 that means a

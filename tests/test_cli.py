@@ -1217,7 +1217,7 @@ def test_interface_roundtrip_with_mut_and_const_struct(tmp_path):
     assert mcc(lib, "--emit-interface").returncode == 0
     stub = (tmp_path / "statlib.mci").read_text()
     assert "fn total(const p: pair) -> int64;" in stub
-    assert "fn bump(mut n: int32);" in stub
+    assert "fn bump(n: &int32);" in stub
     lib.unlink()  # ship only the .o + .mci
 
     consumer = tmp_path / "app.mc"

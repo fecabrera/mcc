@@ -807,7 +807,9 @@ class Parser:
         "~",
     }
 
-    def parse_type_ref(self, greedy_stars: bool = True) -> TypeRef:
+    def parse_type_ref(
+        self, greedy_stars: bool = True, allow_ref: bool = False
+    ) -> TypeRef:
         """Parse a type reference.
 
         Handles ``[struct] name[<type, ...>][*...][[N]...]``, the
@@ -818,17 +820,43 @@ class Parser:
         int32s. A leading ``const`` makes a read-only type, as in the element
         of a ``slice<const T>``.
 
+        A leading ``&`` spells a reference type (``&T`` -- the by-hidden-
+        reference writable convention, today's ``mut``). It is only allowed in
+        a parameter-type or return-type slot, marked by ``allow_ref``; anywhere
+        else it is rejected, keeping the no-reference-locals invariant and
+        leaving ``&`` unambiguously the address-of operator in expressions.
+
         Args:
             greedy_stars: When ``True``, take every following ``*`` as pointer
                 depth; when ``False``, stop where a ``*`` begins a
                 multiplication (used after ``as``).
+            allow_ref: When ``True``, a leading ``&`` is consumed and sets the
+                result's ``mut`` flag; when ``False``, a leading ``&`` is a
+                compile error (a reference type outside a parameter/return
+                slot).
 
         Returns:
             The parsed ``TypeRef``.
 
         Raises:
-            LangError: On a pointer to an array type, or other malformed type.
+            LangError: On a pointer to an array type, a misplaced ``&``, or
+                other malformed type.
         """
+        if self.cur.kind == "&":
+            # `&T` -- a reference type (today's `mut` convention). Legal only
+            # where a parameter or return type is expected; the inner parse
+            # runs without allow_ref, so `&&T` is rejected as a nested `&`.
+            amp = self.cur
+            if not allow_ref:
+                raise LangError(
+                    "a '&' reference type is only allowed in a parameter or "
+                    "return type",
+                    amp.line,
+                )
+            self.advance()
+            ref = self.parse_type_ref(greedy_stars)
+            ref.mut = True
+            return ref
         if self.cur.kind == "const":
             # A `const T` read-only qualifier (the element of a slice<const T>).
             # Binds to the whole following type ref; the qualifier rides on the
@@ -953,57 +981,69 @@ class Parser:
                     )
                 is_nonnull = True
                 self.advance()
-            # `mut` before the type, as in a declaration (`const` rides in
-            # through parse_type_ref); the declaration-side compose bans
-            # apply verbatim.
-            mut_tok = self.cur if self.cur.kind == "mut" else None
-            is_mut = bool(self.accept("mut"))
-            if is_nonnull and is_mut:
+            # `&T` (or the deprecated `mut T`) in the type slot marks a
+            # by-reference writable parameter, riding on the TypeRef's `mut`
+            # flag; the declaration-side compose bans apply verbatim.
+            slot_line = self.cur.line
+            mut_kw = self.cur.kind == "mut"
+            if mut_kw:
+                self.advance()
+            ref = self.parse_type_ref(allow_ref=True)
+            if mut_kw:
+                ref.mut = True
+                ref.mut_deprecated = True
+            if is_nonnull and ref.mut:
                 raise LangError(
-                    "a parameter cannot be both @nonnull and mut "
-                    "(a mut parameter is passed by reference and is never null)",
-                    mut_tok.line,
+                    "a parameter cannot be both @nonnull and a reference "
+                    "(a reference parameter is passed by hidden reference "
+                    "and is never null)",
+                    slot_line,
                 )
-            ref = self.parse_type_ref()
-            if is_mut and ref.const:
+            if ref.mut and ref.const:
                 raise LangError(
-                    "a parameter cannot be both const and mut", mut_tok.line
+                    "a parameter cannot be both const and a reference",
+                    slot_line,
                 )
             ref.nonnull = is_nonnull
-            ref.mut = is_mut
             params.append(ref)
         self.expect(")")
         ret = TypeRef("void")
         if self.accept("->"):
-            # `-> mut T`: the type spells a mut return (a call through the
+            # `-> &T`: the type spells a reference return (a call through the
             # value is an lvalue expression), riding on the return TypeRef's
-            # `mut` flag exactly as a parameter's does. `-> own T` likewise
-            # spells an own return (a call through the value hands the
-            # caller the cleanup obligation); the two never combine.
-            mut_tok = self.cur if self.cur.kind == "mut" else None
-            is_mut = bool(self.accept("mut"))
+            # `mut` flag exactly as a parameter's does. The deprecated `-> mut`
+            # keyword sets the same flag. `-> own T` spells an own return (a
+            # call through the value hands the caller the cleanup obligation);
+            # the two never combine.
+            slot_line = self.cur.line
+            mut_kw = self.cur.kind == "mut"
+            if mut_kw:
+                self.advance()
             own_tok = self.cur if self.cur.kind == "own" else None
             is_own = bool(self.accept("own"))
-            if is_mut and is_own:
+            if mut_kw and is_own:
                 raise LangError(
-                    "a return cannot be both mut and own (mut lends the "
-                    "caller a view of existing storage, own hands it an "
-                    "owned value)",
+                    "a return cannot be both a reference and own (a reference "
+                    "lends the caller a view of existing storage, own hands it "
+                    "an owned value)",
                     own_tok.line,
                 )
-            if is_own and self.cur.kind == "mut":
+            ret = self.parse_type_ref(allow_ref=True)
+            if mut_kw:
+                ret.mut = True
+                ret.mut_deprecated = True
+            if is_own and ret.mut:
                 raise LangError(
-                    "a return cannot be both own and mut (mut lends the "
-                    "caller a view of existing storage, own hands it an "
-                    "owned value)",
-                    self.cur.line,
+                    "a return cannot be both own and a reference (a reference "
+                    "lends the caller a view of existing storage, own hands it "
+                    "an owned value)",
+                    slot_line,
                 )
-            ret = self.parse_type_ref()
-            if is_mut and ret.const:
+            if ret.mut and ret.const:
                 raise LangError(
-                    "a return cannot be both mut and const "
-                    "(a mut return must be writable)",
-                    mut_tok.line,
+                    "a return cannot be both a reference and const "
+                    "(a reference return must be writable)",
+                    slot_line,
                 )
             if is_own and (
                 ret.name == "void" and not ret.stars and not ret.dims
@@ -1013,7 +1053,6 @@ class Parser:
                     "nothing",
                     own_tok.line,
                 )
-            ret.mut = is_mut
             ret.own = is_own
         return TypeRef(
             "fn",
@@ -1676,6 +1715,8 @@ class Parser:
         noalias_params: set[str] = set()
         nonnull_params: set[str] = set()
         format_params: set[str] = set()
+        mut_kw_param_lines: list[int] = []  # deprecated `mut` binder sites
+        mut_kw_return_line: int | None = None  # a deprecated `-> mut` site
         variadic = False
         while self.cur.kind != ")":
             if params:
@@ -1708,39 +1749,28 @@ class Parser:
                     is_format = True
                 self.advance()
             is_const = bool(self.accept("const"))
-            is_mut = bool(self.accept("mut"))
-            if is_const and is_mut:
-                raise LangError(
-                    "a parameter cannot be both const and mut", self.cur.line
-                )
-            if is_noalias and is_mut:
-                raise LangError(
-                    "a parameter cannot be both @noalias and mut "
-                    "(aliasing mut parameters is allowed by design)",
-                    self.cur.line,
-                )
-            if is_nonnull and is_mut:
-                raise LangError(
-                    "a parameter cannot be both @nonnull and mut "
-                    "(a mut parameter is passed by reference and is never null)",
-                    self.cur.line,
-                )
-            if is_format and is_mut:
-                raise LangError(
-                    "a parameter cannot be both @format and mut "
-                    "(a format string is read, never written)",
-                    self.cur.line,
-                )
+            # The deprecated `mut x: T` binder spelling: `mut` before the name.
+            # The blessed spelling puts the reference marker in the type slot
+            # (`x: &T`), read off the parsed TypeRef's `mut` flag below.
+            mut_kw_tok = self.cur if self.cur.kind == "mut" else None
+            if mut_kw_tok is not None:
+                self.advance()
             pname = self.expect("IDENT").text
             if self.cur.kind == "...":
                 # `args...` -- native variadic sugar: a const parameter of type
                 # slice<const any>, the trailing type that marks a collecting
                 # function (the call site boxes its extra arguments into it).
                 ellipsis = self.advance()
-                if is_const or is_mut or is_noalias or is_nonnull or is_format:
+                if (
+                    is_const
+                    or mut_kw_tok is not None
+                    or is_noalias
+                    or is_nonnull
+                    or is_format
+                ):
                     raise LangError(
-                        f"'{pname}...' cannot take const, mut, @noalias, "
-                        "@nonnull, or @format (it is already a const "
+                        f"'{pname}...' cannot take const, a reference, "
+                        "@noalias, @nonnull, or @format (it is already a const "
                         "slice<const any>)",
                         ellipsis.line,
                     )
@@ -1753,53 +1783,96 @@ class Parser:
                     (pname, TypeRef("slice", [TypeRef("any", const=True)]))
                 )
                 break
+            self.expect(":")
+            slot_line = self.cur.line
+            ptype = self.parse_type_ref(allow_ref=True)
+            # A parameter's mutability lives in `mut_params`, not on the stored
+            # TypeRef, so a `&T` marker is lifted off the type and the ref is
+            # left pristine (zero representation change from `mut x: T`).
+            is_mut = ptype.mut or mut_kw_tok is not None
+            ptype.mut = False
+            ptype.mut_deprecated = False
+            if is_const and is_mut:
+                raise LangError(
+                    "a parameter cannot be both const and a reference",
+                    slot_line,
+                )
+            if is_noalias and is_mut:
+                raise LangError(
+                    "a parameter cannot be both @noalias and a reference "
+                    "(aliasing reference parameters is allowed by design)",
+                    slot_line,
+                )
+            if is_nonnull and is_mut:
+                raise LangError(
+                    "a parameter cannot be both @nonnull and a reference "
+                    "(a reference parameter is passed by hidden reference "
+                    "and is never null)",
+                    slot_line,
+                )
+            if is_format and is_mut:
+                raise LangError(
+                    "a parameter cannot be both @format and a reference "
+                    "(a format string is read, never written)",
+                    slot_line,
+                )
             if is_const:
                 const_params.add(pname)
             if is_mut:
                 mut_params.add(pname)
+                if mut_kw_tok is not None:
+                    mut_kw_param_lines.append(mut_kw_tok.line)
             if is_noalias:
                 noalias_params.add(pname)
             if is_nonnull:
                 nonnull_params.add(pname)
             if is_format:
                 format_params.add(pname)
-            self.expect(":")
-            params.append((pname, self.parse_type_ref()))
+            params.append((pname, ptype))
         self.expect(")")
         ret_type = TypeRef("void")
         mut_return = False
         own_return = False
         if self.accept("->"):
-            # `-> mut T`: the function returns an lvalue (a reference to
+            # `-> &T`: the function returns an lvalue (a reference to
             # caller-reachable storage). A flag on the declaration; the
-            # fn(...) -> mut T pointer type spells the same convention.
-            # `-> own T`: the function returns an owned value (the caller
-            # adopts the cleanup obligation). Also a flag, and the two are
-            # mutually exclusive: mut lends a view, own hands over a value.
-            mut_tok = self.cur if self.cur.kind == "mut" else None
-            mut_return = bool(self.accept("mut"))
+            # fn(...) -> &T pointer type spells the same convention. The
+            # deprecated `-> mut T` keyword spells the same thing. `-> own T`:
+            # the function returns an owned value (the caller adopts the
+            # cleanup obligation). Also a flag, and the two are mutually
+            # exclusive: a reference lends a view, own hands over a value.
+            ret_slot_line = self.cur.line
+            mut_kw_tok = self.cur if self.cur.kind == "mut" else None
+            if mut_kw_tok is not None:
+                self.advance()
             own_tok = self.cur if self.cur.kind == "own" else None
             own_return = bool(self.accept("own"))
-            if mut_return and own_return:
+            if mut_kw_tok is not None and own_return:
                 raise LangError(
-                    "a return cannot be both mut and own (mut lends the "
-                    "caller a view of existing storage, own hands it an "
-                    "owned value)",
+                    "a return cannot be both a reference and own (a reference "
+                    "lends the caller a view of existing storage, own hands it "
+                    "an owned value)",
                     own_tok.line,
                 )
-            if own_return and self.cur.kind == "mut":
+            ret_type = self.parse_type_ref(allow_ref=True)
+            mut_return = ret_type.mut or mut_kw_tok is not None
+            # Mutability lives in the `mut_return` flag, not on the TypeRef.
+            ret_type.mut = False
+            ret_type.mut_deprecated = False
+            if mut_kw_tok is not None:
+                mut_kw_return_line = mut_kw_tok.line
+            if own_return and mut_return:
                 raise LangError(
-                    "a return cannot be both own and mut (mut lends the "
-                    "caller a view of existing storage, own hands it an "
-                    "owned value)",
-                    self.cur.line,
+                    "a return cannot be both own and a reference (a reference "
+                    "lends the caller a view of existing storage, own hands it "
+                    "an owned value)",
+                    ret_slot_line,
                 )
-            ret_type = self.parse_type_ref()
             if mut_return and ret_type.const:
                 raise LangError(
-                    "a return cannot be both mut and const "
-                    "(a mut return must be writable)",
-                    mut_tok.line,
+                    "a return cannot be both a reference and const "
+                    "(a reference return must be writable)",
+                    ret_slot_line,
                 )
             if own_return and (
                 ret_type.name == "void"
@@ -1821,13 +1894,13 @@ class Parser:
             )
         if mut_params and extern:
             raise LangError(
-                "mut parameters are not allowed on @extern functions "
+                "reference parameters are not allowed on @extern functions "
                 "(they would change the C calling convention)",
                 line,
             )
         if mut_return and extern:
             raise LangError(
-                "a mut return is not allowed on @extern functions "
+                "a reference return is not allowed on @extern functions "
                 "(it would change the C calling convention)",
                 line,
             )
@@ -1893,11 +1966,12 @@ class Parser:
                 )
             if mut_params:
                 raise LangError(
-                    "mut parameters are not allowed on @asm functions", line
+                    "reference parameters are not allowed on @asm functions",
+                    line,
                 )
             if mut_return:
                 raise LangError(
-                    "a mut return is not allowed on @asm functions "
+                    "a reference return is not allowed on @asm functions "
                     "(the template computes a value, not a reference)",
                     line,
                 )
@@ -2015,6 +2089,8 @@ class Parser:
                 struct_arg_groups=struct_arg_groups,
                 struct_arg_bounds=struct_arg_bounds,
                 struct_arg_defaults=struct_arg_defaults,
+                mut_kw_param_lines=mut_kw_param_lines,
+                mut_kw_return_line=mut_kw_return_line,
             )
         if prop:
             if "::" not in name:
@@ -2047,8 +2123,8 @@ class Parser:
                     raise LangError("a @property method must return a value", line)
                 if prop == "get" and mut_return:
                     raise LangError(
-                        'a @property("get") method cannot return mut; a bare '
-                        "@property is the mut-lvalue form, "
+                        'a @property("get") method cannot return a reference; '
+                        "a bare @property is the reference-lvalue form, "
                         '@property("set") the explicit write path',
                         line,
                     )
@@ -2086,8 +2162,8 @@ class Parser:
                     )
                 if acc == "get" and mut_return:
                     raise LangError(
-                        'an @accessor("get") method cannot return mut; a bare '
-                        "@accessor is the mut-lvalue form, "
+                        'an @accessor("get") method cannot return a reference; '
+                        "a bare @accessor is the reference-lvalue form, "
                         '@accessor("set") the explicit write path',
                         line,
                     )
@@ -2122,6 +2198,8 @@ class Parser:
             struct_arg_groups=struct_arg_groups,
             struct_arg_bounds=struct_arg_bounds,
             struct_arg_defaults=struct_arg_defaults,
+            mut_kw_param_lines=mut_kw_param_lines,
+            mut_kw_return_line=mut_kw_return_line,
         )
 
     def parse_asm(self):

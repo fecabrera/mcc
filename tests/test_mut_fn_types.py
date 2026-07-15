@@ -27,7 +27,7 @@ BIG = "struct big { a: int64; b: int64; c: int64; }\n"
 SUM = "fn sum(const s: struct big) -> int64 { return s.a + s.b + s.c; }\n"
 
 MUT_MISMATCH = (
-    "(a mut parameter is passed by hidden reference, a different calling "
+    "(a reference parameter is passed by hidden reference, a different calling "
     "convention; the types are not convertible)"
 )
 CONST_MISMATCH = (
@@ -50,7 +50,7 @@ def _iface(source: str) -> str:
 def test_fn_type_mut_param_parses():
     (func,) = parse("fn apply(cb: fn(mut char, int32)) {}").functions
     cb_type = func.params[0][1]
-    assert str(cb_type) == "fn(mut char, int32) -> void"
+    assert str(cb_type) == "fn(&char, int32) -> void"
     assert cb_type.params[0].mut and not cb_type.params[1].mut
 
 
@@ -66,8 +66,8 @@ def test_fn_type_nonnull_and_mut_rejected():
     with pytest.raises(
         LangError,
         match=re.escape(
-            "a parameter cannot be both @nonnull and mut "
-            "(a mut parameter is passed by reference and is never null)"
+            "a parameter cannot be both @nonnull and a reference "
+            "(a reference parameter is passed by hidden reference and is never null)"
         ),
     ):
         parse("fn f(cb: fn(@nonnull mut char*)) {}")
@@ -75,7 +75,7 @@ def test_fn_type_nonnull_and_mut_rejected():
 
 def test_fn_type_const_and_mut_rejected():
     with pytest.raises(
-        LangError, match="a parameter cannot be both const and mut"
+        LangError, match="a parameter cannot be both const and a reference"
     ):
         parse("fn f(cb: fn(mut const char)) {}")
 
@@ -186,7 +186,7 @@ def test_mixed_convention_indices_are_per_parameter():
 def test_indirect_mut_argument_must_be_an_lvalue():
     with pytest.raises(
         LangError,
-        match="argument 1 of 'f' is not assignable; a mut parameter needs "
+        match="argument 1 of 'f' is not assignable; a reference parameter needs "
         "a variable, field, element, or dereference",
     ):
         compile_ir(
@@ -197,7 +197,7 @@ def test_indirect_mut_argument_must_be_an_lvalue():
 def test_indirect_mut_argument_rejects_const_parameter():
     with pytest.raises(
         LangError,
-        match="cannot pass a const parameter as a mut argument; it is read-only",
+        match="cannot pass a const parameter as a reference argument; it is read-only",
     ):
         compile_ir(
             "fn setv(mut n: int32) { n = 7; }\n"
@@ -242,7 +242,7 @@ def test_mut_fn_value_does_not_drop_to_plain():
     with pytest.raises(
         LangError,
         match=re.escape(
-            "let g: expected fn(char) -> void, got fn(mut char) -> void "
+            "let g: expected fn(char) -> void, got fn(&char) -> void "
             + MUT_MISMATCH
         ),
     ):
@@ -257,7 +257,7 @@ def test_plain_fn_value_does_not_lift_to_mut():
     with pytest.raises(
         LangError,
         match=re.escape(
-            "let g: expected fn(mut char) -> void, got fn(char) -> void "
+            "let g: expected fn(&char) -> void, got fn(char) -> void "
             + MUT_MISMATCH
         ),
     ):
@@ -302,7 +302,7 @@ def test_argument_position_reports_the_same_mismatch():
         LangError,
         match=re.escape(
             "argument 1 of 'take': expected fn(char) -> void, "
-            "got fn(mut char) -> void " + MUT_MISMATCH
+            "got fn(&char) -> void " + MUT_MISMATCH
         ),
     ):
         compile_ir(
@@ -316,7 +316,7 @@ def test_static_initializer_reports_the_same_mismatch():
         LangError,
         match=re.escape(
             "@static initializer: expected fn(char) -> void, "
-            "got fn(mut char) -> void " + MUT_MISMATCH
+            "got fn(&char) -> void " + MUT_MISMATCH
         ),
     ):
         compile_ir(
@@ -345,7 +345,7 @@ def test_as_between_convention_shapes_rejected():
     with pytest.raises(
         LangError,
         match=re.escape(
-            "cannot cast fn(mut char) -> void to fn(char) -> void: a mut "
+            "cannot cast fn(&char) -> void to fn(char) -> void: a reference "
             "parameter is passed by hidden reference, a different calling "
             "convention; the types are not convertible"
         ),
@@ -534,7 +534,7 @@ def test_mut_fn_type_round_trips_through_interface():
     # convention ships in the .mci and re-parses into the same type.
     src = "fn twice(cb: fn(mut char), mut c: char) { cb(c); cb(c); }\n"
     out = _iface(src)
-    assert "fn twice(cb: fn(mut char) -> void, mut c: char);" in out
+    assert "fn twice(cb: fn(&char) -> void, c: &char);" in out
     caller = out + (
         BUMP + "fn main() -> int32 {\n"
         "    let c: char = 'a';\n"
@@ -574,5 +574,5 @@ def test_mut_fn_type_monomorphizes_separately():
         "    return 0;\n"
         "}"
     )
-    assert "id<$0>($0)<fn(mut char) -> void>" in ir_text
+    assert "id<$0>($0)<fn(&char) -> void>" in ir_text
     assert "id<$0>($0)<fn(char) -> void>" in ir_text

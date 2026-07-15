@@ -1,42 +1,42 @@
 import "std/io";
 
-// Overloads of one generic name may freely mix `mut` and non-`mut`
+// Overloads of one generic name may freely mix `&` and non-`&`
 // positions. The motivating shape is one name serving both kinds of
-// destination: a `mut` overload for the caller's own variable, and a
+// destination: a `&` overload for the caller's own variable, and a
 // pointer overload for storage reached indirectly.
-// Builds on mut_params.mc (what `mut` means) and types/generics.mc
+// Builds on reference_params.mc (what `&` means) and types/generics.mc
 // (generic functions); pointers are covered in memory/pointers.mc.
-fn set<T>(mut a: T) { a = 7 as T; }    // for the caller's own variable
+fn set<T>(a: &T) { a = 7 as T; }    // for the caller's own variable
 fn set<T>(p: T*)    { *p! = 9 as T; }  // for storage reached by pointer
 
 // Resolution first drops candidates the argument cannot match: an rvalue
 // (a literal, a call result, an `&x`, a bare function name) denotes no
-// writable storage, so it drops every candidate that is `mut` at that
+// writable storage, so it drops every candidate that is `&` at that
 // position. Then the most specific pattern wins (`T*` beats `T`, concrete
 // types beat both). Lvalue-ness never breaks a tie: this same-shape pair is
 // fine for an rvalue (only the by-value overload is viable) but ambiguous
-// for an lvalue -- mut markers are template identity, so neither member
+// for an lvalue -- reference markers are template identity, so neither member
 // subsumes the other (overload_subsumption.mc) --
 //     let x: int32 = 0; pick(x);
 //     error: call to 'pick' is ambiguous between overloads
-fn pick<T>(mut a: T) -> int32 { a = a; return 1; }
+fn pick<T>(a: &T) -> int32 { a = a; return 1; }
 fn pick<T>(a: T)     -> int32 { return 2; }
 
 // Writability is judged against the overload that WINS, not against every
-// candidate. `label` has a mut overload and a concrete-char one; concrete
+// candidate. `label` has a reference overload and a concrete-char one; concrete
 // beats generic, so a char argument goes to the read-only overload and a
-// read-only `const` parameter is a fine argument. Had the mut overload won
+// read-only `const` parameter is a fine argument. Had the reference overload won
 // (say, for an int32 argument), the same lend would be rejected:
-//     error: cannot pass a const parameter as a mut argument; it is read-only
-fn label<T>(mut a: T, b: T) -> int32 { a = b; return 1; }
+//     error: cannot pass a const parameter as a reference argument; it is read-only
+fn label<T>(a: &T, b: T) -> int32 { a = b; return 1; }
 fn label<T>(a: char, b: T)  -> int32 { return 2; }
 
 fn describe(const c: char) -> int32 {
-    return label(c, 'x');   // const lvalue, non-mut overload wins: allowed
+    return label(c, 'x');   // const lvalue, non-reference overload wins: allowed
 }
 
-// Used below to show single evaluation of a mut-candidate argument.
-fn advance(mut n: int32) -> int32 {
+// Used below to show single evaluation of a reference-candidate argument.
+fn advance(n: &int32) -> int32 {
     n += 1;
     return n - 1;
 }
@@ -45,8 +45,8 @@ fn main() -> int32 {
     let x: int32 = 0;
     let y: int32 = 0;
 
-    set(x);     // lvalue, and int32 cannot match T*: the mut overload wins
-    set(&y);    // &y is an rvalue: the mut overload drops, the T* one wins
+    set(x);     // lvalue, and int32 cannot match T*: the reference overload wins
+    set(&y);    // &y is an rvalue: the reference overload drops, the T* one wins
     println(f"set(x)   -> x={x}");
     println(f"set(&y)  -> y={y}");
 
@@ -56,7 +56,7 @@ fn main() -> int32 {
     println("label(c) -> overload {}".format(describe('q')));
 
     // The argument is evaluated exactly once, before the winner is known:
-    // because SOME candidate marks the position `mut`, the lvalue's address
+    // because SOME candidate marks the position `&`, the lvalue's address
     // (base and index included) is formed up front and its value read once
     // through it. `advance(i)` runs a single time, so i ends at 1 and only
     // a[0] is written.
@@ -68,7 +68,7 @@ fn main() -> int32 {
     return 0;
 }
 
-// See also: mut_params.mc for mut itself; const_params.mc for the read-only
+// See also: reference_params.mc for the `&` reference itself; const_params.mc for the read-only
 // dual; types/generics.mc for generic functions and overload basics;
 // overloading.mc for concrete (non-generic) overload sets;
 // mixed_overloads.mc for a generic template sharing a name with concrete

@@ -23,21 +23,21 @@ fn rect::area(self: rect) -> int32 {
     return self.w * self.h;
 }
 
-// `mut self` is an ordinary `mut` parameter: a mutation through it is visible
+// `reference self` is an ordinary `&` parameter: a mutation through it is visible
 // to the caller after the call, no receiver machinery involved.
-fn rect::scale(mut self: rect, factor: int32) {
+fn rect::scale(self: &rect, factor: int32) {
     self.w = self.w * factor;
     self.h = self.h * factor;
 }
 
 // The qualified name keys an overload set just like a plain name does: these
 // two `rect::grow` signatures dispatch by argument type.
-fn rect::grow(mut self: rect, by: int32) {
+fn rect::grow(self: &rect, by: int32) {
     self.w += by;
     self.h += by;
 }
 
-fn rect::grow(mut self: rect, dw: int32, dh: int32) {
+fn rect::grow(self: &rect, dw: int32, dh: int32) {
     self.w += dw;
     self.h += dh;
 }
@@ -57,7 +57,7 @@ fn main() -> int32 {
     let r: rect = { w = 3, h = 4 };
     println(f"area = {rect::area(r)}");       // 12
 
-    // `scale` mutates `r` in place through `mut self`.
+    // `scale` mutates `r` in place through `reference self`.
     rect::scale(r, 2);
     println(f"scaled = {r.w} x {r.h}, area = {rect::area(r)}");  // 6 x 8, 48
 

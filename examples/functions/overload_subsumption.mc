@@ -41,7 +41,7 @@ struct point<T> {
 }
 
 // A diagonal member ties x and y to the element type itself...
-fn point<T>::set(mut self: point<T>, x: T, y: T) {
+fn point<T>::set(self: &point<T>, x: T, y: T) {
     println("  [diagonal]   x and y are already T");
     self.x = x;
     self.y = y;
@@ -50,7 +50,7 @@ fn point<T>::set(mut self: point<T>, x: T, y: T) {
 // ...and a converting sibling accepts any agreeing pair and casts. For
 // agreeing arguments of the element type both are viable and the diagonal
 // wins the tie, exactly as above.
-fn point<T>::set<U>(mut self: point<T>, x: U, y: U) {
+fn point<T>::set<U>(self: &point<T>, x: U, y: U) {
     println("  [converting] casting U to the element type");
     self.x = x as T;
     self.y = y as T;
@@ -127,7 +127,7 @@ fn main() -> int32 {
 // an unbounded diagonal outright, tier over everything (mixed_overloads.mc).
 
 // See also: mixed_overloads.mc (the tier/specificity rank), mut_overloads.mc
-// (mut markers are template identity, so a mut/non-mut same-shape pair stays
+// (reference markers are template identity, so a reference/non-reference same-shape pair stays
 // ambiguous for an lvalue), types/type_groups.mc (closed groups),
 // types/method_alias.mc (an alias-spelled diagonal, `type diag<T> =
 // pair<T, T>`, ordering the same way against an open method). Full rules:

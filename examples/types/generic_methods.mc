@@ -36,10 +36,10 @@ fn point<T>::origin() -> point<T> {
     return { x = 0 as T, y = 0 as T };
 }
 
-// `mut self` works the same as in methods.mc: the write lands back in the
+// `reference self` works the same as in methods.mc: the write lands back in the
 // caller's value. `factor` is `T` too, so it monomorphizes alongside the
 // receiver.
-fn point<T>::scale(mut self: point<T>, factor: T) {
+fn point<T>::scale(self: &point<T>, factor: T) {
     self.x = self.x * factor;
     self.y = self.y * factor;
 }
@@ -83,7 +83,7 @@ fn main() -> int32 {
     let o = point<float64>::origin();
     println(f"origin = ({o.x:.2f}, {o.y:.2f})");     // 0.00, 0.00
 
-    // `mut self` mutates each instance in place, through its own instantiation.
+    // `reference self` mutates each instance in place, through its own instantiation.
     point::scale(pi, 10);
     println(f"scaled int = ({pi.x}, {pi.y})");       // 30, 40
     point::scale(pf, 2.0);

@@ -371,7 +371,7 @@ def test_mut_self_on_a_temporary_errors():
     # would launder rvalue-ness and let a mut-self method silently mutate a
     # value about to be discarded.
     with pytest.raises(
-        LangError, match=r"cannot pass a read-only const counter as a mut"
+        LangError, match=r"cannot pass a read-only const counter as a reference argument"
     ):
         compile_ir(
             """
@@ -470,7 +470,7 @@ def test_formation_chain_through_a_non_mut_method_rejects():
     # A by-value method in the chain hands out a temporary; the spilled
     # receiver is const, so the mut hand-off is rejected.
     with pytest.raises(
-        LangError, match=r"cannot pass a read-only const arena as a mut"
+        LangError, match=r"cannot pass a read-only const arena as a reference argument"
     ):
         compile_ir(
             """
@@ -491,7 +491,7 @@ def test_formation_chain_through_a_non_mut_method_rejects():
 def test_non_mut_dot_call_is_not_assignable():
     with pytest.raises(
         LangError,
-        match=r"the call to 'counter::get' does not return mut, so its "
+        match=r"the call to 'counter::get' does not return a reference, so its "
         r"result is not assignable",
     ):
         compile_ir(

@@ -3,7 +3,7 @@ import "std/char";
 
 // Dot calls: `recv.method(args)` is sugar for `Type::method(recv, args)`,
 // where `Type` is the receiver's type. The receiver passes VERBATIM as the
-// first argument, so overload resolution, `mut`-receiver legality, and
+// first argument, so overload resolution, `&`-receiver legality, and
 // every diagnostic are the desugared call's own -- the dot adds no
 // machinery of its own, and the qualified spelling stays valid beside it.
 // What the dot DOES add: one hop of pointer auto-deref, evaluate-once
@@ -13,7 +13,7 @@ import "std/char";
 //
 // Prerequisites: methods.mc for the qualified families the sugar calls
 // into, generic_methods.mc for receiver-driven inference, and
-// functions/mut_returns.mc for the `-> mut` accessors used near the end.
+// functions/mut_returns.mc for the `-> &` accessors used near the end.
 // Alias and builtin receivers ride method_alias.mc's qualifier chase.
 
 struct rect {
@@ -25,26 +25,26 @@ fn rect::area(const self: rect) -> int32 {
     return self.w * self.h;
 }
 
-fn rect::scale(mut self: rect, factor: int32) {
+fn rect::scale(self: &rect, factor: int32) {
     self.w *= factor;
     self.h *= factor;
 }
 
 // An overload set dispatches at a dot call exactly as at a `::` call: the
 // receiver is simply argument one.
-fn rect::grow(mut self: rect, by: int32) {
+fn rect::grow(self: &rect, by: int32) {
     self.w += by;
     self.h += by;
 }
 
-fn rect::grow(mut self: rect, dw: int32, dh: int32) {
+fn rect::grow(self: &rect, dw: int32, dh: int32) {
     self.w += dw;
     self.h += dh;
 }
 
-// A mut-returning method: `return self` re-lends the receiver's storage
+// A reference-returning method: `return self` re-lends the receiver's storage
 // (functions/mut_returns.mc), which is what lets a chain keep mutating.
-fn rect::itself(mut self: rect) -> mut rect {
+fn rect::itself(self: &rect) -> &rect {
     return self;
 }
 
@@ -72,19 +72,19 @@ fn double_it(v: int32) -> int32 {
     return v * 2;
 }
 
-// ---- mut-returning accessors: dot calls as lvalues ----
+// ---- reference-returning accessors: dot calls as lvalues ----
 
 struct list4 {
     data: int32[4];
 }
 
-fn list4::fill(mut self: list4, v: int32) {
+fn list4::fill(self: &list4, v: int32) {
     for i in range(4) {
         self.data[i] = v;
     }
 }
 
-fn list4::at(mut self: list4, i: int32) -> mut int32 {
+fn list4::at(self: &list4, i: int32) -> &int32 {
     return self.data[i];
 }
 
@@ -92,13 +92,13 @@ struct wrap {
     l: list4;
 }
 
-fn wrap::view(mut self: wrap) -> mut list4 {
+fn wrap::view(self: &wrap) -> &list4 {
     return self.l;
 }
 
-// The mut-return formation rule walks through a dot call too: `self` is a
-// mut parameter, `view()` re-lends it, `at(1)` re-lends again.
-fn wrap::second(mut self: wrap) -> mut int32 {
+// The reference-return formation rule walks through a dot call too: `self` is a
+// reference parameter, `view()` re-lends it, `at(1)` re-lends again.
+fn wrap::second(self: &wrap) -> &int32 {
     return self.view().at(1);
 }
 
@@ -120,7 +120,7 @@ fn slice<T>::first(const xs: slice<const T>) -> T {
 }
 
 fn main() -> int32 {
-    // The desugar itself: r.area() IS rect::area(r), and a `mut self`
+    // The desugar itself: r.area() IS rect::area(r), and a `reference self`
     // method mutates the receiver exactly as the qualified call does.
     let r: rect = { w = 3, h = 4 };
     println(f"r.area() = {r.area()}");                 // 12
@@ -154,16 +154,16 @@ fn main() -> int32 {
     // An rvalue receiver evaluates once into a hidden CONST local, so a
     // const-self method on a temporary is fine...
     println(f"mk(2, 5).area() = {mk(2, 5).area()}");   // 10
-    // ...but a mut-self method on one is the desugared call's own error --
-    // `mk(2, 5).scale(3)` is "cannot pass a read-only const rect as a mut
+    // ...but a reference-self method on one is the desugared call's own error --
+    // `mk(2, 5).scale(3)` is "cannot pass a read-only const rect as a reference
     // argument": the mutation would vanish with the temporary. A
-    // mut-RETURNING receiver re-lends its lvalue instead, so this chain
+    // reference-RETURNING receiver re-lends its lvalue instead, so this chain
     // writes r2's own storage:
     let r2: rect = { w = 1, h = 1 };
     r2.itself().grow(4);
     println(f"re-lent chain: {r2.w} x {r2.h}");      // 5 x 5
 
-    // A mut-returning dot call is an lvalue: assignable, compound-
+    // A reference-returning dot call is an lvalue: assignable, compound-
     // assignable, and chainable as a store target.
     let l: list4;
     l.fill(0);
@@ -215,7 +215,7 @@ fn main() -> int32 {
 // method_partial_specialization.mc for the ranking a dot call inherits
 // unchanged; method_alias.mc for the qualifier chase behind alias and
 // builtin receivers; constructors.mc for `S(args)`, the head-side sibling
-// of this call-side sugar; functions/mut_returns.mc for the `-> mut`
+// of this call-side sugar; functions/mut_returns.mc for the `-> &`
 // formation and re-lending rules the lvalue dot calls ride on;
 // method_inheritance.mc for a dot call resolving over a base's family
 // through `extends`; systems/char_methods.mc for the std/char family

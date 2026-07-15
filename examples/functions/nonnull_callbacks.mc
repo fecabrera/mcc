@@ -90,5 +90,5 @@ fn main() -> int32 {
 // calls; function_pointers.mc for the plain fn(...) types, callbacks, and
 // dispatch tables the contract rides on; systems/extern_nonnull.mc for the
 // graded posture that direct extern calls keep; mut_callbacks.mc for the
-// convention-carrying sibling, fn(mut T) / fn(const T) types, where nothing
+// convention-carrying sibling, fn(&T) / fn(const T) types, where nothing
 // converts and no `as` hatch exists.

@@ -28,7 +28,7 @@ struct point<T> {
 
 // The diagonal constructor. On pointf below it is INHERITED, rebased to a
 // concrete (float64, float64) member of pointf's own family.
-fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+fn point<T>::constructor(self: &point<T>, x: T, y: T) {
     println("  [diagonal]   point<T>::constructor");
     self.x = x;
     self.y = y;
@@ -38,11 +38,11 @@ fn point<T>::sum(const self: point<T>) -> T {
     return self.x + self.y;
 }
 
-// A mut-self method: a const or mut receiver lends the base prefix IN
+// A reference-self method: a const or reference receiver lends the base prefix IN
 // PLACE, so on a derived receiver these stores land in the derived value's
 // leading fields. (A by-value `self: point<T>` receiver would prefix-copy
 // instead, the same slicing the `as` value upcast performs.)
-fn point<T>::translate(mut self: point<T>, dx: T, dy: T) {
+fn point<T>::translate(self: &point<T>, dx: T, dy: T) {
     self.x += dx;
     self.y += dy;
 }
@@ -58,7 +58,7 @@ struct pointf extends point<float64> {}
 
 // A derived CONVERTING constructor: a different signature simply OVERLOADS
 // the merged family (there is no C++-style name hiding).
-fn pointf::constructor<U>(mut self: pointf, x: U, y: U) {
+fn pointf::constructor<U>(self: &pointf, x: U, y: U) {
     println("  [converting] pointf::constructor<U>");
     self.x = x as float64;
     self.y = y as float64;
@@ -76,7 +76,7 @@ struct point3f extends pointf {
     z: float64 = -1.0;    // field default; watch the inherited ctor keep it
 }
 
-fn point3f::constructor(mut self: point3f, x: float64, y: float64, z: float64) {
+fn point3f::constructor(self: &point3f, x: float64, y: float64, z: float64) {
     // The receiver position upcasts, and ONLY the receiver (a derived value
     // in any other slot still needs an explicit `as`), so a derived
     // constructor CHAINS by calling a base's directly, then fills its own.
@@ -104,7 +104,7 @@ fn main() -> int32 {
     // rebased at float64, exactly as if pointf had declared it.
     println(f"p.sum() = {p.sum():.2f}");                     // 2.00
 
-    // An inherited mut-self method writes through: the receiver lends its
+    // An inherited reference-self method writes through: the receiver lends its
     // base prefix in place, so the stores land in p's own leading fields.
     p.translate(2.0, 3.0);
     println(f"translated: ({p.x:.2f}, {p.y:.2f})");        // 3.00, 4.00

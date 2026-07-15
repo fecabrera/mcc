@@ -125,7 +125,7 @@ def test_write_to_non_mut_bare_accessor_is_rejected():
     # exactly as a non-mut-returning call target would.
     with pytest.raises(
         LangError,
-        match=r"the call to 'box::at' does not return mut",
+        match=r"the call to 'box::at' does not return a reference",
     ):
         compile_ir(
             """
@@ -437,7 +437,7 @@ def test_accessor_returning_void_is_rejected():
 def test_get_returning_mut_is_rejected():
     with pytest.raises(
         LangError,
-        match=r'an @accessor\("get"\) method cannot return mut',
+        match=r'an @accessor\("get"\) method cannot return a reference',
     ):
         compile_ir(
             """

@@ -10,7 +10,7 @@ import "std/dict";
 
 fn main() -> int32 {
     // A growable list (lib/std/list.mc) implements list_it / list_next. The
-    // container functions take const/mut receivers, so a local passes
+    // container functions take const/reference receivers, so a local passes
     // directly: no & needed. (A list<T>* still works via pointer decay; see
     // examples/functions/pointer_decay.mc.)
     let nums = list<int32>(4);           // ctor-sugar `let`: auto-defers cleanup

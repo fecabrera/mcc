@@ -40,7 +40,7 @@ struct set<K, V> {
     capacity: uint64;                  // total allocated slots
 }
 
-fn set<K, V>::constructor(mut self: set<K, V>) {
+fn set<K, V>::constructor(self: &set<K, V>) {
     set<K, V>::constructor(self, DEFAULT_SET_CAPACITY);
 }
 
@@ -50,7 +50,7 @@ fn set<K, V>::constructor(mut self: set<K, V>) {
  * @param self:     set to initialise
  * @param capacity: initial slot count; must be > 0
  */
-fn set<K, V>::constructor(mut self: set<K, V>, capacity: uint64) {
+fn set<K, V>::constructor(self: &set<K, V>, capacity: uint64) {
     self.entries = alloc<struct set_entry<K, V>>(capacity);
     self.length = 0;
     self.capacity = capacity;
@@ -65,7 +65,7 @@ fn set<K, V>::constructor(mut self: set<K, V>, capacity: uint64) {
  *
  * @param self: set to destroy
  */
-fn set<K, V>::destructor(mut self: set<K, V>) {
+fn set<K, V>::destructor(self: &set<K, V>) {
     dealloc(self.entries);
 
     self.entries = null;
@@ -81,7 +81,7 @@ fn set<K, V>::destructor(mut self: set<K, V>) {
  * @param key:   key to insert or update
  * @param value: value to associate with key
  */
-fn set<K, V>::set(mut self: set<K, V>, key: K, value: V) {
+fn set<K, V>::set(self: &set<K, V>, key: K, value: V) {
     if (self.length * 10 >= self.capacity * 7)
         self.grow();
 
@@ -120,7 +120,7 @@ fn set<K, V>::set(mut self: set<K, V>, key: K, value: V) {
  *
  * @return true if key was found, false otherwise
  */
-fn set<K, V>::get(const self: set<K, V>, key: K, mut out: V) -> bool {
+fn set<K, V>::get(const self: set<K, V>, key: K, out: &V) -> bool {
     let slot = hash(key) % self.capacity;
 
     while (self.entries![slot].state != set_entry_state::EMPTY) {
@@ -142,7 +142,7 @@ fn set<K, V>::get(const self: set<K, V>, key: K, mut out: V) -> bool {
  * @param self: set to remove from
  * @param key:  key to remove
  */
-fn set<K, V>::remove(mut self: set<K, V>, key: K) {
+fn set<K, V>::remove(self: &set<K, V>, key: K) {
     let slot = hash(key) % self.capacity;
 
     while (self.entries![slot].state != set_entry_state::EMPTY) {
@@ -165,7 +165,7 @@ fn set<K, V>::remove(mut self: set<K, V>, key: K) {
  * @param self: set to grow
  */
 @private
-fn set<K, V>::grow(mut self: set<K, V>) {
+fn set<K, V>::grow(self: &set<K, V>) {
     let old_capacity = self.capacity;
     let old_entries = self.entries!;
 

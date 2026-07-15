@@ -1,7 +1,7 @@
 // Passing and returning a `struct` BY VALUE across the `@extern` C boundary.
 //
 // mcc's own calls lay a struct out whole and hand it over as an LLVM aggregate
-// (with `const`/`mut` parameters travelling by a hidden reference). That is
+// (with `const`/`&` parameters travelling by a hidden reference). That is
 // self-consistent, but it is NOT how a C compiler passes a struct: the
 // platform ABI classifies each aggregate into registers, or spills it to
 // memory, by precise size/shape rules. So at an `@extern` call -- and only

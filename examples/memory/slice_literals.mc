@@ -48,7 +48,7 @@ fn main() -> int32 {
 
     // ...and the `as` is now optional at an argument: a bare literal adapts to
     // the parameter's slice type directly, borrowing into this frame for the
-    // call. A plain (non-mut) slice parameter is fine -- the backing array is
+    // call. A plain (non-reference) slice parameter is fine -- the backing array is
     // fresh writable storage -- so uniform-allow lets the literal in.
     println(f"bare arg: {sum([1, 2, 3, 4])}");                     // 10
 

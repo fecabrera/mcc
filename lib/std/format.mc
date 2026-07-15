@@ -59,7 +59,7 @@ enum float_fmt_state {
  * @param value:    unused; only its type is rendered
  * @param modifier: ignored
  */
-fn format<T>(mut str: string, value: T, const modifier: slice<char>) {
+fn format<T>(str: &string, value: T, const modifier: slice<char>) {
     str.push('<');
     str.append(typename(T)!);
     str.push('>');
@@ -79,7 +79,7 @@ fn format<T>(mut str: string, value: T, const modifier: slice<char>) {
  *                  letter renders signed decimal
  */
 @inline
-fn format<T: int32 | int16 | int8>(mut str: string, value: T, const modifier: slice<char>) {
+fn format<T: int32 | int16 | int8>(str: &string, value: T, const modifier: slice<char>) {
     format(str, value as int64, modifier);
 }
 
@@ -100,7 +100,7 @@ fn format<T: int32 | int16 | int8>(mut str: string, value: T, const modifier: sl
  * @param modifier: `[0][width][x|X|b|p]` (see _format below); no base
  *                  letter renders signed decimal
  */
-fn format(mut str: string, value: int64, const modifier: slice<char>) {
+fn format(str: &string, value: int64, const modifier: slice<char>) {
     let neg = false;
     let num = value as uint64;
     if (value < 0) {
@@ -122,7 +122,7 @@ fn format(mut str: string, value: int64, const modifier: slice<char>) {
  *                  letter renders unsigned decimal
  */
 @inline
-fn format<T: uint32 | uint16 | uint8>(mut str: string, value: T, const modifier: slice<char>) {
+fn format<T: uint32 | uint16 | uint8>(str: &string, value: T, const modifier: slice<char>) {
     format(str, value as uint64, modifier);
 }
 
@@ -136,7 +136,7 @@ fn format<T: uint32 | uint16 | uint8>(mut str: string, value: T, const modifier:
  *                  letter renders decimal
  */
 @inline
-fn format(mut str: string, value: uint64, const modifier: slice<char>) {
+fn format(str: &string, value: uint64, const modifier: slice<char>) {
     _format(str, value, modifier, false);
 }
 
@@ -163,7 +163,7 @@ fn format(mut str: string, value: uint64, const modifier: slice<char>) {
  * @param neg:      whether to render a leading '-' before the magnitude
  */
 @private
-fn _format(mut str: string, value: uint64, const modifier: slice<char>, neg: bool) {
+fn _format(str: &string, value: uint64, const modifier: slice<char>, neg: bool) {
     let base: uint64 = 10;
     let pointer = false;
     let mayus = false;
@@ -270,7 +270,7 @@ fn _format(mut str: string, value: uint64, const modifier: slice<char>, neg: boo
  * @param modifier: `[[N].M]f`, as above; `""` renders the six-decimal
  *                  default
  */
-fn format(mut str: string, value: float64, const modifier: slice<char>) {
+fn format(str: &string, value: float64, const modifier: slice<char>) {
     let width: int32 = 0;
     let precision: int32 = 6;
     let state = float_fmt_state::LENGTH;
@@ -313,7 +313,7 @@ fn format(mut str: string, value: float64, const modifier: slice<char>) {
  * @param modifier: "y" renders y/n, "yes" renders yes/no; anything else
  *                  renders true/false
  */
-fn format(mut str: string, value: bool, const modifier: slice<char>) {
+fn format(str: &string, value: bool, const modifier: slice<char>) {
     if (modifier.equals("y"))
         str.append(value ? "y" : "n");
     else if (modifier.equals("yes"))
@@ -336,7 +336,7 @@ fn format(mut str: string, value: bool, const modifier: slice<char>) {
  * @param modifier: applied to every element (e.g. "x" renders each
  *                  integer as hex)
  */
-fn format<T>(mut str: string, const value: slice<T>, const modifier: slice<char>) {
+fn format<T>(str: &string, const value: slice<T>, const modifier: slice<char>) {
     str.push('[');
     for item in enumerate(value) {
         if (item.index > 0) str.append(", ");
@@ -359,7 +359,7 @@ fn format<T>(mut str: string, const value: slice<T>, const modifier: slice<char>
  * @param modifier: `[N][s][N]`, as above; `""` appends unpadded
  */
 @inline
-fn format(mut str: string, const value: slice<const char>, const modifier: slice<char>) {
+fn format(str: &string, const value: slice<const char>, const modifier: slice<char>) {
     let state = str_fmt_state::LPADDING;
     let l_pad: uint64 = 0;
     let r_pad: uint64 = 0;
@@ -421,7 +421,7 @@ fn format(mut str: string, const value: slice<const char>, const modifier: slice
  * @param modifier: `[N][s][N]` (see the string-slice member above)
  */
 @inline
-fn format(mut str: string, const value: string, const modifier: slice<char>) {
+fn format(str: &string, const value: string, const modifier: slice<char>) {
     format(str, value as slice<const char>, modifier);
 }
 
@@ -437,7 +437,7 @@ fn format(mut str: string, const value: string, const modifier: slice<char>) {
  * @param modifier: `[N][s][N]` (see the string-slice member above)
  */
 @inline
-fn format(mut str: string, value: char*, const modifier: slice<char>) {
+fn format(str: &string, value: char*, const modifier: slice<char>) {
     if (value == null) {
         str.append("(null)");
         return;
@@ -461,7 +461,7 @@ fn format(mut str: string, value: char*, const modifier: slice<char>) {
  *                  null (asserted with the `!` hatch, undefined if one is)
  * @param modifier: ignored
  */
-fn format(mut str: string, const value: slice<char*>, const modifier: slice<char>) {
+fn format(str: &string, const value: slice<char*>, const modifier: slice<char>) {
     str.push('[');
     for item in enumerate(value) {
         if (item.index > 0) str.append(", ");
@@ -480,6 +480,6 @@ fn format(mut str: string, const value: slice<char*>, const modifier: slice<char
  * @param modifier: ignored
  */
 @inline
-fn format(mut str: string, value: char, const modifier: slice<char>) {
+fn format(str: &string, value: char, const modifier: slice<char>) {
     str.push(value);
 }

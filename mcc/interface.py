@@ -340,18 +340,17 @@ class InterfaceWriter:
             f"{'@nonnull ' if pname in func.nonnull_params else ''}"
             f"{'@format ' if pname in func.format_params else ''}"
             f"{'const ' if pname in func.const_params else ''}"
-            f"{'mut ' if pname in func.mut_params else ''}"
-            f"{pname}: {ptype}"
+            f"{pname}: {'&' if pname in func.mut_params else ''}{ptype}"
             for pname, ptype in func.params
         ]
         if func.variadic:
             params.append("...")
-        # `-> mut` rides along: the importer's call sites must be lvalue
+        # `-> &T` rides along: the importer's call sites must be lvalue
         # expressions with a pointer-typed return, and the stub must keep
         # pairing with its definition (the pair check rejects a mismatch).
         # `-> own` likewise: the importer's lets must adopt the handed-over
         # cleanup obligation (the two flags are mutually exclusive).
-        mut = "mut " if func.mut_return else ""
+        mut = "&" if func.mut_return else ""
         own = "own " if func.own_return else ""
         ret = "" if _is_void(func.ret_type) else f" -> {mut}{own}{func.ret_type}"
         head = "@private fn" if func.private else "fn"

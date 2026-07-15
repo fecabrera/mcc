@@ -4130,6 +4130,10 @@
             "named": true
           },
           {
+            "type": "reference_type",
+            "named": true
+          },
+          {
             "type": "struct",
             "named": false
           },
@@ -4207,6 +4211,10 @@
           },
           {
             "type": "pointer_type",
+            "named": true
+          },
+          {
+            "type": "reference_type",
             "named": true
           },
           {
@@ -4288,6 +4296,10 @@
         },
         {
           "type": "pointer_type",
+          "named": true
+        },
+        {
+          "type": "reference_type",
           "named": true
         },
         {
@@ -6101,6 +6113,10 @@
           "named": true
         },
         {
+          "type": "reference_type",
+          "named": true
+        },
+        {
           "type": "type_arguments",
           "named": true
         }
@@ -6263,6 +6279,52 @@
   },
   {
     "type": "pointer_type",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "array_type",
+          "named": true
+        },
+        {
+          "type": "const_type",
+          "named": true
+        },
+        {
+          "type": "function_type",
+          "named": true
+        },
+        {
+          "type": "grouped_type",
+          "named": true
+        },
+        {
+          "type": "pointer_type",
+          "named": true
+        },
+        {
+          "type": "type_arguments",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "reference_type",
     "named": true,
     "fields": {
       "name": {

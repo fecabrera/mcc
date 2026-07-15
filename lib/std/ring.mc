@@ -12,7 +12,7 @@ struct ring<T> {
     capacity: uint64; // total allocated slots
 }
 
-fn ring<T>::constructor(mut self: ring<T>) {
+fn ring<T>::constructor(self: &ring<T>) {
     ring<T>::constructor(self, DEFAULT_RING_CAPACITY);
 }
 
@@ -22,7 +22,7 @@ fn ring<T>::constructor(mut self: ring<T>) {
  * @param self:     ring to initialise
  * @param capacity: initial slot count
  */
-fn ring<T>::constructor(mut self: ring<T>, capacity: uint64) {
+fn ring<T>::constructor(self: &ring<T>, capacity: uint64) {
     self.data = alloc<T>(capacity);
     self.head = 0;
     self.length = 0;
@@ -34,7 +34,7 @@ fn ring<T>::constructor(mut self: ring<T>, capacity: uint64) {
  *
  * @param self: ring to destroy
  */
-fn ring<T>::destructor(mut self: ring<T>) {
+fn ring<T>::destructor(self: &ring<T>) {
     dealloc(self.data);
 
     self.data = null;
@@ -49,7 +49,7 @@ fn ring<T>::destructor(mut self: ring<T>) {
  * @param self:  ring to push onto
  * @param value: value to append
  */
-fn ring<T>::push(mut self: ring<T>, value: T) {
+fn ring<T>::push(self: &ring<T>, value: T) {
     if (self.length == self.capacity)
         self.grow();
 
@@ -67,7 +67,7 @@ fn ring<T>::push(mut self: ring<T>, value: T) {
  *
  * @return the popped value
  */
-fn ring<T>::pop(mut self: ring<T>) -> T {
+fn ring<T>::pop(self: &ring<T>) -> T {
     let pos = self.head;
 
     self.head = (self.head + 1) % self.capacity;
@@ -101,7 +101,7 @@ fn ring<T>::has(const self: ring<T>, index: uint64) -> bool {
  *
  * @return the element at that position, as an assignable lvalue
  */
-fn ring<T>::at(mut self: ring<T>, index: uint64) -> mut T {
+fn ring<T>::at(self: &ring<T>, index: uint64) -> &T {
     let pos = (self.head + index) % (self.capacity);
     return self.data![pos];
 }
@@ -138,7 +138,7 @@ fn ring<T>::is_empty(const self: ring<T>) -> bool {
  * @param self: ring whose buffer to grow
  */
 @private
-fn ring<T>::grow(mut self: ring<T>) {
+fn ring<T>::grow(self: &ring<T>) {
     let new_capacity: uint64 = self.capacity * 2;
     if (new_capacity == 0)
         new_capacity = 1;

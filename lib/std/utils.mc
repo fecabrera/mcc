@@ -1,14 +1,14 @@
 /**
  * Exchanges two values in place.
  *
- * Both parameters are `mut`, so the swap happens in the caller's storage
+ * Both parameters are `&`, so the swap happens in the caller's storage
  * with no pointers at the call site: `swap(x, y);`.
  *
  * @param a: first value
  * @param b: second value
  */
 @inline
-fn swap<T>(mut a: T, mut b: T) {
+fn swap<T>(a: &T, b: &T) {
     let t = a;
     a = b;
     b = t;
@@ -23,7 +23,7 @@ fn swap<T>(mut a: T, mut b: T) {
  * @return the value dst held before the call
  */
 @inline
-fn replace<T>(mut dst: T, value: T) -> T {
+fn replace<T>(dst: &T, value: T) -> T {
     let old = dst;
     dst = value;
     return old;

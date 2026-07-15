@@ -850,7 +850,7 @@ def test_mut_result_return_needs_an_lvalue():
     # ok(...) is an rvalue, so the mut-return lvalue discipline rejects it
     # with its normal wording -- no result-specific ban needed.
     with pytest.raises(
-        LangError, match="a mut return must be formed from a mut or pointer"
+        LangError, match="a reference return must be formed from a reference or pointer"
     ):
         compile_ir(
             DECL + "fn f() -> mut result<int32, my_error> { return ok(1); }"

@@ -16,6 +16,7 @@ WARNING_CLASSES = frozenset(
         "extern-nonnull",
         "unused-result",
         "noreturn-own",
+        "deprecated-mut",
     }
 )
 

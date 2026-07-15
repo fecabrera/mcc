@@ -39,7 +39,7 @@ fn main() -> int32 {
     bytefill(buf, 0xAB as byte, 8);  // first half 0xAB, second half stays zero
 
     // The guard covers loops too. Nothing in this loop assigns to buf,
-    // shadows it, or lends it as a mut argument, so the fact survives loop
+    // shadows it, or lends it as a reference argument, so the fact survives loop
     // entry and every iteration crosses into crc32's @nonnull slot with no
     // in-body guard and no `buf!` hatch. (A loop that did touch buf would
     // drop the fact at entry: see functions/nonnull_loops.mc.)
@@ -82,5 +82,5 @@ fn main() -> int32 {
 // and the write-effect rules on which calls kill them;
 // functions/nonnull_assert.mc for the `!` assertion
 // where no guard fits; pointers.mc for alloc/dealloc; lists.mc for the
-// container APIs, whose mut/const self receivers accept a heap pointer
+// container APIs, whose &/const self receivers accept a heap pointer
 // through the same one-line guard (see functions/pointer_decay.mc).

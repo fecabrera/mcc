@@ -160,7 +160,7 @@ def test_mut_marker_is_part_of_the_template_base():
         "fn bump<T>(mut a: T) { a = a + (1 as T); }\n"
         "fn main() -> int32 { let x: int32 = 1; bump(x); return x - 2; }"
     )
-    assert 'define void @"bump<$0>(mut $0)<int32>"(' in out
+    assert 'define void @"bump<$0>(&$0)<int32>"(' in out
 
 
 def test_defaulted_type_param_is_part_of_the_template_base():

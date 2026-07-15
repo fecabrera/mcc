@@ -24,7 +24,7 @@ fn first(@nonnull p: int32*) -> int32 {
 // The positive guard, on a field instead of a bare name. `if (b.data != null)`
 // proves b.data inside the then branch, and the proven projection crosses the
 // @nonnull slot directly. Any local base works: a plain local, a value
-// parameter like this one, or a mut/@nonnull parameter.
+// parameter like this one, or a reference/@nonnull parameter.
 fn peek(b: struct buffer) -> int32 {
     if (b.data != null) {
         return first(b.data); // ok: the guarded field satisfies @nonnull
@@ -54,7 +54,7 @@ fn read(b: struct buffer*) -> int32 {
 // "Write-free" is strict and transitive. A function is tainted by any
 // through-memory store (`*p = v`, `a[i] = v`, `s.f = v`, or their compound
 // forms; even a store to the function's own local struct counts), by
-// assigning a mut parameter or a global, by anything opaque (@asm, a call
+// assigning a reference parameter or a global, by anything opaque (@asm, a call
 // through a function-pointer value, va_start, a bodyless @extern callee, a
 // `for ... in` protocol loop; the builtin range/enumerate counting loops are
 // fine), and by calling any name with a tainted same-name candidate. tally
@@ -86,7 +86,7 @@ fn audit(b: struct buffer*) -> int32 {
 // wholesale, so `first(b->data)` inside this loop would not compile even
 // though first is write-free. (A projection fact also still dies at the
 // caller's own through-memory stores and when the base is reassigned,
-// shadowed, or lent as a mut argument; only the call kill was refined.)
+// shadowed, or lent as a reference argument; only the call kill was refined.)
 fn sum(b: struct buffer*) -> int32 {
     if (b == null or b->data == null) {
         return -1;

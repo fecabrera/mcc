@@ -8,7 +8,7 @@ import "std/io";
 // resolution, privacy, and every diagnostic are the family call's own
 // (positions count the hidden receiver, so a bad first written argument
 // reports "argument 2"). `let p = S(args);` binds the constructed slot
-// directly, no temporary and no copy, so a `mut self` constructor writes
+// directly, no temporary and no copy, so a `reference self` constructor writes
 // p's own storage. (For a type that declares a `destructor` family, that
 // same constructor-sugar let additionally schedules the automatic cleanup
 // call, `defer S::destructor(p);` -- see destructors.mc; none of the
@@ -37,7 +37,7 @@ struct counter {
     step: int32 = 1;    // field default; already in place when the ctor runs
 }
 
-fn counter::constructor(mut self: counter, n: int32) {
+fn counter::constructor(self: &counter, n: int32) {
     self.n = n;
     // self.step is untouched: the slot default-initializes exactly as a
     // bare `let c: counter;` does, so the constructor starts from step = 1
@@ -54,7 +54,7 @@ struct point<T> {
 // The diagonal constructor: both arguments are the element type. Each body
 // prints a marker so the runtime output proves which overload resolution
 // picked.
-fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+fn point<T>::constructor(self: &point<T>, x: T, y: T) {
     println("  [diagonal]   point<T>::constructor");
     self.x = x;
     self.y = y;
@@ -69,7 +69,7 @@ fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
 // are exactly what makes this chain expressible. The pinned call ranks the
 // family as usual: both arguments are T, so the diagonal wins over
 // re-entering this member, and BOTH markers print when it runs.
-fn point<T>::constructor<U>(mut self: point<T>, x: U, y: U) {
+fn point<T>::constructor<U>(self: &point<T>, x: U, y: U) {
     println("  [converting] point<T>::constructor<U>, chaining at T");
     point<T>::constructor(self, x as T, y as T);
 }
@@ -82,7 +82,7 @@ struct box<T = int64> {
     v: T;
 }
 
-fn box<T>::constructor(mut self: box<T>, v: T) {
+fn box<T>::constructor(self: &box<T>, v: T) {
     self.v = v;
 }
 
@@ -91,7 +91,7 @@ fn box<T>::constructor(mut self: box<T>, v: T) {
 // Builtins included: this declaration is what makes `char(65)` a call.
 // Without it the head is the has-no-constructor error above; the sugar
 // never falls back to a cast.
-fn char::constructor(mut self: char, code: int32) {
+fn char::constructor(self: &char, code: int32) {
     self = code as char;
 }
 
@@ -110,7 +110,7 @@ struct token {
     id: int32 = -1;
 }
 
-fn token::constructor(mut self: token) {
+fn token::constructor(self: &token) {
     println("  [empty]      token::constructor");
     self.id = 7;
 }
@@ -127,7 +127,7 @@ fn mk(v: float64) -> point<float64> {
 
 fn main() -> int32 {
     // A bare non-generic head. `let` binds the constructed slot directly:
-    // the constructor's `mut self` wrote c's own storage.
+    // the constructor's `reference self` wrote c's own storage.
     println("counter(41):");
     let c = counter(41);
     c.n += c.step;

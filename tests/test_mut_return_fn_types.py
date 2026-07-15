@@ -33,11 +33,11 @@ BOX = (
 )
 
 MUTRET_MISMATCH = (
-    "(a mut return is passed as a pointer to the returned storage, a "
+    "(a reference return is passed as a pointer to the returned storage, a "
     "different calling convention; the types are not convertible)"
 )
 MUT_CONST_RETURN = (
-    "a return cannot be both mut and const (a mut return must be writable)"
+    "a return cannot be both a reference and const (a reference return must be writable)"
 )
 
 
@@ -56,7 +56,7 @@ def test_fn_type_mut_return_parses():
     (func,) = parse("fn f(get: fn(uint64) -> mut char) {}").functions
     get_type = func.params[0][1]
     assert get_type.ret.mut
-    assert str(get_type) == "fn(uint64) -> mut char"
+    assert str(get_type) == "fn(uint64) -> &char"
 
 
 def test_fn_type_plain_return_is_not_mut():
@@ -81,7 +81,7 @@ def test_fn_type_mut_void_return_rejected():
     with pytest.raises(
         LangError,
         match=re.escape(
-            "a function type cannot return mut void (there is no storage "
+            "a function type cannot return a reference to void (there is no storage "
             "to reference)"
         ),
     ):
@@ -163,7 +163,7 @@ def test_generic_alias_at_void_rejected_per_binding():
     # void binding is what errors (mirroring the decl side's per-instance
     # check).
     with pytest.raises(
-        LangError, match="a function type cannot return mut void"
+        LangError, match="a function type cannot return a reference to void"
     ):
         compile_ir(
             "type getter<T> = fn() -> mut T;\n"
@@ -248,7 +248,7 @@ def test_plain_fn_value_call_not_assignable():
     # A variable-held plain callee reports the named-call rejection.
     with pytest.raises(
         LangError,
-        match="the call to 'f' does not return mut, so its result is not "
+        match="the call to 'f' does not return a reference, so its result is not "
         "assignable",
     ):
         compile_ir(ZERO + "fn main() { let f = zero; f() = 2; }")
@@ -259,7 +259,7 @@ def test_plain_field_callee_not_assignable():
     with pytest.raises(
         LangError,
         match=re.escape(
-            "the call to a fn() -> int32 value does not return mut, so its "
+            "the call to a fn() -> int32 value does not return a reference, so its "
             "result is not assignable"
         ),
     ):
@@ -276,7 +276,7 @@ def test_mut_returning_fn_value_does_not_drop_to_plain():
     with pytest.raises(
         LangError,
         match=re.escape(
-            "let g: expected fn() -> int32, got fn() -> mut int32 "
+            "let g: expected fn() -> int32, got fn() -> &int32 "
             + MUTRET_MISMATCH
         ),
     ):
@@ -289,7 +289,7 @@ def test_plain_fn_value_does_not_lift_to_mut_return():
     with pytest.raises(
         LangError,
         match=re.escape(
-            "let g: expected fn() -> mut int32, got fn() -> int32 "
+            "let g: expected fn() -> &int32, got fn() -> int32 "
             + MUTRET_MISMATCH
         ),
     ):
@@ -301,7 +301,7 @@ def test_argument_position_reports_the_same_mismatch():
         LangError,
         match=re.escape(
             "argument 1 of 'take': expected fn() -> int32, "
-            "got fn() -> mut int32 " + MUTRET_MISMATCH
+            "got fn() -> &int32 " + MUTRET_MISMATCH
         ),
     ):
         compile_ir(
@@ -315,7 +315,7 @@ def test_static_initializer_reports_the_same_mismatch():
         LangError,
         match=re.escape(
             "@static initializer: expected fn() -> int32, "
-            "got fn() -> mut int32 " + MUTRET_MISMATCH
+            "got fn() -> &int32 " + MUTRET_MISMATCH
         ),
     ):
         compile_ir(
@@ -328,7 +328,7 @@ def test_ternary_mix_of_return_conventions_rejected():
     with pytest.raises(
         LangError,
         match=re.escape(
-            "ternary branch: expected fn() -> mut int32, "
+            "ternary branch: expected fn() -> &int32, "
             "got fn() -> int32 " + MUTRET_MISMATCH
         ),
     ):
@@ -374,7 +374,7 @@ def test_as_dropping_mut_return_rejected():
     with pytest.raises(
         LangError,
         match=re.escape(
-            "cannot cast fn() -> mut int32 to fn() -> int32: a mut return "
+            "cannot cast fn() -> &int32 to fn() -> int32: a reference return "
             "is passed as a pointer to the returned storage, a different "
             "calling convention; the types are not convertible"
         ),
@@ -388,7 +388,7 @@ def test_as_adding_mut_return_rejected():
     with pytest.raises(
         LangError,
         match=re.escape(
-            "cannot cast fn() -> int32 to fn() -> mut int32: a mut return "
+            "cannot cast fn() -> int32 to fn() -> &int32: a reference return "
             "is passed as a pointer to the returned storage, a different "
             "calling convention; the types are not convertible"
         ),
@@ -468,7 +468,7 @@ def test_chain_through_plain_fn_value_rejected():
     with pytest.raises(
         LangError,
         match="the chain passes through a call to 'g' that does not "
-        "return mut",
+        "return a reference",
     ):
         compile_ir(
             "struct box { v: int32; }\n"
@@ -500,7 +500,7 @@ def test_chain_through_plain_field_held_callee_rejected():
     with pytest.raises(
         LangError,
         match="the chain passes through an indirect call that does not "
-        "return mut",
+        "return a reference",
     ):
         compile_ir(
             "struct box { v: int32; }\n"
@@ -532,7 +532,7 @@ def test_mut_return_fn_type_round_trips_through_interface():
     # (The prototype spells the struct name bare -- `struct` is an optional
     # C-habit keyword to the parser -- unlike str(TypeRef) surfaces, which
     # never had it to drop.)
-    assert "fn install(get: fn(mut buf, uint64) -> mut char, mut b: buf);" in out
+    assert "fn install(get: fn(&buf, uint64) -> &char, b: &buf);" in out
     CodeGen(Parser(tokenize(out)).parse_program(), "test").generate()
 
 
@@ -541,7 +541,7 @@ def test_fn_type_in_return_position_round_trips():
         COUNTER + "fn pick() -> fn() -> mut int32 { return counter_ref; }\n"
     )
     out = _iface(src)
-    assert "fn pick() -> fn() -> mut int32;" in out
+    assert "fn pick() -> fn() -> &int32;" in out
     CodeGen(Parser(tokenize(out)).parse_program(), "test").generate()
 
 
@@ -560,5 +560,5 @@ def test_mut_return_fn_type_monomorphizes_separately():
         "    return 0;\n"
         "}"
     )
-    assert "id<$0>($0)<fn() -> mut int32>" in ir_text
+    assert "id<$0>($0)<fn() -> &int32>" in ir_text
     assert "id<$0>($0)<fn() -> int32>" in ir_text

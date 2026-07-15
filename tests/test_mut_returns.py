@@ -34,7 +34,7 @@ SETUP = (
     "    let b = struct buf { data = &bytes[0], length = 3 };\n"
 )
 
-FORMATION = "a mut return must be formed from a mut or pointer parameter"
+FORMATION = "a reference return must be formed from a reference or pointer parameter"
 
 
 def iface(source: str) -> str:
@@ -68,14 +68,14 @@ def test_bodyless_prototype_carries_mut_return():
 
 def test_mut_return_rejected_on_extern():
     with pytest.raises(
-        LangError, match="a mut return is not allowed on @extern functions"
+        LangError, match="a reference return is not allowed on @extern functions"
     ):
         parse("@extern fn f(n: int32) -> mut int32;")
 
 
 def test_mut_return_rejected_on_asm():
     with pytest.raises(
-        LangError, match="a mut return is not allowed on @asm functions"
+        LangError, match="a reference return is not allowed on @asm functions"
     ):
         parse('@asm fn f(n: int32) -> mut int32 { "nop" }')
 
@@ -86,19 +86,19 @@ def test_fn_pointer_type_spells_mut_return():
     program = parse("fn main() { let g: fn(int32) -> mut int32; }")
     (let,) = program.functions[0].body
     assert let.type_name.ret.mut
-    assert str(let.type_name) == "fn(int32) -> mut int32"
+    assert str(let.type_name) == "fn(int32) -> &int32"
 
 
 # ------------------------------------------------------------ declaration bans
 
 
 def test_mut_void_return_rejected():
-    with pytest.raises(LangError, match="cannot return mut void"):
+    with pytest.raises(LangError, match="cannot return a reference to void"):
         compile_ir("fn f() -> mut void { }")
 
 
 def test_main_cannot_return_mut():
-    with pytest.raises(LangError, match="'main' cannot return mut"):
+    with pytest.raises(LangError, match="'main' cannot return a reference"):
         compile_ir("fn main() -> mut int32 { return 0; }")
 
 
@@ -327,7 +327,7 @@ def test_null_root_rejected():
 def test_plain_call_in_chain_rejected():
     # A plain T*-returning call vouches for nothing.
     with pytest.raises(
-        LangError, match="a call to 'raw' that does not return mut"
+        LangError, match="a call to 'raw' that does not return a reference"
     ):
         compile_ir(
             "@static let g: int32 = 0;\n"
@@ -377,7 +377,7 @@ def test_chain_through_static_mut_return_call():
 def test_chain_through_shadowed_name_rejected():
     # A local function pointer shadows the name: an indirect call, which a
     # plain fn(...) type can never mark as returning mut.
-    with pytest.raises(LangError, match="does not return mut"):
+    with pytest.raises(LangError, match="does not return a reference"):
         compile_ir(
             "struct pt { x: int32; }\n"
             "fn make() -> int32 { return 0; }\n"
@@ -404,7 +404,7 @@ def test_shadowing_let_drops_param_root():
 def test_exact_type_return_required():
     # The caller writes through the reference: nothing adapts or widens.
     with pytest.raises(
-        LangError, match="mut return: expected a int32 lvalue, got int64"
+        LangError, match="reference return: expected a int32 lvalue, got int64"
     ):
         compile_ir(
             "fn f(mut x: int64) -> mut int32 { return x; }\n"
@@ -414,7 +414,7 @@ def test_exact_type_return_required():
 
 def test_volatile_storage_rejected_as_mut_return():
     with pytest.raises(
-        LangError, match="cannot pass @volatile storage as a mut return"
+        LangError, match="cannot pass @volatile storage as a reference return"
     ):
         compile_ir(
             "@volatile struct reg { bits: int32; }\n"
@@ -425,7 +425,7 @@ def test_volatile_storage_rejected_as_mut_return():
 
 def test_packed_field_rejected_as_mut_return():
     with pytest.raises(
-        LangError, match="cannot pass a @packed field as a mut return"
+        LangError, match="cannot pass a @packed field as a reference return"
     ):
         compile_ir(
             "@packed struct wire { tag: char; value: int32; }\n"
@@ -607,7 +607,7 @@ def test_address_of_plain_call_rejected_too():
 def test_plain_call_not_assignable():
     with pytest.raises(
         LangError,
-        match="the call to 'f' does not return mut, so its result is not "
+        match="the call to 'f' does not return a reference, so its result is not "
         "assignable",
     ):
         compile_ir(
@@ -617,7 +617,7 @@ def test_plain_call_not_assignable():
 
 
 def test_plain_call_not_compound_assignable():
-    with pytest.raises(LangError, match="does not return mut"):
+    with pytest.raises(LangError, match="does not return a reference"):
         compile_ir(
             "fn f() -> int32 { return 1; }\n"
             "fn main() -> int32 { f() += 2; return 0; }"
@@ -625,7 +625,7 @@ def test_plain_call_not_compound_assignable():
 
 
 def test_plain_call_field_not_assignable():
-    with pytest.raises(LangError, match="does not return mut"):
+    with pytest.raises(LangError, match="does not return a reference"):
         compile_ir(
             "struct pt { x: int32; }\n"
             "fn f() -> struct pt { let p: struct pt; p.x = 0; return p; }\n"
@@ -634,7 +634,7 @@ def test_plain_call_field_not_assignable():
 
 
 def test_void_call_not_assignable():
-    with pytest.raises(LangError, match="does not return mut"):
+    with pytest.raises(LangError, match="does not return a reference"):
         compile_ir(
             "fn f() { }\n"
             "fn main() -> int32 { f() = 2; return 0; }"
@@ -753,7 +753,7 @@ def test_interface_renders_mut_return():
     out = iface(
         "fn at(mut self: char*, i: uint64) -> mut char { return self[i]; }"
     )
-    assert "fn at(mut self: char*, i: uint64) -> mut char;" in out
+    assert "fn at(self: &char*, i: uint64) -> &char;" in out
 
 
 def test_mut_return_round_trips_through_mci(tmp_path):
@@ -765,7 +765,7 @@ def test_mut_return_round_trips_through_mci(tmp_path):
     )
     out = tmp_path / "lib.mci"
     assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
-    assert "fn counter_ref() -> mut int32;" in out.read_text()
+    assert "fn counter_ref() -> &int32;" in out.read_text()
     # The consumer compiles against the stub: the call is an lvalue there
     # too. (JIT-running would need the missing object; compiling is the
     # round-trip under test, via the definition living beside the stub.)

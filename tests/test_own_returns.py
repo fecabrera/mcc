@@ -447,7 +447,7 @@ def test_own_void_is_rejected():
 
 def test_own_and_mut_do_not_combine():
     with pytest.raises(
-        LangError, match=r"a return cannot be both mut and own"
+        LangError, match=r"a return cannot be both a reference and own"
     ):
         compile_ir(
             RES

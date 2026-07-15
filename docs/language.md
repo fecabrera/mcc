@@ -84,20 +84,20 @@ not match the C function). A function with a `const` struct parameter is a
 legal function value (`let f = trace;`): its type spells the convention —
 `fn(const struct matrix) -> float64` — and is distinct from, and not
 convertible with, the by-value `fn(struct matrix) -> float64` (see
-[mut/const-carrying function types](#mutconst-carrying-function-types)).
+[&/const-carrying function types](#referenceconst-carrying-function-types)).
 
-### mut parameters
+### Reference parameters
 
-A parameter marked `mut` is the writable dual of `const`: it is passed by
-hidden reference to the caller's storage — for **every** type, scalars
-included, since that is the only way a write can reach the caller — and the
-callee's assignments land in the caller's variable. Reading it loads the
-current value (copy on read); `&` on it is rejected, so the reference can
-never outlive the call. It is the memory-safe replacement for an out-pointer
-parameter:
+A parameter whose type is `&T` — a **reference** — is the writable dual of
+`const`: it is passed by hidden reference to the caller's storage — for
+**every** type, scalars included, since that is the only way a write can
+reach the caller — and the callee's assignments land in the caller's
+variable. Reading it loads the current value (copy on read); `&` on it is
+rejected, so the reference can never outlive the call. It is the memory-safe
+replacement for an out-pointer parameter:
 
 ```c
-fn find(key: int32, mut out: int32) -> bool {   // instead of out: int32*
+fn find(key: int32, out: &int32) -> bool {   // instead of out: int32*
     out = 42;          // writes the caller's variable
     return true;
 }
@@ -112,66 +112,79 @@ fn main() -> int32 {
 The argument must be the caller's own writable storage — a variable, a field,
 an array element, or a dereference — of **exactly** the parameter's type (the
 callee writes through the reference, so nothing can adapt or widen; `int32`
-and `uint32` may share bits, but not a `mut` reference). A literal, a plain
-call result (a [`mut` return](#mut-returns) re-lends instead), a `const`
+and `uint32` may share bits, but not a `&` reference). A literal, a plain
+call result (a [`&` return](#reference-returns) re-lends instead), a `const`
 parameter, a read-only `const T` lvalue, `@volatile` storage, and a
 `@packed` field (whose alignment is not guaranteed) are all rejected.
 
-Inside the body a `mut` parameter behaves like the variable it references:
+Inside the body a `&` parameter behaves like the variable it references:
 assignment and compound assignment write through, a struct's fields project
 (`p.x = 3` writes the caller's field), and it can be **re-lent** — passed
-onward as another function's `mut` argument (recursion included), which
-forwards the reference without letting it escape. Two `mut` parameters may
+onward as another function's `&` argument (recursion included), which
+forwards the reference without letting it escape. Two `&` parameters may
 alias the same variable; as with two pointers, the last write wins.
 
-`mut` works on generic parameters (`fn swap<T>(mut a: T, mut b: T)`), with
+`&` works on generic parameters (`fn swap<T>(a: &T, b: &T)`), with
 the argument's type matching the instantiated parameter exactly. Overloads of
-one generic name may freely mix `mut` and non-`mut` positions — for example a
-`mut`-taking overload next to a pointer-taking one:
+one generic name may freely mix `&` and non-`&` positions — for example a
+`&`-taking overload next to a pointer-taking one:
 
 ```c
-fn set<T>(mut a: T) { a = 7 as T; }    // for the caller's own variable
+fn set<T>(a: &T) { a = 7 as T; }    // for the caller's own variable
 fn set<T>(p: T*)    { *p = 9 as T; }   // for storage reached by pointer
 ```
 
 The call resolves the overload in a defined order:
 
 1. **Shape** — candidates whose parameter patterns the argument types cannot
-   match are dropped, and a candidate that is `mut` at a position receiving
+   match are dropped, and a candidate that is `&` at a position receiving
    something that is not an lvalue (a literal, a call result, an `&x`, a bare
    function name) is dropped with them.
 2. **Specificity** — among the viable candidates the most specific parameter
    patterns win (`T*` beats `T`, concrete types beat both), exactly as for
-   overloads without `mut`.
+   overloads without `&`.
 3. A remaining tie is an error, and lvalue-ness never breaks it: the
-   same-shape pair `fn f<T>(mut a: T)` / `fn f<T>(a: T)` is ambiguous for an
-   lvalue argument (an rvalue picks the non-`mut` one, the only viable
+   same-shape pair `fn f<T>(a: &T)` / `fn f<T>(a: T)` is ambiguous for an
+   lvalue argument (an rvalue picks the non-`&` one, the only viable
    candidate).
 
 The argument is still evaluated exactly once, before the winner is known: at
-a position any candidate marks `mut`, an lvalue's address is formed up front
+a position any candidate marks `&`, an lvalue's address is formed up front
 and its value read through that address, so the callee's writes land in the
-caller's storage when a `mut` overload wins, and the single read keeps the
+caller's storage when a `&` overload wins, and the single read keeps the
 storage's semantics (a `@volatile` lvalue gets a volatile load) when a
-non-`mut` one does. The writability rules above are judged against the
+non-`&` one does. The writability rules above are judged against the
 **chosen** overload only: a `const` parameter, a read-only `const T` lvalue,
-`@volatile` storage, or a `@packed` field is a fine argument when a non-`mut`
-overload wins, and remains an error when a `mut` one does.
+`@volatile` storage, or a `@packed` field is a fine argument when a non-`&`
+overload wins, and remains an error when a `&` one does.
 
-Like `const`, `mut` is not allowed on `@extern` parameters (the
-hidden-reference ABI would not match the C function). A function with a `mut`
+Like `const`, `&` is not allowed on `@extern` parameters (the
+hidden-reference ABI would not match the C function). A function with a `&`
 parameter is a legal function value: its type spells the convention —
-`fn(mut int32) -> bool` — and calls through the value enforce the same
+`fn(&int32) -> bool` — and calls through the value enforce the same
 writable-lvalue rules as a direct call (see
-[mut/const-carrying function types](#mutconst-carrying-function-types)).
+[&/const-carrying function types](#referenceconst-carrying-function-types)).
 
-See [examples/functions/mut_params.mc](../examples/functions/mut_params.mc)
-and, for overloads mixing `mut`,
-[examples/functions/mut_overloads.mc](../examples/functions/mut_overloads.mc).
+`&` is a reference type only in a parameter- or return-type slot; a stray
+`&` anywhere else — `let r: &T`, a `list<&T>` element, an `x as &T` cast, a
+struct field — is a compile error (`a '&' reference type is only allowed in
+a parameter or return type`). There are no reference locals, and `&` stays
+unambiguously the address-of operator in expressions.
 
-### mut returns
+> **Deprecated spelling.** The reference marker used to be written as a
+> `mut` binder before the name — `fn find(key: int32, mut out: int32)`. That
+> form still compiles and means exactly the same thing, but is deprecated in
+> favor of `&T` in the type slot. It warns under the opt-in `-Wdeprecated-mut`
+> class (included in `-Wall`); the `mut` keyword will be removed in a later
+> release.
 
-A function declared `-> mut T` returns an **lvalue**: a reference to
+See [examples/functions/reference_params.mc](../examples/functions/reference_params.mc)
+and, for overloads mixing `&`,
+[examples/functions/reference_overloads.mc](../examples/functions/reference_overloads.mc).
+
+### Reference returns
+
+A function declared `-> &T` returns an **lvalue**: a reference to
 caller-reachable storage of type `T`, rather than a copy of the value. The
 call expression is then usable on both sides of `=` — it is the accessor
 shape (`_at`-style element access without handing out a raw `T*`):
@@ -179,11 +192,11 @@ shape (`_at`-style element access without handing out a raw `T*`):
 ```c
 struct buf { data: char*; length: uint64; }
 
-fn buf_at(mut self: struct buf, i: uint64) -> mut char {
-    return self.data[i];       // formed from the mut receiver: legal
+fn buf_at(self: &struct buf, i: uint64) -> &char {
+    return self.data[i];       // formed from the receiver: &legal
 }
 
-fn bump(mut c: char) { c += 1; }
+fn bump(c: &char) { c += 1; }
 
 fn main() -> int32 {
     let bytes: char[4];
@@ -191,26 +204,26 @@ fn main() -> int32 {
     let b = struct buf { data = &bytes[0], length = 3 };
     buf_at(b, 0) = '/';         // assignment through the returned lvalue
     buf_at(b, 1) += 1;          // compound assignment (addressed once)
-    bump(buf_at(b, 2));         // re-lent as a mut argument
+    bump(buf_at(b, 2));         // re-lent as a reference argument
     let c = buf_at(b, 0);       // value context: loads the current value
     return c == '/' ? 0 : 1;
 }
 ```
 
-There are no reference locals: a `mut` return is **consumed at the call
+There are no reference locals: a `&` return is **consumed at the call
 expression**. In value position it loads; on the lvalue side it is an
 assignment or compound-assignment target, a base for projections
-(`f(s).field = v`, and `f(s)[i] = v` through a `-> mut T*` result), and
-re-lendable as another call's `mut` argument on both call paths (concrete
+(`f(s).field = v`, and `f(s)[i] = v` through a `-> &T*` result), and
+re-lendable as another call's `&` argument on both call paths (concrete
 and generic/overloaded). `&f(...)` is rejected — the reference must not
-outlive the full expression, the same non-escape guarantee a `mut`
+outlive the full expression, the same non-escape guarantee a `&`
 parameter carries.
 
 **The formation rule.** Without a lifetime system, what keeps the reference
 from dangling is a strict, checkable rule at the callee's `return`: the
-returned lvalue may only be formed from a **`mut` or pointer parameter or a
+returned lvalue may only be formed from a **`&` or pointer parameter or a
 global**, traced through member accesses (`.`/`->`), elements,
-dereferences, and calls that themselves return `mut` (composition:
+dereferences, and calls that themselves return `&` (composition:
 `return buf_at(self, 0);` is fine). Everything rooted in the call's own
 frame is rejected:
 
@@ -221,33 +234,33 @@ frame is rejected:
 - the **pointer parameter itself**: `return p` would reference the
   parameter's own frame slot and is rejected, while `return *p`,
   `return p[i]`, and `return p->f` reach the storage the caller handed in
-  and are legal. A `mut` parameter *is* legal as the returned lvalue itself
+  and are legal. A `&` parameter *is* legal as the returned lvalue itself
   (`return x;`) — it already names the caller's storage.
 
-Casts, arithmetic, `null`, and calls without a `mut` return are never part
-of a legal chain. The storage rules `mut` arguments obey apply at the
+Casts, arithmetic, `null`, and calls without a `&` return are never part
+of a legal chain. The storage rules `&` arguments obey apply at the
 `return` too: `@volatile` storage, `@packed` fields, and read-only
 `const T` lvalues are rejected, and the lvalue's type must match the
 declared return **exactly** (the caller writes through the reference, so
 nothing adapts or widens).
 
-`-> mut` works on generics (`fn pick<T>(mut a: T, mut b: T, f: bool) ->
-mut T`), with the formation and void rules checked per instance. It is
+`-> &` works on generics (`fn pick<T>(a: &T, b: &T, f: bool) ->
+&T`), with the formation and void rules checked per instance. It is
 rejected on `@extern` and `@asm` functions (the pointer-typed return would
 change the C calling convention), on `main`, on `void` (there is no
-storage to reference), and composed with `const` (a mut return must be
-writable, so `-> mut const T` is banned at parse time); overloads
-differing only in `-> mut` collide as duplicates, like any
-return-type-only pair. A `-> mut` function is a legal [function
-value](#function-pointers): the `fn(...) -> mut T` type spells the return
+storage to reference), and composed with `const` (a reference return must be
+writable, so `-> &const T` is banned at parse time); overloads
+differing only in `-> &` collide as duplicates, like any
+return-type-only pair. A `-> &` function is a legal [function
+value](#function-pointers): the `fn(...) -> &T` type spells the return
 convention, and a call through the value is the same lvalue expression a
-direct call is (see [mut/const-carrying function
-types](#mutconst-carrying-function-types)). In an [interface
+direct call is (see [&/const-carrying function
+types](#referenceconst-carrying-function-types)). In an [interface
 file](#interface-files) the marker is re-emitted on the prototype and must
 match the definition exactly.
 
 One programmer's-problem caveat, the same one [container
-cursors](#control-flow) have: a `mut` return that points into a
+cursors](#control-flow) have: a `&` return that points into a
 container's heap storage is a borrow of that storage — an operation that
 reallocates it (a growing `xs.push`, `s.append`, ...) within the same
 full expression, or between forming the reference and the surrounding
@@ -255,11 +268,16 @@ statement's store, invalidates the reference. The formation rule prevents
 frame escapes, not heap staleness; keep the access and the mutation in
 separate statements, exactly as with an in-flight cursor.
 
-See [examples/functions/mut_returns.mc](../examples/functions/mut_returns.mc).
+> **Deprecated spelling.** The return marker used to be written `-> mut T`.
+> That form still compiles and means exactly the same thing, but is
+> deprecated in favor of `-> &T`. It warns under the opt-in
+> `-Wdeprecated-mut` class (included in `-Wall`).
 
-### Pointer decay into const/mut parameters
+See [examples/functions/reference_returns.mc](../examples/functions/reference_returns.mc).
 
-A `T*` argument at a `const T` (struct) or `mut T` slot implicitly
+### Pointer decay into const/reference parameters
+
+A `T*` argument at a `const T` (struct) or `&T` slot implicitly
 dereferences — the pointer **decays** — so the callee sees the pointee,
 read-only or writable, without the caller writing `*var`. A stack value and a
 heap pointer then call the same function identically:
@@ -269,7 +287,7 @@ import "std/memory";
 
 struct point { x: int32; y: int32; }
 
-fn shift(mut p: struct point, const by: struct point) {
+fn shift(p: &struct point, const by: struct point) {
     p.x += by.x;
     p.y += by.y;
 }
@@ -287,18 +305,18 @@ fn main() -> int32 {
 }
 ```
 
-Mechanically the feature is cheap: a `const` struct parameter and a `mut`
+Mechanically the feature is cheap: a `const` struct parameter and a `&`
 parameter already travel as a hidden reference, so decay forwards the pointer
 value instead of forming `&lvalue`. That is also why an **rvalue** `T*` may
-decay into `mut T` — the pointee is real storage even when the pointer
+decay into `&T` — the pointee is real storage even when the pointer
 expression is a temporary (`shift(&a, ...)`, a call result, a `p!`) —
-deliberately unlike the plain rule that a `mut` argument must be an lvalue.
+deliberately unlike the plain rule that a `&` argument must be an lvalue.
 
 A decay is a **two-sided promise**. The callee's side is the receiver
 contract already in the declaration: `const` will not write through the
-reference, `mut` writes through it and never lets it escape. The caller's
+reference, `&` writes through it and never lets it escape. The caller's
 side is a value-supplier promise in the `@nonnull` family: the pointer must
-be **provably non-null**, because a `const`/`mut` reference is never null by
+be **provably non-null**, because a `const`/`&` reference is never null by
 construction. The proof is the same machinery `@nonnull` uses — an `&x`, a
 `@nonnull` parameter, a local seeded or narrowed by a null check, or the
 postfix `p!` assertion:
@@ -314,7 +332,7 @@ An unproven pointer at a decaying slot is a compile error naming the fix:
 
 ```
 example.mc: error: line 3: cannot pass a possibly-null point* as argument 1
-of 'shift': decaying into a mut point parameter forms a reference, which is
+of 'shift': decaying into a reference point parameter forms a hidden reference, which is
 never null (narrow with a null check or assert with postfix '!')
 ```
 
@@ -324,26 +342,26 @@ null-dereference responsibility, exactly as it did before decay existed.
 
 The rule is fenced in four ways:
 
-- **Hidden-reference slots only.** `const` struct parameters and `mut`
+- **Hidden-reference slots only.** `const` struct parameters and `&`
   parameters of any type. A `const` scalar parameter is a by-value copy with
   no reference behind it, and a plain by-value `T` parameter still needs an
   explicit `*var` — the copy stays visible.
-- **Exactly one level.** `T*` decays to `const`/`mut T`; a `T**` decays only
-  to `const`/`mut T*` (its pointee is itself a pointer), never twice.
-- **Proven non-null**, as above. A string literal never decays into `mut` —
+- **Exactly one level.** `T*` decays to `const`/`&T`; a `T**` decays only
+  to `const`/`&T*` (its pointee is itself a pointer), never twice.
+- **Proven non-null**, as above. A string literal never decays into `&` —
   its bytes live in a constant global.
 - **An exact match beats a decayed one.** Under overloading, decayed
   readings enter resolution only when no candidate matches the pointer type
-  directly, so `fn f(x: T*)` beside `fn f(mut x: T)` stays unambiguous.
+  directly, so `fn f(x: T*)` beside `fn f(x: &T)` stays unambiguous.
 
-Generic inference participates: at a `const`/`mut` slot, unification also
+Generic inference participates: at a `const`/`&` slot, unification also
 tries the argument's pointee against the parameter pattern, one level down,
-so a `list<int32>*` at `mut self: list<T>` binds `T = int32` (previously
+so a `list<int32>*` at `self: &list<T>` binds `T = int32` (previously
 "cannot infer type parameter(s) T"). Facts about the *pointer's own storage*
 are irrelevant to the callee — a `const` or `@volatile` pointer variable
 decays fine (the load of the pointer itself honors them) — and because the
 pointer is passed **by value**, a flow-narrowed non-null fact survives the
-call, unlike lending the pointer variable itself as `mut`. A decayed
+call, unlike lending the pointer variable itself as `&`. A decayed
 argument is a borrowed reference, never a transfer of ownership.
 
 See
@@ -365,7 +383,7 @@ fn copy(@noalias dst: uint8*, @noalias src: uint8*, n: uint64) {
 
 The annotation precedes any `const` and the parameter name (`@noalias const
 p: T*` is allowed — a `const` pointer is read-only but still a single pointer).
-It changes **no ABI**, unlike `const`/`mut`, so it is allowed on `@extern`
+It changes **no ABI**, unlike `const`/`&`, so it is allowed on `@extern`
 declarations too — the [libc bindings](#reaching-libc) mark `memcpy`, `strcpy`,
 and the rest of the C11 `restrict` family this way (but not `memmove`, whose
 regions may overlap by design).
@@ -374,7 +392,7 @@ The promise is **unchecked**: if the pointers actually overlap, the behavior is
 undefined, exactly as with C's `restrict`. mcc does not verify it and does not
 warn when the same variable is passed to two `@noalias` parameters. `@noalias`
 is only a pointer-parameter annotation: it is rejected on a non-pointer
-parameter, on a `mut` parameter (aliasing two `mut` parameters is allowed by
+parameter, on a `&` parameter (aliasing two `&` parameters is allowed by
 design, which would contradict the promise), and on `@asm` functions. See
 [examples/functions/noalias.mc](../examples/functions/noalias.mc).
 
@@ -455,15 +473,15 @@ the pointer between the check and the use:
 - **Bare local pointer variables narrow, and so do field projections**
   like `s.p` or `b->data` (see the projection rules below, which are
   stricter). Globals never narrow (any call in between could store null
-  into one), `mut` parameters never carry a *name* fact (a callee taking
-  two `mut` references can alias one, so a call could null it without
+  into one), `&` parameters never carry a *name* fact (a callee taking
+  two `&` references can alias one, so a call could null it without
   naming it here), and index expressions like `a[i]` carry no fact —
   assert those with `!` instead.
 - **Taking `&p` anywhere in the function disables narrowing of `p`**
   entirely: once its address exists, a stored pointer could null `p`
   without ever naming it.
 - **The fact dies on anything that could null the variable**: reassigning
-  `p`, passing `p` as a `mut` argument, or a shadowing `let p`. A
+  `p`, passing `p` as a `&` argument, or a shadowing `let p`. A
   reassignment kills only *with its store* — the right-hand side evaluates
   first, so `cur = cur->next` reads through the still-narrowed name — and
   the pointer compounds `p += n` / `p -= n` are exempt entirely:
@@ -478,8 +496,8 @@ the pointer between the check and the use:
   pre-scan of the whole loop kills the facts for every name the loop
   reassigns (`p = ...`; a pointer's `p += n` is arithmetic and keeps its
   fact, here as everywhere), shadows with a `let p`, or lends as a
-  bare `mut` argument, anywhere in the subtree (nested branches, `case`
-  arms, `defer` bodies, and both branches of an `@if` included; `mut`
+  bare `&` argument, anywhere in the subtree (nested branches, `case`
+  arms, `defer` bodies, and both branches of an `@if` included; `&`
   positions are resolved by callee name across all overloads,
   conservatively). Everything else survives (the guard-then-loop idiom
   `if (p == null) return; while (...) { use(p); }` just works), and a
@@ -508,12 +526,12 @@ branch, a diverging `if (b->data == null)` proves it for the remainder,
 loop headers and exit conditions prove it the same way, and `and`/`or`
 chains thread projections and bare names together
 (`if (b == null or b->data == null) { return -1; }` proves both). A
-proven projection crosses `@nonnull` slots and decays into `const`/`mut`
+proven projection crosses `@nonnull` slots and decays into `const`/`&`
 parameters exactly like a proven local. The fact is keyed by the access
 path, so any depth works (`p->inner->data`), `.` and `->` spell the same
 fact, and `(*b).data` is the same fact as `b->data`. The base must be a
-local variable; `mut` and `@nonnull` parameters are fine as *bases*
-(`fn f(mut b: Buf)` may guard and use `b.data`), while globals,
+local variable; `&` and `@nonnull` parameters are fine as *bases*
+(`fn f(b: &Buf)` may guard and use `b.data`), while globals,
 call results, and array elements (`bs[0].data`) carry no path fact. A
 `@volatile` owner anywhere along the path (directly or inherited via
 `extends`) never forms a fact: volatile means the field can change
@@ -531,7 +549,7 @@ projection fact dies far more eagerly than a name fact:
   is write-free when its body has no through-memory store (`*p = v`,
   `a[i] = v`, `s.f = v`, compound forms included -- a store to its own
   local struct counts too, under the strict rule), no assignment to a
-  `mut` parameter or a global, nothing opaque (`@asm`, a call through
+  `&` parameter or a global, nothing opaque (`@asm`, a call through
   a function-pointer value, `va_start`/`va_end`, a bodyless callee
   such as `@extern` or an unpaired prototype, a protocol/slice
   `for` loop -- the builtin `range`/`enumerate` counting loops are
@@ -553,7 +571,7 @@ projection fact dies far more eagerly than a name fact:
 - **wholesale at every loop entry** (unlike name facts, no pre-scan
   yet); a `while (b->data != null)` header still proves the body top,
   since the condition re-proves it on each back edge;
-- **on the base**: reassigning, shadowing, or `mut`-lending `b` kills
+- **on the base**: reassigning, shadowing, or `&`-lending `b` kills
   every `b...` path fact.
 
 One asymmetry in guard chains: when a *later* operand of the chain can
@@ -606,7 +624,7 @@ compares; asserting and then comparing needs parentheses: `(p!) == q`.
 
 To keep the per-binding fact sound, a `@nonnull` parameter cannot be
 reassigned, cannot have its address taken (a `T**` could store null through
-it), cannot be passed as a `mut` argument (the callee writes through a
+it), cannot be passed as a `&` argument (the callee writes through a
 hidden reference and could store null into the parameter's storage), and a
 shadowing `let` of the same name is a fresh, unproven binding. A
 function with `@nonnull` parameters is a legal function value: the function
@@ -619,7 +637,7 @@ Like `@noalias`, the annotation precedes any `const` (`@nonnull const p: T*`
 composes; the two annotations combine in either order), changes **no ABI**,
 and so is allowed on `@extern` declarations and rides along on
 [interface files](#interface-files). It is rejected on non-pointer
-parameters, on `mut` (a `mut` parameter is passed by reference and is never
+parameters, on `&` (a `&` parameter is passed by reference and is never
 null), and on `@asm` functions. At the LLVM level the established fact is
 handed to the optimizer as the `nonnull` and `dereferenceable(sizeof(T))`
 argument attributes.
@@ -635,11 +653,11 @@ Passing an unproven pointer to any of them is a compile error instead of
 a latent crash. A stack buffer (`&x`, an array) or a string literal is
 already a proof; a heap buffer needs a one-line diverging guard after the
 allocation (`if (p == null) return 1;`), which loops that do not touch
-the pointer preserve. Container `self` parameters are `mut`/`const`
+the pointer preserve. Container `self` parameters are `&`/`const`
 receivers, where non-null holds by construction, so they carry the
 guarantee without annotations; a heap `list<T>*` or `dict<V>*` reaches
 them through the same one-line guard, by
-[decaying](#pointer-decay-into-constmut-parameters) into the receiver
+[decaying](#pointer-decay-into-constreference-parameters) into the receiver
 slot. Parameters for which null is meaningful stay plain: `resize` (null
 allocates fresh) and `dealloc` (null is a no-op). The `libc/` bindings follow as a separate pass
 ([roadmap](../ROADMAP.md#planned)).
@@ -664,9 +682,9 @@ picks the member whose parameter list fits the arguments, so a
 constructor-flavored family reads as one operation:
 
 ```c
-fn counter_init(mut self: counter)                          // zeroed
-fn counter_init(mut self: counter, start: int32)            // seeded
-fn counter_init(mut self: counter, start: int32, step: int32)
+fn counter_init(self: &counter)                          // zeroed
+fn counter_init(self: &counter, start: int32)            // seeded
+fn counter_init(self: &counter, start: int32, step: int32)
 ```
 
 Resolution follows the same order as
@@ -676,9 +694,9 @@ that keep it C-simple:
 
 - **Overloads must differ in parameter types.** Two overloads may not differ
   solely in return type; that stays a duplicate definition. Nor solely in
-  `const`/`mut` markers on the same types (a same-type `mut`/non-`mut` pair
+  `const`/`&` markers on the same types (a same-type `&`/non-`&` pair
   is uncallable under the resolution rules — an rvalue argument filters out
-  the `mut` candidate, and an lvalue keeps both in a same-shape tie — so
+  the `&` candidate, and an lvalue keeps both in a same-shape tie — so
   allowing it buys nothing), nor solely in `@nonnull`/`@noalias` annotations
   (caller promises about the supplied value, not part of the call shape).
   Each of these reports
@@ -812,8 +830,8 @@ constraints *imply* `B`'s:
   equal pointer depth; [generic-alias](#generic-aliases) spellings are
   expanded first, exactly as in inference, so an alias-spelled diagonal
   (`diag<V>` for `pair<V, V>`) orders identically. Arity, the
-  [collecting](#native-variadic-arguments) flag, and the `mut` positions
-  must agree outright (`mut` markers are template identity); `const`
+  [collecting](#native-variadic-arguments) flag, and the `&` positions
+  must agree outright (`&` markers are template identity); `const`
   markers and return types are ignored, as in the duplicate rules.
 - **Constraint implication.** For every wildcard of `B` that carries a
   constraint — a [closed type group](#closed-type-groups) or an
@@ -951,8 +969,8 @@ This is the foundational, **explicit-call** form. Its rules today:
   mcc enforces **no `self` convention** — no required parameter named `self`,
   no required first-parameter type, no required receiver at all.
   `fn point::origin() -> point` and `fn point::of(x: float64, y: float64)`
-  are legal. `self` above is a convention, not a keyword, and `mut self` is
-  just a `mut` parameter whose mutations are visible to the caller.
+  are legal. `self` above is a convention, not a keyword, and `reference self` is
+  just a `&` parameter whose mutations are visible to the caller.
 - **The qualifier must be a declared, complete type.** The segment before
   `::` must name a type in scope: a struct, a builtin type
   (`fn int32::m` — see [methods on type
@@ -1046,12 +1064,12 @@ just an ordinary concrete overload of the qualified name).
 struct point<T> { x: T; y: T; }
 
 // The generic fallback: any point<T>.
-fn point<T>::magnitude(mut self: point<T>) -> float64 {
+fn point<T>::magnitude(self: &point<T>) -> float64 {
     return sqrt(pow(self.x as float64, 2.0) + pow(self.y as float64, 2.0));
 }
 
 // A specialization: point<float64> needs no `as float64` casts.
-fn point<float64>::magnitude(mut self: point<float64>) -> float64 {
+fn point<float64>::magnitude(self: &point<float64>) -> float64 {
     return sqrt(pow(self.x, 2.0) + pow(self.y, 2.0));
 }
 ```
@@ -1142,11 +1160,11 @@ type pointf = point<float64>;
 
 // Declared through the alias: exactly `fn point<float64>::magnitude` — a
 // specialization, outranking the generic for a point<float64> receiver.
-fn pointf::magnitude(mut self: pointf) -> float64 {
+fn pointf::magnitude(self: &pointf) -> float64 {
     return sqrt(pow(self.x, 2.0) + pow(self.y, 2.0));
 }
 
-fn point<T>::magnitude(mut self: point<T>) -> float64 {   // the generic
+fn point<T>::magnitude(self: &point<T>) -> float64 {   // the generic
     return sqrt(pow(self.x as float64, 2.0) + pow(self.y as float64, 2.0));
 }
 
@@ -1251,12 +1269,12 @@ their only callable spelling):
 ```c
 struct point<T> { x: T; y: T; }
 
-fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+fn point<T>::constructor(self: &point<T>, x: T, y: T) {
     self.x = x; self.y = y;
 }
 
 // A converting constructor chains to the direct member at the enclosing T.
-fn point<T>::constructor<U>(mut self: point<T>, x: U, y: U) {
+fn point<T>::constructor<U>(self: &point<T>, x: U, y: U) {
     point<T>::constructor(self, x as T, y as T);
 }
 
@@ -1308,18 +1326,18 @@ the chaining form.
 `recv.method(args)` is sugar for `Type::method(recv, args)`, where `Type` is
 the receiver's type. The receiver expression passes **verbatim** as the first
 argument, so overload resolution (specializations, partials, subsumption),
-`mut`-receiver legality, evaluate-once addressing, and every diagnostic are
+`&`-receiver legality, evaluate-once addressing, and every diagnostic are
 the desugared call's own:
 
 ```c
 struct counter { n: int32; }
-fn counter::bump(mut self: counter) { self.n += 1; }
+fn counter::bump(self: &counter) { self.n += 1; }
 fn counter::get(const self: counter) -> int32 { return self.n; }
 
 fn main() -> int32 {
     let c: counter;
     c.n = 0;
-    c.bump();                  // counter::bump(c) -- mut self writes c
+    c.bump();                  // counter::bump(c) -- reference self writes c
     counter::bump(c);          // the qualified spelling stays valid
     let q = &c;
     q.bump();                  // a pointer receiver auto-derefs one hop:
@@ -1351,14 +1369,14 @@ The rules:
   members — see [inherited methods](#inherited-methods).
 - **An rvalue receiver evaluates once.** A chained receiver
   (`p.get().upper().lower()`) is a call result: it evaluates once into a
-  hidden local. A plain rvalue spills to a **const** slot, so a mut-self
+  hidden local. A plain rvalue spills to a **const** slot, so a reference-self
   method on a temporary is an error (`mk().bump()` rejects — the mutation
-  would vanish with the temporary); a [`mut`-returning](#mut-returns)
+  would vanish with the temporary); a [`&`-returning](#reference-returns)
   receiver re-lends its carried lvalue instead, so `b.ref().grow()` writes
   the caller's storage.
-- **A `mut`-returning method call is an lvalue** through the dot spelling
+- **A `&`-returning method call is an lvalue** through the dot spelling
   too: `l.at(i) = v`, `l.at(i) += 1`, chained store targets
-  (`a.view().at(2) = 7`), and the mut-return formation walk all judge the
+  (`a.view().at(2) = 7`), and the reference-return formation walk all judge the
   desugared family.
 - **Explicit type arguments at a dot-call do not parse** (`p.m<int32>(...)`)
   — method type parameters are inference-only, exactly as at a `::` call.
@@ -1392,28 +1410,28 @@ println(f"{t.fahrenheit}");   // 212 -- s.field, no parentheses
 let f = t.fahrenheit();       // the call spelling still works
 ```
 
-A `@property` takes **only its receiver** and **returns a value**. A `-> mut`
+A `@property` takes **only its receiver** and **returns a value**. A `-> &`
 return makes the access an assignable lvalue — `s.field = v` is exactly
-`Type::field(s) = v` through the [mut return](#mut-returns), so plain and
+`Type::field(s) = v` through the [reference return](#reference-returns), so plain and
 compound assignment write straight through the accessor:
 
 ```c
 struct cell { n: int32; }
 
 @property
-fn cell::value(mut self: cell) -> mut int32 { return self.n; }
+fn cell::value(self: &cell) -> &int32 { return self.n; }
 
 let c = cell { n = 5 };
 c.value = 40;    // cell::value(c) = 40
 c.value += 2;    // 42
 ```
 
-A read-only (non-`mut`) property rejects assignment, exactly as a
-non-mut-returning call target does.
+A read-only (non-`&`) property rejects assignment, exactly as a
+non-reference-returning call target does.
 
 ##### Explicit get/set pairs
 
-The `-> mut` form hands out raw storage, so it cannot run logic on the write
+The `-> &` form hands out raw storage, so it cannot run logic on the write
 path. For accessors that must — validation, clamping, bookkeeping —
 `@property("get")` / `@property("set")` declare an explicit pair:
 
@@ -1424,7 +1442,7 @@ struct gauge { raw: int32; }
 fn gauge::level(const self: gauge) -> int32 { return self.raw; }
 
 @property("set")
-fn gauge::level(mut self: gauge, value: int32) {
+fn gauge::level(self: &gauge, value: int32) {
     self.raw = value < 0 ? 0 : (value > 100 ? 100 : value);
 }
 
@@ -1435,8 +1453,8 @@ g.level += 5;       // gauge::level(g, gauge::level(g) + 5) -- read-modify-write
 ```
 
 - **The getter** is receiver-only and value-returning, like a bare
-  `@property` — but it may **not** return `mut` (the bare form is the
-  mut-lvalue mechanism; the pair is the call mechanism, and they do not mix).
+  `@property` — but it may **not** return `&` (the bare form is the
+  reference-lvalue mechanism; the pair is the call mechanism, and they do not mix).
 - **The setter** takes exactly `(self, value)`; the assigned expression
   passes as its second argument with the call's own overload dispatch,
   literal adaptation, and coercion. A setter may declare a return type, but
@@ -1445,7 +1463,7 @@ g.level += 5;       // gauge::level(g, gauge::level(g) + 5) -- read-modify-write
   the operator, one set — the receiver expression is evaluated for each, both
   reaching the same storage.
 - **A pair may be partial**: getter-only rejects assignment (the standard
-  "does not return mut" error); setter-only is **write-only** and rejects
+  "does not return a reference" error); setter-only is **write-only** and rejects
   reads (`property 'gauge::level' is write-only`), including `op=` (which
   needs the getter).
 - **One family, one mechanism**: declaring both a bare `@property` and a
@@ -1484,15 +1502,15 @@ The indices are ordinary arguments: **any number, of any type** — `m[r, c]`
 passes both, `d["key"]` indexes a dict by string. Overloads within the
 family dispatch over them like any call.
 
-The bare form returns the element, and a `-> mut` return makes `xs[i]` an
+The bare form returns the element, and a `-> &` return makes `xs[i]` an
 assignable lvalue — `xs[i] = v` is exactly `Type::at(xs, i) = v` through the
-[mut return](#mut-returns):
+[reference return](#reference-returns):
 
 ```c
 struct grid { cells: int32[16]; }
 
 @accessor
-fn grid::at(mut self: grid, r: uint64, c: uint64) -> mut int32 {
+fn grid::at(self: &grid, r: uint64, c: uint64) -> &int32 {
     return self.cells[r * 4 + c];
 }
 
@@ -1506,7 +1524,7 @@ explicit pair: `d[k]` calls the getter, `d[k] = v` the setter — the indices
 first, the assigned value **last** — and `d[k] op= v` is read-modify-write
 through both (the receiver and index expressions are evaluated for each,
 both reaching the same storage). The pair's rules are the property pair's:
-the getter never returns `mut`, a setter's return is discarded, getter-only
+the getter never returns `&`, a setter's return is discarded, getter-only
 rejects writes (`accessor 'dict::at' is read-only`), setter-only rejects
 reads (`write-only`) and `op=`, and one family cannot mix the bare form with
 the pair.
@@ -1544,22 +1562,22 @@ S::constructor(s, args);     // construct in place
 // ... S(args) evaluates to s
 ```
 
-The desugaring is exact — overload resolution, `mut`/`const` receiver
+The desugaring is exact — overload resolution, `&`/`const` receiver
 legality, privacy, and every diagnostic are the family call's own (arities
 and argument positions count the receiver, so a mismatch reports
 `argument 2` for the first written argument). The slot default-initializes
 exactly as a bare `let s: S;` does: a struct with declared field defaults
 starts from them, anything else starts uninitialized, and the constructor
 fills it in place. `let p = S(args);` binds the constructed slot directly —
-no temporary, no copy — so a `mut self` constructor writes `p`'s own storage.
+no temporary, no copy — so a `reference self` constructor writes `p`'s own storage.
 
 ```c
 struct point<T> { x: T; y: T; }
 
-fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+fn point<T>::constructor(self: &point<T>, x: T, y: T) {
     self.x = x; self.y = y;
 }
-fn point<T>::constructor<U>(mut self: point<T>, x: U, y: U) {  // converting
+fn point<T>::constructor<U>(self: &point<T>, x: U, y: U) {  // converting
     self.x = x as T; self.y = y as T;
 }
 
@@ -1595,7 +1613,7 @@ generic:
   keeps the inferring behavior. A *generic* alias used bare keeps the
   type-use arity error — annotate the head (`diag<int32>(1, 2)`).
 - **Any type with a declared `constructor` family is constructible** —
-  builtins included: declare `fn char::constructor(mut self: char, code:
+  builtins included: declare `fn char::constructor(self: &char, code:
   int32)` and `char(65)` works. Without a declared constructor a call
   **with arguments** is an error (`type 'int32' has no constructor` — it
   does **not** become a cast), and for a struct, `struct 'point' has no
@@ -1614,7 +1632,7 @@ derived `pointf()`, an alias — and, unlike C++, **declaring constructors
 does not suppress it**: a 2-argument family beside `point<float64>()`
 leaves the zero-argument call default-initializing. Declared members still
 win — a visible family member that accepts just the receiver (a
-`(mut self)`-only constructor, or a
+`(reference self)`-only constructor, or a
 [collecting](#native-variadic-arguments) one
 whose fixed prefix is only the receiver) claims `T()` and runs normally —
 so the implicit form is strictly the fallback and no ambiguity between the
@@ -1665,8 +1683,8 @@ let p = point<float64>();
 
 ```c
 struct handle { fd: int32; }
-fn handle::constructor(mut self: handle, fd: int32) { self.fd = fd; }
-fn handle::destructor(mut self: handle) { close(self.fd); }
+fn handle::constructor(self: &handle, fd: int32) { self.fd = fd; }
+fn handle::destructor(self: &handle) { close(self.fd); }
 
 fn use_it() -> int32 {
     let h = handle(acquire());
@@ -1720,7 +1738,7 @@ Details and sharp edges:
   the read-only view for user code, but destruction is scope teardown, not
   user mutation (the C++ stance): the synthesized call alone bypasses the
   const view. A user-written `T::destructor(p)` on a const `p` keeps the
-  ordinary mut-receiver error.
+  ordinary reference-receiver error.
 - **Manually destroying an auto-destructed value is undefined behavior.**
   A qualified `T::destructor(p)` (or a manual `defer T::destructor(p);`)
   beside the automatic call compiles and destroys twice — like a C
@@ -1769,9 +1787,9 @@ See [examples/types/destructors.mc](../examples/types/destructors.mc).
 
 A function declared `-> own T` hands its caller an **owned value**: the
 signature says, visibly, that the return transfers a resource and the
-caller must clean it up. Like [`-> mut`](#mut-returns), `own` is a flag on
+caller must clean it up. Like [`-> &`](#reference-returns), `own` is a flag on
 the declaration, not part of the type (the two are mutually exclusive:
-`mut` lends a view of existing storage, `own` hands over a value) — and it
+`&` lends a view of existing storage, `own` hands over a value) — and it
 changes no ABI; everything below is compile-time policy.
 
 ```c
@@ -1806,7 +1824,7 @@ double-free the copies-are-bitwise stance warns about. Asserting that the
 source truly relinquishes the value takes the explicit marker:
 
 ```c
-fn box::pop(mut self: box) -> own res {
+fn box::pop(self: &box) -> own res {
     return move(self.r);   // "I own this and I am handing it over"
 }
 ```
@@ -1896,17 +1914,17 @@ smuggles the destroyed copy out.
 adopt — which keeps generic signatures writable: `fn pool<T>::take(...) ->
 own T` compiles for every `T`, and does its job exactly when `T` carries a
 destructor. The flag rides `.mci` interface stubs (`fn make(v: int32) ->
-own res;`) and its mismatch against a prototype is rejected like a `mut`
+own res;`) and its mismatch against a prototype is rejected like a `&`
 mismatch. `@extern` functions cannot be `own` (C hands over no destructor
 obligation), and neither can `@property`/`@accessor` methods (reads
 through field or index syntax never transfer).
 
 **Function-pointer types carry the marker too**: `fn(int32) -> own res`
-spells an own return the way `fn(...) -> mut T` spells a mut one, so a
+spells an own return the way `fn(...) -> &T` spells a reference one, so a
 call through the value — a factory local, a field-held callback, an
 inferred `let factory = make;` (the function value derives the bit from
 its declaration) — vouches for adoption exactly like a direct call.
-Unlike `mut`, `own` changes no calling convention; it is a **contract**,
+Unlike `&`, `own` changes no calling convention; it is a **contract**,
 so implicit retyping is rejected in *both* directions (dropping the
 marker would silently leak the handed-over obligation, fabricating it
 would destroy a value the callee never handed over), and an explicit
@@ -1929,10 +1947,10 @@ deriving makes the base's constructors callable on the derived type:
 struct point<T> { x: T; y: T; }
 struct pointf extends point<float64> {}
 
-fn point<T>::constructor(mut self: point<T>, x: T, y: T) {
+fn point<T>::constructor(self: &point<T>, x: T, y: T) {
     self.x = x; self.y = y;
 }
-fn pointf::constructor<U>(mut self: pointf, x: U, y: U) {   // converting
+fn pointf::constructor<U>(self: &pointf, x: U, y: U) {   // converting
     self.x = x as float64; self.y = y as float64;
 }
 fn point<T>::magnitude(const self: point<T>) -> float64 {
@@ -1980,9 +1998,9 @@ the receiver binding `T`, bare-head constructor inference included
 
 **The receiver upcasts — and only the receiver.** In the receiver position
 (the first argument) of any method-family call, a derived value passes where
-the resolved parameter is a declared base of its lineage: a `mut` or
+the resolved parameter is a declared base of its lineage: a `&` or
 `const` (hidden-reference) receiver **lends its base prefix in place** — the
-same storage viewed as the base, so a `mut self` method's writes land in the
+same storage viewed as the base, so a `reference self` method's writes land in the
 derived value's leading fields — and a by-value receiver **prefix-copies**
 (the honest data slicing the [`as` upcast](#structs) performs; the derived
 tail is simply not passed). This covers the explicit qualified spelling too:
@@ -1992,7 +2010,7 @@ tail is simply not passed). This covers the explicit qualified spelling too:
 ```c
 struct point3f extends point<float64> { z: float64; }
 
-fn point3f::constructor(mut self: point3f, x: float64, y: float64, z: float64) {
+fn point3f::constructor(self: &point3f, x: float64, y: float64, z: float64) {
     point::constructor(self, x, y);   // the receiver upcasts: constructor chaining
     self.z = z;
 }
@@ -2188,8 +2206,8 @@ The rules, all type-shaped:
   slice explicitly. A collecting function cannot also take C varargs
   (`...`), cannot be `@extern` (C sees no `slice<const any>`), and `main`
   cannot collect; C-style `...` variadics also stay banned from overload
-  sets. A `mut` trailing `slice<const any>` never collects —
-  `mut` lends the caller's own storage — so such a function stays
+  sets. A `&` trailing `slice<const any>` never collects —
+  `&` lends the caller's own storage — so such a function stays
   explicit-slice.
 
 See [examples/functions/native_variadics.mc](../examples/functions/native_variadics.mc).
@@ -2440,9 +2458,9 @@ the name or the order imports merged them — separately compiled objects
 always emit a given instance under the same `linkonce_odr` symbol and the
 linker merges the copies correctly.
 
-A `mut` parameter keeps its marker in the pattern (`bump<$0>(mut $0)`): a
-same-shape `mut`/by-value template pair is a genuine overload — an rvalue
-argument filters out the `mut` candidate. `const` markers and the return
+A `&` parameter keeps its marker in the pattern (`bump<$0>(&$0)`): a
+same-shape `&`/by-value template pair is a genuine overload — an rvalue
+argument filters out the `&` candidate. `const` markers and the return
 type never distinguish template overloads, so two templates of one name
 spelling the same base — alpha-renamed copies (`f<T>(x: T)` beside
 `f<U>(x: U)`) and return-type-only variants, every call to which would be
@@ -3129,7 +3147,7 @@ to a `let` before the call silences the site (the leak then reads
 explicitly at the binding: a scope that `panic` unwinds never runs its
 destructors either). A call through a function-pointer *value* never
 warns: `@noreturn` is not part of a
-[function type](#mutconst-carrying-function-types), so an indirect callee
+[function type](#referenceconst-carrying-function-types), so an indirect callee
 is never known to diverge.
 
 Like the other opt-in classes it is default-off — `-Wnoreturn-own` (or
@@ -3382,7 +3400,7 @@ rvalue is iterable: `for x in make_iter() { ... }` works, where `&` could not
 take its address. For value types the two forms are indistinguishable; the
 reference form matters when the body mutates the container as it goes (and, as
 in C, growing a container mid-iteration invalidates an in-flight cursor either
-way — the same staleness a [`mut` return](#mut-returns) into container
+way — the same staleness a [`&` return](#reference-returns) into container
 storage suffers when a growing push lands between forming the reference and
 using it).
 
@@ -4003,7 +4021,7 @@ the function, so nothing needs spelling out — even a C variadic like `printf`
 aliases cleanly. (`println` is a function value too, but a call through the
 value performs no [collection](#native-variadic-arguments): it takes the trailing
 `slice<const any>` explicitly — see
-[mut/const-carrying function types](#mutconst-carrying-function-types).)
+[&/const-carrying function types](#referenceconst-carrying-function-types).)
 
 ```c
 const log = printf;           // an alias; the type is inferred
@@ -4023,8 +4041,8 @@ A function value is a pointer underneath, so it casts like one: `add as
 uint64` is the function's address as an integer, `addr as fn(...) -> R`
 turns an address back into a callable pointer, and it bitcasts to/from a
 data pointer such as `uint8*`. (One exception: an `as` directly between two
-function types whose `mut`/`const` parameter conventions differ is rejected —
-see [mut/const-carrying function types](#mutconst-carrying-function-types).)
+function types whose `&`/`const` parameter conventions differ is rejected —
+see [&/const-carrying function types](#referenceconst-carrying-function-types).)
 
 Only a single, non-generic function has an address; a generic name like
 `id` cannot be used as a value (there is no one instance to point at).
@@ -4090,31 +4108,31 @@ where the type is used, so a generic alias like
 **annotation** that may appear in this position — `@noalias` is an
 unchecked hint that drops silently from a function value, and `@format` is
 compile-time sugar keyed to a declaration, never part of a value's type.
-The `mut` and `const` keywords take the same slot and spell the
+The `&` and `const` keywords take the same slot and spell the
 hidden-reference calling conventions, described next.
 
 See
 [examples/functions/nonnull_callbacks.mc](../examples/functions/nonnull_callbacks.mc).
 
-### mut/const-carrying function types
+### Reference/const-carrying function types
 
-A function type may also spell the [`mut`](#mut-parameters) and
-[`const`](#const-parameters) parameter conventions: `fn(mut char) -> void`
+A function type may also spell the [`&`](#reference-parameters) and
+[`const`](#const-parameters) parameter conventions: `fn(&char) -> void`
 is the type of a function whose parameter is passed as a pointer to the
 caller's own storage, and `fn(const struct big) -> int64` one whose struct
 parameter travels by read-only hidden reference. The bare name of such a
 function infers the carrying type, and a call through the value passes the
 same by-reference arguments — and enforces the **same call-site rules** —
-as a direct call: the argument of a `mut` parameter must be the caller's
+as a direct call: the argument of a `&` parameter must be the caller's
 own writable lvalue of exactly the parameter's type (or a provably non-null
 pointer to it, which decays), and the `const`/`@volatile`/`@packed`
 rejections all apply.
 
 ```c
-fn bump(mut a: char) { a = a + 1; }
+fn bump(a: &char) { a = a + 1; }
 
 fn main() -> int32 {
-    let f = bump;       // inferred: fn(mut char) -> void
+    let f = bump;       // inferred: fn(&char) -> void
     let c: char = 'A';
     f(c);               // passes &c underneath; c is now 'B'
     return 0;           // f('x') is the same "not assignable" error
@@ -4122,19 +4140,19 @@ fn main() -> int32 {
 ```
 
 Unlike the `@nonnull` contract, the convention is **not convertible** — in
-either direction, with no `as` hatch. `fn(mut char)` and `fn(char)` receive
+either direction, with no `as` hatch. `fn(&char)` and `fn(char)` receive
 their argument differently at the machine level (a pointer to storage
 versus the value itself), so no call sequence through the wrong type could
 be correct; the mismatch is rejected wherever the two meet, and the error
 says why no cast is offered:
 
 ```
-error: line 3: let g: expected fn(char) -> void, got fn(mut char) -> void
-(a mut parameter is passed by hidden reference, a different calling
+error: line 3: let g: expected fn(char) -> void, got fn(&char) -> void
+(a reference parameter is passed by hidden reference, a different calling
 convention; the types are not convertible)
 ```
 
-An `as` between two function types is allowed only when their `mut`/`const`
+An `as` between two function types is allowed only when their `&`/`const`
 shape and their return convention match — a same-shape signature
 reinterpret, including stripping a `@nonnull` contract, still works.
 (Laundering through a data pointer, `f as uint8* as fn(char)`, remains
@@ -4163,42 +4181,42 @@ identity: it is spelled in `.mci` [interface files](#interface-files),
 instantiates templates distinctly, and a prototype must spell it exactly as
 its definition does.
 
-The return convention is spelled the same way: `fn(...) -> mut T` is the
-type of a [`mut`-returning](#mut-returns) function, so the last
-function-value ban is gone. The bare name of a `-> mut` function infers the
+The return convention is spelled the same way: `fn(...) -> &T` is the
+type of a [`&`-returning](#reference-returns) function, so the last
+function-value ban is gone. The bare name of a `-> &` function infers the
 carrying type, and a call through the value is the same **lvalue
 expression** a direct call is — assignable (`f() = v`, `f() += v`),
 projectable (`f(s).field = v`, `f(t)[i] = v`), and re-lendable as another
-call's `mut` argument — with the same guarantees, since the callee's own
+call's `&` argument — with the same guarantees, since the callee's own
 body passed the formation and storage rules when it compiled. A field-held
 callee works too (`table.get(i) = v` stores through the returned
 reference), and `&f()` stays rejected (the reference must not escape its
-full expression). Inside another `-> mut` function the value composes into
-formation chains: a chain-position call through a `fn(...) -> mut T`
-value vouches for its storage exactly as a named `-> mut` candidate does.
+full expression). Inside another `-> &` function the value composes into
+formation chains: a chain-position call through a `fn(...) -> &T`
+value vouches for its storage exactly as a named `-> &` candidate does.
 
 ```c
 @static let counter: int32 = 0;
-fn counter_ref() -> mut int32 { return counter; }
+fn counter_ref() -> &int32 { return counter; }
 
 fn main() -> int32 {
-    let f = counter_ref;    // inferred: fn() -> mut int32
+    let f = counter_ref;    // inferred: fn() -> &int32
     f() = 41;               // assignment through the returned lvalue
     f() += 1;               // compound assignment
     return f();             // value context: loads (counter is 42)
 }
 ```
 
-Like the parameter conventions, the mut return is **not convertible** — in
-either direction, with no `as` hatch: a `fn() -> mut int32` call returns a
+Like the parameter conventions, the reference return is **not convertible** — in
+either direction, with no `as` hatch: a `fn() -> &int32` call returns a
 pointer to the vouched storage where a `fn() -> int32` call returns the
 value itself, so no call sequence through the wrong type could be correct
-(the mismatch error says a mut return is passed as a pointer to the
-returned storage). `fn() -> mut void` is rejected per use — there is no
+(the mismatch error says a reference return is passed as a pointer to the
+returned storage). `fn() -> &void` is rejected per use — there is no
 storage to reference — so a generic alias like
-`type getter<T> = fn() -> mut T` is validated per binding, and
-`-> mut const T` is banned at parse time in both the declaration and the
-fn-type slot (a mut return must be writable).
+`type getter<T> = fn() -> &T` is validated per binding, and
+`-> &const T` is banned at parse time in both the declaration and the
+fn-type slot (a reference return must be writable).
 
 A [collecting](#native-variadic-arguments) function is a function value
 too — its trailing `args...` parameter is sugar for `const args:
@@ -4211,9 +4229,9 @@ f-strings — do not apply through a value either (the runtime sequential
 form still works, since the callee parses its format string at runtime).
 
 See
-[examples/functions/mut_callbacks.mc](../examples/functions/mut_callbacks.mc)
+[examples/functions/reference_callbacks.mc](../examples/functions/reference_callbacks.mc)
 and
-[examples/functions/mut_return_callbacks.mc](../examples/functions/mut_return_callbacks.mc).
+[examples/functions/reference_return_callbacks.mc](../examples/functions/reference_return_callbacks.mc).
 
 ## Arrays
 
@@ -4359,9 +4377,9 @@ re-stored per execution — a view captured on one loop pass observes a later
 pass's elements, like any loop local.
 
 At a **function argument** the literal borrows into the calling frame, so the
-view lives for the whole call — even against a plain (non-`mut`) `slice<T>`
+view lives for the whole call — even against a plain (non-`&`) `slice<T>`
 parameter, whose fresh backing array is writable (uniform-allow, exactly as for
-a string literal). A `mut slice<T>` parameter still rejects a literal: it
+a string literal). A `&slice<T>` parameter still rejects a literal: it
 demands the caller's own named storage, which a literal is not. The adaptation
 holds through an overload set — `f([1, 2, 3])` picks the `slice<int32>`
 overload over an `int32*` one, never adapting the literal to the pointer — but a
@@ -4398,11 +4416,11 @@ literal's), the same borrow a `let` or argument does. Because a string constant
 is static-lifetime, the reborrow is safe even when the target outlives the
 current frame, so it reaches every assignment form — a plain name, a deref
 (`*out = "hi";`), an index (`a[i] = "hi";`), a member (`c.name = "hi";`, the
-mirror of the `cmd { name = "hi" }` struct literal), and a mut return
+mirror of the `cmd { name = "hi" }` struct literal), and a reference return
 (`f(...) = "hi";`) — and a ternary of string literals adapts arm by arm here
 too. **Array-literal assignment is not supported** (`s = [1, 2, 3];` is a
 compile error): the materialized backing array is frame-local, but an
-assignment target can outlive the frame (a `mut slice<T>*` out-parameter, an
+assignment target can outlive the frame (a `&slice<T>*` out-parameter, an
 outer-scope variable), so the borrowed view would dangle — the same lifetime
 hazard that rejects `return [..] as slice<T>;`. The `let`/argument positions
 stay safe only because the binding and its backing share a frame. See
@@ -4615,7 +4633,7 @@ Where the struct type is already fixed by context, the name may be **dropped**
 entirely — a bare `{ field = value, ... }` takes its type from the position, the
 way `[...]` and `"..."` adapt to a `slice<T>`. It is allowed in every position a
 slice literal is: a type-annotated `let`, an assignment (including `*p = { ... }`,
-`a[i] = { ... }`, `s.field = { ... }`, and a mut return), a `return`, a function
+`a[i] = { ... }`, `s.field = { ... }`, and a reference return), a `return`, a function
 argument, an array or slice element, and a nested struct field. Unlike a slice
 borrow a struct literal is a plain value copy, so it also adapts in a `return`
 with no lifetime concern.
@@ -5058,7 +5076,7 @@ let x, y, z = t;                // no rest binder: one binder per position
 
 Everything else rides the struct machinery: whole-value assignment copies,
 tuples pass and return by value, a `const tuple<...>` parameter travels by
-hidden reference (elements then read-only), `mut` parameters lend the
+hidden reference (elements then read-only), `&` parameters lend the
 caller's storage, `sizeof`/`alignof` report the struct layout (padding
 included), tuples nest in arrays, structs, and other tuples, and generic
 inference recurses through the shape (`fn fst<A, B>(t: tuple<A, B>) -> A`).
@@ -5147,7 +5165,7 @@ fn main() -> int32 {
 The by-value boxable set is **primitives, pointers, and slices**. A **struct**
 additionally boxes — but only into a `const any` target, **by hidden
 reference**: the payload holds a *pointer* to the value's existing storage
-(the same convention a `const`/`mut` struct parameter already travels through,
+(the same convention a `const`/`&` struct parameter already travels through,
 [hidden references](#functions-and-methods)), tagged as the struct type itself
 (`point`, not `point*`), so `case type` recovers it as a reference with no
 copy. The archetypal `const any` position is the `slice<const any>` a
@@ -5909,7 +5927,7 @@ linkable symbol:
 
 - A concrete function becomes a [bodyless `fn` prototype](#bodyless-fn-prototypes)
   — its body lives in the object, reached by the symbol the bare name
-  resolves to and called with the mcc convention, so `const`/`mut` parameter
+  resolves to and called with the mcc convention, so `const`/`&` parameter
   markers are re-emitted and the hidden-reference passing they imply carries
   over. (A real `@extern` declaration in the source stays verbatim — it keeps
   meaning "C calling convention".)
@@ -5949,7 +5967,7 @@ file (however it was imported) is a compile error naming the owning file:
  * Doubles the list's capacity. Internal; called by list<T>::push.
  */
 @private
-fn list<T>::grow(mut self: list<T>) { ... }
+fn list<T>::grow(self: &list<T>) { ... }
 ```
 
 ```
@@ -6059,8 +6077,8 @@ An `@extern` function may take or return a `struct` (or `union`) **by value**,
 and the call is lowered to the platform C ABI so the aggregate lands where the C
 side expects it. This is a property of the `@extern` boundary only: mcc's own
 calls keep their raw-aggregate convention (the whole struct as an LLVM
-aggregate, with `const`/`mut` struct parameters travelling by a
-[hidden reference](#mut-parameters)), which is self-consistent but is not the C
+aggregate, with `const`/`&` struct parameters travelling by a
+[hidden reference](#reference-parameters)), which is self-consistent but is not the C
 ABI. The two conventions stay distinct.
 
 The direction covered is **mcc calling C**. Three platform ABIs are classified,
@@ -6127,12 +6145,12 @@ suite; Win64, which has no CI runner, is verified by IR shape only. See
 A plain `fn` may also end with `;` instead of a body. Where `@extern` means
 "a symbol with the **C** calling convention", a bodyless prototype means "a
 concrete **mcc** function defined in another object" — the call uses the mcc
-convention, so `const` struct and `mut` parameters keep their
-[hidden-reference passing](#mut-parameters), which `@extern` deliberately
+convention, so `const` struct and `&` parameters keep their
+[hidden-reference passing](#reference-parameters), which `@extern` deliberately
 rejects:
 
 ```c
-fn bump(mut n: int32);                  // defined in a linked object
+fn bump(n: &int32);                  // defined in a linked object
 fn total(const p: struct pair) -> int64;
 
 fn main() -> int32 {
@@ -6142,8 +6160,8 @@ fn main() -> int32 {
 }
 ```
 
-Every signature marker (`const`, `mut`, `@noalias`, `@nonnull`, and a
-[`-> mut` return](#mut-returns)) means exactly
+Every signature marker (`const`, `&`, `@noalias`, `@nonnull`, and a
+[`-> &` return](#reference-returns)) means exactly
 what it does on a definition, and the prototype must match the definition's
 signature — the convention is derived from the signature on each side
 independently. Generic, `@inline`, `@asm`, and `@static` functions cannot be
@@ -6159,7 +6177,7 @@ parameter list is not a mismatch — it joins the name's overload set as its
 own member. Identical prototypes collapse onto one declaration (like repeated
 `@extern` declarations), and a prototype arriving after its definition is
 discarded the same way. Matching within one signature is strict: the return
-type (its `mut` marker included), the derived `const`-struct/`mut`
+type (its `&` marker included), the derived `const`-struct/`&`
 hidden-reference positions, the
 `@noalias` and `@nonnull` markers, and the `@private` flag must all agree —
 parameter names
@@ -6266,7 +6284,7 @@ fn digit_value(c: char) -> char {
 [overload set](#function-overloading),
 
 ```c
-format(mut str: string, value: X, const modifier: slice<char>)
+format(str: &string, value: X, const modifier: slice<char>)
 ```
 
 where every member appends `value`'s rendering to a
@@ -6344,7 +6362,7 @@ back into the set for its fields:
 ```c
 struct point { x: int32; y: int32; }
 
-fn format(mut str: string, value: struct point*, const modifier: slice<char>) {
+fn format(str: &string, value: struct point*, const modifier: slice<char>) {
     str.push('(');
     format(str, value->x, modifier);
     str.append(", ");

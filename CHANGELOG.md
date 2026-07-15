@@ -8,6 +8,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Deprecated
+
+- **The `mut` / `-> mut` mutability spelling** — the legacy binder form
+  `fn f(mut x: T)` and return form `fn f() -> mut T` are superseded by the
+  `&T` reference types (see Added). They still compile and mean exactly the
+  same thing, but now emit a warning under the new opt-in `-Wdeprecated-mut`
+  class (included in `-Wall`): `the 'mut' parameter spelling is deprecated;
+  write the type as '&T' instead` (and the matching `-> &T` message for
+  returns). Migrate by moving the marker into the type slot. The `mut`
+  keyword itself is not yet removed — that closes the deprecation window in a
+  later release (Phase C of the `&`-reference redesign).
+
 ### Removed
 
 - **BREAKING: the variadic `@format` `print`/`println` overloads** —
@@ -149,6 +161,26 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and writing families only.
 
 ### Added
+
+- **`&T` reference types — the blessed spelling for by-hidden-reference
+  parameters and returns** — a writable reference parameter is now written
+  `fn f(x: &T)` and a reference return `fn f() -> &T`, with the marker in
+  the type slot (parsed exactly as in `-> &T` and `own &T`). This is Phase A
+  of the [`&`-reference redesign](ROADMAP.md): a pure, semantics-preserving
+  respell of the old `mut` / `-> mut` convention — `x: &T` compiles to the
+  identical IR `mut x: T` did, keyed on the same name-set registries, with
+  zero codegen change. `&` is a reference type **only** in a parameter- or
+  return-type slot (including inside a `fn(...)` type, e.g. `fn(&char) -> &int32`);
+  a stray `&` anywhere else — `let r: &T`, a `list<&T>` element, an `x as &T`
+  cast, a struct field — is a compile error (`a '&' reference type is only
+  allowed in a parameter or return type`), preserving the no-reference-locals
+  invariant and leaving `&` the address-of operator in expressions. `.mci`
+  interface stubs emit the `&T` spelling and round-trip it. All of `lib/` and
+  `examples/` migrated to `&`; docs, the tree-sitter grammar, and the example
+  suite (`reference_params.mc`, `reference_returns.mc`, `reference_overloads.mc`,
+  `reference_callbacks.mc`, `reference_return_callbacks.mc`) updated in lockstep.
+  The many pinned error and rendered-type strings that named `mut` now speak
+  of a "reference" (e.g. rendered types show `fn(&int32)` / `-> &int32`).
 
 - **`-Wnoreturn-own` — a guaranteed-leak diagnostic for `@noreturn`
   arguments** — a new opt-in warning class reporting an

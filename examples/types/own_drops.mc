@@ -30,12 +30,12 @@ struct res {
     id: int32;
 }
 
-fn res::constructor(mut self: res, id: int32) {
+fn res::constructor(self: &res, id: int32) {
     self.id = id;
     println(f"  open {id}");
 }
 
-fn res::destructor(mut self: res) {
+fn res::destructor(self: &res) {
     println(f"  close {self.id}");
     self.id = -1;
 }

@@ -7,8 +7,8 @@ import "std/string";
 // scheduled destructor on that path (the whole-value hard error from
 // destructors.mc, lifted exactly here), and the caller's let ADOPTS the
 // cleanup obligation, scheduling `T::destructor` like a constructor-sugar
-// let. Like `-> mut` (mut_returns.mc), `own` is a flag on the declaration,
-// not part of the type, and the two never combine: mut lends a view, own
+// let. Like `-> &` (mut_returns.mc), `own` is a flag on the declaration,
+// not part of the type, and the two never combine: a reference lends a view, own
 // hands over a value. No ABI changes anywhere -- own is compile-time
 // policy.
 //
@@ -22,12 +22,12 @@ struct conn {
     id: int32;
 }
 
-fn conn::constructor(mut self: conn, id: int32) {
+fn conn::constructor(self: &conn, id: int32) {
     self.id = id;
     println(f"  open {id}");
 }
 
-fn conn::destructor(mut self: conn) {
+fn conn::destructor(self: &conn) {
     println(f"  close {self.id}");
     self.id = -1;
 }
@@ -68,7 +68,7 @@ struct slot {
     c: conn;
 }
 
-fn slot::take(mut self: slot) -> own conn {
+fn slot::take(self: &slot) -> own conn {
     return move(self.c);
 }
 
@@ -131,7 +131,7 @@ fn main() -> int32 {
     }                                    // close 0
 
     // The marker rides function-pointer TYPES too: `fn(int32) -> own conn`
-    // spells the contract the way `fn(...) -> mut T` spells a mut return,
+    // spells the contract the way `fn(...) -> &T` spells a reference return,
     // so a call through a value -- here a factory local; a field-held
     // callback works the same -- still vouches for adoption. (Assigning an
     // own function to a PLAIN fn type, or the reverse, is a compile error
@@ -159,7 +159,7 @@ fn main() -> int32 {
 
 // The signature travels: an .mci interface stub renders `-> own conn`, so
 // importers adopt identically, and an own/plain mismatch between a
-// prototype and its definition is rejected like a mut mismatch. This lift
+// prototype and its definition is rejected like a reference mismatch. This lift
 // also closed a general escape: in ANY function, `return ok(local)` of an
 // auto-destructed local is now the same hard error as the bare
 // `return local` (the result wrap no longer smuggles a destroyed copy
