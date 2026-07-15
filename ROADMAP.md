@@ -3184,7 +3184,29 @@ already do).
         `-Wdeprecated-mut` class, then de-keyword `mut` (freeing it as an
         identifier)". Nothing in `lib/` or `examples/` uses `mut` anymore, so
         the removal only breaks external code still on the old spelling.
-        Effort S.
+        Effort S. SCOPE ADDITION (USER, 2026-07-15): fold in an
+        editor-support catch-up across ALL THREE editor integrations —
+        `editors/vscode/` (TextMate grammar `syntaxes/mcc.tmLanguage.json`),
+        `editors/neovim/` (`queries/mcc/*.scm`), and `editors/helix/`
+        (`tree-sitter-mcc/`) — all of which have drifted behind the compiler.
+        Specifically `own` must become a RESERVED KEYWORD everywhere: today
+        NONE of the three model `own` at all (VSCode's keyword rule is
+        `\b(fn|let|const|mut|struct|enum|union)\b` — no `own`, no `move`;
+        neovim and helix highlight `mut` but neither lists `own` or `move`),
+        so `-> own T` / `-> own &T` returns and the `move(...)` operator go
+        unhighlighted in every editor. Plus a sweep for any other
+        shipped-but-ungrammared features (audit against `docs/language.md` —
+        e.g. `move`, f-strings, `@`-directives, the Phase-A `&T` / Phase-B
+        `const &T` forms just added). For the tree-sitter grammar (helix):
+        regenerate `parser.c`, extend the corpus tests and
+        `queries/highlights.scm`, and decide per token whether `own` is fully
+        reserved or contextual (via `word:`) where a token must still be
+        usable as an identifier; for VSCode extend the tmLanguage keyword
+        rules; for neovim extend the highlight queries. Natural fit here
+        because Phase C is already the grammar-touching cleanup pass (it
+        removes `mut` from all three grammars); doing the catch-up in the
+        same pass avoids a second editor-grammar churn. Bumps the effort from
+        S toward M.
   - [ ] Phase D — `-> own &T` (genuinely new; sequenced LAST; an expert
         escape hatch, NOT a headline): return a reference that hands the
         caller the cleanup obligation without copying. `new<T>()` (a `T*`)
