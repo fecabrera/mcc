@@ -191,9 +191,11 @@ fn main() -> int32 {
     // A copy is bitwise and never scheduled: no open prints for view, and
     // only the constructed original closes, once. If the type owns a
     // resource, both views name it -- exactly C's problem; copy with care.
+    // `-Wdestructor-copy` flags exactly this copy (this file is the demo,
+    // compiled at plain -Werror); `let view = move(orig);` blesses it.
     {
         let orig = file(42);
-        let view = orig;
+        let view = orig;        // -Wdestructor-copy: an owning value is copied
     }                           // one close: fd 42
 
     return 0;

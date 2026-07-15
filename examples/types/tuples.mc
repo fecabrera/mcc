@@ -18,9 +18,9 @@ fn divmod(a: int32, b: int32) -> tuple<int32, int32> {
 }
 
 // Two same-shape tuples are the same type, across functions and modules, so
-// tuples pass and return by value like structs, and a `const` tuple
+// tuples pass and return by value like structs, and a `const &` tuple
 // parameter travels by hidden reference (elements then read-only).
-fn manhattan(const p: tuple<int32, int32>) -> int32 {
+fn manhattan(const p: &tuple<int32, int32>) -> int32 {
     return p[0] + p[1];
 }
 

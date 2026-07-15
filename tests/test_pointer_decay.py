@@ -47,7 +47,7 @@ def test_pointer_decays_into_concrete_mut_scalar():
 
 def test_pointer_decays_into_concrete_const_struct():
     assert run(
-        POINT + "fn sum(const p: struct point) -> int32 { return p.x + p.y; }\n"
+        POINT + "fn sum(const p: &struct point) -> int32 { return p.x + p.y; }\n"
         "fn main() -> int32 {\n"
         "    let v = point { x = 1, y = 2 };\n"
         "    let q = &v;\n"
@@ -232,7 +232,7 @@ def test_unproven_pointer_at_mut_slot_error_is_pinned():
 def test_unproven_pointer_at_const_slot_error_is_pinned():
     source = (
         "struct box { value: int32; }\n"
-        "fn f(const b: struct box) {}\n"
+        "fn f(const b: &struct box) {}\n"
         "fn g(p: struct box*) { f(p); }\n"
         "fn main() -> int32 { return 0; }"
     )
@@ -308,7 +308,7 @@ def test_generic_inference_through_decay_at_const_slot():
     # `box<int32>*` at `const b: box<T>` binds T = int32 through the
     # pointee -- previously "cannot infer type parameter(s) T".
     assert run(
-        BOX + "fn get<T>(const b: struct box<T>) -> T { return b.value; }\n"
+        BOX + "fn get<T>(const b: &struct box<T>) -> T { return b.value; }\n"
         "fn main() -> int32 {\n"
         "    let b = box { value = 41 as int32 };\n"
         "    let p = &b;\n"
@@ -395,7 +395,7 @@ def test_generic_decay_infers_through_list_pointer():
     # T at a const list<T> slot while the mut slot takes a plain lvalue.
     assert run(
         'import "std/list";\n'
-        "fn steal_len<T>(mut dst: struct list<T>, const src: struct list<T>) {\n"
+        "fn steal_len<T>(mut dst: struct list<T>, const src: &struct list<T>) {\n"
         "    dst.length = src.length;\n"
         "}\n"
         "fn main() -> int32 {\n"
@@ -415,7 +415,7 @@ def test_generic_decay_with_both_arguments_ampersand_shaped():
     # slots receive rvalue pointers, both prove non-null for free.
     assert run(
         'import "std/list";\n'
-        "fn steal_len<T>(mut dst: struct list<T>, const src: struct list<T>) {\n"
+        "fn steal_len<T>(mut dst: struct list<T>, const src: &struct list<T>) {\n"
         "    dst.length = src.length;\n"
         "}\n"
         "fn main() -> int32 {\n"
@@ -430,7 +430,7 @@ def test_generic_decay_with_both_arguments_ampersand_shaped():
 
 def test_generic_unproven_pointer_error_is_pinned():
     source = (
-        BOX + "fn get<T>(const b: struct box<T>) -> T { return b.value; }\n"
+        BOX + "fn get<T>(const b: &struct box<T>) -> T { return b.value; }\n"
         "fn g(p: struct box<int32>*) -> int32 { return get(p); }\n"
         "fn main() -> int32 { return 0; }"
     )
@@ -457,7 +457,7 @@ def test_generic_arity_error_survives_the_decay_retry():
 def test_cannot_infer_is_preserved_without_a_pointer_to_decay():
     with pytest.raises(LangError, match=r"cannot infer type parameter\(s\) T"):
         compile_ir(
-            BOX + "fn get<T>(const b: struct box<T>) -> T { return b.value; }\n"
+            BOX + "fn get<T>(const b: &struct box<T>) -> T { return b.value; }\n"
             "fn main() -> int32 { get(5); return 0; }"
         )
 

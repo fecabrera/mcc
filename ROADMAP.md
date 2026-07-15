@@ -2535,25 +2535,24 @@ already do).
             two copy-site classes first (each judges one statement
             in isolation, no flow analysis), the path-sensitive
             checker last
-        - [ ] `-Wdestructor-copy` — warn at the COPY SITE on a
-              bitwise copy of a value whose type declares a
-              destructor (the moment two views come to name one
-              LIVE resource: `let b = a;`), the direction the
-              shipped copies-are-not-tracked stance records; the
-              shipped `move(v)` assertion is the sanctioned
-              relinquishing spelling such a warning would exempt.
-              Scoped by the separation ruling above: the
-              copy-of-destroyed assignment case is `-Wown-assign`'s,
-              not this class's. SCOPE RULED (USER, 2026-07-14): fires
-              not only at explicit `let b = a` copies but also at
-              BY-VALUE-PARAM CALL SITES — the implicit copies Phase B
-              of the [`&`/`const` redesign](#functions-and-methods)
-              creates when `const T` on an aggregate flips to by-value.
-              A bitwise copy of a destructor-owning type is essentially
-              always wrong (no copy-constructor → both copies
-              double-free), so every such site must be `const &` or an
-              explicit `move`; must land with Phase B to avoid a
-              silent-aliasing gap
+        - [x] `-Wdestructor-copy` — SHIPPED 2026-07-15 with Phase B of the
+              `&`/`const` redesign, with the by-value-param call-site scope.
+              Warns at the COPY SITE on a bitwise copy of a value whose type
+              declares a destructor (two views come to name one LIVE resource):
+              an explicit `let b = a;` AND a BY-VALUE-PARAM CALL SITE (the
+              implicit copy a plain `const x: T` / bare `x: T` of an owning
+              type makes when passed a live variable/field/element — the copies
+              Phase B newly creates). `move(v)` — now accepted in `let`
+              initializers and by-value arguments as well as `-> own` returns —
+              is the sanctioned relinquishing spelling that exempts the site,
+              as is taking the value by `const &`. A fresh temporary (an
+              `-> own` initializer, a constructor, an ephemeral chained
+              receiver spilled to a `0recv...` local) is a transfer, not an
+              alias, and never warns. Scoped by the separation ruling above:
+              the copy-of-destroyed assignment case stays `-Wown-assign`'s, not
+              this class's. New opt-in class in `WARNING_CLASSES`
+              (`CodeGen.warn_destructor_copy`), default-off, joins `-Wall`;
+              `examples/types/destructors.mc` is the CI demo (plain `-Werror`).
         - [ ] `-Wown-assign` — a DEDICATED diagnostic (USER RULING:
               its own named class, severity separable from generic
               destructor copies; the warning-class option chosen
@@ -3107,12 +3106,32 @@ already do).
         The remaining sub-point — whether `mut` de-keywords (freeing it as an
         identifier) — is deferred to Phase C, which now shrinks to just
         "close the deprecation window" (remove `mut`, de-keyword).
-  - [ ] Phase B — the `const` flip (the ONE real ABI/semantics change):
-        `const x: T` on an aggregate flips from today's hidden-reference
-        view to a genuine by-value read-only COPY; `const x: &T` takes over
-        the view role. Available uniformly on all types (today a by-value
-        read-only struct param does not exist; a `const &` scalar is new
-        too). Depends on Phase A having migrated stdlib/examples to
+  - [x] Phase B — the `const` flip (the ONE real ABI/semantics change).
+        SHIPPED 2026-07-15. `const x: T` on an aggregate now flips from the
+        hidden-reference view to a genuine by-value read-only COPY, and
+        `const x: &T` is the view (a new `constref_params` registry: a subset
+        of `const_params`, read-only, hidden-reference for every type — the
+        read-only counterpart of `mut_params`). `hidden_ref_indices` is now
+        `mut_params ∪ constref_params` (the const-aggregate special case is
+        gone). RESOLVED both trailing OPENs, both YES: (1) **`const` erases
+        from function types entirely** — `function_type` drops the
+        const-aggregate→constref derivation, so `fn(const T)` ≡ `fn(T)` for
+        every type; a `const &T` (const riding a mutref index) reclassifies to
+        a read-only `constref`, spelled `fn(const &T)`. (2) **the `@extern`
+        `const`-param ban is LIFTED** for by-value `const T` (the ordinary C
+        by-value convention); the reference forms `&T`/`const &T` stay
+        rejected on `@extern`. The `-> const &T` read-only-reference RETURN was
+        DEFERRED (left OPEN below — it did not fall out trivially and is not in
+        the original sketch). Migration: every non-scalar `const x: T` in
+        `lib/` and `examples/` mechanically rewritten to `const x: &T`
+        (behavior/IR preserved); the `args...` collector stays a by-value
+        `const slice<const any>` (a header copy, no owned resource). The
+        coupled `-Wdestructor-copy` shipped with it (see the use-after-move
+        effort) with the by-value-param call-site scope; `move(v)` gained
+        `let`-initializer and by-value-argument positions to bless a copy.
+        Available uniformly on all types (a by-value read-only struct param
+        and a `const &` scalar are both new). Depended on Phase A having
+        migrated stdlib/examples to
         `const &` wherever a view was intended. Bare `x: T` is ALREADY
         read-write by-value (verified) — NOT a change, so nobody should
         "implement" it. MIGRATION RULING (USER, 2026-07-14): the Phase-B
@@ -3152,11 +3171,12 @@ already do).
         elements, `let x: const T`, the shipped `extends slice<const E>`
         covariant bound) — the same keyword now means three things, spelled
         out in migration docs. Effort S mechanically, M with the shipping
-        set. OPEN (deferrable): allow `-> const &T` (read-only reference
-        return)? The split makes it expressible for the first time (today's
-        `-> mut` / `-> &` is writable-only), a symmetry point not in the
-        original sketch. OPEN (deferrable, recommend yes): `const` erases
-        from fn types entirely
+        set. STILL OPEN (deferred at Phase B ship): allow `-> const &T`
+        (read-only reference return)? The split makes it expressible for the
+        first time (today's `-> mut` / `-> &` is writable-only), a symmetry
+        point not in the original sketch — it did not fall out of Phase B
+        trivially, so it stays a future item. RESOLVED at Phase B ship (was
+        "recommend yes"): `const` erases from fn types entirely — DONE.
   - [ ] Phase C — close the deprecation window: retire `mut` / `-> mut`
         entirely once the Phase-A window has run its course. Now that Phase A
         shipped as a deprecation window (not a big-bang), this is purely

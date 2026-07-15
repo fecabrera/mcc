@@ -354,13 +354,17 @@ def function_type(
     Its LLVM type is a pointer to the LLVM function type, so a value of it is
     callable directly.
 
-    The one canonicalization point for the parameter qualifiers: a ``const``
-    qualifier on a parameter type is stripped here -- on an aggregate it
-    records the hidden-reference index (the calling convention it implies),
-    on a scalar it simply drops (``fn(const int32)`` *is* ``fn(int32)``: a
-    by-value copy is read-only to the caller either way). Both producers --
-    a spelled ``fn(...)`` type resolving possibly-``const`` parameter types,
-    and a function value deriving the sets from a declaration's registries --
+    The one canonicalization point for the parameter qualifiers. A plain
+    ``const`` on a parameter type carries no caller contract -- a by-value
+    read-only copy is read-only to the *callee* only -- so it erases entirely
+    here, of every type: ``fn(const int32)`` *is* ``fn(int32)`` and (since
+    Phase B) ``fn(const point)`` *is* ``fn(point)``. A ``const`` that rides on
+    a reference index (``const &T``, the read-only view) is a real calling
+    convention -- a pointer to the caller's storage -- so it is preserved: the
+    index moves from ``mutref`` (writable) to ``constref`` (read-only),
+    spelled ``const &T`` and passed by hidden reference. Both producers -- a
+    spelled ``fn(...)`` type resolving possibly-``const`` parameter types, and
+    a function value deriving the sets from a declaration's registries --
     funnel through here, so the two spellings build one identical type.
 
     Args:
@@ -371,11 +375,12 @@ def function_type(
             the type carries, spelled into its name (so
             ``fn(@nonnull char*) -> void`` is distinct from its plain form)
             and checked at calls through a value of the type.
-        mutref: Indices of ``mut`` parameters -- passed as a pointer to the
-            caller's own storage, spelled into the name and the LLVM type.
-        constref: Indices of ``const`` aggregate parameters -- passed by
-            hidden (read-only) reference; unioned with the indices derived
-            from ``const``-qualified aggregate types in ``params``.
+        mutref: Indices of writable ``&T`` parameters -- passed as a pointer to
+            the caller's own storage, spelled into the name and the LLVM type.
+            A ``const &T`` index passed here is reclassified to ``constref``.
+        constref: Indices of ``const &T`` read-only reference parameters --
+            passed by hidden (read-only) reference; unioned with the ``mutref``
+            indices whose parameter type is ``const`` (the ``const &T`` view).
         mutret: ``True`` for a ``-> mut`` return -- the call returns a
             pointer to the returned storage (never erased: a ``mut`` return
             always changes the return convention), spelled into the name and
@@ -389,13 +394,19 @@ def function_type(
     """
     stripped = []
     derived = set(constref)
+    mut = set(mutref)
     for i, p in enumerate(params):
         if p.const:
             p = strip_const(p)
-            if is_aggregate(p):
-                derived.add(i)  # a scalar's const drops instead (see above)
+            if i in mut:
+                # `const &T`: a read-only reference. Keep the pointer calling
+                # convention (move it to constref) but shed writability.
+                mut.discard(i)
+                derived.add(i)
+            # else a by-value `const T`: erases entirely (scalar or aggregate).
         stripped.append(p)
     params = tuple(stripped)
+    mutref = frozenset(mut)
     constref = frozenset(derived)
     hidden = mutref | constref
     fnty = ir.FunctionType(
@@ -405,8 +416,8 @@ def function_type(
     )
     parts = [
         ("@nonnull " if i in nonnull else "")
-        + ("&" if i in mutref else "")
         + ("const " if i in constref else "")
+        + ("&" if i in hidden else "")
         + p.name
         for i, p in enumerate(params)
     ]

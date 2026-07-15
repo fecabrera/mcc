@@ -24,12 +24,12 @@ import "std/format";
  * @param str: the bytes to write, unchanged
  */
 @inline
-fn print<T extends slice<const char>>(const str: T) {
+fn print<T extends slice<const char>>(const str: &T) {
     print(stdout!, str);
 }
 
 @inline
-fn print<T extends slice<const char>>(@nonnull f: FILE*, const str: T) {
+fn print<T extends slice<const char>>(@nonnull f: FILE*, const str: &T) {
     let view = str as slice<const char>;
     fwrite(view.data as byte*, sizeof(char), view.length, f);
 }
@@ -45,12 +45,12 @@ fn print<T extends slice<const char>>(@nonnull f: FILE*, const str: T) {
  * @param str: the bytes to write, unchanged
  */
 @inline
-fn println<T extends slice<const char>>(const str: T) {
+fn println<T extends slice<const char>>(const str: &T) {
     println(stdout!, str);
 }
 
 @inline
-fn println<T extends slice<const char>>(@nonnull f: FILE*, const str: T) {
+fn println<T extends slice<const char>>(@nonnull f: FILE*, const str: &T) {
     print(f, str);
     fputc('\n' as int32, f);
 }
@@ -76,7 +76,7 @@ fn writechar(const c: char) {
  */
 @deprecated("use print() instead")
 @inline
-fn writestr<T extends slice<char>>(const str: T) {
+fn writestr<T extends slice<char>>(const str: &T) {
     writestr(str as slice<const char>);
 }
 
@@ -88,7 +88,7 @@ fn writestr<T extends slice<char>>(const str: T) {
  */
 @deprecated("use print() instead")
 @inline
-fn writestr(const str: const slice<const char>) {
+fn writestr(const str: &const slice<const char>) {
     fwrite(str.data as byte*, sizeof(char), str.length, stdout);
 }
 
@@ -101,7 +101,7 @@ fn writestr(const str: const slice<const char>) {
  */
 @deprecated("use println() instead")
 @inline
-fn writeln<T extends slice<char>>(const str: T) {
+fn writeln<T extends slice<char>>(const str: &T) {
     writestr(str);
     writechar('\n');
 }
@@ -114,7 +114,7 @@ fn writeln<T extends slice<char>>(const str: T) {
  */
 @deprecated("use println() instead")
 @inline
-fn writeln(const str: slice<const char>) {
+fn writeln(const str: &slice<const char>) {
     writestr(str);
     writechar('\n');
 }
@@ -128,14 +128,14 @@ fn writeln(const str: slice<const char>) {
  * @param msg:    rendered message text
  */
 @private @noreturn
-fn fail(const msg: slice<const char>) {
+fn fail(const msg: &slice<const char>) {
     fflush(stdout);
     println(stderr!, msg);
     abort();
 }
 
 @private @noreturn
-fn fail(const prefix: slice<const char>, const msg: slice<const char>) {
+fn fail(const prefix: &slice<const char>, const msg: &slice<const char>) {
     fflush(stdout);
     print(stderr!, prefix);
     println(stderr!, msg);
@@ -159,7 +159,7 @@ fn fail(const prefix: slice<const char>, const msg: slice<const char>) {
  * @param msg: message text, written as-is
  */
 @noreturn
-fn panic<T extends slice<const char>>(const msg: T) {
+fn panic<T extends slice<const char>>(const msg: &T) {
     fail(msg as slice<const char>);
 }
 
@@ -178,7 +178,7 @@ fn panic<T extends slice<const char>>(const msg: T) {
  * @param cond: condition expected to hold
  * @param msg:  message text, written as-is on failure
  */
-fn assert<T extends slice<const char>>(const cond: bool, const msg: T) {
+fn assert<T extends slice<const char>>(const cond: bool, const msg: &T) {
     if (!cond) {
         fail("assertion failed: ", msg as slice<const char>);
     }

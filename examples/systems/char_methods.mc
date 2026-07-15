@@ -30,7 +30,7 @@ fn describe(c: char) {
 // Case-insensitive equality, the classic use of char::lower: fold both
 // sides to one case and compare. String literals at the call adapt to the
 // slice<const char> parameters on their own (functions/overloading.mc).
-fn eq_ignore_case(const a: slice<const char>, const b: slice<const char>) -> bool {
+fn eq_ignore_case(const a: &slice<const char>, const b: &slice<const char>) -> bool {
     if (a.length != b.length) return false;
     for i in range(a.length) {
         if (char::lower(a[i]) != char::lower(b[i])) return false;
@@ -40,7 +40,7 @@ fn eq_ignore_case(const a: slice<const char>, const b: slice<const char>) -> boo
 
 // char::is_hex admits both letter cases, so validating a "0x" literal is
 // a prefix check plus one predicate per remaining character.
-fn is_hex_literal(const s: slice<const char>) -> bool {
+fn is_hex_literal(const s: &slice<const char>) -> bool {
     if (s.length < 3 or s[0] != '0' or s[1] != 'x') return false;
     for i in range(2, s.length) {
         if (!char::is_hex(s[i])) return false;

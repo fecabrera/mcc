@@ -6,9 +6,9 @@ import "std/io";
 // family: one `init` name, several ways to seed it. This file keeps the
 // whole set in one module; sets are open, so members may also come from
 // different modules (open_overloads.mc).
-// Builds on functions.mc and mut_params.mc (what `reference self` means);
+// Builds on functions.mc and reference_params.mc (what `reference self` means);
 // generic overload sets, which resolve in the same order, are covered in
-// mut_overloads.mc, and a set mixing concrete members with a generic
+// reference_overloads.mc, and a set mixing concrete members with a generic
 // template in mixed_overloads.mc.
 
 struct counter {
@@ -50,7 +50,7 @@ fn counter_init(self: &struct counter, label: slice<const char>) {
 // an untyped literal call like f(0) is then ambiguous; `0 as int64` or a
 // typed variable disambiguates.
 
-fn show(name: char*, const c: struct counter) {
+fn show(name: char*, const c: &struct counter) {
     println(f"{name}: value={c.value} step={c.step}");
 }
 
@@ -81,9 +81,9 @@ fn main() -> int32 {
 // An overloaded name is also not a function value (`let g = counter_init;`
 // has no single address to take).
 
-// See also: mut_overloads.mc (generic overload sets and the resolution
+// See also: reference_overloads.mc (generic overload sets and the resolution
 // order), mixed_overloads.mc (a generic template joining a concrete set),
 // overload_subsumption.mc (the tie-break ordering rank-tied templates),
 // open_overloads.mc (extending a set from another module),
-// mut_params.mc (reference parameters), types/structs.mc (struct types, covered
+// reference_params.mc (reference parameters), types/structs.mc (struct types, covered
 // later in the tour). Full rules: docs/language.md, "Function overloading".

@@ -1,12 +1,14 @@
 import "std/io";
 import "std/memory";
 
-// Pointer decay into `const`/`&` parameters: a proven-non-null `T*`
-// argument at a hidden-reference slot (a `const T` struct parameter, or a
-// `&T` parameter of any type) implicitly dereferences. The pointer value
+// Pointer decay into hidden-reference parameters: a proven-non-null `T*`
+// argument at a hidden-reference slot (a `&T` parameter, or its read-only
+// `const &T` view, of any type) implicitly dereferences. The pointer value
 // is forwarded as the hidden reference, so a stack value and a heap pointer
 // call the same function with the same spelling, no `*p` at the call site.
-// Prerequisites: mut_params.mc and const_params.mc for the two slots,
+// A plain by-value `const T` is NOT a hidden-reference slot (since Phase B it
+// is a copy) and takes no decay -- see the tail comment.
+// Prerequisites: reference_params.mc and const_params.mc for the two slots,
 // nonnull_narrowing.mc for the null-check proof, memory/pointers.mc for the
 // heap.
 
@@ -14,7 +16,7 @@ struct point { x: int32; y: int32; }
 
 // Both parameters travel as hidden references: `p` is written through,
 // `by` is read-only. Nothing here is decay-specific; the call sites decide.
-fn shift(p: &struct point, const by: struct point) {
+fn shift(p: &struct point, const by: &struct point) {
     p.x += by.x;
     p.y += by.y;
 }
@@ -22,7 +24,7 @@ fn shift(p: &struct point, const by: struct point) {
 fn main() -> int32 {
     let delta = point { x = 10, y = 20 };
 
-    // A stack value: the ordinary &/const call from mut_params.mc.
+    // A stack value: the ordinary &/const & call from reference_params.mc.
     let s = point { x = 1, y = 2 };
     shift(s, delta);
     println(f"stack -> ({s.x}, {s.y})");
@@ -55,6 +57,6 @@ fn main() -> int32 {
 
 // Decay is exactly one level deep and only into hidden-reference slots: a
 // `const` scalar or a plain by-value `T` parameter still needs an explicit
-// `*p`. See also: mut_params.mc and const_params.mc for the receiving slots;
+// `*p`. See also: reference_params.mc and const_params.mc for the receiving slots;
 // nonnull_narrowing.mc and nonnull_assert.mc for the ways a pointer becomes
 // proven; memory/pointers.mc for new/dealloc.

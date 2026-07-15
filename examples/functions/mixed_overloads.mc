@@ -8,7 +8,7 @@ import "std/io";
 // call it matches exactly, and the generic tier covers everything else. The
 // motivating shape is fast paths plus a catch-all: hand-tuned members for
 // the common types, one template for the rest.
-// Builds on overloading.mc (concrete sets) and mut_overloads.mc (resolution
+// Builds on overloading.mc (concrete sets) and reference_overloads.mc (resolution
 // inside a generic set); generic functions themselves are covered in
 // types/generics.mc.
 
@@ -52,7 +52,7 @@ fn main() -> int32 {
 // "describe(int32)" and "describe(float64)", but a template beside a single
 // concrete member leaves that member's plain C-linkable symbol intact.
 
-// See also: overloading.mc (concrete sets and their rules), mut_overloads.mc
+// See also: overloading.mc (concrete sets and their rules), reference_overloads.mc
 // (specificity and reference markers inside a generic set), overload_subsumption.mc (the
 // subsumption tie-break among rank-tied templates), types/generics.mc
 // (monomorphization), types/type_groups.mc (closed type groups adding a

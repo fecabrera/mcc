@@ -73,7 +73,7 @@ fn stack<T>::pop(self: &stack<T>) -> T {
  *
  * @return the top value
  */
-fn stack<T>::peek(const self: stack<T>) -> T {
+fn stack<T>::peek(const self: &stack<T>) -> T {
     return self.data![self.top - 1];
 }
 
@@ -85,7 +85,7 @@ fn stack<T>::peek(const self: stack<T>) -> T {
  * @return the live element count
  */
 @property
-fn stack<T>::length(const self: stack<T>) -> uint64 {
+fn stack<T>::length(const self: &stack<T>) -> uint64 {
     return self.top;
 }
 
@@ -96,7 +96,7 @@ fn stack<T>::length(const self: stack<T>) -> uint64 {
  *
  * @return true if the stack is empty, false otherwise
  */
-fn stack<T>::is_empty(const self: stack<T>) -> bool {
+fn stack<T>::is_empty(const self: &stack<T>) -> bool {
     return self.top == 0;
 }
 

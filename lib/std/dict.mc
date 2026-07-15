@@ -166,7 +166,7 @@ fn dict<V>::set(self: &dict<V>, @nonnull key: char*, value: V) {
  *
  * @return true if key was found, false otherwise
  */
-fn dict<V>::get(const self: dict<V>, @nonnull key: char*, out: &V) -> bool {
+fn dict<V>::get(const self: &dict<V>, @nonnull key: char*, out: &V) -> bool {
     let slot = hash(key) % self.capacity;
 
     while (self.entries![slot].state != dict_entry_state::EMPTY) {
@@ -191,7 +191,7 @@ fn dict<V>::get(const self: dict<V>, @nonnull key: char*, out: &V) -> bool {
  *
  * @return true if key has an entry
  */
-fn dict<V>::has(const self: dict<V>, @nonnull key: char*) -> bool {
+fn dict<V>::has(const self: &dict<V>, @nonnull key: char*) -> bool {
     let slot = hash(key) % self.capacity;
 
     while (self.entries![slot].state != dict_entry_state::EMPTY) {
@@ -218,7 +218,7 @@ fn dict<V>::has(const self: dict<V>, @nonnull key: char*) -> bool {
  * @return the value associated with key
  */
 @accessor("get")
-fn dict<V>::at(const self: dict<V>, @nonnull key: char*) -> V {
+fn dict<V>::at(const self: &dict<V>, @nonnull key: char*) -> V {
     let slot = hash(key) % self.capacity;
 
     while (self.entries![slot].state != dict_entry_state::EMPTY) {

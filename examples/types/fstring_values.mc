@@ -40,13 +40,13 @@ fn mk(id: int32) -> own probe {
     return probe(id);
 }
 
-fn format(str: &string, const value: probe, const modifier: slice<char>) {
+fn format(str: &string, const value: &probe, const modifier: &slice<char>) {
     format(str, value.id, modifier);
 }
 
 // A string-taking consumer for the argument-position demo: the rendered
 // temporary binds a `const string` parameter directly.
-fn takes(const s: const string) {
+fn takes(const s: &const string) {
     println(f"  takes: {s as slice<const char>}");
 }
 
@@ -58,7 +58,7 @@ fn greet(name: slice<const char>) -> own string {
 }
 
 // A concrete slice position for the escape-hatch demo.
-fn show(const s: slice<const char>) {
+fn show(const s: &slice<const char>) {
     print("  got ");
     println(s);
 }

@@ -340,7 +340,9 @@ class InterfaceWriter:
             f"{'@nonnull ' if pname in func.nonnull_params else ''}"
             f"{'@format ' if pname in func.format_params else ''}"
             f"{'const ' if pname in func.const_params else ''}"
-            f"{pname}: {'&' if pname in func.mut_params else ''}{ptype}"
+            f"{pname}: "
+            f"{'&' if pname in func.mut_params or pname in func.constref_params else ''}"
+            f"{ptype}"
             for pname, ptype in func.params
         ]
         if func.variadic:

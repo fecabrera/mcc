@@ -85,7 +85,7 @@ fn ring<T>::pop(self: &ring<T>) -> T {
  *
  * @return true if index < self.length
  */
-fn ring<T>::has(const self: ring<T>, index: uint64) -> bool {
+fn ring<T>::has(const self: &ring<T>, index: uint64) -> bool {
     return index < self.length;
 }
 
@@ -115,7 +115,7 @@ fn ring<T>::at(self: &ring<T>, index: uint64) -> &T {
  *
  * @return the front value
  */
-fn ring<T>::peek(const self: ring<T>) -> T {
+fn ring<T>::peek(const self: &ring<T>) -> T {
     return self.data![self.head];
 }
 
@@ -126,7 +126,7 @@ fn ring<T>::peek(const self: ring<T>) -> T {
  *
  * @return true if the ring is empty, false otherwise
  */
-fn ring<T>::is_empty(const self: ring<T>) -> bool {
+fn ring<T>::is_empty(const self: &ring<T>) -> bool {
     return self.length == 0;
 }
 

@@ -2277,7 +2277,7 @@ def test_guarded_projection_decays_into_generic_const():
     assert run(
         "struct Cell<T> { n: T; }\n"
         "struct Holder { cell: Cell<int32>*; }\n"
-        "fn read<T>(const c: Cell<T>) -> T { return c.n; }\n"
+        "fn read<T>(const c: &Cell<T>) -> T { return c.n; }\n"
         "fn main() -> int32 {\n"
         "    let c = struct Cell<int32> { n = 6 };\n"
         "    let h = struct Holder { cell = &c };\n"

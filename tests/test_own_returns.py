@@ -230,10 +230,10 @@ def test_move_outside_an_own_function_is_rejected():
         )
 
 
-def test_move_outside_a_return_is_rejected():
-    # move() behaves like a builtin fn move<T>(v: T) -> T, but only a
-    # return in an own function gives the assertion a transfer target --
-    # a let (which would imply an adoption that does not happen) rejects.
+def test_move_in_a_nested_operand_is_rejected():
+    # move() behaves like a builtin fn move<T>(v: T) -> T. It is legal in an
+    # own return, a let initializer, and a by-value argument (where it blesses
+    # a copy); a nested operand gives it no transfer target and rejects.
     with pytest.raises(
         LangError,
         match=r"move\(\.\.\.\) has no transfer target here",
@@ -243,11 +243,26 @@ def test_move_outside_a_return_is_rejected():
             + """
             fn main() -> int32 {
                 let r: res;
-                let s = move(r);
+                let n = move(r).h + 1;
                 return 0;
             }
             """
         )
+
+
+def test_move_in_a_let_initializer_is_accepted():
+    # Phase B: `let s = move(r);` is the sanctioned relinquishing spelling for a
+    # bitwise copy -- accepted, and exempt from -Wdestructor-copy.
+    compile_ir(
+        RES
+        + """
+        fn main() -> int32 {
+            let r: res;
+            let s = move(r);
+            return 0;
+        }
+        """
+    )
 
 
 def test_move_composes_inside_the_ok_payload():

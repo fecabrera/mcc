@@ -510,9 +510,11 @@ def test_volatile_union_member_access():
     assert "store volatile" in ir_text and "load volatile" in ir_text
 
 
-def test_const_union_parameter_passes_by_hidden_reference():
+def test_const_ref_union_parameter_passes_by_hidden_reference():
+    # Since Phase B the hidden-reference view is spelled `const &T` (a plain
+    # `const T` union is a by-value read-only copy).
     ir_text = compile_ir(
-        VALUE + "fn read(const v: union value) -> int64 { return v.i; }\n"
+        VALUE + "fn read(const v: &union value) -> int64 { return v.i; }\n"
         "fn main() -> int32 {\n"
         "    let v = value { i = 1 };\n"
         "    return read(v) as int32;\n"

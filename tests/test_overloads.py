@@ -958,11 +958,12 @@ def test_const_slice_value_rejected_by_mutable_slice_overload():
 
 
 def test_hidden_ref_sharing_unchanged_when_not_overloaded():
-    # A non-overloaded const-struct call still passes the caller's storage
-    # directly (the direct-call fast path, no spill).
+    # A non-overloaded `const &` call still passes the caller's storage
+    # directly (the direct-call fast path, no spill). Since Phase B the
+    # hidden-reference view is spelled `const &T`; a plain `const T` copies.
     out = compile_ir(
         "struct point { x: int32; y: int32; }\n"
-        "fn total(const p: point) -> int32 { return p.x + p.y; }\n"
+        "fn total(const p: &point) -> int32 { return p.x + p.y; }\n"
         "fn main() -> int32 {\n"
         "    let p = struct point { x = 3, y = 4 };\n"
         "    return total(p);\n"

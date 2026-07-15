@@ -2,11 +2,11 @@ import "std/io";
 
 // A struct boxes into an `any` too, but only into a `const any` target and
 // only BY HIDDEN REFERENCE: the payload holds a pointer to the value's
-// existing storage (the same convention a `const`/`&` struct parameter
+// existing storage (the same convention a `const &`/`&` struct parameter
 // travels through, see functions/const_params.mc), tagged as the struct type
 // itself (`point`, NOT `point*`). `case type` / `with` recover it as a
 // read-only alias with no copy, so the arm reads the caller's live fields and
-// can hand the binding on to a `const value: point` function that shares that
+// can hand the binding on to a `const value: &point` function that shares that
 // same storage again. The archetypal `const any` position is the
 // `slice<const any>` a native variadic collects into, which is where this
 // example boxes from.
@@ -16,7 +16,7 @@ import "std/io";
 // Prerequisites: any.mc (the box, single-type `case type`, and the `&s`
 // escape hatch this extends), with_unwrap.mc (the one-pattern `with` sugar),
 // functions/native_variadics.mc (the `slice<const any>` a variadic collects),
-// and functions/const_params.mc (the hidden reference a `const` struct param
+// and functions/const_params.mc (the hidden reference a `const &` struct param
 // already uses).
 
 struct point {
@@ -24,16 +24,17 @@ struct point {
     y: int32;
 }
 
-// A `const value: point` consumer. A `const` struct parameter is itself a
-// hidden reference, so handing it a recovered `point` binding copies nothing:
-// the same caller storage flows all the way through.
-fn manhattan(const p: point) -> int32 {
+// A `const &point` consumer. A `const &` parameter is a hidden reference, so
+// handing it a recovered `point` binding copies nothing: the same caller
+// storage flows all the way through. (A plain by-value `const point` would
+// take a copy instead -- see functions/const_params.mc for the Phase B split.)
+fn manhattan(const p: &point) -> int32 {
     let ax = p.x < 0 ? -p.x : p.x;
     let ay = p.y < 0 ? -p.y : p.y;
     return ax + ay;
 }
 
-// A collecting function: `args...` is sugar for `const args: slice<const any>`,
+// A collecting function: `args...` is sugar for `const args: &slice<const any>`,
 // the archetypal `const any` position. Each extra argument is boxed caller-side
 // into that slice; a struct argument boxes by hidden reference.
 fn describe(args...) {
@@ -94,7 +95,7 @@ fn main() -> int32 {
 // with_unwrap.mc for the `with` sugar used above; case_type_groups.mc and
 // generic_case_arms.mc for multi-type and generic arms (a generic `when T v:`
 // recovers a struct tag by reference too); functions/const_params.mc for the
-// hidden reference a `const` struct parameter shares with this box;
+// hidden reference a `const &` struct parameter shares with this box;
 // functions/native_variadics.mc for the `slice<const any>` collection this
 // boxes from; the docs section "The any type" for the owning/union/array
 // rejection rules.

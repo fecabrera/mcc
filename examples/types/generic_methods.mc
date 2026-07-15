@@ -25,7 +25,7 @@ struct point<T> {
 // got point<float64>"). A bare `self: point` would leave `T` mentioned
 // nowhere in the signature, so a bare call could not infer it. Here
 // `const self` reads the receiver without copying it.
-fn point<T>::sum(const self: point<T>) -> T {
+fn point<T>::sum(const self: &point<T>) -> T {
     return self.x + self.y;
 }
 
@@ -58,7 +58,7 @@ struct box<T> {
 // parse error "type arguments after 'labeled' are not supported; the
 // qualifier's list names the struct instantiation and a method's own type
 // parameters are inferred".
-fn box<T>::labeled<U>(const self: box<T>, label: U) -> tuple<U, T> {
+fn box<T>::labeled<U>(const self: &box<T>, label: U) -> tuple<U, T> {
     return (label, self.value);
 }
 

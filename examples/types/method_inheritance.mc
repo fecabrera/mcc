@@ -34,7 +34,7 @@ fn point<T>::constructor(self: &point<T>, x: T, y: T) {
     self.y = y;
 }
 
-fn point<T>::sum(const self: point<T>) -> T {
+fn point<T>::sum(const self: &point<T>) -> T {
     return self.x + self.y;
 }
 
@@ -47,7 +47,7 @@ fn point<T>::translate(self: &point<T>, dx: T, dy: T) {
     self.y += dy;
 }
 
-fn point<T>::describe(const self: point<T>) {
+fn point<T>::describe(const self: &point<T>) {
     println("  [base]    point<T>::describe");
 }
 
@@ -66,7 +66,7 @@ fn pointf::constructor<U>(self: &pointf, x: U, y: U) {
 
 // A derived SAME-SHAPE member shadows the inherited one: override
 // semantics, no marker keyword (the hop beats specificity).
-fn pointf::describe(const self: pointf) {
+fn pointf::describe(const self: &pointf) {
     println("  [derived] pointf::describe");
 }
 

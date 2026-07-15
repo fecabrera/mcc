@@ -28,7 +28,7 @@ struct point {
 // member of the stdlib's `string::append` set. Same name, same receiver
 // shape as the stdlib members; the value parameter's type is what selects
 // it. No annotation, no registration: declaring it is joining.
-fn string::append(str: &string, const value: struct point) {
+fn string::append(str: &string, const value: &struct point) {
     let buf: char[32];
     let n = snprintf(buf, 32, "(%d, %d)", value.x, value.y);
     // Appending the rendered text re-enters the same whole-program set and
@@ -63,6 +63,6 @@ fn main() -> int32 {
 
 // See also: overloading.mc (concrete sets in one module and the
 // must-differ rule), mixed_overloads.mc (generic and concrete members
-// sharing a set, the concrete > bounded > unbounded rank), mut_overloads.mc
+// sharing a set, the concrete > bounded > unbounded rank), reference_overloads.mc
 // (resolution inside a generic set). Full rules: docs/language.md,
 // "Function overloading".

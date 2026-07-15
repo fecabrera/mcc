@@ -684,14 +684,28 @@ def test_handwritten_proto_parses():
     assert fn.nonnull_params == {"p"}
 
 
+def test_const_ref_and_by_value_const_round_trip_distinctly():
+    # Phase B: the by-value `const x: T` and the `const x: &T` view are
+    # distinct conventions, and the stub must spell them apart so the importer
+    # rebuilds each exactly.
+    stub = iface(
+        "struct big { a: int64; }\n"
+        "fn by_value(const s: struct big) -> int64 { return s.a; }\n"
+        "fn by_ref(const s: &struct big) -> int64 { return s.a; }\n"
+    )
+    assert "fn by_value(const s: big) -> int64;" in stub
+    assert "fn by_ref(const s: &big) -> int64;" in stub
+
+
 def test_proto_call_uses_hidden_references():
     # A proto is called with the mcc convention: a pointer to the caller's
-    # storage at every mut and const-struct position, exactly as if the
-    # definition were in this module.
+    # storage at every mut and const-reference position, exactly as if the
+    # definition were in this module. (Since Phase B the struct view is the
+    # `const &T` spelling; a plain `const T` is a by-value copy.)
     ir_text = compile_ir(
         "struct big { a: int64; b: int64; }\n"
         "fn set(mut out: int32) -> bool;\n"
-        "fn peek(const s: struct big) -> int64;\n"
+        "fn peek(const s: &struct big) -> int64;\n"
         "fn main() -> int32 {\n"
         "    let x: int32 = 0;\n"
         "    set(x);\n"

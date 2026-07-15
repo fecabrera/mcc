@@ -51,7 +51,7 @@ fn string::append(self: &string, @nonnull str: char*) {
  * @param str:  slice of characters to append
  */
 @inline
-fn string::format(const self: string, args...) -> own string {
+fn string::format(const self: &string, args...) -> own string {
     return move((self as slice<const char>).format(args));
 }
 
@@ -69,7 +69,7 @@ fn string::format(const self: string, args...) -> own string {
  *         otherwise
  */
 @inline
-fn string::equals(const self: string, @nonnull arr: char*) -> bool {
+fn string::equals(const self: &string, @nonnull arr: char*) -> bool {
     for el in enumerate(self) {
         if (el.value != arr[el.index])
             return false;
@@ -92,7 +92,7 @@ fn string::equals(const self: string, @nonnull arr: char*) -> bool {
  *         otherwise
  */
 @inline
-fn slice::equals(const self: slice<const char>, const str: string) -> bool {
+fn slice::equals(const self: &slice<const char>, const str: &string) -> bool {
     return str.equals(self as slice<const char>);
 }
 

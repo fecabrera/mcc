@@ -281,9 +281,9 @@ FSTRING_NO_RENDERER = (
 )
 
 MOVE_MISPLACED = (
-    "move(...) has no transfer target here: it is legal only in the "
-    "return value of an `-> own` function (around the whole value or on "
-    "the ok payload)"
+    "move(...) has no transfer target here: it is legal in the return value "
+    "of an `-> own` function (around the whole value or on the ok payload), a "
+    "`let` initializer, or a by-value argument"
 )
 
 
@@ -1108,6 +1108,47 @@ class CodeGen:
                 "as '&T' instead",
                 line, wclass="deprecated-mut",
             )
+
+    def warn_destructor_copy(self, expr, t: LangType, line: int) -> None:
+        """Warn under ``-Wdestructor-copy`` that an owning value is bit-copied.
+
+        The single formatter for the ``destructor-copy`` class: a bitwise copy
+        of a value whose type declares a ``destructor`` -- ``let b = a;`` and
+        the by-value parameter copies Phase B creates when ``const x: T`` on an
+        owning aggregate is passed by value -- funnels through here with the
+        source expression and its type. mcc has no copy constructor, so both
+        copies name one live resource and would double-free at cleanup; the
+        sanctioned relinquishing spelling ``move(...)`` (which the caller
+        strips before reaching here) exempts the site, as does taking the value
+        by ``const &`` view instead of by value.
+
+        Only a persistent lvalue source (a variable, field, or element) aliases
+        a still-live resource; a fresh temporary -- a constructor, an ``-> own``
+        call, a literal -- is a transfer or a build, not an alias, and never
+        reaches this formatter. The message names the *construct*, not the type,
+        so every monomorphization of a generic body emits one identical line the
+        driver's print-time dedup collapses.
+
+        Args:
+            expr: The source expression being copied.
+            t: The value's type (``const``-stripped by the caller if needed).
+            line: The copy site's 1-based source line.
+        """
+        if not isinstance(expr, (Var, Member, Index)):
+            return  # a fresh temporary is a transfer/build, not an alias
+        if isinstance(expr, Var) and expr.name[:1].isdigit():
+            # A synthetic spill (`0recv...`, a chained/rvalue receiver bound to
+            # a hidden const local) is an ephemeral temporary consumed by the
+            # call, not a persistent alias -- its name is not lexable.
+            return
+        if not self.type_owns_cleanup(strip_const(t)):
+            return
+        self.warn(
+            "a value with a destructor is copied here, aliasing a live "
+            "resource (both copies would free it); hand it over with "
+            "'move(...)' or take it by 'const &' reference",
+            line, wclass="destructor-copy",
+        )
 
     def warn_deprecated(self, name: str, msg: str | None, line: int) -> None:
         """Warn that a ``@deprecated`` function was resolved, when ``msg`` is set.
@@ -2599,12 +2640,14 @@ class CodeGen:
     def hidden_ref_indices(self, func: Func, params: list) -> frozenset[int]:
         """Indices of ``func``'s parameters passed by hidden reference.
 
-        A ``const`` parameter of struct type is handed over as a pointer to the
-        caller's storage instead of copied by value: the callee promises not to
-        mutate it, so sharing the storage is safe and avoids the copy. A
-        ``mut`` parameter is a pointer to the caller's storage for **every**
-        type -- on a scalar the convention change is the point, since it is the
-        only way a write reaches the caller.
+        A reference parameter -- a writable ``&T`` (in ``mut_params``) or the
+        read-only ``const &T`` view (in ``constref_params``) -- is handed over
+        as a pointer to the caller's storage instead of copied, for **every**
+        type. On a scalar the convention change is the whole point of ``&``.
+
+        A plain ``const x: T`` is NOT here: since Phase B it is a by-value
+        read-only copy (the C by-value convention), the same as a bare ``x: T``
+        but read-only in the body. The view spelling is ``const &T``.
 
         Args:
             func: The function whose parameters to classify.
@@ -2615,9 +2658,8 @@ class CodeGen:
         """
         return frozenset(
             i
-            for i, ((name, _), ptype) in enumerate(zip(func.params, params))
-            if (name in func.const_params and is_aggregate(ptype))
-            or name in func.mut_params
+            for i, (name, _) in enumerate(func.params)
+            if name in func.mut_params or name in func.constref_params
         )
 
     @staticmethod
@@ -8161,8 +8203,18 @@ class CodeGen:
                 # `let r: result<int32, my_error> = ok(1);` the result.
                 declared = self.lang_type(stmt.type_name, stmt.line)
                 tv = self.gen_adapted_literal(stmt.value, declared, stmt.line)
+                copy_src = None  # a fresh build, never an aliasing copy
             else:
-                tv = self.gen_expr(stmt.value)
+                # `let b = move(a);`: the sanctioned relinquishing spelling is
+                # accepted here as a blessed bitwise copy (no -Wdestructor-copy),
+                # the same value the plain copy would bind. A move(...) anywhere
+                # else in a let (an operand) still errors from gen_expr.
+                copy_src = stmt.value
+                if isinstance(copy_src, Move):
+                    copy_src = None  # blessed: skip the copy warning
+                    tv = self.gen_expr(stmt.value.value)
+                else:
+                    tv = self.gen_expr(stmt.value)
             if stmt.type_name is not None:
                 declared = self.lang_type(stmt.type_name, stmt.line)
                 if declared is VOID:
@@ -8192,6 +8244,11 @@ class CodeGen:
                 raise LangError(
                     f"cannot assign a void value to {stmt.name!r}", stmt.line
                 )
+            if copy_src is not None and not self.own_call_initializer(stmt.value):
+                # A plain `let b = a;` bit-copies the source; if it owns a
+                # destructor the two names alias one live resource. An own-call
+                # initializer is a transfer (it adopts below), not a copy.
+                self.warn_destructor_copy(copy_src, tv.type, stmt.line)
             slot = self.builder.alloca(tv.type.ir, name=stmt.name)
             if over_aligned(tv.type):
                 slot.align = type_align(tv.type)
@@ -16326,11 +16383,21 @@ class CodeGen:
                 # derived from its storage; coerce/decay do not apply.
                 args.append(self.valist_arg(arg_expr, line))
                 continue
-            tv = self.gen_expr(arg_expr)
-            # Argument position never adopts an own call's obligation: the
-            # temporary is queued and destroyed when the full chain ends,
-            # after the callee returns.
-            self.register_own_drop(arg_expr, tv)
+            # `f(move(a))`: the sanctioned relinquishing spelling blesses the
+            # by-value copy (no -Wdestructor-copy), passing the same value the
+            # plain argument would. A move(...) in a by-hidden-reference slot or
+            # a nested operand still errors from gen_expr.
+            copy_src = arg_expr
+            if isinstance(copy_src, Move):
+                copy_src = None
+                tv = self.gen_expr(arg_expr.value)
+                self.register_own_drop(arg_expr.value, tv)
+            else:
+                tv = self.gen_expr(arg_expr)
+                # Argument position never adopts an own call's obligation: the
+                # temporary is queued and destroyed when the full chain ends,
+                # after the callee returns.
+                self.register_own_drop(arg_expr, tv)
             if i < len(params):
                 if receiver_upcast and i == 0:
                     # A by-value receiver prefix-copies into a declared base
@@ -16339,6 +16406,10 @@ class CodeGen:
                     if target is not None:
                         tv = self.upcast_struct_value(tv, target)
                 tv = self.coerce(tv, params[i], line, f"argument {i + 1} of {label}")
+                if copy_src is not None:
+                    # A by-value parameter bit-copies the argument; if it owns a
+                    # destructor the callee's copy aliases the caller's live one.
+                    self.warn_destructor_copy(copy_src, tv.type, line)
                 value = tv.value
             elif is_integer(tv.type) and tv.type.ir.width < 32:
                 # C varargs promote small integers to int (sign- or

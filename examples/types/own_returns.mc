@@ -7,7 +7,7 @@ import "std/string";
 // scheduled destructor on that path (the whole-value hard error from
 // destructors.mc, lifted exactly here), and the caller's let ADOPTS the
 // cleanup obligation, scheduling `T::destructor` like a constructor-sugar
-// let. Like `-> &` (mut_returns.mc), `own` is a flag on the declaration,
+// let. Like `-> &` (reference_returns.mc), `own` is a flag on the declaration,
 // not part of the type, and the two never combine: a reference lends a view, own
 // hands over a value. No ABI changes anywhere -- own is compile-time
 // policy.
@@ -169,7 +169,7 @@ fn main() -> int32 {
 // no signature to carry the marker.
 //
 // See also: destructors.mc (the error this lifts and every opt-out
-// spelling), mut_returns.mc (the sibling return flag), error_handling.mc
+// spelling), reference_returns.mc (the sibling return flag), error_handling.mc
 // (results, try, except), own_drops.mc (the statement-end destruction of
 // every receiverless consumption). Full rules: docs/language.md,
 // "Move-out returns".

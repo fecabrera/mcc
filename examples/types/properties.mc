@@ -10,7 +10,7 @@ import "std/stack";
 // receiver and returns a value.
 //
 // Prerequisites: method_calls.mc for the dot-call desugar a property extends,
-// and functions/mut_returns.mc for the `-> &` accessors the settable form
+// and functions/reference_returns.mc for the `-> &` accessors the settable form
 // below rides on.
 
 struct temperature {
@@ -20,12 +20,12 @@ struct temperature {
 // A read-only property: a `const self` accessor computed from a field. Reads
 // as `t.fahrenheit`, no parentheses.
 @property
-fn temperature::fahrenheit(const self: temperature) -> int32 {
+fn temperature::fahrenheit(const self: &temperature) -> int32 {
     return self.celsius * 9 / 5 + 32;
 }
 
 // A SETTABLE property: returning `-> &int32` re-lends the field's storage
-// (functions/mut_returns.mc), so `v.value` is an assignable lvalue and
+// (functions/reference_returns.mc), so `v.value` is an assignable lvalue and
 // `v.value = x` is just `vec2::value(v, ...) = x` through the reference return.
 struct cell {
     n: int32;
@@ -53,7 +53,7 @@ struct gauge {
 }
 
 @property("get")
-fn gauge::level(const self: gauge) -> int32 {
+fn gauge::level(const self: &gauge) -> int32 {
     return self.raw;
 }
 
@@ -74,7 +74,7 @@ struct pair<T> {
 }
 
 @property
-fn pair<T>::first(const self: pair<T>) -> T {
+fn pair<T>::first(const self: &pair<T>) -> T {
     return self.a;
 }
 

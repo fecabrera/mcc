@@ -22,9 +22,13 @@ def test_mut_and_const_params_coexist():
     assert func.const_params == {"b"} and func.mut_params == {"c"}
 
 
-def test_const_mut_combination_rejected():
-    with pytest.raises(LangError, match="a parameter cannot be both const and a reference"):
-        parse("fn f(const mut n: int32) {}")
+def test_const_mut_combination_is_the_read_only_view():
+    # Phase B: `const` + a reference marker is the read-only reference view --
+    # read-only, passed by hidden reference, never writable (not in mut_params).
+    (func,) = parse("fn f(const n: &int32) {}").functions
+    assert func.const_params == {"n"}
+    assert func.constref_params == {"n"}
+    assert func.mut_params == set()
 
 
 def test_mut_rejected_on_extern():

@@ -17,6 +17,7 @@ WARNING_CLASSES = frozenset(
         "unused-result",
         "noreturn-own",
         "deprecated-mut",
+        "destructor-copy",
     }
 )
 

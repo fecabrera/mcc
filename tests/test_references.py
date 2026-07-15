@@ -54,11 +54,14 @@ def test_amp_and_const_params_coexist():
     assert func.const_params == {"b"} and func.mut_params == {"c"}
 
 
-def test_const_and_amp_combination_rejected():
-    with pytest.raises(
-        LangError, match="a parameter cannot be both const and a reference"
-    ):
-        parse("fn f(const n: &int32) {}")
+def test_const_amp_is_the_read_only_reference_view():
+    # Phase B: `const x: &T` is the read-only reference view -- read-only (in
+    # const_params) yet passed by hidden reference (in constref_params), never
+    # writable, so it does NOT join mut_params.
+    (func,) = parse("fn f(const n: &int32) {}").functions
+    assert func.const_params == {"n"}
+    assert func.constref_params == {"n"}
+    assert func.mut_params == set()
 
 
 def test_amp_never_written_on_the_binder():

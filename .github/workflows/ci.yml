@@ -73,14 +73,16 @@ jobs:
         # compiler can check -- the decided default stays off in normal
         # builds, on in CI.
         #
-        # Four demos deliberately keep LIVE triggers to teach their own
+        # Five demos deliberately keep LIVE triggers to teach their own
         # class, so under -Wall -Werror each is a hard error by design -- a
         # warning-class demo cannot build with its own class promoted to
         # error. They are compiled just below at plain -Werror (their classes
         # off, the documented relaxed default): systems/extern_nonnull.mc,
-        # control-flow/dead_code.mc, types/unchecked_dereference.mc, and
+        # control-flow/dead_code.mc, types/unchecked_dereference.mc,
         # functions/panic_assert.mc (the -Wnoreturn-own demo: its
-        # panic(f"...") teaches the diagnosable dying-path leak).
+        # panic(f"...") teaches the diagnosable dying-path leak), and
+        # types/destructors.mc (the -Wdestructor-copy demo: its `let view =
+        # orig;` teaches the bitwise-copy-of-an-owning-value aliasing hazard).
         #
         # systems/c_struct_abi.mc passes structs by value across the C boundary.
         # The classification is target-specific (AArch64, x86-64 System V, and
@@ -93,12 +95,14 @@ jobs:
               -not -path 'examples/control-flow/dead_code.mc' \
               -not -path 'examples/types/unchecked_dereference.mc' \
               -not -path 'examples/functions/panic_assert.mc' \
+              -not -path 'examples/types/destructors.mc' \
               -not -path 'examples/systems/c_struct_abi.mc' | while read -r f; do
             echo "== $f =="
             pipenv run python -m mcc "$f" -Wall -Werror -o "$RUNNER_TEMP/$(basename "$f" .mc)"
           done
           for demo in systems/extern_nonnull control-flow/dead_code \
-                      types/unchecked_dereference functions/panic_assert; do
+                      types/unchecked_dereference functions/panic_assert \
+                      types/destructors; do
             echo "== examples/$demo.mc (own-class demo: plain -Werror) =="
             pipenv run python -m mcc "examples/$demo.mc" -Werror \
               -o "$RUNNER_TEMP/$(basename "$demo")"

@@ -120,7 +120,7 @@ fn set<K, V>::set(self: &set<K, V>, key: K, value: V) {
  *
  * @return true if key was found, false otherwise
  */
-fn set<K, V>::get(const self: set<K, V>, key: K, out: &V) -> bool {
+fn set<K, V>::get(const self: &set<K, V>, key: K, out: &V) -> bool {
     let slot = hash(key) % self.capacity;
 
     while (self.entries![slot].state != set_entry_state::EMPTY) {

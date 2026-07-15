@@ -29,20 +29,20 @@ struct pair<A, B> {
 
 // The fully GENERIC describe: matches any pair whatsoever. Each body prints a
 // marker so the runtime output proves which one dispatch picked.
-fn pair<T, U>::describe(const self: pair<T, U>) {
+fn pair<T, U>::describe(const self: &pair<T, U>) {
     println("  [generic] pair<T, U>::describe");
 }
 
 // The PARTIAL: the first position is pinned to int32, the second stays free.
 // It matches every pair<int32, X>, and beats the generic for those receivers
 // on pattern specificity (a concrete position outscores a bare name).
-fn pair<int32, U>::describe(const self: pair<int32, U>) {
+fn pair<int32, U>::describe(const self: &pair<int32, U>) {
     println(f"  [partial] pair<int32, U>::describe, a = {self.a}");
 }
 
 // The FULL specialization: all positions concrete, so it is an ordinary
 // concrete overload and outranks both templates for this exact receiver.
-fn pair<int32, int8>::describe(const self: pair<int32, int8>) {
+fn pair<int32, int8>::describe(const self: &pair<int32, int8>) {
     println("  [full]    pair<int32, int8>::describe, a = {}, b = {}".format(
             self.a, self.b as int32));
 }
@@ -50,7 +50,7 @@ fn pair<int32, int8>::describe(const self: pair<int32, int8>) {
 // Fresh names are REAL type parameters: they are inferred at the call and
 // prepend the method's own `<...>` list, so a partial may add method type
 // parameters too. Here `U` comes from the receiver and `W` from `label`.
-fn pair<int32, U>::tag<W>(const self: pair<int32, U>, label: W) -> W {
+fn pair<int32, U>::tag<W>(const self: &pair<int32, U>, label: W) -> W {
     println(f"  [partial] pair<int32, U>::tag<W>, b = {self.b}");
     return label;
 }
@@ -62,12 +62,12 @@ fn pair<int32, U>::tag<W>(const self: pair<int32, U>, label: W) -> W {
 // also interacts with the ranking tiers -- a bounded generic method would
 // beat an UNBOUNDED partial -- see `Partial specialization` in
 // docs/language.md for that rule.
-fn pair<T, U>::width(const self: pair<T, U>) -> int32 {
+fn pair<T, U>::width(const self: &pair<T, U>) -> int32 {
     println("  [generic] pair<T, U>::width");
     return -1;
 }
 
-fn pair<int32, U: int8 | int16>::width(const self: pair<int32, U>) -> int32 {
+fn pair<int32, U: int8 | int16>::width(const self: &pair<int32, U>) -> int32 {
     println("  [bounded partial] pair<int32, U: int8 | int16>::width");
     return sizeof(U) as int32;
 }

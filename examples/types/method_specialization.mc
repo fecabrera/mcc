@@ -36,7 +36,7 @@ struct point<T> {
 // The GENERIC magnitude: it works for any element type by widening each field
 // with `as float64` before handing it to the libc math routines. The print
 // marker lets the runtime output prove this body ran.
-fn point<T>::magnitude(const self: point<T>) -> float64 {
+fn point<T>::magnitude(const self: &point<T>) -> float64 {
     println("  [generic]     point<T>::magnitude, widening with 'as float64'");
     return sqrt(pow(self.x as float64, 2.0) + pow(self.y as float64, 2.0));
 }
@@ -44,7 +44,7 @@ fn point<T>::magnitude(const self: point<T>) -> float64 {
 // The SPECIALIZATION for `point<float64>`: the fields are already float64, so
 // this body skips the casts entirely. It outranks the generic above for a
 // float64 receiver -- same qualified name `point::magnitude`, but concrete wins.
-fn point<float64>::magnitude(const self: point<float64>) -> float64 {
+fn point<float64>::magnitude(const self: &point<float64>) -> float64 {
     println("  [specialized] point<float64>::magnitude, no casts needed");
     return sqrt(pow(self.x, 2.0) + pow(self.y, 2.0));
 }
@@ -60,12 +60,12 @@ struct holder<T> {
     item: T;
 }
 
-fn holder<T>::describe(const self: holder<T>) {
+fn holder<T>::describe(const self: &holder<T>) {
     println("  [generic]     holder<T>::describe");
 }
 
 // Specialization keyed on a USER STRUCT argument, `holder<widget>`.
-fn holder<widget>::describe(const self: holder<widget>) {
+fn holder<widget>::describe(const self: &holder<widget>) {
     println("  [specialized] holder<widget>::describe, widget id = {}".format(self.item.id));
 }
 

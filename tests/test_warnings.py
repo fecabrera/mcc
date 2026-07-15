@@ -1500,3 +1500,167 @@ def test_noreturn_own_promotes_under_its_selective_werror(capsys):
 
 def test_wall_enables_noreturn_own():
     assert NR_OWN in parse_wflags(["all"])
+
+
+# --- -Wdestructor-copy: a bitwise copy of an owning value ------------------
+#
+# mcc has no copy constructor, so a bitwise copy of a value whose type declares
+# a destructor makes two names alias one live resource (both would free it at
+# cleanup). The class fires at the copy site -- an explicit `let b = a;` and,
+# since Phase B, the by-value parameter copies a plain `const x: T` on an
+# owning aggregate creates. move(...) is the sanctioned relinquishing spelling
+# that exempts the site, as does taking the value by `const &` view.
+
+DTOR_COPY = "destructor-copy"
+DTOR_COPY_MSG = ("a value with a destructor is copied here, aliasing a live "
+                 "resource (both copies would free it); hand it over with "
+                 "'move(...)' or take it by 'const &' reference")
+
+# An owning type, a destructor-less one, and both by-value and const-&
+# consumers of each -- all import-free.
+DC_PRELUDE = (
+    "struct res { id: int32; }\n"
+    "fn res::destructor(mut self: res) { }\n"
+    "struct bare { id: int32; }\n"
+    "fn by_value(const r: res) -> int32 { return r.id; }\n"
+    "fn by_ref(const r: &res) -> int32 { return r.id; }\n"
+    "fn bare_by_value(const b: bare) -> int32 { return b.id; }\n"
+)
+
+
+def dtor_copy_warnings(source: str) -> list[tuple[str, int]]:
+    """The destructor-copy emissions of a source, as (message, line)."""
+    return [(w.message, w.line)
+            for w in generate(source).warnings if w.wclass == DTOR_COPY]
+
+
+def test_let_copy_of_an_owning_value_warns():
+    # The explicit copy: `let b = a;` where a's type declares a destructor.
+    src = (
+        DC_PRELUDE
+        + "fn main() -> int32 {\n"
+        "    let a = res { id = 1 };\n"
+        "    let b = a;\n"
+        "    return b.id;\n"
+        "}\n"
+    )
+    assert dtor_copy_warnings(src) == [(DTOR_COPY_MSG, 9)]
+
+
+def test_let_copy_of_a_destructorless_value_is_silent():
+    # No destructor family -> nothing to double-free -> no warning.
+    src = (
+        DC_PRELUDE
+        + "fn main() -> int32 {\n"
+        "    let a = bare { id = 1 };\n"
+        "    let b = a;\n"
+        "    return b.id;\n"
+        "}\n"
+    )
+    assert dtor_copy_warnings(src) == []
+
+
+def test_let_move_of_an_owning_value_is_exempt():
+    # move(...) blesses the copy: the author relinquishes a deliberately.
+    src = (
+        DC_PRELUDE
+        + "fn main() -> int32 {\n"
+        "    let a = res { id = 1 };\n"
+        "    let b = move(a);\n"
+        "    return b.id;\n"
+        "}\n"
+    )
+    assert dtor_copy_warnings(src) == []
+
+
+def test_by_value_param_copy_of_an_owning_value_warns():
+    # The Phase B site: a plain `const r: res` takes the argument by value, so
+    # passing a live lvalue bit-copies an owning value.
+    src = (
+        DC_PRELUDE
+        + "fn main() -> int32 {\n"
+        "    let a = res { id = 1 };\n"
+        "    return by_value(a);\n"
+        "}\n"
+    )
+    assert dtor_copy_warnings(src) == [(DTOR_COPY_MSG, 9)]
+
+
+def test_by_value_param_move_is_exempt():
+    src = (
+        DC_PRELUDE
+        + "fn main() -> int32 {\n"
+        "    let a = res { id = 1 };\n"
+        "    return by_value(move(a));\n"
+        "}\n"
+    )
+    assert dtor_copy_warnings(src) == []
+
+
+def test_const_ref_param_does_not_copy():
+    # A `const &` view shares the caller's storage: no copy, no warning.
+    src = (
+        DC_PRELUDE
+        + "fn main() -> int32 {\n"
+        "    let a = res { id = 1 };\n"
+        "    return by_ref(a);\n"
+        "}\n"
+    )
+    assert dtor_copy_warnings(src) == []
+
+
+def test_by_value_param_of_a_destructorless_value_is_silent():
+    src = (
+        DC_PRELUDE
+        + "fn main() -> int32 {\n"
+        "    let a = bare { id = 1 };\n"
+        "    return bare_by_value(a);\n"
+        "}\n"
+    )
+    assert dtor_copy_warnings(src) == []
+
+
+def test_own_call_initializer_is_not_a_copy():
+    # `let s = make();` adopts the callee's handed-over value -- a transfer,
+    # not an alias, so no destructor-copy warning.
+    src = (
+        DC_PRELUDE
+        + "fn make() -> own res { return move(res { id = 1 }); }\n"
+        "fn main() -> int32 {\n"
+        "    let s = make();\n"
+        "    return s.id;\n"
+        "}\n"
+    )
+    assert dtor_copy_warnings(src) == []
+
+
+def test_chained_own_receiver_is_not_a_copy():
+    # `make().poke()` where poke takes a by-value owning `self` spills the
+    # own-call temporary to a hidden `0recv...` local; that ephemeral,
+    # consumed receiver is not a persistent alias, so no warning fires.
+    src = (
+        DC_PRELUDE
+        + "fn make() -> own res { return move(res { id = 5 }); }\n"
+        "fn res::poke(self: res) -> int32 { return self.id; }\n"
+        "fn main() -> int32 {\n"
+        "    return make().poke();\n"
+        "}\n"
+    )
+    assert dtor_copy_warnings(src) == []
+
+
+def test_destructor_copy_is_off_without_the_flag():
+    note = Note(DTOR_COPY_MSG, 9, "w.mc", DTOR_COPY)
+    assert _report_warnings([note], Path("w.mc"), True) is False
+
+
+def test_destructor_copy_renders_its_flag_when_enabled(capsys):
+    note = Note(DTOR_COPY_MSG, 9, "w.mc", DTOR_COPY)
+    enabled = frozenset({DTOR_COPY})
+    assert _report_warnings([note], Path("w.mc"), False, enabled) is False
+    assert capsys.readouterr().err == (
+        f"w.mc: warning: line 9: {DTOR_COPY_MSG} [-Wdestructor-copy]\n")
+
+
+def test_wall_enables_destructor_copy():
+    assert DTOR_COPY in parse_wflags(["all"])

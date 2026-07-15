@@ -50,7 +50,7 @@ type pointf = point<float64>;
 
 // The generic magnitude, for any element type. Each body prints a marker so
 // the runtime output proves which one dispatch picked.
-fn point<T>::magnitude(const self: point<T>) -> float64 {
+fn point<T>::magnitude(const self: &point<T>) -> float64 {
     println("  [generic]   point<T>::magnitude");
     return sqrt(pow(self.x as float64, 2.0) + pow(self.y as float64, 2.0));
 }
@@ -59,7 +59,7 @@ fn point<T>::magnitude(const self: point<T>) -> float64 {
 // a specialization outranking the generic for a point<float64> receiver.
 // Writing the same signature under both spellings would be an ordinary
 // duplicate-definition error -- they are one name.
-fn pointf::magnitude(const self: pointf) -> float64 {
+fn pointf::magnitude(const self: &pointf) -> float64 {
     println("  [via alias] pointf::magnitude IS point<float64>::magnitude");
     return sqrt(pow(self.x, 2.0) + pow(self.y, 2.0));
 }
@@ -100,7 +100,7 @@ struct pair<A, B> {
 
 type swap<X, Y> = pair<Y, X>;
 
-fn pair<A, B>::pick(const self: pair<A, B>) -> A {
+fn pair<A, B>::pick(const self: &pair<A, B>) -> A {
     println("  [generic]   pair<A, B>::pick");
     return self.a;
 }
@@ -109,7 +109,7 @@ fn pair<A, B>::pick(const self: pair<A, B>) -> A {
 // `pair<U, int32>`, so this IS the partial specialization
 // `fn pair<U, int32>::pick` -- it matches any pair whose SECOND position is
 // int32 and beats the generic for those receivers.
-fn swap<int32, U>::pick(const self: swap<int32, U>) -> U {
+fn swap<int32, U>::pick(const self: &swap<int32, U>) -> U {
     println("  [via alias] swap<int32, U>::pick IS pair<U, int32>::pick");
     return self.a;
 }
@@ -122,7 +122,7 @@ fn swap<int32, U>::pick(const self: swap<int32, U>) -> U {
 // simply rejected at the call.
 type diag<T> = pair<T, T>;
 
-fn diag<U>::same(const self: diag<U>) -> U {
+fn diag<U>::same(const self: &diag<U>) -> U {
     println("  [diagonal]  diag<U>::same matches only pair<X, X>");
     return self.a + self.b;
 }
@@ -134,11 +134,11 @@ fn diag<U>::same(const self: diag<U>) -> U {
 // subsumption tie-break (this exact pair used to be the standard ambiguity
 // error; see functions/overload_subsumption.mc and "Rank-tied templates:
 // subsumption" in docs/language.md).
-fn pair<A, B>::trace(const self: pair<A, B>) {
+fn pair<A, B>::trace(const self: &pair<A, B>) {
     println("  [generic]   pair<A, B>::trace, diagonal filtered out");
 }
 
-fn diag<U>::trace(const self: diag<U>) {
+fn diag<U>::trace(const self: &diag<U>) {
     println("  [diagonal]  diag<U>::trace");
 }
 

@@ -290,8 +290,9 @@ codegen, so an instantiation obeys the same ABI as a hand-written one.
 **Structs passed or returned by value** are classified for the platform C ABI
 at the `@extern` boundary on **AArch64 (Apple/AAPCS64)**, **x86-64 System V**,
 and **x86-64 Windows (Win64)**. mcc's own calls keep their raw-aggregate
-convention (LLVM lays the struct out whole; `const`/`&` struct parameters
-travel by a hidden reference) — that is self-consistent but is _not_ the C ABI —
+convention (LLVM lays the struct out whole; `&` and `const &` reference
+parameters travel by a hidden reference, a plain `const` copies) — that is
+self-consistent but is _not_ the C ABI —
 while a call to an `@extern` C function that takes or returns a struct by value
 now marshals each aggregate the way a C compiler does. On AArch64 that means a
 homogeneous float aggregate (all `float64`, 1–4 members) in FP registers, any

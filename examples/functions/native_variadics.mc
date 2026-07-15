@@ -2,7 +2,7 @@ import "std/io";
 
 // Native variadics: a trailing `slice<const any>` parameter marks a
 // COLLECTING function, and `fn f(args...)` is pure sugar for
-// `fn f(const args: slice<const any>)`. At the call site every extra
+// `fn f(const args: &slice<const any>)`. At the call site every extra
 // argument (past the fixed parameters) is boxed into a caller-stack `any`,
 // allocation-free, and the callee receives a read-only slice over them.
 // The callee walks it with `for` and recovers values with `case type`.

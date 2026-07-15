@@ -24,7 +24,7 @@ from helpers import compile_ir, parse, run
 BUMP = "fn bump(mut a: char) { a = a + 1; }\n"
 PLAIN = "fn plain(a: char) {}\n"
 BIG = "struct big { a: int64; b: int64; c: int64; }\n"
-SUM = "fn sum(const s: struct big) -> int64 { return s.a + s.b + s.c; }\n"
+SUM = "fn sum(const s: &struct big) -> int64 { return s.a + s.b + s.c; }\n"
 
 MUT_MISMATCH = (
     "(a reference parameter is passed by hidden reference, a different calling "
@@ -73,11 +73,13 @@ def test_fn_type_nonnull_and_mut_rejected():
         parse("fn f(cb: fn(@nonnull mut char*)) {}")
 
 
-def test_fn_type_const_and_mut_rejected():
-    with pytest.raises(
-        LangError, match="a parameter cannot be both const and a reference"
-    ):
-        parse("fn f(cb: fn(mut const char)) {}")
+def test_fn_type_const_ref_is_the_read_only_view():
+    # Phase B: `const &T` in a function type is the read-only reference view
+    # (no longer rejected). Both flags ride the TypeRef; the resolver
+    # reconciles them into a read-only hidden reference.
+    (func,) = parse("fn f(cb: fn(const &char)) {}").functions
+    ref = func.params[0][1].params[0]
+    assert ref.const and ref.mut
 
 
 # ------------------------------------------------------- values and inference
@@ -266,11 +268,14 @@ def test_plain_fn_value_does_not_lift_to_mut():
         )
 
 
-def test_const_struct_fn_value_does_not_drop_to_by_value():
+def test_const_ref_struct_fn_value_does_not_drop_to_by_value():
+    # A `const &` reference fn value keeps its hidden-reference convention: it
+    # does not silently match a by-value slot. (Since Phase B a by-value
+    # `const T` erases, so `fn(big)` is the by-value shape.)
     with pytest.raises(
         LangError,
         match=re.escape(
-            "let g: expected fn(big) -> int64, got fn(const big) -> int64 "
+            "let g: expected fn(big) -> int64, got fn(const &big) -> int64 "
             + CONST_MISMATCH
         ),
     ):
@@ -281,17 +286,19 @@ def test_const_struct_fn_value_does_not_drop_to_by_value():
 
 
 def test_by_value_struct_fn_does_not_lift_to_const_ref():
+    # ...and the reverse: a by-value function does not lift into a `const &`
+    # reference slot (`fn(mut const T)` is the fn-type spelling of `const &T`).
     with pytest.raises(
         LangError,
         match=re.escape(
-            "let g: expected fn(const big) -> int64, got fn(big) -> int64 "
+            "let g: expected fn(const &big) -> int64, got fn(big) -> int64 "
             + CONST_MISMATCH
         ),
     ):
         compile_ir(
             BIG + "fn vsum(s: struct big) -> int64 { return s.a; }\n"
             "fn main() -> int32 {\n"
-            "    let g: fn(const struct big) -> int64 = vsum;\n"
+            "    let g: fn(const &struct big) -> int64 = vsum;\n"
             "    return 0;\n"
             "}"
         )
@@ -356,10 +363,12 @@ def test_as_between_convention_shapes_rejected():
 
 
 def test_as_between_const_shapes_rejected():
+    # A `const &` reference shape cannot be cast to a by-value shape: no call
+    # sequence bridges the calling-convention change.
     with pytest.raises(
         LangError,
         match=re.escape(
-            "cannot cast fn(const big) -> int64 to fn(big) -> int64: a const "
+            "cannot cast fn(const &big) -> int64 to fn(big) -> int64: a const "
             "parameter is passed by hidden reference, a different calling "
             "convention; the types are not convertible"
         ),
@@ -460,8 +469,9 @@ def test_cmp_alias_inhabited_at_scalar_t():
 
 
 def test_cmp_alias_inhabited_at_struct_t():
-    # ...and at a struct T the same alias resolves to the hidden-reference
-    # convention, inhabited by a const-parameter comparator.
+    # ...and at a struct T the const still erases (Phase B generalized the
+    # scalar rule to all types), so a const-parameter comparator -- itself a
+    # by-value read-only copy -- inhabits the alias.
     assert run(
         "type cmp<T> = fn(const T, const T) -> bool;\n"
         + BIG
@@ -478,13 +488,36 @@ def test_cmp_alias_inhabited_at_struct_t():
     ) == 9
 
 
-def test_cmp_alias_at_struct_t_rejects_by_value_comparator():
+def test_cmp_alias_at_struct_t_accepts_by_value_comparator():
+    # Phase B generalizes const-erases-from-fn-types to every type: `const T`
+    # erases at a struct binding too, so `cmp<big>` is `fn(big, big)` and a
+    # plain by-value comparator inhabits it (the old hidden-reference
+    # requirement is gone).
+    assert run(
+        "type cmp<T> = fn(const T, const T) -> bool;\n"
+        + BIG
+        + "fn vless(a: struct big, b: struct big) -> bool { return a.a < b.a; }\n"
+        "fn main() -> int32 {\n"
+        "    let c: cmp<struct big> = vless;\n"
+        "    let x: struct big; let y: struct big;\n"
+        "    x.a = 1; x.b = 0; x.c = 0;\n"
+        "    y.a = 2; y.b = 0; y.c = 0;\n"
+        "    return c(x, y) ? 4 : 0;\n"
+        "}"
+    ) == 4
+
+
+def test_cmp_alias_at_struct_t_rejects_const_ref_comparator():
+    # ...but a `const &` reference comparator does NOT inhabit the by-value
+    # alias: the reference is a distinct calling convention.
     with pytest.raises(LangError, match=re.escape(CONST_MISMATCH)):
         compile_ir(
             "type cmp<T> = fn(const T, const T) -> bool;\n"
             + BIG
-            + "fn vless(a: struct big, b: struct big) -> bool { return true; }\n"
-            "fn main() -> int32 { let c: cmp<struct big> = vless; return 0; }"
+            + "fn rless(const a: &struct big, const b: &struct big) -> bool {\n"
+            "    return true;\n"
+            "}\n"
+            "fn main() -> int32 { let c: cmp<struct big> = rless; return 0; }"
         )
 
 
@@ -509,19 +542,23 @@ def test_collecting_fn_is_a_legal_value_with_an_explicit_slice():
 
 
 def test_collecting_fn_value_spells_the_slice_parameter():
-    # The `args...` sugar param is `const slice<const any>`: an aggregate
-    # const, so the value's type is exactly the explicitly spelled
-    # hidden-reference form -- and only that form.
-    program = (
-        "fn total(args...) -> int32 { return 0; }\n"
-        "fn use(cb: fn(const slice<const any>) -> int32) -> int32 { return 1; }\n"
-        "fn main() -> int32 { return use(total); }"
-    )
-    assert run(program) == 1
+    # The `args...` sugar param is a plain `const slice<const any>`: a by-value
+    # read-only copy since Phase B, so the value's type erases const to
+    # `fn(slice<const any>)` -- the `const` and bare spellings name one type.
+    for slot in ("fn(const slice<const any>)", "fn(slice<const any>)"):
+        program = (
+            "fn total(args...) -> int32 { return 0; }\n"
+            f"fn use(cb: {slot} -> int32) -> int32 {{ return 1; }}\n"
+            "fn main() -> int32 { return use(total); }"
+        )
+        assert run(program) == 1
+    # A `const &` reference slot is a distinct convention the by-value
+    # collector does not inhabit.
     with pytest.raises(LangError, match=re.escape(CONST_MISMATCH)):
         compile_ir(
             "fn total(args...) -> int32 { return 0; }\n"
-            "fn use(cb: fn(slice<const any>) -> int32) -> int32 { return 1; }\n"
+            "fn use(cb: fn(const &slice<const any>) -> int32) -> int32 "
+            "{ return 1; }\n"
             "fn main() -> int32 { return use(total); }"
         )
 

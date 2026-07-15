@@ -12,7 +12,7 @@ import "std/format";
  *
  * @return a new string with the formatted string
  */
-fn slice::format(@format const self: slice<const char>, args...) -> own string {
+fn slice::format(@format const self: &slice<const char>, args...) -> own string {
     let str = string();
     let modifier = string();
 
@@ -73,7 +73,7 @@ fn slice::format(@format const self: slice<const char>, args...) -> own string {
  *
  * @return true if the slices are equal, false otherwise
  */
-fn slice<T>::equals(const self: slice<T>, const str: slice<T>) -> bool {
+fn slice<T>::equals(const self: &slice<T>, const str: &slice<T>) -> bool {
     if (self.length != str.length)
         return false;
 

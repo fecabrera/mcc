@@ -13,7 +13,7 @@ import "std/char";
 //
 // Prerequisites: methods.mc for the qualified families the sugar calls
 // into, generic_methods.mc for receiver-driven inference, and
-// functions/mut_returns.mc for the `-> &` accessors used near the end.
+// functions/reference_returns.mc for the `-> &` accessors used near the end.
 // Alias and builtin receivers ride method_alias.mc's qualifier chase.
 
 struct rect {
@@ -21,7 +21,7 @@ struct rect {
     h: int32;
 }
 
-fn rect::area(const self: rect) -> int32 {
+fn rect::area(const self: &rect) -> int32 {
     return self.w * self.h;
 }
 
@@ -43,7 +43,7 @@ fn rect::grow(self: &rect, dw: int32, dh: int32) {
 }
 
 // A reference-returning method: `return self` re-lends the receiver's storage
-// (functions/mut_returns.mc), which is what lets a chain keep mutating.
+// (functions/reference_returns.mc), which is what lets a chain keep mutating.
 fn rect::itself(self: &rect) -> &rect {
     return self;
 }
@@ -64,7 +64,7 @@ struct handler {
     cb: fn(int32) -> int32;
 }
 
-fn handler::cb(const self: handler, v: int32) -> int32 {
+fn handler::cb(const self: &handler, v: int32) -> int32 {
     return v * 100;
 }
 
@@ -109,13 +109,13 @@ struct point<T> {
     y: T;
 }
 
-fn point<T>::sum(const self: point<T>) -> T {
+fn point<T>::sum(const self: &point<T>) -> T {
     return self.x + self.y;
 }
 
 // A builtin generic qualifier (method_alias.mc): declared once, then any
 // slice<int32> receiver dispatches it.
-fn slice<T>::first(const xs: slice<const T>) -> T {
+fn slice<T>::first(const xs: &slice<const T>) -> T {
     return xs[0];
 }
 
@@ -215,7 +215,7 @@ fn main() -> int32 {
 // method_partial_specialization.mc for the ranking a dot call inherits
 // unchanged; method_alias.mc for the qualifier chase behind alias and
 // builtin receivers; constructors.mc for `S(args)`, the head-side sibling
-// of this call-side sugar; functions/mut_returns.mc for the `-> &`
+// of this call-side sugar; functions/reference_returns.mc for the `-> &`
 // formation and re-lending rules the lvalue dot calls ride on;
 // method_inheritance.mc for a dot call resolving over a base's family
 // through `extends`; systems/char_methods.mc for the std/char family

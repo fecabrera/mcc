@@ -1,8 +1,10 @@
-"""const parameters: read-only params, with structs passed by hidden reference.
+"""const parameters: the by-value read-only copy and the `const &` view.
 
-A `const` parameter cannot be mutated in the body. A const struct is handed
-over as a pointer to the caller's storage instead of copied by value -- value
-semantics without the copy, since the callee promises not to write it.
+A `const` parameter cannot be mutated in the body. Since Phase B of the
+`&`-reference redesign a plain `const x: T` is a by-value read-only COPY of
+every type (the ordinary calling convention, read-only to the callee); the
+hidden-reference view is the separate `const x: &T` spelling, a read-only
+pointer to the caller's storage available uniformly on all types.
 """
 
 import pytest
@@ -21,12 +23,28 @@ def test_const_param_parses_onto_the_func():
     assert fn.const_params == {"s"}
 
 
-# --- ABI: struct const param is a pointer ---
+# --- ABI: plain const struct is by-value; const & is a pointer ---
 
 
-def test_const_struct_param_is_passed_by_pointer():
+def test_const_struct_param_is_by_value():
+    # Phase B: a plain `const s: T` aggregate is a by-value read-only copy, no
+    # longer a hidden reference.
     ir = compile_ir(BIG + "fn sum(const s: struct big) -> int64 { return s.a; }")
+    assert 'define i64 @"sum"(%"big" ' in ir
+
+
+def test_const_ref_struct_param_is_passed_by_pointer():
+    # The view spelling `const s: &T` is the hidden read-only reference the
+    # plain form used to be.
+    ir = compile_ir(BIG + "fn sum(const s: &struct big) -> int64 { return s.a; }")
     assert 'define i64 @"sum"(%"big"* ' in ir
+
+
+def test_const_ref_scalar_param_is_a_pointer():
+    # `const &` is available uniformly on all types now -- a read-only hidden
+    # reference to a scalar (new: a scalar view did not exist before Phase B).
+    ir = compile_ir("fn f(const n: &int64) -> int64 { return n; }")
+    assert 'define i64 @"f"(i64* ' in ir
 
 
 def test_non_const_struct_param_stays_by_value():
@@ -144,20 +162,44 @@ def test_const_struct_list_element_is_read_only():
 # --- restrictions ---
 
 
-def test_const_param_rejected_on_extern():
-    with pytest.raises(LangError, match="const parameters are not allowed on @extern"):
-        parse("@extern fn c(const s: struct big);")
+def test_by_value_const_param_allowed_on_extern():
+    # Phase B lifted the ban: a by-value `const` is the ordinary C by-value
+    # convention (a callee-side read-only discipline C cannot see), so it is
+    # allowed on @extern.
+    parse("@extern fn c(const s: struct big);")
 
 
-def test_function_value_of_const_struct_fn():
-    # A const-struct function is a legal function value: the inferred type
-    # spells the hidden-reference convention (`fn(const struct big)`), so the
-    # slot holds a pointer-taking function and calls through it pass the
-    # argument's address.
+def test_const_ref_param_rejected_on_extern():
+    # A `const &` view is a hidden pointer that would change the C calling
+    # convention, so the reference form stays rejected on @extern.
+    with pytest.raises(
+        LangError, match="reference parameters are not allowed on @extern"
+    ):
+        parse("@extern fn c(const s: &struct big);")
+
+
+def test_function_value_of_by_value_const_struct_fn():
+    # A by-value const-struct function is a legal function value; const erases
+    # from the function type (`fn(struct big)`), so the slot holds a
+    # value-taking function.
     src = (
         BIG
         + """
     fn sum(const s: struct big) -> int64 { return s.a; }
+    fn main() -> int32 { let f = sum; let v: struct big; return f(v) as int32; }
+    """
+    )
+    out = compile_ir(src)
+    assert 'i64 (%"big")*' in out
+
+
+def test_function_value_of_const_ref_struct_fn():
+    # A `const &` function value keeps the hidden-reference convention in its
+    # type, so the slot holds a pointer-taking function.
+    src = (
+        BIG
+        + """
+    fn sum(const s: &struct big) -> int64 { return s.a; }
     fn main() -> int32 { let f = sum; let v: struct big; return f(v) as int32; }
     """
     )

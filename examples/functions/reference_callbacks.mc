@@ -1,12 +1,14 @@
 import "std/io";
 
-// A function type can spell the hidden-reference calling conventions:
+// A function type can spell the write-through reference convention:
 // `fn(&int32)` types a function that writes through to the caller's own
-// storage, and `fn(const struct point, const struct point) -> bool` one
-// whose struct parameters travel by read-only reference. A function with
-// reference or const-aggregate parameters is therefore a legal function value,
-// and a call through the value passes by reference -- and enforces the same
-// call-site rules -- as a direct call would.
+// storage. A function with a reference parameter is therefore a legal
+// function value, and a call through the value passes by hidden reference --
+// and enforces the same call-site rules -- as a direct call would. A by-value
+// `const` parameter, by contrast, is NOT part of the type: since Phase B of
+// the `&`-reference redesign `const` erases from a function type entirely
+// (`fn(const T)` IS `fn(T)`, for a struct T as much as a scalar), so this file
+// closes on one comparator alias inhabited by plain by-value functions.
 // Prerequisites: function_pointers.mc, reference_params.mc, const_params.mc; the
 // comparator alias below uses a generic type alias (types/generic_alias.mc).
 
@@ -20,11 +22,11 @@ fn negate(n: &int32)    { n = -n; }
 @static let transforms: (fn(&int32))[] = [double_it, negate];
 
 // The headline use of const in a function type: one comparator alias for
-// every element type. On a by-value scalar, const is not part of the
-// convention and simply drops at type formation -- fn(const int32) IS
-// fn(int32) -- while on a struct it records the hidden reference. So the
-// same alias is inhabited at both kinds of T, by the natural function
-// each kind calls for.
+// every element type. `const` is not part of a function type on ANY kind of
+// T -- it simply drops at type formation, fn(const int32) IS fn(int32) and
+// fn(const point) IS fn(point) (the Phase B rule; only `const &T` stays a
+// distinct convention). So the same alias is inhabited at both scalar and
+// struct T, by an ordinary by-value comparator of the matching element type.
 type cmp<T> = fn(const T, const T) -> bool;
 
 // pick returns whichever of a/b the comparator prefers, at any T.
@@ -36,7 +38,10 @@ fn pick<T>(a: T, b: T, better: cmp<T>) -> T {
 // Inhabits cmp<int32>: plain by-value parameters, the const erased.
 fn less(a: int32, b: int32) -> bool { return a < b; }
 
-// Inhabits cmp<struct point>: const-struct parameters, hidden reference.
+// Inhabits cmp<struct point>: const struct parameters. Since Phase B a
+// by-value `const T` erases from the function type just like a scalar's does
+// (`cmp<point>` is `fn(point, point)`), so a plain const-struct comparator
+// inhabits the alias -- no hidden reference required.
 struct point { x: int32; y: int32; }
 
 fn closer(const a: struct point, const b: struct point) -> bool {
@@ -95,8 +100,8 @@ fn main() -> int32 {
     // cmp<int32>: the const erases, the plain `less` inhabits the alias.
     println(f"pick(3, 9, less)   -> {pick(3, 9, less)}");
 
-    // cmp<struct point>: the same alias, now the hidden-reference type,
-    // inhabited by the const-parameter comparator -- no copies made.
+    // cmp<struct point>: the same alias is fn(point, point) here too (const
+    // erased), inhabited by the plain by-value const-struct comparator.
     let a = point { x = 3, y = 4 };
     let b = point { x = 6, y = 8 };
     let best = pick(a, b, closer);

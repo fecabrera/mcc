@@ -71,7 +71,7 @@ fn mk(id: int32) -> own probe {
     return probe(id);
 }
 
-fn format(str: &string, const value: probe, const modifier: slice<char>) {
+fn format(str: &string, const value: &probe, const modifier: &slice<char>) {
     format(str, value.id, modifier);
 }
 

@@ -6,7 +6,7 @@ import "libc/stdio";
 // The stdlib `format` module: the formatting protocol's baseline overload
 // set. Every member has the shape
 //
-//     format(str: &string, value: X, const modifier: slice<char>)
+//     format(str: &string, value: X, const modifier: &slice<char>)
 //
 // and appends value's rendering to str, with modifier steering the spelling
 // ("" picks the default). Because the modifier is a char slice, a bare
@@ -36,7 +36,7 @@ struct point {
 // printable. A concrete member outranks format.mc's closed-group templates
 // and its unbounded fallback, and the field calls re-enter the
 // whole-program set, so the caller's modifier steers the fields too.
-fn format(str: &string, value: struct point*, const modifier: slice<char>) {
+fn format(str: &string, value: struct point*, const modifier: &slice<char>) {
     str.push('(');
     format(str, value!->x, modifier);
     str.append(", ");

@@ -57,41 +57,73 @@ both.
 
 A parameter marked `const` is read-only: the body may not assign to it, to one
 of its fields, or to one of its array elements, and may not take its address
-with `&`. For a **struct** parameter, `const` also changes how it is passed —
-by a hidden pointer to the caller's storage instead of a by-value copy. You get
-value semantics (the callee sees the struct, never mutates the caller's) without
-hand-writing a pointer or paying for the copy:
+with `&`. The `const` *binder annotation* comes in two forms that differ only
+in **how the value is received**:
+
+- **`const x: T` — a by-value read-only copy.** The callee gets its own copy
+  (the ordinary calling convention), read-only to the body. On a scalar this
+  is all `const` ever meant; on a struct it is a genuine copy.
+- **`const x: &T` — a read-only hidden reference (the *view*).** A pointer to
+  the caller's storage, available uniformly on every type, read like a plain
+  value (`a.x`, not `a->x`). No copy is made, and the callee still cannot write
+  through it.
 
 ```c
 struct matrix { m: float64[16]; }
 
-fn trace(const a: struct matrix) -> float64 {   // passed by hidden reference
+fn trace(const a: &struct matrix) -> float64 {   // the view: no copy
     return a.m[0] + a.m[5] + a.m[10] + a.m[15];
+}
+
+fn label(const tag: int32) -> int32 {            // by-value read-only copy
+    return tag * 2;
 }
 ```
 
-The hidden reference shares the argument's storage when it has an address (a
-variable, a field); a temporary argument (a struct returned by value, say) is
-spilled to a stack slot first. `const` works on generic parameters too.
+The view shares the argument's storage when it has an address (a variable, a
+field); a temporary argument (a struct returned by value, say) is spilled to a
+stack slot first. Both forms work on generic parameters.
+
+Prefer the by-value copy for scalars and small plain-data structs (it is the
+simpler convention with no aliasing), and the `const &` view for larger
+structs. For a type that **owns a resource** (declares a destructor), take it
+by `const &`: a by-value copy would be a bitwise copy that aliases the owned
+resource — both copies would free it — which
+[`-Wdestructor-copy`](#opt-in-warning-classes) flags at the copy site
+(`move(v)` blesses a deliberate one).
+
+> Historical note: before the `&`-reference redesign's Phase B, a `const`
+> *struct* parameter was implicitly the hidden-reference view. It is now a
+> by-value copy like every other type, and the view moved to the explicit
+> `const &T` spelling — so an old view-intended `const s: T` must be written
+> `const s: &T`. This is one of three unrelated meanings of the `const`
+> keyword: the binder annotation here, the `&`-reference view `const &T`, and
+> the type-level `const` of a read-only element in `slice<const char>`.
 
 `const` on a **pointer** parameter freezes the pointer itself, not what it
 points at — `const p: struct node*` means `p = ...` is rejected but `p->next =
 ...` is fine, the same distinction as C's `node* const` versus `const node*`.
-On a scalar it simply makes the parameter read-only.
 
-`const` is not allowed on `@extern` parameters (the hidden-reference ABI would
-not match the C function). A function with a `const` struct parameter is a
-legal function value (`let f = trace;`): its type spells the convention —
-`fn(const struct matrix) -> float64` — and is distinct from, and not
-convertible with, the by-value `fn(struct matrix) -> float64` (see
+A **by-value** `const x: T` **is** allowed on `@extern` parameters — it is the
+ordinary C by-value convention, a callee-side discipline C never sees. The
+`const &T` view is a hidden pointer that would change the C calling convention,
+so the reference form is rejected on `@extern` (like `&T`).
+
+`const` erases from **function types**: a by-value `const` carries no caller
+contract, so `fn(const struct matrix)` *is* `fn(struct matrix)` (generalizing
+the long-standing `fn(const int32)` ≡ `fn(int32)` rule to every type). The
+`const &T` view is a real calling convention that stays spelled in the type —
+`fn(const &struct matrix) -> float64` — distinct from, and not convertible
+with, the by-value `fn(struct matrix) -> float64` (see
 [&/const-carrying function types](#referenceconst-carrying-function-types)).
 
 ### Reference parameters
 
 A parameter whose type is `&T` — a **reference** — is the writable dual of
-`const`: it is passed by hidden reference to the caller's storage — for
-**every** type, scalars included, since that is the only way a write can
-reach the caller — and the callee's assignments land in the caller's
+the [`const &T`](#const-parameters) view: it is passed by hidden reference to
+the caller's storage — for **every** type, scalars included, since that is the
+only way a write can reach the caller — and the callee's assignments land in
+the caller's
 variable. Reading it loads the current value (copy on read); `&` on it is
 rejected, so the reference can never outlive the call. It is the memory-safe
 replacement for an out-pointer parameter:
@@ -158,8 +190,10 @@ non-`&` one does. The writability rules above are judged against the
 `@volatile` storage, or a `@packed` field is a fine argument when a non-`&`
 overload wins, and remains an error when a `&` one does.
 
-Like `const`, `&` is not allowed on `@extern` parameters (the
-hidden-reference ABI would not match the C function). A function with a `&`
+Like the `const &` view, a writable `&` is not allowed on `@extern`
+parameters (the hidden-reference ABI would not match the C function; a
+by-value `const T` is fine there, being the ordinary C convention). A
+function with a `&`
 parameter is a legal function value: its type spells the convention —
 `fn(&int32) -> bool` — and calls through the value enforce the same
 writable-lvalue rules as a direct call (see
@@ -277,17 +311,19 @@ See [examples/functions/reference_returns.mc](../examples/functions/reference_re
 
 ### Pointer decay into const/reference parameters
 
-A `T*` argument at a `const T` (struct) or `&T` slot implicitly
-dereferences — the pointer **decays** — so the callee sees the pointee,
-read-only or writable, without the caller writing `*var`. A stack value and a
-heap pointer then call the same function identically:
+A `T*` argument at a `const &T` (read-only) or `&T` (writable) reference slot
+implicitly dereferences — the pointer **decays** — so the callee sees the
+pointee, read-only or writable, without the caller writing `*var`. A stack
+value and a heap pointer then call the same function identically. (A by-value
+`const T` or plain `T` slot has no reference behind it, so nothing decays
+there — the value must be passed directly.)
 
 ```c
 import "std/memory";
 
 struct point { x: int32; y: int32; }
 
-fn shift(p: &struct point, const by: struct point) {
+fn shift(p: &struct point, const by: &struct point) {
     p.x += by.x;
     p.y += by.y;
 }
@@ -305,9 +341,9 @@ fn main() -> int32 {
 }
 ```
 
-Mechanically the feature is cheap: a `const` struct parameter and a `&`
-parameter already travel as a hidden reference, so decay forwards the pointer
-value instead of forming `&lvalue`. That is also why an **rvalue** `T*` may
+Mechanically the feature is cheap: a `const &` and a `&` parameter already
+travel as a hidden reference, so decay forwards the pointer value instead of
+forming `&lvalue`. That is also why an **rvalue** `T*` may
 decay into `&T` — the pointee is real storage even when the pointer
 expression is a temporary (`shift(&a, ...)`, a call result, a `p!`) —
 deliberately unlike the plain rule that a `&` argument must be an lvalue.
@@ -322,7 +358,7 @@ construction. The proof is the same machinery `@nonnull` uses — an `&x`, a
 postfix `p!` assertion:
 
 ```c
-fn consume(p: struct point*, const by: struct point) {
+fn consume(p: struct point*, const by: &struct point) {
     if (p == null) { return; }
     shift(p, by);               // narrowed: proven for this whole scope
 }
@@ -1746,9 +1782,11 @@ Details and sharp edges:
   what you constructed manually.
 - **Copies are bitwise and alias.** `let b = a;` copies the fields, and
   only `a` (the constructed let) is destroyed — if the type owns a
-  resource, both views name it, exactly C's problem. A future
-  `-Wdestructor-copy` may flag such copies; today the language does not
-  track them.
+  resource, both views name it, exactly C's problem. The opt-in
+  [`-Wdestructor-copy`](#opt-in-warning-classes) flags such a copy — both an
+  explicit `let b = a;` and the by-value parameter copy a plain `const x: T`
+  makes — so an owning value must be taken by `const &` or handed over with
+  `move(...)` (which blesses the copy).
 - **Returning or emitting the whole value is a hard error** — unless the
   function is declared [`-> own`](#move-out-returns-own), the move-out
   lift. `return t;` copies the value out, then the unwinding destroys the
@@ -1832,12 +1870,15 @@ fn box::pop(self: &box) -> own res {
 `move(v)` behaves like a builtin `fn move<T>(v: T) -> T` — the value
 passes through unchanged; the call *is* the assertion — and is claimed by
 call shape exactly like `ok(`/`error(`, so a bare `move` stays an
-ordinary identifier. It is legal only in the return value of an `-> own`
-function, around the whole value or on the ok payload
-(`return ok(move(v));`); anywhere else it has no transfer target and is
-rejected. A *wrong* `move()` (the field stays reachable and owned) is the
-same undefined double-free as any aliasing copy — the marker makes the
-risky case visible, never silent.
+ordinary identifier. It is legal in the three places a value is relinquished
+into a new home: the return value of an `-> own` function (around the whole
+value or on the ok payload, `return ok(move(v));`), a `let` initializer
+(`let b = move(a);`), and a by-value argument (`f(move(a))`) — where in the
+latter two it blesses a bitwise copy, exempting it from
+[`-Wdestructor-copy`](#opt-in-warning-classes). A nested operand or any other
+position has no transfer target and is rejected. A *wrong* `move()` (the field
+stays reachable and owned) is the same undefined double-free as any aliasing
+copy — the marker makes the risky case visible, never silent.
 
 **At the caller**, a `let` bound to an own call **adopts**: it schedules
 `T::destructor` on its scope exactly like a constructor-sugar let (a
@@ -1874,7 +1915,10 @@ copy names an already-destroyed resource — and if that variable was
 itself adopted by its `let`, its scope-end destructor runs on the same
 resource again (the overwritten old value, meanwhile, is never
 destroyed). This is the copies-are-bitwise stance doing what it says;
-`-Wdestructor-copy` on the roadmap is the diagnostic direction for it.
+`-Wown-assign` on the roadmap is the diagnostic direction for this
+assignment case (distinct from the shipped
+[`-Wdestructor-copy`](#opt-in-warning-classes), which flags the plain
+copy-aliases-a-live-resource case, `let b = a;`).
 And **the `?? fallback` mix now mirrors the bare call in let position
 too**: `let v = try f() ?? fallback;` adopts — whichever value fills the
 slot, the unwrapped payload or the built fallback, is destroyed at scope
@@ -3156,6 +3200,36 @@ Like the other opt-in classes it is default-off — `-Wnoreturn-own` (or
 [examples/functions/panic_assert.mc](../examples/functions/panic_assert.mc),
 the class's living demo.
 
+#### -Wdestructor-copy
+
+mcc has no copy constructor, so a **bitwise copy** of a value whose type
+declares a [`destructor`](#destructors) makes two names alias one live
+resource — both would free it at cleanup, a double-free. The class warns at
+the **copy site** on such a copy from a persistent lvalue:
+
+```
+example.mc: warning: line 9: a value with a destructor is copied here, aliasing a live resource (both copies would free it); hand it over with 'move(...)' or take it by 'const &' reference [-Wdestructor-copy]
+```
+
+Two copy sites fire: an explicit `let b = a;`, and a **by-value parameter**
+call — the copy a plain [`const x: T`](#const-parameters) (or bare `x: T`) on
+an owning type makes when passed a live variable, field, or element. The fix
+is either the read-only `const &T` view (which shares the storage, no copy) or
+the sanctioned relinquishing spelling `move(v)`, which blesses a deliberate
+copy — `let b = move(a);` and `f(move(a))` are exempt. A fresh temporary is a
+transfer or a build, not an alias, so an `-> own` call initializer
+(`let s = make();`), a constructor, a literal, and an ephemeral chained
+receiver never warn.
+
+The class is the counterpart the `const`-flip needs: since a `const` struct
+parameter is now a by-value copy (not the old hidden reference), an
+unmigrated view-intended `const s: string` would silently copy an owning
+value — this diagnostic surfaces exactly that. Default-off; `-Wdestructor-copy`
+(or `-Wall`) enables it, promoting under `-Werror` as
+`[-Werror=destructor-copy]`. See
+[examples/types/destructors.mc](../examples/types/destructors.mc), the class's
+living demo.
+
 ### Deprecated functions
 
 `@deprecated("message")` is a declaration attribute on a function: the
@@ -4117,10 +4191,10 @@ See
 ### Reference/const-carrying function types
 
 A function type may also spell the [`&`](#reference-parameters) and
-[`const`](#const-parameters) parameter conventions: `fn(&char) -> void`
-is the type of a function whose parameter is passed as a pointer to the
-caller's own storage, and `fn(const struct big) -> int64` one whose struct
-parameter travels by read-only hidden reference. The bare name of such a
+[`const &`](#const-parameters) reference conventions: `fn(&char) -> void`
+is the type of a function whose parameter is passed as a writable pointer to
+the caller's own storage, and `fn(const &struct big) -> int64` one whose
+struct parameter travels by read-only hidden reference. The bare name of such a
 function infers the carrying type, and a call through the value passes the
 same by-reference arguments — and enforces the **same call-site rules** —
 as a direct call: the argument of a `&` parameter must be the caller's
@@ -4159,11 +4233,12 @@ reinterpret, including stripping a `@nonnull` contract, still works.
 possible and is undefined behavior, exactly like forging an address with
 `as fn(...)`.)
 
-`const` carries into the type only where it changes the convention — on an
-aggregate (a struct, union, slice, or tuple). On a by-value scalar it is
-not part of the convention and simply drops: `fn(const int32)` **is**
-`fn(int32)`, one type with one spelling. This is what makes a comparator
-alias transparent across kinds of `T`:
+A by-value `const` carries **no** caller contract, so it drops from the type
+entirely — of every type, not just scalars: `fn(const int32)` **is**
+`fn(int32)` and `fn(const struct big)` **is** `fn(struct big)`, one type with
+one spelling. Only the `const &T` **view** — a real pointer convention —
+stays in the type, spelled `fn(const &struct big)`. This erasure is what makes
+a comparator alias transparent across kinds of `T`:
 
 ```c
 type cmp<T> = fn(const T, const T) -> bool;
@@ -4172,8 +4247,8 @@ fn less(a: int32, b: int32) -> bool { return a < b; }          // scalar T:
 let ci: cmp<int32> = less;                                     // const drops
 
 fn big_less(const a: struct big, const b: struct big) -> bool  // struct T:
-    { return a.a < b.a; }                                      // hidden ref
-let cb: cmp<struct big> = big_less;
+    { return a.a < b.a; }                                      // const drops
+let cb: cmp<struct big> = big_less;                            // by-value fits
 ```
 
 Like the `@nonnull` contract, the convention is part of the type's

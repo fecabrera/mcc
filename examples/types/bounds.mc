@@ -58,7 +58,7 @@ fn footprint<T extends shape = circle>() -> int32 {
 //     error: pack<char> does not satisfy the bound slice<int32> of 'pack::matches'
 struct pack<T> extends slice<T> { cap: uint64; }
 
-fn pack<T>::matches<U extends slice<T>>(const self: pack<T>, const o: U) -> bool {
+fn pack<T>::matches<U extends slice<T>>(const self: &pack<T>, const o: &U) -> bool {
     return self.length == (o as slice<const T>).length;
 }
 

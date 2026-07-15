@@ -83,6 +83,29 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **BREAKING: `const` on a struct parameter is now a by-value read-only copy,
+  and `const &T` is the read-only reference view** (Phase B of the
+  `&`-reference redesign — the one real ABI change of the series). A plain
+  `const x: T` parameter is a by-value read-only copy of **every** type (the
+  ordinary calling convention; on a scalar this is unchanged, on a struct it
+  used to be a hidden reference). The hidden-reference *view* moved to the
+  explicit `const x: &T` spelling — the `const` binder annotation applied to a
+  `&T` reference type — now available uniformly on all types (a `const &`
+  scalar view is new). An old view-intended `const s: T` must be rewritten
+  `const s: &T` to keep sharing the caller's storage; the whole standard
+  library and example suite were migrated mechanically (behavior/IR
+  preserved). Three consequences ride along: (1) **`const` erases from
+  function types entirely** — `fn(const struct big)` **is** `fn(struct big)`,
+  generalizing the long-standing `fn(const int32)` ≡ `fn(int32)` rule to every
+  type; only the `const &T` view (a real pointer convention) stays spelled,
+  `fn(const &struct big)`, distinct from and not convertible with the by-value
+  form. (2) **The `@extern` `const`-parameter ban is lifted** for by-value
+  `const T` — it is the ordinary C by-value convention — while the reference
+  forms (`&T` and `const &T`) stay rejected on `@extern`. (3) `move(v)` is now
+  accepted in a `let` initializer and a by-value argument (not only an `-> own`
+  return), where it blesses a bitwise copy. Pointer **decay** into a hidden
+  reference now happens at `&T` / `const &T` slots (not by-value `const T`).
+
 - **Slice `extends` bounds are const-covariant, and a string literal binds
   a bounded char-slice type parameter** — a bound of `slice<const E>` is
   now also satisfied by any type whose declared lineage reaches
@@ -161,6 +184,20 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and writing families only.
 
 ### Added
+
+- **`-Wdestructor-copy` — a new opt-in warning class for bitwise copies of
+  owning values** — mcc has no copy constructor, so a bitwise copy of a value
+  whose type declares a `destructor` makes two names alias one live resource
+  (both would free it, a double-free). The class warns at the **copy site**:
+  an explicit `let b = a;`, and — the case Phase B's `const`-flip newly
+  creates — a **by-value parameter** call passing a live variable/field/element
+  to a plain `const x: T` (or bare `x: T`) of an owning type. The fix is the
+  `const &T` view (shares the storage, no copy) or `move(v)` (blesses a
+  deliberate copy, exempting the site). Default-off, joins `-Wall`, promotes
+  under `-Werror` as `[-Werror=destructor-copy]`; a fresh temporary (an
+  `-> own` call initializer, a constructor, a chained receiver) is a transfer,
+  not an alias, and never warns. `examples/types/destructors.mc` is the living
+  demo (compiled at plain `-Werror` in CI, like the other own-class demos).
 
 - **`&T` reference types — the blessed spelling for by-hidden-reference
   parameters and returns** — a writable reference parameter is now written

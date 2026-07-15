@@ -88,7 +88,7 @@ fn list<T>::reset(self: &list<T>) {
  *
  * @return true if index < self.length
  */
-fn list<T>::has(const self: list<T>, index: uint64) -> bool {
+fn list<T>::has(const self: &list<T>, index: uint64) -> bool {
     return index < self.length;
 }
 
@@ -121,7 +121,7 @@ fn list<T>::at(self: &list<T>, index: uint64) -> &T {
  *
  * @return true on success, false if index is out of bounds
  */
-fn list<T>::get(const self: list<T>, index: uint64, out: &T) -> bool {
+fn list<T>::get(const self: &list<T>, index: uint64, out: &T) -> bool {
     if (!self.has(index))
         return false;
 
@@ -202,7 +202,7 @@ fn list<T>::append(self: &list<T>, @nonnull items: T*, n: uint64) {
  *         otherwise
  */
 @inline
-fn list<T>::equals(const self: list<T>, const lst: slice<const T>) -> bool {
+fn list<T>::equals(const self: &list<T>, const lst: &slice<const T>) -> bool {
     return (self as slice<const T>).equals(lst);
 }
 
@@ -222,7 +222,7 @@ fn list<T>::equals(const self: list<T>, const lst: slice<const T>) -> bool {
  *         otherwise
  */
 @inline
-fn list<T>::equals<U extends slice<T>>(const self: list<T>, const lst: U) -> bool {
+fn list<T>::equals<U extends slice<T>>(const self: &list<T>, const lst: &U) -> bool {
     return self.equals(lst as slice<const T>);
 }
 

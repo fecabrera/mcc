@@ -983,8 +983,13 @@ class Parser:
                 self.advance()
             # `&T` (or the deprecated `mut T`) in the type slot marks a
             # by-reference writable parameter, riding on the TypeRef's `mut`
-            # flag; the declaration-side compose bans apply verbatim.
+            # flag; the declaration-side compose bans apply verbatim. A leading
+            # `const` marks the read-only view: `fn(const &T)` composes the
+            # `const` and the `&` reference into the read-only hidden reference
+            # (parse_type_ref only consumes a leading `&`, so `const` is read
+            # here to sit in front of it, then folded onto the TypeRef).
             slot_line = self.cur.line
+            const_kw = bool(self.accept("const"))
             mut_kw = self.cur.kind == "mut"
             if mut_kw:
                 self.advance()
@@ -992,6 +997,8 @@ class Parser:
             if mut_kw:
                 ref.mut = True
                 ref.mut_deprecated = True
+            if const_kw:
+                ref.const = True
             if is_nonnull and ref.mut:
                 raise LangError(
                     "a parameter cannot be both @nonnull and a reference "
@@ -999,11 +1006,10 @@ class Parser:
                     "and is never null)",
                     slot_line,
                 )
-            if ref.mut and ref.const:
-                raise LangError(
-                    "a parameter cannot be both const and a reference",
-                    slot_line,
-                )
+            # `const &T` in a function type is the read-only reference view
+            # (Phase B): the const rides on the TypeRef's `const` flag, the
+            # reference on its `mut` flag, and function_type reconciles the pair
+            # into a read-only hidden reference.
             ref.nonnull = is_nonnull
             params.append(ref)
         self.expect(")")
@@ -1711,6 +1717,7 @@ class Parser:
         self.expect("(")
         params = []
         const_params: set[str] = set()
+        constref_params: set[str] = set()
         mut_params: set[str] = set()
         noalias_params: set[str] = set()
         nonnull_params: set[str] = set()
@@ -1778,6 +1785,10 @@ class Parser:
                     raise LangError(
                         f"'{pname}...' must be the last parameter", ellipsis.line
                     )
+                # The collector is a plain `const args: slice<const any>`: a
+                # by-value read-only copy of the caller-built slice header (no
+                # owned resource to double-free), so it is an ordinary const
+                # param -- not the `const &` view.
                 const_params.add(pname)
                 params.append(
                     (pname, TypeRef("slice", [TypeRef("any", const=True)]))
@@ -1792,11 +1803,12 @@ class Parser:
             is_mut = ptype.mut or mut_kw_tok is not None
             ptype.mut = False
             ptype.mut_deprecated = False
-            if is_const and is_mut:
-                raise LangError(
-                    "a parameter cannot be both const and a reference",
-                    slot_line,
-                )
+            # `const x: &T` is the read-only reference view (Phase B): the
+            # `const` binder annotation applied to a `&T` reference type. It is
+            # read-only (in const_params) yet passed by hidden reference (in
+            # constref_params), never writable -- so it does NOT join
+            # mut_params. A plain `&T` (no const) stays the writable reference.
+            is_constref = is_const and is_mut
             if is_noalias and is_mut:
                 raise LangError(
                     "a parameter cannot be both @noalias and a reference "
@@ -1810,7 +1822,9 @@ class Parser:
                     "and is never null)",
                     slot_line,
                 )
-            if is_format and is_mut:
+            if is_format and is_mut and not is_const:
+                # A writable reference to a format string is rejected (it is
+                # read, never written); a read-only `const &` view is allowed.
                 raise LangError(
                     "a parameter cannot be both @format and a reference "
                     "(a format string is read, never written)",
@@ -1818,7 +1832,9 @@ class Parser:
                 )
             if is_const:
                 const_params.add(pname)
-            if is_mut:
+            if is_constref:
+                constref_params.add(pname)
+            elif is_mut:
                 mut_params.add(pname)
                 if mut_kw_tok is not None:
                     mut_kw_param_lines.append(mut_kw_tok.line)
@@ -1886,13 +1902,12 @@ class Parser:
                 )
         if variadic and type_params:
             raise LangError("a generic function cannot be variadic", line)
-        if const_params and extern:
-            raise LangError(
-                "const parameters are not allowed on @extern functions "
-                "(they would change the C calling convention)",
-                line,
-            )
-        if mut_params and extern:
+        if (mut_params or constref_params) and extern:
+            # A by-value `const x: T` is the ordinary C by-value convention, so
+            # it is allowed on @extern (a callee-side read-only discipline C
+            # cannot see). A reference parameter -- writable `&T` or the
+            # read-only `const &T` view -- is a hidden pointer that would change
+            # the C calling convention, so it stays rejected.
             raise LangError(
                 "reference parameters are not allowed on @extern functions "
                 "(they would change the C calling convention)",
@@ -2073,6 +2088,7 @@ class Parser:
                 proto=True,
                 variadic=variadic,
                 const_params=const_params,
+                constref_params=constref_params,
                 mut_params=mut_params,
                 noalias_params=noalias_params,
                 nonnull_params=nonnull_params,
@@ -2179,6 +2195,7 @@ class Parser:
             variadic=variadic,
             inline=inline,
             const_params=const_params,
+            constref_params=constref_params,
             mut_params=mut_params,
             noalias_params=noalias_params,
             nonnull_params=nonnull_params,

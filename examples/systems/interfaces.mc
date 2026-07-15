@@ -1,15 +1,16 @@
 // Bodyless `fn` prototypes and `.mci` interface files: shipping a compiled
 // mcc library that other programs import and link against.
-// Prerequisites: extern.mc, functions/mut_params.mc, functions/const_params.mc.
+// Prerequisites: extern.mc, functions/reference_params.mc, functions/const_params.mc.
 //
 // A plain `fn` may end with `;` instead of a body. Where `@extern` means "a
 // symbol with the C calling convention" (see extern.mc), a bodyless prototype
 // means "a concrete mcc function defined in another linked object, called
-// with the mcc convention". The difference matters for `&` and `const`
-// struct parameters: their hidden-reference passing is part of the mcc
+// with the mcc convention". The difference matters for the hidden-reference
+// forms `&T` and `const &T`: their by-reference passing is part of the mcc
 // convention, so a prototype carries it while `@extern` deliberately rejects
-// it. Every signature marker (`const`, `&`, `@noalias`, `@nonnull`) means
-// exactly what it does on a definition.
+// it (a by-value `const T` is fine on `@extern` since Phase B; the reference
+// forms are what it cannot describe). Every signature marker (`const`, `&`,
+// `@noalias`, `@nonnull`) means exactly what it does on a definition.
 //
 // You rarely write a prototype by hand: `--emit-interface` writes them for
 // you. This file is a complete little library (plus a `main` that demos it).
@@ -30,7 +31,7 @@
 //
 //     const SCALE: int64 = 100;
 //
-//     fn total(const p: pair) -> int64;
+//     fn total(const p: &pair) -> int64;
 //
 //     fn bump(n: &int32);
 //
@@ -75,9 +76,9 @@ struct pair { a: int64; b: int64; }
 
 const SCALE: int64 = 100;
 
-// A const struct parameter is passed by hidden reference (no copy); as a
-// prototype the `const` marker rides along, so consumers pass it the same way.
-fn total(const p: struct pair) -> int64 {
+// A `const &` struct parameter is passed by hidden reference (no copy); as a
+// prototype the `const &` marker rides along, so consumers pass it the same way.
+fn total(const p: &struct pair) -> int64 {
     return (p.a + p.b) * SCALE;
 }
 
@@ -107,4 +108,4 @@ fn main() -> int32 {
     return 0;
 }
 
-// See also: extern.mc, functions/mut_params.mc, functions/const_params.mc.
+// See also: extern.mc, functions/reference_params.mc, functions/const_params.mc.

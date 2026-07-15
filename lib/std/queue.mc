@@ -93,7 +93,7 @@ fn queue<T>::pop(self: &queue<T>) -> T {
  * @param self: queue to peek at
  * @return the front value
  */
-fn queue<T>::peek(const self: queue<T>) -> T {
+fn queue<T>::peek(const self: &queue<T>) -> T {
     return self.head!->value;
 }
 
@@ -103,7 +103,7 @@ fn queue<T>::peek(const self: queue<T>) -> T {
  * @param self: queue to inspect
  * @return true if the queue holds no values
  */
-fn queue<T>::is_empty(const self: queue<T>) -> bool {
+fn queue<T>::is_empty(const self: &queue<T>) -> bool {
     return self.head == null;
 }
 

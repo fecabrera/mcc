@@ -394,8 +394,14 @@ class Func:
         symbol: ``@symbol("...")`` -- the linker name, when not ``name``.
         source: Defining file, stamped by the driver.
         const_params: Names of parameters declared ``const`` -- read-only in the
-            body; a ``const`` struct is passed by a hidden pointer rather than
-            copied.
+            body. A plain ``const x: T`` is a by-value read-only copy (of any
+            type); a ``const x: &T`` is a read-only hidden reference (see
+            :attr:`constref_params`), the view spelling. Both are read-only, so
+            both live here.
+        constref_params: Names of ``const x: &T`` parameters -- the read-only
+            hidden-reference view, a subset of :attr:`const_params`. Passed as a
+            pointer to the caller's storage (whatever the type) but not writable
+            through it, the read-only counterpart of :attr:`mut_params`.
         mut_params: Names of parameters declared ``mut`` -- passed by hidden
             reference to the caller's storage (whatever the type), writable
             through the reference, with ``&`` on them rejected so the
@@ -576,6 +582,7 @@ class Func:
     symbol: str | None = None
     source: str | None = None
     const_params: set[str] = field(default_factory=set)
+    constref_params: set[str] = field(default_factory=set)
     mut_params: set[str] = field(default_factory=set)
     noalias_params: set[str] = field(default_factory=set)
     nonnull_params: set[str] = field(default_factory=set)

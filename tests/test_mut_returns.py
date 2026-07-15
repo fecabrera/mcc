@@ -558,12 +558,13 @@ def test_loaded_value_coerces_in_expressions():
 
 
 def test_shared_storage_as_const_hidden_reference():
-    # A mut-returning call's storage feeds a const struct parameter without
-    # a spill: the hidden reference is the returned address itself.
+    # A mut-returning call's storage feeds a `const &` view parameter without
+    # a spill: the hidden reference is the returned address itself. (Since
+    # Phase B the view is spelled `const &T`; a plain `const T` copies.)
     ir_text = compile_ir(
         "struct pt { x: int32; y: int32; }\n"
         "fn pt_ref(mut p: struct pt) -> mut struct pt { return p; }\n"
-        "fn x_of(const p: struct pt) -> int32 { return p.x; }\n"
+        "fn x_of(const p: &struct pt) -> int32 { return p.x; }\n"
         "fn main() -> int32 {\n"
         "    let p: struct pt;\n"
         "    p.x = 3; p.y = 0;\n"

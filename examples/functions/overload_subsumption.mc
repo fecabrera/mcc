@@ -126,7 +126,7 @@ fn main() -> int32 {
 // And it never reorders across the rank: a bounded open pattern still beats
 // an unbounded diagonal outright, tier over everything (mixed_overloads.mc).
 
-// See also: mixed_overloads.mc (the tier/specificity rank), mut_overloads.mc
+// See also: mixed_overloads.mc (the tier/specificity rank), reference_overloads.mc
 // (reference markers are template identity, so a reference/non-reference same-shape pair stays
 // ambiguous for an lvalue), types/type_groups.mc (closed groups),
 // types/method_alias.mc (an alias-spelled diagonal, `type diag<T> =
