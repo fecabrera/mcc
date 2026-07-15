@@ -170,6 +170,8 @@ fn main() -> int32 {
 //
 // See also: destructors.mc (the error this lifts and every opt-out
 // spelling), reference_returns.mc (the sibling return flag), error_handling.mc
-// (results, try, except), own_drops.mc (the statement-end destruction of
-// every receiverless consumption). Full rules: docs/language.md,
-// "Move-out returns".
+// (results, try, except), own_receivers.mc (the receiver-side mirror: `own
+// self: T` and the `own` parameter marker take a value in by move under
+// this same relinquish discipline), own_drops.mc (the statement-end
+// destruction of every receiverless consumption). Full rules:
+// docs/language.md, "Move-out returns".

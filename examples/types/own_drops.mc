@@ -274,8 +274,12 @@ fn main() -> int32 {
 //
 // See also: own_returns.mc for the feature itself (the obligation, the
 // formation rule, move, adoption, the function-pointer marker);
-// destructors.mc for the schedule and the stack-lets-only scope this
-// drop rule is the one exception to; error_handling.mc for results, the
+// own_receivers.mc for the OTHER destination of an own temporary -- an
+// `own` parameter or `own self: T` receiver ADOPTS it (dropping it at the
+// end of the callee's body), where the receiverless consumptions here drop
+// it at statement end; destructors.mc for the schedule and the
+// stack-lets-only scope this drop rule is the one exception to;
+// error_handling.mc for results, the
 // try endings, and `??`; control-flow/defer.mc for the defer stack
 // statement temps die before; fstring_values.mc for the drop schedule
 // carrying an f-string's rendered string and its hole temporaries.
