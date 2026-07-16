@@ -2372,7 +2372,11 @@ without a cast, while a call through a base view still types the result `&a`
 participate — a *by-value* return of a descendant would slice through the slot
 and stays rejected — and an [interface stub](#interface-files) re-emits the
 covariant spelling, so static callers importing through a `.mci` keep the
-narrowing. The boundary widening leans on the whole program agreeing that a
+narrowing. The overload's **non-receiver parameters must resolve before
+bodies**: on a generic struct, an overload whose other parameters spell the
+struct's own type parameters (`get(self: &cell<T>, k: T)`) cannot key the
+shared slot's covariant adaptation and is rejected — spell the base member's
+return there. The boundary widening leans on the whole program agreeing that a
 thin spelling's referent is exactly its type, so a slot member whose reference
 return was **pinned thin by its interface's closure** (no extension of the
 return type was visible when the stub was compiled) is incompatible with a

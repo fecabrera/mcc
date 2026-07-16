@@ -2388,6 +2388,57 @@ def test_covariant_override_must_still_be_a_reference():
         )
 
 
+def test_contravariant_override_return_is_rejected():
+    # The relaxation runs one way only: an override may NARROW to a declared
+    # descendant, never WIDEN to an ancestor -- a base-view caller would
+    # type the slot's result as the base's `&y` while the runtime override
+    # hands back an `&x` whose object lacks y's suffix fields.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::me' returns x but the base member",
+    ):
+        compile_ir(
+            """
+            struct x { v: int32; }
+            struct y extends x { w: int32; }
+            struct a { sy: y; }
+            struct b extends a { sx: x; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            fn a::me(self: &a) -> &y { return self.sy; }
+            @override fn b::me(self: &b) -> &x { return self.sx; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_covariant_return_on_an_unresolvable_generic_pattern_is_rejected():
+    # A struct-generic overload whose non-receiver parameters spell the
+    # struct's own type parameters keys its slot by the pre-body fallback
+    # pattern, which diverges between the override and the base member --
+    # a covariant marking registered under it would be a dead key (the slot
+    # boundaries would never adapt the return). Refused up front.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'entry::get' declares a covariant return, "
+        r"but its non-receiver parameters spell the struct's own type "
+        r"parameters",
+    ):
+        compile_ir(
+            """
+            struct x { v: int32; }
+            struct y extends x { w: int32; }
+            struct cell<T> { n: T; sx: x; }
+            struct entry<T> extends cell<T> { sy: y; }
+            fn cell<T>::get(self: &cell<T>, k: T) -> &x { return self.sx; }
+            @override fn entry<T>::get(self: &entry<T>, k: T) -> &y {
+                return self.sy;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
 def test_override_returning_an_unrelated_reference_is_still_rejected():
     # The relaxation is exactly "a declared descendant of the base's
     # reference return": an unrelated reference stays the return-ABI error.

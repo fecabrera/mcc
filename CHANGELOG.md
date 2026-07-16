@@ -274,11 +274,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   own narrower reference (derived fields reachable without a cast) and a
   `.mci` stub re-emits the covariant spelling so importers keep the
   narrowing; a *by-value* descendant return would slice through the slot and
-  stays rejected, and a covariant slot member whose reference return was
+  stays rejected, a covariant slot member whose reference return was
   **pinned thin by its interface's closure** is rejected in a program that
   extends that return type (the one-word return cannot carry the runtime
   type across the `.mci` boundary — recompile the interface with the
-  extension in its closure) — and pass **every parameter** — the
+  extension in its closure), and a covariant override whose non-receiver
+  parameters spell the struct's own type parameters is rejected (the
+  pre-body fallback slot key cannot carry the covariant marking) — and
+  pass **every parameter** — the
   receiver and each argument — the same way (by value vs. by reference, `const`
   vs. writable, `own`, `@nonnull`, `@noalias`), since the slot's indirect call
   and the stored thunk must agree on each value's ABI. Widening a read-only

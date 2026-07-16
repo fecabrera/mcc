@@ -1766,6 +1766,22 @@ class CodeGen:
             a generic member whose non-receiver types cannot resolve here, the
             order-independent template base as an opaque fallback key.
         """
+        resolved = self.dispatch_pattern_resolved(func)
+        if resolved is not None:
+            return resolved
+        return ("t", self.template_base(func))
+
+    def dispatch_pattern_resolved(self, func: Func) -> "tuple | None":
+        """:meth:`dispatch_pattern`'s resolved form, or ``None`` on fallback.
+
+        ``None`` when a non-receiver parameter type does not resolve at this
+        point (a struct-generic member spelling the struct's own parameters,
+        pre-body) -- the case :meth:`dispatch_pattern` papers over with its
+        opaque template-base key. Exposed separately so
+        :meth:`validate_dispatch_overrides` can refuse to key a covariant
+        slot on the fallback (whose value diverges between the override and
+        the base member, making the registration a dead key).
+        """
         # This runs during call emission (slot lookup / winner selection), so
         # it must leave the caller's source context untouched: resolve the
         # member's parameter types under ITS source, then restore.
@@ -1775,7 +1791,7 @@ class CodeGen:
             types = [self.lang_type(t, func.line) for _, t in func.params[1:]]
             return tuple(str(strip_const(t)) for t in types)
         except LangError:
-            return ("t", self.template_base(func))
+            return None
         finally:
             self.current_source = saved_source
 
@@ -2140,13 +2156,34 @@ class CodeGen:
             if covariant:
                 # SIE-186: remember the slot, so the thunk builder and the
                 # dispatch site adapt a thin covariant spelling to the slot's
-                # base-shaped fat return.
-                pattern = self.dispatch_pattern(func)
+                # base-shaped fat return. The key must be the RESOLVED
+                # pattern: the fallback key embeds each member's own
+                # template base, so it diverges between the override and the
+                # base member and the registration would be dead -- the
+                # boundaries would never adapt, a silent return-ABI mismatch.
+                pattern = self.dispatch_pattern_resolved(func)
+                if pattern is None:
+                    raise LangError(
+                        f"@override method {func.name!r} declares a covariant"
+                        " return, but its non-receiver parameters spell the "
+                        "struct's own type parameters and do not resolve "
+                        "before bodies, so the shared dispatch slot cannot "
+                        "carry the covariance; spell the base member's "
+                        "return type instead",
+                        func.line,
+                    )
                 introducer = self.overload_introducer(
                     func.name.split("::", 1)[0], method, pattern
                 )
-                if introducer is not None:
-                    self.covariant_ret_slots.add((introducer, method, pattern))
+                if introducer is None:
+                    raise LangError(
+                        f"@override method {func.name!r} declares a covariant"
+                        " return but no base in its chain introduces the "
+                        "overload's dispatch slot; the compiler cannot key "
+                        "the covariant adaptation",
+                        func.line,
+                    )
+                self.covariant_ret_slots.add((introducer, method, pattern))
                 # ... and that adaptation is only sound while each member's
                 # pinned return width agrees with the whole program's view
                 # of its return type: an .mci-pinned THIN return whose type
@@ -2353,6 +2390,40 @@ class CodeGen:
             f"no implementation of {method!r} for {concrete}", 0
         )
 
+    def covariant_slot_ret_ir(
+        self, type_name: str, method: str, pattern: tuple, symbol: str,
+        fn_ty: ir.FunctionType,
+    ) -> "ir.Type | None":
+        """The slot-shaped fat return for a THIN covariant hop, or ``None``.
+
+        The one predicate both slot boundaries share (SIE-186): the thunk
+        builder widens a thin winner's result into the base-shaped fat view,
+        and the dispatch site types its indirect call with the same widened
+        shape (then narrows back). ``None`` means the hop needs no
+        adaptation -- the slot is not covariant, or the hop's own return is
+        already fat (every fat view is the same two-word layout, so the
+        slot's callers read it as the base's shape through the
+        function-pointer bitcast they already perform). Cheap-first: the
+        introducer chain walk runs only when a covariant slot exists at all
+        and the hop's return is thin.
+
+        Args:
+            type_name: The dispatching type (template name or qualifier).
+            method: The family's method name.
+            pattern: The overload's receiver-stripped slot key.
+            symbol: The hop's mangled symbol (its :attr:`fat_ret` identity).
+            fn_ty: The hop's IR function type (the thin return to widen).
+
+        Returns:
+            The fat ``{leaf*, i8*}`` return IR, or ``None``.
+        """
+        if not self.covariant_ret_slots or symbol in self.fat_ret:
+            return None
+        introducer = self.overload_introducer(type_name, method, pattern)
+        if (introducer, method, pattern) not in self.covariant_ret_slots:
+            return None
+        return self.fat_ref_ir(fn_ty.return_type.pointee)
+
     def build_dispatch_thunk(
         self, concrete: LangType, method: str, pattern: tuple
     ) -> ir.Function:
@@ -2387,35 +2458,30 @@ class CodeGen:
         """
         winner, symbol = self.slot_winner(concrete, method, pattern)
         # The pattern is part of the thunk symbol: sibling overloads of one
-        # method name have distinct slots and so distinct thunks.
+        # method name have distinct slots and so distinct thunks. Built
+        # exactly once per (concrete, method, pattern): the only caller is
+        # vtable_for's entries loop, which runs once per type (the table is
+        # cached before the loop, so the mid-body recursion through
+        # dispatch_table_of self-hits that cache), and a slot appears once
+        # in the specs -- llvmlite would refuse the duplicate name loudly if
+        # the invariant ever broke.
         suffix = f"({','.join(map(str, pattern))})" if pattern else ""
         mangled = f"{concrete.name}::{method}{suffix}.vthunk"
-        existing = self.funcs.get(mangled)
-        if existing is not None:
-            return existing
-        i8ptr = ir.IntType(8).as_pointer()
         winner_arg_irs = list(winner.function_type.args)
         other_irs = winner_arg_irs[1:]
         fat_recv_ir = self.fat_ref_ir(concrete.ir)
         # SIE-186: a covariant slot returns the base-shaped fat view, so a
         # winner spelling a THIN leaf reference is widened on the way out.
-        introducer = self.overload_introducer(
-            concrete.template or concrete.name, method, pattern
+        ret_ir = self.covariant_slot_ret_ir(
+            concrete.template or concrete.name, method, pattern, symbol,
+            winner.function_type,
         )
-        widen_ret = (
-            introducer, method, pattern
-        ) in self.covariant_ret_slots and symbol not in self.fat_ret
-        if widen_ret:
-            ret_ir = self.fat_ref_ir(winner.function_type.return_type.pointee)
-        else:
+        widen_ret = ret_ir is not None
+        if not widen_ret:
             ret_ir = winner.function_type.return_type
         thunk_ty = ir.FunctionType(ret_ir, [fat_recv_ir, *other_irs])
         thunk = ir.Function(self.module, thunk_ty, name=mangled)
         thunk.linkage = "linkonce_odr"
-        # Register before the body: the dedup lookup above must hit if table
-        # construction re-enters (a covariant widen asks for a vtable while
-        # this thunk is being built).
-        self.funcs[mangled] = thunk
         saved_builder = self.builder
         try:
             self.builder = ir.IRBuilder(thunk.append_basic_block("entry"))
@@ -2485,12 +2551,24 @@ class CodeGen:
         glob = ir.GlobalVariable(self.module, arr_ty, name=f"{mangled}.vtable")
         glob.linkage = "linkonce_odr"
         glob.global_constant = True
+        # Placeholder initializer: linkonce_odr demands a definition, so an
+        # error escaping the thunk builds below must not leave a bare
+        # declaration behind in the module.
+        glob.initializer = ir.Constant(arr_ty, ir.Undefined)
         table = glob.bitcast(i8ptr)
         self.vtables[mangled] = table
-        entries = [
-            self.build_dispatch_thunk(concrete, method, pattern).bitcast(i8ptr)
-            for method, pattern, _introducer in specs
-        ]
+        try:
+            entries = [
+                self.build_dispatch_thunk(concrete, method, pattern).bitcast(
+                    i8ptr
+                )
+                for method, pattern, _introducer in specs
+            ]
+        except Exception:
+            # Do not memoize a half-built table: a caller that survives the
+            # error must rebuild, not reuse the undef placeholder.
+            self.vtables.pop(mangled, None)
+            raise
         glob.initializer = ir.Constant(arr_ty, entries)
         return table
 
@@ -2546,13 +2624,11 @@ class CodeGen:
         # the view's first word, and the table drops (nothing extends the
         # leaf anywhere in the program, per check_covariant_member_width, so
         # its referent is exactly its spelling).
-        introducer = self.overload_introducer(qualifier, method, pattern)
-        narrow_ret = (
-            introducer, method, pattern
-        ) in self.covariant_ret_slots and callee.name not in self.fat_ret
-        if narrow_ret:
-            ret_ir = self.fat_ref_ir(callee.function_type.return_type.pointee)
-        else:
+        ret_ir = self.covariant_slot_ret_ir(
+            qualifier, method, pattern, callee.name, callee.function_type
+        )
+        narrow_ret = ret_ir is not None
+        if not narrow_ret:
             ret_ir = callee.function_type.return_type
         # The slot's function type: the fat receiver (as widened at this site)
         # plus the other argument types, returning the callee's return type
@@ -12200,7 +12276,8 @@ class CodeGen:
             stmt.value, t, align, volatile, stmt.line, what="a reference return"
         )
         if t != self.ret_type:
-            if self.receiver_upcast_target(t, self.ret_type) is None:
+            target = self.receiver_upcast_target(t, self.ret_type)
+            if target is None:
                 raise LangError(
                     f"reference return: expected a {self.ret_type} lvalue, "
                     f"got {t}",
@@ -12224,12 +12301,10 @@ class CodeGen:
                     stmt.line,
                 )
             # SIE-186: a derived lvalue returns as its declared base --
-            # reinterpret the storage as the base prefix; the wrap below
-            # pairs it with the derived table (``static=t``), so the view
-            # dispatches the runtime type.
-            addr = self.builder.bitcast(
-                addr, strip_const(self.ret_type).ir.as_pointer()
-            )
+            # reinterpret the storage as the predicate's own (const-stripped)
+            # base target; the wrap below pairs it with the derived table
+            # (``static=t``), so the view dispatches the runtime type.
+            addr = self.builder.bitcast(addr, target.ir.as_pointer())
         if self.ret_fat:
             # SIE-101: the return is a two-word {address, table} view. The
             # table follows the argument-side sourcing: a bare forwarded view
