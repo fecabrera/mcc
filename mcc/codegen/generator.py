@@ -1864,17 +1864,59 @@ class CodeGen:
         would reinterpret the returned bytes. The type
         key is the resolved-type spelling where it resolves; for a
         struct-generic member whose return names the struct parameter (``-> T``,
-        unbound at this pre-body pass) it falls back to the raw ``TypeRef``
-        spelling, which compares consistently because both the override and its
-        rebased base clone spell the return in the DERIVED struct's own
-        parameter names.
+        unbound at this pre-body pass) it falls back to the ``TypeRef``
+        spelling with the member's struct parameters alpha-renamed to their
+        qualifier position (:meth:`generic_ret_spelling`), which compares
+        consistently because both the override and its rebased base clone
+        spell the return over the derived struct's parameters -- whatever
+        each happens to NAME them (`fn b<X>::me` vs the declaration's `T`).
         """
         self.current_source = func.source
         try:
             key = str(self.lang_type(func.ret_type, func.line))
         except LangError:
-            key = ("<unresolved>", str(func.ret_type))
+            key = ("<unresolved>", str(self.generic_ret_spelling(func)))
         return (func.own_return, func.mut_return, key)
+
+    def generic_ret_spelling(self, func: Func) -> TypeRef:
+        """A member's return spelling, alpha-renamed for cross-hop comparison.
+
+        The struct-generic parameter names in a return spelling are the
+        member's own choice (the qualifier's, or the declaration's for a
+        rebased clone), so two hops of one hierarchy may spell one return
+        differently. Renaming each struct parameter to its qualifier
+        POSITION (``$0``, ``$1``, ...) -- the identity the ``extends``
+        composition preserves -- makes the spellings of the override and its
+        rebased base clone directly comparable. A concrete (specialized)
+        qualifier position binds no name and passes through unchanged. A
+        fresh position is judged by ``type_params`` MEMBERSHIP -- the
+        registration-time fact -- not by re-probing
+        :meth:`struct_arg_is_param`, which reads whatever type bindings
+        happen to be live and would misclassify under a caller's
+        instantiation context (the :meth:`slot_winner` hazard).
+        """
+        qargs = func.qualifier_args or []
+        binding = {
+            qa.name: TypeRef(f"${i}")
+            for i, qa in enumerate(qargs)
+            if qa.name in func.type_params
+        }
+        if not binding:
+            return func.ret_type
+        return self.subst_struct_args(func.ret_type, binding)
+
+    def ret_desc(self, func: Func) -> str:
+        """A member's return type as diagnostics render it.
+
+        The resolved spelling where it resolves; the SOURCE spelling for a
+        struct-generic return that does not resolve pre-body -- never
+        :meth:`return_abi`'s internal fallback key.
+        """
+        self.current_source = func.source
+        try:
+            return str(self.lang_type(func.ret_type, func.line))
+        except LangError:
+            return str(func.ret_type)
 
     def covariant_return_ok(self, base: Func, over: Func) -> bool:
         """Whether ``over``'s return covariantly narrows ``base``'s (SIE-186).
@@ -1886,10 +1928,12 @@ class CodeGen:
         fat view (the slot thunk widens a thin leaf result, see
         :meth:`build_dispatch_thunk`) -- so the relaxation is ABI-safe.
         Only reference returns participate (a by-value return of a descendant
-        would slice through the slot), the ``own`` marker must agree, and
-        both spellings must resolve to concrete structs here (a
-        struct-generic return that does not resolve at this pre-body pass
-        keeps the same-spelling requirement).
+        would slice through the slot) and the ``own`` marker must agree. A
+        spelling that resolves to a concrete struct here is judged on the
+        resolved types; a struct-generic return that does not resolve at
+        this pre-body pass (``-> &b<T>``, ``T`` unbound) is judged
+        spelling-structurally at the template level instead
+        (:meth:`covariant_return_template_ok`, SIE-189).
 
         Args:
             base: The base member's rebased clone.
@@ -1910,10 +1954,175 @@ class CodeGen:
             self.current_source = over.source
             over_ret = self.lang_type(over.ret_type, over.line)
         except LangError:
-            return False
+            return self.covariant_return_template_ok(base, over)
         finally:
             self.current_source = saved
         return self.receiver_upcast_target(over_ret, base_ret) is not None
+
+    def covariant_return_template_ok(self, base: Func, over: Func) -> bool:
+        """:meth:`covariant_return_ok` for struct-generic spellings (SIE-189).
+
+        A return that spells the struct's own type parameters resolves at no
+        pre-body pass, but covariance is still decidable from the
+        declarations alone: the override and its rebased base clone both
+        spell their returns over the derived struct's parameters
+        (alpha-renamed to qualifier position, :meth:`generic_ret_spelling`,
+        so each hop's private NAMES drop out), and walking the override
+        return's declared ``extends`` chain -- substituting the spelled
+        arguments hop by hop, exactly as :meth:`base_chain` composes -- lands
+        on the base's spelling precisely when the resolved returns are
+        covariant at EVERY instantiation. Spellings are compared by
+        DECLARATION, never by name: each hop's head resolves in the file
+        that spelled it (:meth:`template_walk_head`) and each concrete
+        argument canonicalizes there (:meth:`canon_template_arg`), so two
+        same-named file-scoped ``@static`` types from different files never
+        conflate. The walk mirrors :meth:`receiver_upcast_target`'s
+        refusals: only plain struct references participate (no pointers,
+        arrays, or function types), and an intrusive ``extends T`` edge
+        ends the lineage (:meth:`struct_base_ref` returns ``None`` there).
+        Anything that does not match conservatively keeps the same-spelling
+        requirement.
+
+        Args:
+            base: The base member's rebased clone.
+            over: The ``@override`` candidate.
+
+        Returns:
+            ``True`` when every instantiation's returns are the legal
+            covariant pair.
+        """
+
+        def plain(ref: TypeRef) -> bool:
+            return ref.params is None and not ref.stars and not ref.dims
+
+        def key(head) -> "str | int":
+            return head if isinstance(head, str) else id(head)
+
+        target = self.generic_ret_spelling(base)
+        current = self.generic_ret_spelling(over)
+        if not (plain(target) and plain(current)):
+            return False
+        target_head = self.template_walk_head(target.name, base.source)
+        target_args = self.canon_template_args(target.args, base.source)
+        head = self.template_walk_head(current.name, over.source)
+        args = self.canon_template_args(current.args, over.source)
+        if target_head is None or target_args is None or args is None:
+            return False
+        target_key = [str(a) for a in target_args]
+        seen = {key(head)}
+        while True:
+            if head is None or isinstance(head, str):
+                return False  # a builtin/unknown head: the chain ends
+            decl = head
+            if len(decl.type_params) != len(args):
+                return False  # arity mismatch; instantiation reports it
+            ref = self.struct_base_ref(decl)
+            if ref is None or not plain(ref):
+                return False  # a root, or an intrusive `extends T` edge
+            # The hop's spelling belongs to the DECLARING file: mark its
+            # parameters off (``$h<i>``, distinct from the ``$<i>``
+            # placeholders riding in `args`), canonicalize every concrete
+            # name it spells under decl.source, then splice this hop's
+            # already-canonical arguments into the marks.
+            marks = {
+                p: TypeRef(f"$h{i}") for i, p in enumerate(decl.type_params)
+            }
+            hop_args = self.canon_template_args(
+                self.subst_struct_args(ref, marks).args, decl.source
+            )
+            if hop_args is None:
+                return False
+            binding = {f"$h{i}": a for i, a in enumerate(args)}
+            args = [self.subst_struct_args(a, binding) for a in hop_args]
+            head = self.template_walk_head(ref.name, decl.source)
+            if key(head) == key(target_head) and (
+                [str(a) for a in args] == target_key
+            ):
+                return True
+            if key(head) in seen:
+                return False  # cyclic extends; instantiation reports it
+            seen.add(key(head))
+
+    def template_walk_head(self, name: str, source: "str | None"):
+        """The declaration (or builtin) a template-walk head names.
+
+        Resolution happens under the file that SPELLED the name -- a
+        file-scoped ``@static`` struct there shadows a global template,
+        exactly as :meth:`lang_type` resolves -- and the returned
+        declaration object is the head's program-wide identity, so
+        same-named types from different files compare unequal.
+
+        Args:
+            name: The head's spelled name.
+            source: The file the spelling belongs to.
+
+        Returns:
+            The ``StructDecl``/``UnionDecl``, the name itself for a builtin
+            head, or ``None`` for an unknown (alias/unresolvable) one.
+        """
+        decl = self.static_structs.get((source, name))
+        if decl is not None:
+            return decl
+        decl = self.struct_templates.get(name)
+        if decl is not None:
+            return decl
+        if name in TYPES or name in RESERVED_TYPE_NAMES:
+            return name
+        return None
+
+    def canon_template_args(
+        self, args: "list[TypeRef]", source: "str | None"
+    ) -> "list[TypeRef] | None":
+        """:meth:`canon_template_arg` over an argument list, or ``None``."""
+        out = []
+        for arg in args:
+            canon = self.canon_template_arg(arg, source)
+            if canon is None:
+                return None
+            out.append(canon)
+        return out
+
+    def canon_template_arg(
+        self, ref: TypeRef, source: "str | None"
+    ) -> "TypeRef | None":
+        """A template-walk argument spelling as a program-wide identity.
+
+        A fully concrete spelling resolves under its declaring file
+        (:meth:`resolve_ref_at` -- so aliases chase and a file-scoped
+        ``@static`` type canonicalizes to its unique instantiation name); a
+        ``$``-placeholder passes through to compare positionally; a spelling
+        structured OVER a placeholder (``slice<$0>``) keeps its shape with
+        the head name replaced by its unique identity (the ``@static``
+        mangled base where file-scoped). ``None`` -- an unresolvable name,
+        or a placeholder under an alias or function-type head -- keeps the
+        conservative same-spelling requirement.
+
+        Args:
+            ref: The argument spelling.
+            source: The file the spelling belongs to.
+
+        Returns:
+            The canonicalized spelling, or ``None``.
+        """
+        if "$" not in str(ref):
+            resolved = self.resolve_ref_at(ref, source)
+            return None if resolved is None else TypeRef(str(resolved))
+        if ref.name.startswith("$"):
+            return ref if not ref.args else None
+        if ref.params is not None:
+            return None  # a fn(...) type over a placeholder: conservative
+        head = self.template_walk_head(ref.name, source)
+        if head is None:
+            return None
+        token = (
+            head
+            if isinstance(head, str)
+            else self.symbol_bases.get((head.source, head.name), head.name)
+        )
+        args = self.canon_template_args(ref.args, source)
+        if args is None:
+            return None
+        return dataclasses_replace(ref, name=token, args=args)
 
     def check_covariant_member_width(self, func: Func, member: Func):
         """Reject a covariant-slot member whose pinned thin return the
@@ -1944,16 +2153,28 @@ class CodeGen:
         if not member.mut_return:
             return
         saved = self.current_source
+        name: "str | None" = None
         try:
             self.current_source = member.source
             ret = strip_const(self.lang_type(member.ret_type, member.line))
+            if is_struct(ret):
+                name = ret.template or ret.name
         except LangError:
-            return  # a struct-generic spelling: no covariance, nothing to pin
+            # A struct-generic spelling (SIE-189): the referent's TEMPLATE is
+            # decidable from the spelling alone, and width pinning is a
+            # template-level fact (`extends` targets the template).
+            ref = member.ret_type
+            if (
+                ref.params is None
+                and not ref.stars
+                and not ref.dims
+                and self.lookup_struct_decl(ref.name) is not None
+            ):
+                name = ref.name
         finally:
             self.current_source = saved
-        if not is_struct(ret):
+        if name is None:
             return
-        name = ret.template or ret.name
         if self.is_fat_base(name, member.source) or not self.is_fat_base(
             name, None
         ):
@@ -2134,14 +2355,22 @@ class CodeGen:
             for base in targets:
                 if self.return_abi(base) != over_abi:
                     if not self.covariant_return_ok(base, func):
+                        # Render SOURCE spellings, never return_abi's internal
+                        # fallback key (an unresolved struct-generic return
+                        # would otherwise print as a raw tuple). Attribute
+                        # the error to the override's own file explicitly:
+                        # ret_desc(base) leaves current_source at the base
+                        # clone's file, which generate() would otherwise
+                        # stamp onto the error.
                         raise LangError(
                             f"@override method {func.name!r} returns "
-                            f"{self.return_abi(func)[2]} but the base member "
-                            f"it overrides returns {self.return_abi(base)[2]};"
+                            f"{self.ret_desc(func)} but the base member "
+                            f"it overrides returns {self.ret_desc(base)};"
                             " an override must return the same type, or a "
                             "reference to a declared descendant of the base's"
                             " reference return (they share one dispatch slot)",
                             func.line,
+                            source=func.source,
                         )
                     covariant = True
                 # override_pattern matched every parameter (it spells them all),
@@ -2152,6 +2381,7 @@ class CodeGen:
                         raise LangError(
                             f"@override method {func.name!r} {mismatch}",
                             func.line,
+                            source=func.source,
                         )
             if covariant:
                 # SIE-186: remember the slot, so the thunk builder and the
@@ -2377,11 +2607,17 @@ class CodeGen:
                 # align position-for-position with the declaration's parameter
                 # list and thus with this hop's `current.args`, and a concrete
                 # (specialized) position carries no fresh name -- it was already
-                # substituted into the signature, so it binds nothing.
+                # substituted into the signature, so it binds nothing. A fresh
+                # position is one whose name the registration classified as a
+                # type parameter -- judged by ``type_params`` MEMBERSHIP, not
+                # by re-probing ``struct_arg_is_param``: this runs mid-body of
+                # whatever function forced the table, whose live type bindings
+                # would resolve the member's own parameter name and misread a
+                # fresh position as concrete (dropping the binding).
                 bindings = {
                     qa.name: arg
                     for qa, arg in zip(member.qualifier_args, current.args)
-                    if self.struct_arg_is_param(qa, member.line)
+                    if qa.name in member.type_params
                 }
                 fn, _ret, _params = self.instantiate(member, bindings, member.line)
                 return fn, fn.name

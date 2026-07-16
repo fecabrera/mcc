@@ -267,7 +267,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   call is typed with the base return type) — or, the return side's one
   relaxation (SIE-186), declare a **covariant reference return**: a reference
   to a declared `extends` descendant of the base member's reference return
-  (`-> &b` over the base's `-> &a`). The covariance is **spelling-level
+  (`-> &b` over the base's `-> &a`) — and on a **generic struct hierarchy
+  too** (SIE-189): `-> &b<T>` over `-> &a<T>` resolves at no pre-body pass,
+  so covariance is judged **at the template level**, walking the override
+  return's declared `extends` chain with the spelled type arguments
+  substituted hop by hop (alpha-renamed to qualifier position, so a renamed
+  qualifier parameter still compares; every spelled name resolved to its
+  **declaration** in the file that spelled it, so two same-named file-scoped
+  `@static` types from different files never conflate — and a concrete type
+  argument spelled through an alias compares resolved), granted exactly when
+  *every* instantiation narrows (`-> &b<int32>` over `-> &a<T>` stays
+  rejected) and adapted per concrete instantiation's slot — while a generic
+  return-ABI mismatch diagnostic now prints the **source spellings**
+  (`b<T>`), never the checker's internal unresolved tuple key, and the
+  override-compatibility errors attribute to the **override's own file**
+  (previously the base clone's file could stamp the message). The covariance is **spelling-level
   only** — the slot's return ABI stays the base's fat view forever (a thin
   leaf spelling widens at the slot boundary, so nothing reinterprets), while
   a *static* call on a concrete receiver types the result as the override's
@@ -1231,6 +1245,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and [nonnull_callbacks.mc](examples/functions/nonnull_callbacks.mc).
 
 ### Fixed
+
+- **Building a generic hierarchy's dispatch table inside a generic body
+  crashed** (SIE-189 sibling hardening) — forming a fat view of one generic
+  hierarchy from within another generic member's body (`fn a<T>::get(self:
+  &a<T>) -> &x<T> { return self.store; }`, where `y<T> extends x<T>` is
+  overridden) built `y<int32>`'s table while the enclosing instantiation's
+  type bindings were live, and the slot-winner instantiation re-probed the
+  winning template's qualifier parameter against those bindings — `T`
+  resolved, the fresh position was misread as concrete, and the dropped
+  binding crashed codegen with a `KeyError`. The classification now reads
+  the registration-time fact (`type_params` membership), which no caller
+  context can distort.
 
 - **Positional placeholders did not desugar through a `.format` dot-call
   receiver** — a string-literal receiver reaches the marshal wrapped in

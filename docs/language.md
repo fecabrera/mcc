@@ -2372,7 +2372,21 @@ without a cast, while a call through a base view still types the result `&a`
 participate — a *by-value* return of a descendant would slice through the slot
 and stays rejected — and an [interface stub](#interface-files) re-emits the
 covariant spelling, so static callers importing through a `.mci` keep the
-narrowing. The overload's **non-receiver parameters must resolve before
+narrowing. On a **generic struct hierarchy** the return spellings (`-> &b<T>`
+over `-> &a<T>`, given `b<T> extends a<T>`) resolve at no pre-body pass, so
+covariance is judged **at the template level** instead: the override return's
+declared `extends` chain is walked with the spelled type arguments
+substituted hop by hop (and each side's parameter names alpha-renamed to
+qualifier position, so a method that renames the struct's parameters still
+compares). The walk matches **declarations, never names**: each spelled name
+resolves in the file that spelled it, so two same-named file-scoped
+[`@static`](#visibility) types from different files never conflate,
+and a concrete type argument spelled through an alias compares resolved.
+The relaxation is granted exactly when **every** instantiation's
+returns narrow — `-> &b<int32>` over `-> &a<T>` is rejected, since it narrows
+at one instantiation only — and each concrete instantiation's slot then
+adapts independently (`b<int32>`'s thunk widens with `b<int32>`'s table). The
+overload's **non-receiver parameters must resolve before
 bodies**: on a generic struct, an overload whose other parameters spell the
 struct's own type parameters (`get(self: &cell<T>, k: T)`) cannot key the
 shared slot's covariant adaptation and is rejected — spell the base member's

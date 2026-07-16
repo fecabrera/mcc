@@ -2459,6 +2459,324 @@ def test_override_returning_an_unrelated_reference_is_still_rejected():
         )
 
 
+def test_generic_covariant_override_dispatches_per_instantiation():
+    # SIE-189: the SIE-186 relaxation on a struct-GENERIC hierarchy. The
+    # return spellings (`-> &b<T>` over `-> &a<T>`) resolve at no pre-body
+    # pass, so covariance is judged spelling-structurally against the
+    # declared `extends` chain of the templates -- and then each concrete
+    # instantiation's slot adapts independently (b<int32> and b<float64>
+    # widen through their own thunks and tables).
+    assert (
+        run(
+            """
+            struct a<T> { v: T; }
+            struct b<T> extends a<T> { w: T; }
+            fn a<T>::kind(const self: &a<T>) -> int32 { return 1; }
+            @override fn b<T>::kind(const self: &b<T>) -> int32 { return 2; }
+            fn a<T>::me(self: &a<T>) -> &a<T> { return self; }
+            @override fn b<T>::me(self: &b<T>) -> &b<T> { return self; }
+            fn via(x: &a<int32>) -> int32 { return x.me().kind(); }
+            fn viaf(x: &a<float64>) -> int32 { return x.me().kind(); }
+            fn main() -> int32 {
+                let q: b<int32> = { v = 1, w = 2 };
+                if (via(q) != 2) { return 10; }
+                let p: a<int32> = { v = 1 };
+                if (via(p) != 1) { return 20; }
+                let f: b<float64> = { v = 1.0, w = 2.0 };
+                if (viaf(f) != 2) { return 30; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_generic_covariant_override_narrows_at_a_static_call_site():
+    # A direct call on a concrete generic receiver types the result as the
+    # override's own instantiated spelling: the derived suffix field is
+    # reachable without a cast and the write lands in the receiver.
+    assert (
+        run(
+            """
+            struct a<T> { v: T; }
+            struct b<T> extends a<T> { w: T; }
+            fn a<T>::me(self: &a<T>) -> &a<T> { return self; }
+            @override fn b<T>::me(self: &b<T>) -> &b<T> { return self; }
+            fn main() -> int32 {
+                let q: b<int32> = { v = 1, w = 2 };
+                q.me().w = 7;
+                if (q.w != 7) { return 60; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_generic_covariance_survives_a_renamed_qualifier_parameter():
+    # The spellings compare alpha-renamed to qualifier POSITION: the
+    # override's `fn b<X>::me` and the declaration's `struct b<U>` (whose
+    # names the rebased base clone spells) still describe one return.
+    assert (
+        run(
+            """
+            struct a<T> { v: T; }
+            struct b<U> extends a<U> { w: U; }
+            fn a<T>::kind(const self: &a<T>) -> int32 { return 1; }
+            @override fn b<Q>::kind(const self: &b<Q>) -> int32 { return 2; }
+            fn a<T>::me(self: &a<T>) -> &a<T> { return self; }
+            @override fn b<X>::me(self: &b<X>) -> &b<X> { return self; }
+            fn via(x: &a<int32>) -> int32 { return x.me().kind(); }
+            fn main() -> int32 {
+                let q: b<int32> = { v = 1, w = 2 };
+                if (via(q) != 2) { return 10; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_generic_covariance_composes_through_swapped_type_args():
+    # The template walk substitutes the spelled arguments hop by hop, so a
+    # derivation that permutes them (`b<T, U> extends a<U, T>`) matches the
+    # base clone's spelling exactly when every instantiation is covariant.
+    assert (
+        run(
+            """
+            struct a<T, U> { v: T; u: U; }
+            struct b<T, U> extends a<U, T> { w: T; }
+            fn a<T, U>::kind(const self: &a<T, U>) -> int32 { return 1; }
+            @override fn b<T, U>::kind(const self: &b<T, U>) -> int32 {
+                return 2;
+            }
+            fn a<T, U>::me(self: &a<T, U>) -> &a<T, U> { return self; }
+            @override fn b<T, U>::me(self: &b<T, U>) -> &b<T, U> {
+                return self;
+            }
+            fn via(x: &a<float64, int32>) -> int32 { return x.me().kind(); }
+            fn main() -> int32 {
+                let q: b<int32, float64> = { v = 1.0, u = 2, w = 3 };
+                if (via(q) != 2) { return 10; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_generic_covariance_over_an_unrelated_return_hierarchy():
+    # As in the concrete case, the covariance is between the RETURN types'
+    # own template-level extends chain, independent of the receiver chain.
+    assert (
+        run(
+            """
+            struct x<T> { v: T; }
+            struct y<T> extends x<T> { w: T; }
+            fn x<T>::tag(const self: &x<T>) -> int32 { return 7; }
+            @override fn y<T>::tag(const self: &y<T>) -> int32 { return 8; }
+            struct a<T> { n: T; store: y<T>; }
+            struct b<T> extends a<T> { m: T; }
+            fn a<T>::get(self: &a<T>) -> &x<T> { return self.store; }
+            @override fn b<T>::get(self: &b<T>) -> &y<T> {
+                return self.store;
+            }
+            fn via(q: &a<int32>) -> int32 { return q.get().tag(); }
+            fn main() -> int32 {
+                let obj: b<int32> = { n = 0, store = { v = 0, w = 0 }, m = 0 };
+                if (via(obj) != 8) { return 10; }
+                obj.get().w = 5;
+                if (obj.store.w != 5) { return 20; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_generic_contravariant_override_is_rejected_with_source_spellings():
+    # Widening stays rejected on a generic hierarchy, and the diagnostic
+    # spells the SOURCE types -- never return_abi's internal fallback key
+    # (the pre-SIE-189 message leaked `('<unresolved>', 'x<T>')`).
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::me' returns x<T> but the base member "
+        r"it overrides returns y<T>",
+    ):
+        compile_ir(
+            """
+            struct x<T> { v: T; }
+            struct y<T> extends x<T> { w: T; }
+            struct a<T> { sy: y<T>; }
+            struct b<T> extends a<T> { sx: x<T>; }
+            fn a<T>::kind(const self: &a<T>) -> int32 { return 1; }
+            @override fn b<T>::kind(const self: &b<T>) -> int32 { return 2; }
+            fn a<T>::me(self: &a<T>) -> &y<T> { return self.sy; }
+            @override fn b<T>::me(self: &b<T>) -> &x<T> { return self.sx; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_generic_covariance_requires_matching_type_arguments():
+    # `-> &b<int32>` over `-> &a<T>` is covariant at T = int32 only; the
+    # template-level judgment demands descent at EVERY instantiation, so
+    # the mismatched spelling keeps the same-spelling requirement.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::me' returns b<int32> but the base "
+        r"member it overrides returns a<T>",
+    ):
+        compile_ir(
+            """
+            struct a<T> { v: T; }
+            struct b<T> extends a<T> { w: T; }
+            struct s { q: b<int32>; }
+            fn a<T>::me(self: &a<T>) -> &a<T> { return self; }
+            @override fn b<T>::me(self: &b<T>) -> &b<int32> {
+                return self.st.q;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_generic_by_value_descendant_return_still_slices():
+    # The reference requirement holds at the template level too: a by-value
+    # descendant return would slice through the shared slot.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::me' returns b<T> but the base member "
+        r"it overrides returns a<T>",
+    ):
+        compile_ir(
+            """
+            struct a<T> { v: T; }
+            struct b<T> extends a<T> { w: T; }
+            fn a<T>::me(const self: &a<T>) -> a<T> { return self; }
+            @override fn b<T>::me(const self: &b<T>) -> b<T> { return self; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_generic_return_abi_mismatch_prints_source_spellings():
+    # A plain (non-covariant) mismatch on a generic family also renders the
+    # source spellings, not the internal `('<unresolved>', ...)` tuples.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::get' returns slice<T> but the base "
+        r"member it overrides returns T",
+    ):
+        compile_ir(
+            """
+            struct a<T> { v: T; }
+            struct b<T> extends a<T> { w: T; }
+            fn a<T>::get(const self: &a<T>) -> T { return self.v; }
+            @override fn b<T>::get(const self: &b<T>) -> slice<T> {
+                return self.s;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_slot_winner_binds_inside_a_generic_body():
+    # Sibling hardening: forming a fat view of a generic hierarchy INSIDE a
+    # generic member's body (live type bindings) builds y<int32>'s table
+    # there, and slot_winner must classify the tag template's qualifier
+    # parameter as fresh by its registration (type_params membership) --
+    # probing the live bindings would resolve `T` and drop the binding.
+    assert (
+        run(
+            """
+            struct x<T> { v: T; }
+            struct y<T> extends x<T> { w: T; }
+            fn x<T>::tag(const self: &x<T>) -> int32 { return 7; }
+            @override fn y<T>::tag(const self: &y<T>) -> int32 { return 8; }
+            struct a<T> { store: y<T>; }
+            fn a<T>::get(self: &a<T>) -> &x<T> { return self.store; }
+            fn via(q: &a<int32>) -> int32 { return q.get().tag(); }
+            fn main() -> int32 {
+                let obj: a<int32> = { store = { v = 0, w = 0 } };
+                if (via(obj) != 8) { return 10; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_generic_covariance_does_not_conflate_file_scoped_types(tmp_path):
+    # The template walk compares DECLARATIONS, not names: a file-scoped
+    # `@static struct y<T>` in the override's file is not the base file's
+    # same-named `@static struct y<T>`, so `-> &z<T>` (extending the LOCAL
+    # y) does not covariantly narrow the base's `-> &y<T>` -- before the
+    # fix the name match granted it, and a dynamic caller read fields of
+    # the wrong struct. The error also attributes to the OVERRIDE's file
+    # (ret_desc leaves current_source at the base clone's).
+    (tmp_path / "basefile.mc").write_text(
+        "@static struct y<T> { v: T; }\n"
+        "struct a<T> { store: y<T>; }\n"
+        "fn a<T>::tag(const self: &a<T>) -> int32 { return 1; }\n"
+        "fn a<T>::get(self: &a<T>) -> &y<T> { return self.store; }\n"
+    )
+    main = tmp_path / "prog.mc"
+    main.write_text(
+        'import "basefile";\n'
+        "@static struct y<T> { q: T; big: int64; }\n"
+        "@static struct z<T> extends y<T> { w: T; }\n"
+        "struct b<T> extends a<T> { s2: z<T>; }\n"
+        "@override fn b<T>::tag(const self: &b<T>) -> int32 { return 2; }\n"
+        "@override fn b<T>::get(self: &b<T>) -> &z<T> { return self.s2; }\n"
+        "fn main() -> int32 { return 0; }\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::get' returns z<T> but the base member "
+        r"it overrides returns y<T>",
+    ) as excinfo:
+        run_path(main)
+    assert excinfo.value.source == str(main)
+
+
+def test_generic_covariance_crosses_files_through_one_hierarchy(tmp_path):
+    # The cross-file positive control: the override's return extends the
+    # IMPORTED (global) return hierarchy, the walk resolves both spellings
+    # to the same declarations, and each instantiation's slot dispatches.
+    (tmp_path / "basefile.mc").write_text(
+        "struct x<T> { v: T; }\n"
+        "struct a<T> { store: x<T>; }\n"
+        "fn a<T>::tag(const self: &a<T>) -> int32 { return 1; }\n"
+        "fn a<T>::get(self: &a<T>) -> &x<T> { return self.store; }\n"
+    )
+    main = tmp_path / "prog.mc"
+    main.write_text(
+        'import "basefile";\n'
+        "struct z<T> extends x<T> { w: T; }\n"
+        "fn x<T>::what(const self: &x<T>) -> int32 { return 7; }\n"
+        "@override fn z<T>::what(const self: &z<T>) -> int32 { return 8; }\n"
+        "struct b<T> extends a<T> { s2: z<T>; }\n"
+        "@override fn b<T>::tag(const self: &b<T>) -> int32 { return 2; }\n"
+        "@override fn b<T>::get(self: &b<T>) -> &z<T> { return self.s2; }\n"
+        "fn via(q: &a<int32>) -> int32 { return q.get().what(); }\n"
+        "fn main() -> int32 {\n"
+        "    let obj: b<int32> = { store = { v = 0 }, s2 = { v = 1, w = 2 } };\n"
+        "    if (via(obj) != 8) { return 10; }\n"
+        "    obj.get().w = 5;\n"
+        "    if (obj.s2.w != 5) { return 20; }\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    assert run_path(main) == 0
+
+
 def test_mci_stub_preserves_the_covariant_return_spelling(tmp_path):
     # The stub re-emits the override's own `-> &b` return: the narrowing
     # lives only in the checker, so a static caller importing through the
