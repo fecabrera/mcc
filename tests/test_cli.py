@@ -1272,3 +1272,49 @@ def test_uncalled_tombstone_builds_clean_under_werror(tmp_path):
     result = mcc(src, "-Werror", "--emit-llvm")
     assert result.returncode == 0
     assert result.stderr == ""
+
+
+# ------------------------------------------- SIE-101: separate compilation
+
+def test_separate_compilation_dispatches_across_mci_boundaries(tmp_path):
+    # Three translation units, each compiled against the previous units'
+    # .mci stubs only (sources deleted between steps), linked into one
+    # program: the hierarchy + override in shapes.o, the view-taking `via`
+    # in viewer.o, the dispatch call in prog. The stub must carry the
+    # @override marker for viewer's closure to keep the dispatch family --
+    # without it viewer.o would compile `it.who()` as a direct base call
+    # and the linked program would silently answer 1 (the sliced base).
+    shapes = tmp_path / "shapes.mc"
+    shapes.write_text(
+        "struct a { n: int32; }\n"
+        "struct b extends a { m: int32; }\n"
+        "fn a::who(const self: &a) -> int32 { return 1; }\n"
+        "@override fn b::who(const self: &b) -> int32 { return 2; }\n"
+    )
+    assert mcc(shapes, "--emit-interface").returncode == 0
+    assert mcc(shapes, "-c").returncode == 0
+    assert "@override fn b::who" in (tmp_path / "shapes.mci").read_text()
+    shapes.unlink()  # viewer resolves the import through the stub
+    viewer = tmp_path / "viewer.mc"
+    viewer.write_text(
+        'import "shapes";\n'
+        "fn via(const it: &a) -> int32 { return it.who(); }\n"
+    )
+    assert mcc(viewer, "--emit-interface", "-I", tmp_path).returncode == 0
+    assert mcc(viewer, "-c", "-I", tmp_path).returncode == 0
+    viewer.unlink()  # prog resolves both imports through the stubs
+    prog = tmp_path / "prog.mc"
+    prog.write_text(
+        'import "shapes";\n'
+        'import "viewer";\n'
+        "fn make() -> b { let r: b = { n = 0, m = 0 }; return r; }\n"
+        "fn main() -> int32 { return via(make()); }\n"
+    )
+    exe = tmp_path / "prog"
+    result = mcc(
+        prog, tmp_path / "shapes.o", tmp_path / "viewer.o",
+        "-o", exe, "-I", tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    out = subprocess.run([exe], capture_output=True, text=True)
+    assert out.returncode == 2  # the runtime override, not the sliced base

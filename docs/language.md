@@ -6261,10 +6261,16 @@ linkable symbol:
 
 - A concrete function becomes a [bodyless `fn` prototype](#bodyless-fn-prototypes)
   — its body lives in the object, reached by the symbol the bare name
-  resolves to and called with the mcc convention, so `const`/`&` parameter
-  markers are re-emitted and the hidden-reference passing they imply carries
-  over. (A real `@extern` declaration in the source stays verbatim — it keeps
-  meaning "C calling convention".)
+  resolves to and called with the mcc convention, so `const`/`&`/`own`
+  parameter markers are re-emitted and the passing and ownership contracts
+  they imply carry over. A method's [`@override`](#override-a-method) marker
+  is re-emitted too: it declares the dispatch relationship, so a consumer's
+  closure keeps the family and a call through a base view still [dispatches
+  the runtime override](#polymorphic-base-views) — a prototype `@override`
+  is exactly this interface spelling (elsewhere a bodyless `@override` is
+  rejected, since a Mode-1 replacement needs a body). (A real `@extern`
+  declaration in the source stays verbatim — it keeps meaning "C calling
+  convention".)
 - Types, constants, and generic/`@inline` functions are emitted **in full**:
   the consumer needs their layout, value, or body to type-check and to
   re-instantiate or re-inline them (as C++ keeps templates and `inline` in

@@ -1736,3 +1736,63 @@ def test_dispatch_across_a_multi_module_hierarchy(tmp_path):
         "fn main() -> int32 { return via(make()); }\n"
     )
     assert run_path(main) == 2
+
+
+def test_mci_stub_carries_the_override_marker(tmp_path):
+    # The stub re-emits @override on a base-chain override's prototype: the
+    # marker IS the dispatch relationship, so a consumer's closure keeps the
+    # family. (Before the fix the stub dropped it, and every dispatch site
+    # compiled against the stub silently bound the base -- a behavioral
+    # slice across the interface boundary.)
+    lib = tmp_path / "geo.mc"
+    lib.write_text(
+        "struct a { n: int32; }\n"
+        "struct b extends a { m: int32; }\n"
+        "fn a::greet(const self: &a) -> int32 { return self.n; }\n"
+        "@override fn b::greet(const self: &b) -> int32 { return self.m; }\n"
+    )
+    out = tmp_path / "geo.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    stub = out.read_text()
+    assert "fn a::greet(const self: &a) -> int32;" in stub
+    assert "@override fn b::greet(const self: &b) -> int32;" in stub
+
+
+def test_consumer_against_an_override_stub_dispatches_indirectly(tmp_path):
+    # A view-taking function compiled against the stub alone: the @override
+    # prototype keeps (a, greet) a dispatch family, so `it.greet()` loads the
+    # table slot and calls indirectly -- never a direct call to the base
+    # member.
+    (tmp_path / "geo.mci").write_text(
+        "struct a { n: int32; }\n"
+        "struct b extends a { m: int32; }\n"
+        "fn a::greet(const self: &a) -> int32;\n"
+        "@override fn b::greet(const self: &b) -> int32;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "geo";\n'
+        "fn via(const it: &a) -> int32 { return it.greet(); }\n"
+        "fn main() -> int32 { let x: a = { n = 0 }; return via(x); }\n"
+    )
+    ir = str(compile_to_ir(main, (tmp_path,)))
+    via = ir.split('define i32 @"via"')[1].split("\n}")[0]
+    assert 'call i32 @"a::greet"' not in via  # not devirtualized to the base
+    assert "load i8*, i8**" in via            # the table slot load
+
+
+def test_override_proto_shadowing_nothing_is_rejected():
+    # An @override prototype is only the interface spelling of a base-chain
+    # override; one that shadows no inherited member is the same typo error
+    # as its bodied counterpart.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::who' overrides no inherited base member",
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            @override fn b::who(const self: &b) -> int32;
+            fn main() -> int32 { return 0; }
+            """
+        )

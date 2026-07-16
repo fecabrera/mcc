@@ -236,7 +236,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   view — a reference upcast never slices; a *by-value* argument still needs an
   explicit `as`). A `.mci` stub's fatness is pinned to its own import closure,
   and a prototype/definition that disagree on a reference's fatness across that
-  boundary are rejected as a signature mismatch. Because a dispatch override
+  boundary are rejected as a signature mismatch. A stub re-emits a method's
+  `@override` marker on its prototype (a method-qualified `@override` proto is
+  legal for exactly this): the marker declares the dispatch relationship, so a
+  consumer compiled against the stub keeps the family and its base-view calls
+  still dispatch the runtime override across separately compiled objects. Because a dispatch override
   shares its base member's single table slot, an override must stay
   ABI-compatible with it: it must **return the same type** (the slot's indirect
   call is typed with the base return type) and pass **every parameter** — the
