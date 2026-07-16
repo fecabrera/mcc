@@ -102,6 +102,28 @@ fn relay2(x: &base) -> &base {
     return relay(x);            // a returned view re-returns intact
 }
 
+// ---- Overload resolution sees the view ----
+
+// A derived argument reaches EVERY overload whose reference position is a
+// declared base, so the call resolves instead of demanding an exact
+// spelling -- and among the viable candidates, the NEARER base wins: a
+// `leaf` picks prefer(&middle) over prefer(&base) (fewer extends hops).
+// Distances compare per position: a candidate must be no farther at every
+// reference position to win on the conversion (nearer here, farther there
+// is an ambiguity error, settled with an explicit `as`).
+fn prefer(const it: &base) -> int32 { return 1; }
+fn prefer(const it: &middle) -> int32 { return 2; }
+
+// Generic inference works through the same view: a derived argument binds a
+// `&cell<T>` parameter's T from its declared base instantiation, so an
+// `fcell` infers T = float64 -- no `as`, no explicit type argument.
+struct cell<T> { v: T; }
+struct fcell extends cell<float64> { tag: int32; }
+
+fn value_of<T>(const c: &cell<T>) -> T {
+    return c.v;
+}
+
 fn main() -> int32 {
     let v: leaf = { id = 3, rank = 2, power = 1 };
 
@@ -135,6 +157,18 @@ fn main() -> int32 {
     // method call on the result dispatches the runtime type.
     println("relay2(leaf).speak():");
     relay2(v).speak();          // leaf::speak, through two returned views
+
+    // Overload resolution ranks the view: the leaf reaches both prefer
+    // overloads, and the nearer base (middle, one hop) beats the farther
+    // one (base, two hops).
+    println(f"prefer(leaf) picks overload {prefer(v)}");    // 2
+
+    // Generic inference through the view: T = float64, from fcell's
+    // declared base instantiation.
+    let fc: fcell = { v = 2.5, tag = 7 };
+    if (value_of(fc) == 2.5) {
+        println("value_of(fcell) infers T = float64");
+    }
 
     return 0;
 }

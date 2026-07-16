@@ -2324,3 +2324,201 @@ def test_overloaded_writable_reference_takes_a_derived_lvalue():
         }
         """
     ) == 2
+
+
+# --- SIE-184 review round: viability, ranking, and emission are ONE predicate -
+
+
+def test_decayed_pointer_argument_keeps_the_exact_overload():
+    # The view runs AFTER pointer decay and its distance is recorded on the
+    # same post-decay actuals, so a `b*` argument decaying to `b` charges the
+    # `&a` candidate its hop and the exact `&b` wins (a distance computed on
+    # the raw pointer type saw 0 for both and manufactured an ambiguity).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn f(const it: &a) -> int32 { return 1; }
+        fn f(const it: &b) -> int32 { return 2; }
+        fn main() -> int32 {
+            let v: b = { n = 1, m = 2 };
+            let p: b* = &v;
+            return f(p);
+        }
+        """
+    ) == 2
+
+
+def test_enclosing_generic_binding_does_not_hijack_a_concrete_pattern():
+    # Inside g<int32>, the live binding T = int32 must not capture the
+    # candidate's parameter STRUCT named T: the concrete pattern resolves in
+    # the candidate's own context (empty bindings), and the shape filter
+    # trusts the formed view instead of re-resolving the bare name in the
+    # caller's scope.
+    assert run(
+        """
+        struct T { n: int32; }
+        struct d extends T { m: int32; }
+        fn f(const v: &T) -> int32 { return 7; }
+        fn f(x: int32) -> int32 { return x; }
+        fn g<T>(x: T) -> int32 {
+            let o: d = { n = 1, m = 2 };
+            return f(o);
+        }
+        fn main() -> int32 { return g(0); }
+        """
+    ) == 7
+
+
+def test_qualified_member_overloads_rank_the_receiver_position():
+    # A qualified `a::f(d)` charges position 0 its view distance like any
+    # other reference position (the old method-position exclusion dropped it
+    # and left the pair tied), so the exact `&b` member wins.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::f(const it: &a) -> int32 { return 1; }
+        fn a::f(const it: &b) -> int32 { return 2; }
+        fn main() -> int32 {
+            let d: b = { n = 1, m = 2 };
+            return a::f(d);
+        }
+        """
+    ) == 2
+
+
+def test_alias_spelled_view_candidate_is_charged_its_distance():
+    # `&abase` (a plain alias of `a`) views -- and is charged -- exactly like
+    # the direct spelling: the distance comes from the formed view itself,
+    # never a separate name walk that an alias spelling slips past.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        type abase = a;
+        fn h(const it: &abase) -> int32 { return 1; }
+        fn h(const it: &b) -> int32 { return 2; }
+        fn main() -> int32 {
+            let vb: b = { n = 1, m = 2 };
+            return h(vb);
+        }
+        """
+    ) == 2
+
+
+def test_concrete_receiver_specialization_does_not_capture_the_family():
+    # The receiver position routes CONCRETE patterns through the same
+    # emission-parity resolution as every other position: the
+    # `ga<const char>` specialization (whose instance gb's chain never holds)
+    # stays non-viable, and the generic member wins -- adding the
+    # specialization must not break the working call with a late marshal
+    # error.
+    assert run(
+        """
+        struct ga<T> { x: int32; }
+        struct gb extends ga<char> { y: int32; }
+        fn ga<T>::m(const self: &ga<T>) -> int32 { return 1; }
+        fn ga<const char>::m(const self: &ga<const char>) -> int32 {
+            return 3;
+        }
+        fn main() -> int32 {
+            let b: gb = { x = 1, y = 2 };
+            return ga::m(b);
+        }
+        """
+    ) == 1
+
+
+def test_thin_mci_parameter_stays_cleanly_non_viable(tmp_path):
+    # Resolution carries emission's fatness gate: the stub never saw `a`
+    # extended, so its `&a` is THIN and emission cannot form a view for a
+    # derived argument -- the candidate is cleanly non-viable (the honest
+    # no-overload diagnostic), never admitted and then failed at the marshal
+    # with a misleading coercion error.
+    (tmp_path / "api.mci").write_text(
+        "struct a { n: int32; }\n"
+        "fn viewit(const it: &a) -> int32;\n"
+        "fn viewit(x: int32) -> int32;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "api";\n'
+        "struct b extends a { m: int32; }\n"
+        "fn main() -> int32 {\n"
+        "    let v: b = { n = 1, m = 2 };\n"
+        "    return viewit(v);\n"
+        "}\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"no overload of 'viewit' with signature viewit\(b\)",
+    ):
+        compile_to_ir(main, (tmp_path,))
+
+
+def test_mixed_view_distances_are_ambiguous():
+    # The dominance rule (maintainer ruling): a candidate wins on view
+    # distance only when it is no farther at EVERY position. Nearer here,
+    # farther there is incomparable -- the call is ambiguous, never resolved
+    # by a silent total that lets one position outvote another's exact match.
+    with pytest.raises(
+        LangError,
+        match=r"call to 'f' is ambiguous between overloads: no candidate "
+        r"is uniformly nearest through the derived->base view",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            struct c extends b { o: int32; }
+            struct d extends c { p: int32; }
+            fn f(const x: &c, const y: &c) -> int32 { return 1; }
+            fn f(const x: &d, const y: &a) -> int32 { return 2; }
+            fn main() -> int32 {
+                let v: d = { n = 1, m = 2, o = 3, p = 4 };
+                return f(v, v);
+            }
+            """
+        )
+
+
+def test_uniformly_nearer_candidate_wins_across_positions():
+    # The dominance rule's resolving half: nearer (or equal) at BOTH
+    # positions is a genuine win, so the `&b` pair beats the `&a` pair for
+    # two `c` arguments.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct c extends b { o: int32; }
+        fn f(const x: &a, const y: &a) -> int32 { return 1; }
+        fn f(const x: &b, const y: &b) -> int32 { return 2; }
+        fn main() -> int32 {
+            let v: c = { n = 1, m = 2, o = 3 };
+            return f(v, v);
+        }
+        """
+    ) == 2
+
+
+def test_losing_candidates_do_not_instantiate_generic_structs():
+    # The name pre-walk: a losing candidate's generic reference pattern
+    # (box<heavy>, a family the argument's chain never reaches) is rejected
+    # before its parameter type resolves, so the trial leaves no orphan
+    # monomorphized struct in the module IR.
+    ir = compile_ir(
+        """
+        struct heavy { n: int32; }
+        struct box<T> { it: T; }
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn f<U>(const it: &box<heavy>, u: U) -> int32 { return 1; }
+        fn f<U>(const it: &a, u: U) -> int32 { return 2; }
+        fn main() -> int32 {
+            let v: b = { n = 1, m = 2 };
+            return f(v, 0);
+        }
+        """
+    )
+    assert 'box<heavy>' not in ir

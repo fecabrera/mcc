@@ -239,10 +239,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   reference position — adding an unrelated overload no longer turns a working
   call into "no overload of ..." — and a generic `&point<T>` reference
   parameter infers `T` through the derived argument's declared base
-  instantiation; an exact-typed candidate always outranks a view-conversion
-  one and a nearer base outranks a farther one (the view distance ranks below
-  the tier and the inheritance hop), so no resolution among exactly-matching
-  candidates changes. A `.mci` stub's fatness is pinned to its own import closure,
+  instantiation. The conversion is ranked **per position** (the dominance
+  rule): a candidate wins on it only when no farther at *every* reference
+  position — an exact-typed candidate beats a view-conversion one, a nearer
+  base beats a farther one — while a mixed comparison (nearer here, farther
+  there) is an ambiguity error settled by an explicit `as`, never a silent
+  total; the distances arbitrate below the tier and the inheritance hop, so
+  no resolution among exactly-matching candidates changes. Viability through
+  the conversion is exactly emission's upcast — resolved in the candidate's
+  own context (aliases chased, an enclosing generic's same-named binding
+  never captures a parameter struct, a losing trial instantiates nothing)
+  and gated by the callee's own-closure fatness, so a thin `.mci` `&base`
+  parameter stays cleanly non-viable. A `.mci` stub's fatness is pinned to its own import closure,
   and a prototype/definition that disagree on a reference's fatness across that
   boundary are rejected as a signature mismatch. A stub re-emits a method's
   `@override` marker on its prototype (a method-qualified `@override` proto is
