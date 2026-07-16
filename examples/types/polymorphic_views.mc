@@ -85,6 +85,20 @@ fn show_announce(const it: &base) {
     it.announce();
 }
 
+// A REFERENCE RETURN carries the view (SIE-183): `-> &base` hands back the
+// same two-word {object, table} pair, so a forwarded view keeps its RUNTIME
+// type across the hop -- relay(v).speak() dispatches leaf::speak, and the
+// result re-lends onward (or re-returns, as relay2 shows) with the table
+// intact. Contrast copy-on-read above: reading a VALUE out drops the view,
+// forwarding a REFERENCE keeps it.
+fn relay(x: &base) -> &base {
+    return x;                   // forwards the incoming view, table and all
+}
+
+fn relay2(x: &base) -> &base {
+    return relay(x);            // a returned view re-returns intact
+}
+
 fn main() -> int32 {
     let v: leaf = { id = 3, rank = 2, power = 1 };
 
@@ -114,6 +128,11 @@ fn main() -> int32 {
     println("show_announce(leaf):");
     show_announce(v);           // announce header, then leaf::speak
 
+    // A returned reference is still the view: two relay hops later, the
+    // method call on the result dispatches the runtime type.
+    println("relay2(leaf).speak():");
+    relay2(v).speak();          // leaf::speak, through two returned views
+
     return 0;
 }
 
@@ -126,6 +145,7 @@ fn main() -> int32 {
 // time and uniform across all of its references, independent of whether any
 // family is overridden (introducing the first override never changes a
 // reference's width) -- an un-extended struct's references stay one word, so
-// ordinary container methods pay nothing. A fat reference may not yet appear
-// in a function-pointer type, and destructors are not dispatched yet (the
-// table holds no destructor slot); both are later stages.
+// ordinary container methods pay nothing. A fat reference (parameter or
+// return) may not yet appear in a function-pointer type, and destructors are
+// not dispatched yet (the table holds no destructor slot); both are later
+// stages.

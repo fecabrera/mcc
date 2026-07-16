@@ -251,17 +251,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `@nonnull`, or adding `@noalias` where the base permits aliasing (the body
   would assume non-aliasing a base-view caller need not honor) are all clean
   compile errors; the one safe relaxation is *narrowing* a writable base
-  reference to a read-only override one. A few constructs a
+  reference to a read-only override one. A **reference return** (`-> &T`) of a
+  fat base is the same two-word `{object, table}` view a fat parameter is
+  (SIE-183): a function forwarding a view parameter hands back the *runtime*
+  type's table, so `relay(obj).kind()` dispatches the derived override, and
+  re-lending or re-returning the result forwards the same view; any other
+  returned lvalue carries its own exact static type's table (per the
+  reference-return exact-type rule). Two constructs a
   single slot cannot represent are rejected rather than miscompiled, each
-  liftable later: a fat reference may not ride in a function-pointer type; a
+  liftable later: a fat reference — parameter or return — may not ride in a
+  function-pointer type, spelled or inferred from a function value; and a
   **method-owned generic override** (one declaring its own type parameter, not
   merely the struct's) may not be *dynamically dispatched* through a base view
   (it stays a legal static override on a concrete receiver — a **struct-generic**
-  override dispatches normally); and a function may not **return a reference**
-  to a fat base that has overridden methods (the pointer-shaped return would
-  drop the table — an empty-table fat base such as the stdlib `slice` still
-  returns freely). The destructor table slot is deferred (base-view destruction
-  stays manual). See [docs/language.md](docs/language.md) and
+  override dispatches normally). The destructor table slot is deferred (base-view
+  destruction stays manual). See [docs/language.md](docs/language.md) and
   [examples/types/polymorphic_views.mc](examples/types/polymorphic_views.mc).
 
 - **BREAKING: `@override` is now required on a method that shadows an
