@@ -16,7 +16,7 @@ import pytest
 from mcc.codegen import CodeGen
 from mcc.driver import compile_to_ir, emit_interface
 from mcc.errors import LangError
-from helpers import _resolve, compile_ir, run
+from helpers import _resolve, compile_ir, run, run_path
 
 
 def _gen(source: str) -> CodeGen:
@@ -1525,3 +1525,214 @@ def test_view_re_lent_at_a_non_receiver_fat_position_propagates_its_table():
         }
         """
     ) == 2
+
+
+def test_ternary_of_two_views_is_a_value_read_carrying_the_base_table():
+    # `cond ? l : r` over two fat view parameters is an ordinary a-typed
+    # EXPRESSION, not a re-lend: per the copy-on-read ruling (prefix
+    # extraction), reading a value out of a view yields a genuine base value
+    # carrying no view, so the re-formed view dispatches the base (1) even
+    # though `l` came in viewing a derived `b`. (Table propagation is
+    # per-argument and follows a BARE view name only; if ternary re-lending
+    # is ever wanted, this is the test to revisit -- it asserts today's
+    # semantics as implied by the ruling, not a separate explicit ruling.)
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn pick(cond: bool, const l: &a, const r: &a) -> int32 {
+            return via(cond ? l : r);
+        }
+        fn main() -> int32 {
+            let x: b = { n = 0, m = 0 };
+            let y: a = { n = 5 };
+            return pick(true, x, y);
+        }
+        """
+    ) == 1
+
+
+def test_overload_introduced_mid_chain_dispatches_through_its_own_views():
+    # An overload family may be INTRODUCED partway down the chain: `who()`
+    # roots at `a`, `who(int32)` roots at `b`. Each slot keys on its own
+    # introducer, so a leaf `c` dispatches both -- `who()` through a root
+    # `&a` view (3) and `who(1)` through a mid-chain `&b` view (31).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct c extends b { k: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        @override fn c::who(const self: &c) -> int32 { return 3; }
+        fn b::who(const self: &b, x: int32) -> int32 { return 20 + x; }
+        @override fn c::who(const self: &c, x: int32) -> int32 { return 30 + x; }
+        fn via_a(const it: &a) -> int32 { return it.who(); }
+        fn via_b(const it: &b) -> int32 { return it.who(1); }
+        fn main() -> int32 {
+            let leaf: c = { n = 0, m = 0, k = 0 };
+            if (via_a(leaf) != 3) { return 10; }
+            if (via_b(leaf) != 31) { return 20; }
+            return 3;
+        }
+        """
+    ) == 3
+
+
+def test_override_may_drop_a_base_noalias_promise():
+    # The safe direction of the @noalias ABI rule: the BASE promises callers
+    # pass non-aliasing pointers, so an override that merely stops ASSUMING
+    # the promise is sound (contrast adding @noalias, which is rejected).
+    # The relaxed override compiles and dispatches (2).
+    assert run(
+        """
+        struct payload { v: int32; }
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::apply(const self: &a, @noalias p: payload*) -> int32 { return 1; }
+        @override fn b::apply(const self: &b, p: payload*) -> int32 { return 2; }
+        fn via(const x: &a, p: payload*) -> int32 { return x.apply(p); }
+        fn main() -> int32 {
+            let o: b = { n = 0, m = 0 };
+            let pl: payload = { v = 0 };
+            return via(o, &pl);
+        }
+        """
+    ) == 2
+
+
+def test_shadowing_across_loops_breaks_and_early_returns_restores_the_table():
+    # The scope-exit table restore under heavier control flow: shadows inside
+    # a while body (with continue and break), a doubly-nested block shadow,
+    # and a shadow followed by an early return -- after every exit shape the
+    # OUTER fat parameter dispatches its runtime type again (2), and every
+    # shadowed inner `p` stays static (1).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn via(const p: &a, early: bool) -> int32 {
+            let i: int32 = 0;
+            while (i < 3) {
+                let p: a = { n = i };
+                if (i == 1) { i = i + 1; continue; }
+                { let q = p.who(); if (q != 1) { return 90; } }
+                if (i == 2) { break; }
+                i = i + 1;
+            }
+            if (early) { { let p: a = { n = 7 }; } return p.who(); }
+            { { let p: a = { n = 9 }; let inner = p.who(); } }
+            return p.who();
+        }
+        fn main() -> int32 {
+            let o: b = { n = 0, m = 0 };
+            if (via(o, true) != 2) { return 70; }
+            return via(o, false);
+        }
+        """
+    ) == 2
+
+
+def test_inherited_generic_method_takes_a_derived_non_receiver_view():
+    # An inherited method-owned GENERIC (`pick<T>`, never overridden, so a
+    # legal static call on a derived receiver) with a fat non-receiver
+    # parameter: the derived `other` forms its view on the instantiate path
+    # and the body's re-dispatch reaches the override (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn a::pick<T>(const self: &a, const other: &a, x: T) -> int32 {
+            return other.who();
+        }
+        fn main() -> int32 {
+            let d1: b = { n = 0, m = 0 };
+            let d2: b = { n = 0, m = 0 };
+            return d1.pick(d2, 42);
+        }
+        """
+    ) == 2
+
+
+def test_writable_and_const_views_of_one_object_in_one_call():
+    # One object lent twice in a single call -- writable `&a` and `const &a`.
+    # Both views carry the derived table (2 + 2 = 4) and the write through
+    # the writable one lands in the caller's object.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn both(w: &a, const r: &a) -> int32 { w.n = 9; return w.who() + r.who(); }
+        fn main() -> int32 {
+            let x: b = { n = 0, m = 0 };
+            let s = both(x, x);
+            if (x.n != 9) { return 80; }
+            return s;
+        }
+        """
+    ) == 4
+
+
+def test_as_base_stays_sliced_inside_ternaries_and_generic_wrappers():
+    # Explicit `as base` slicing composes: inside ternary arms and through a
+    # generic identity wrapper the result is a genuine `a` (base table, 1),
+    # while the same wrapper handed the derived value returns a full `b`
+    # whose view dispatches the override (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn wrap<T>(v: T) -> T { return v; }
+        fn main() -> int32 {
+            let x: b = { n = 0, m = 0 };
+            let y: b = { n = 1, m = 1 };
+            let cond: bool = true;
+            if (via(cond ? (x as a) : (y as a)) != 1) { return 10; }
+            if (via(wrap(x as a)) != 1) { return 20; }
+            if (via(wrap(x)) != 2) { return 30; }
+            return 4;
+        }
+        """
+    ) == 4
+
+
+def test_dispatch_across_a_multi_module_hierarchy(tmp_path):
+    # The hierarchy, the override, the view-taking function, and the dispatch
+    # site each live in a DIFFERENT module: the merged import closure sees the
+    # extension, so `&a` is fat program-wide (fatness never differs within one
+    # linked program) and `via` -- whose own module never imports the derived
+    # type -- still dispatches the runtime override (2).
+    (tmp_path / "base.mc").write_text(
+        "struct a { n: int32; }\n"
+        "fn a::who(const self: &a) -> int32 { return 1; }\n"
+    )
+    (tmp_path / "derived.mc").write_text(
+        'import "base";\n'
+        "struct b extends a { m: int32; }\n"
+        "@override fn b::who(const self: &b) -> int32 { return 2; }\n"
+    )
+    (tmp_path / "lib.mc").write_text(
+        'import "base";\n'
+        "fn via(const it: &a) -> int32 { return it.who(); }\n"
+    )
+    main = tmp_path / "prog.mc"
+    main.write_text(
+        'import "base";\n'
+        'import "derived";\n'
+        'import "lib";\n'
+        "fn make() -> b { let r: b = { n = 0, m = 0 }; return r; }\n"
+        "fn main() -> int32 { return via(make()); }\n"
+    )
+    assert run_path(main) == 2
