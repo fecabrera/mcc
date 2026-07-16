@@ -105,6 +105,11 @@ class LangType:
             Records the declared lineage the nominal subtype relation walks (see
             :meth:`CodeGen.nominal_subtype`); excluded from equality/hash like the
             other layout attributes -- the interned name is the identity.
+        intrusive: ``True`` when ``base`` embeds a bare-parameter payload
+            (``struct entry<T> extends T`` -- intrusive reuse). The edge gives
+            prefix layout for the explicit casts, but it is not a declared base
+            family: the implicit reference upcast never crosses it (see
+            :meth:`CodeGen.receiver_upcast_target`).
     """
 
     name: str
@@ -131,6 +136,7 @@ class LangType:
     const: bool = False
     mutable: "LangType | None" = field(default=None, compare=False)
     base: "LangType | None" = field(default=None, compare=False)
+    intrusive: bool = field(default=False, compare=False)
 
     def __str__(self) -> str:
         """Return the type's source-level name."""

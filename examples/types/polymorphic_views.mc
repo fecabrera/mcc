@@ -102,6 +102,34 @@ fn relay2(x: &base) -> &base {
     return relay(x);            // a returned view re-returns intact
 }
 
+// The RETURN POSITION upcasts too (SIE-186): a DERIVED lvalue returns as a
+// declared base reference, forming the view at the return site exactly as an
+// argument would on entry -- the storage reinterprets as the base prefix and
+// the view carries the DERIVED table, so the caller's dispatch reaches the
+// runtime type. Same asymmetry as arguments: a reference upcasts (never
+// slices), a by-value `-> base` return of a leaf still needs the explicit
+// `as`.
+fn first(x: &leaf, y: &leaf) -> &base {
+    return x;                   // a leaf lvalue, returned as &base
+}
+
+// COVARIANT OVERRIDE RETURNS ride on that upcast: an `@override` may declare
+// a return that is a declared descendant of the base member's reference
+// return. The narrowing is SPELLING-LEVEL -- through a base view the shared
+// slot still hands back the base-shaped view (carrying the runtime table),
+// while a static call on a concrete receiver types the result as the
+// override's own `&middle`/`&leaf`, so derived fields are reachable without
+// a cast.
+fn base::me(self: &base) -> &base {
+    return self;
+}
+@override fn middle::me(self: &middle) -> &middle {
+    return self;
+}
+@override fn leaf::me(self: &leaf) -> &leaf {
+    return self;
+}
+
 // ---- Overload resolution sees the view ----
 
 // A derived argument reaches EVERY overload whose reference position is a
@@ -158,6 +186,22 @@ fn main() -> int32 {
     println("relay2(leaf).speak():");
     relay2(v).speak();          // leaf::speak, through two returned views
 
+    // Return-position upcast: first() returns a leaf lvalue as `&base`, and
+    // the formed view dispatches the leaf override.
+    println("first(leaf, leaf).speak():");
+    let w: leaf = { id = 4, rank = 0, power = 0 };
+    first(v, w).speak();        // leaf::speak, through the upcast view
+
+    // Covariant returns, both faces. Statically the result narrows to the
+    // receiver's own spelling -- `v.me()` is a `&leaf`, so a leaf field
+    // assigns through it without a cast ...
+    v.me().power = 9;
+    println(f"v.me().power = {v.power}");           // 9, wrote through
+    // ... and dynamically, `me()` through the base view still returns the
+    // base-shaped view with the runtime table: the chained call dispatches.
+    println("relay(leaf).me().speak():");
+    relay(v).me().speak();      // leaf::speak, covariance through the slot
+
     // POINTER DECAY composes with the view (deref-then-view): a proven
     // `leaf*` at the fat `&base` slot is exactly describe(*p) -- the pointer
     // sheds its one level, the pointee lends its base prefix, and the view
@@ -193,7 +237,9 @@ fn main() -> int32 {
 // time and uniform across all of its references, independent of whether any
 // family is overridden (introducing the first override never changes a
 // reference's width) -- an un-extended struct's references stay one word, so
-// ordinary container methods pay nothing. A fat reference (parameter or
-// return) may not yet appear in a function-pointer type, and destructors are
-// not dispatched yet (the table holds no destructor slot); both are later
-// stages.
+// ordinary container methods pay nothing (leaf::me above returns a plain
+// thin `&leaf` for exactly that reason; the slot widens it back to the
+// base-shaped view only on the dispatch path). A fat reference (parameter
+// or return) may not yet appear in a function-pointer type, and destructors
+// are not dispatched yet (the table holds no destructor slot); both are
+// later stages.

@@ -2070,11 +2070,307 @@ def test_dispatched_override_with_a_fat_reference_return():
     ) == 2
 
 
-def test_override_returning_the_derived_reference_is_still_rejected():
-    # The return-ABI rule is unchanged: an override spelling `-> &b` where the
-    # base returns `-> &a` is rejected (they share one slot). And spelling
-    # `-> &a` while returning `self` hits the reference-return exact-type rule
-    # -- there is no return-position reference upcast yet (a liftable gap).
+def test_return_position_reference_upcast_forms_the_view():
+    # SIE-186 gap 1: a derived lvalue returns as a declared base reference --
+    # the view forms at the return site, paired with the DERIVED type's
+    # table, so the returned reference dispatches the runtime type (2).
+    assert (
+        run(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            fn first(x: &b, y: &b) -> &a { return x; }
+            fn main() -> int32 {
+                let u: b = { n = 0, m = 0 };
+                let v: b = { n = 0, m = 0 };
+                return first(u, v).kind();
+            }
+            """
+        )
+        == 2
+    )
+
+
+def test_return_position_upcast_writes_through_to_the_derived_object():
+    # The upcast view references the derived object's base prefix in place:
+    # a write through it lands in the caller's object, and the suffix
+    # fields are untouched (a reference upcast never slices).
+    assert (
+        run(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            fn pick(x: &b) -> &a { return x; }
+            fn main() -> int32 {
+                let u: b = { n = 0, m = 9 };
+                pick(u).n = 42;
+                if (u.n != 42) { return 50; }
+                if (u.m != 9) { return 51; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_return_position_upcast_forwards_a_view_parameters_runtime_table():
+    # `return x` where x is itself a fat `&b` view: the upcast keeps the
+    # PARAMETER's runtime table (here a c), not b's static one -- the same
+    # forwarding rule as an exact-typed view return.
+    assert (
+        run(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            struct c extends b { k: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            @override fn c::kind(const self: &c) -> int32 { return 3; }
+            fn relay(x: &b) -> &a { return x; }
+            fn main() -> int32 {
+                let obj: c = { n = 0, m = 0, k = 0 };
+                return relay(obj).kind();
+            }
+            """
+        )
+        == 3
+    )
+
+
+def test_return_position_upcast_never_downcasts_or_crosses_hierarchies():
+    # The relaxation is exact-or-declared-descendant only: a base lvalue
+    # cannot return as a derived reference ...
+    with pytest.raises(
+        LangError, match=r"reference return: expected a b lvalue, got a"
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn f(x: &a) -> &b { return x; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+    # ... and an unrelated struct still errors.
+    with pytest.raises(
+        LangError, match=r"reference return: expected a a lvalue, got z"
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            struct z { q: int32; }
+            fn f(x: &z) -> &a { return x; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_intrusive_extends_never_forms_an_implicit_view():
+    # `struct entry<T> extends T` is intrusive embedding, not a declared
+    # base family (no method inheritance, no vtable chain), so the implicit
+    # reference upcast never crosses the edge -- in the return position ...
+    with pytest.raises(
+        LangError,
+        match=r"reference return: expected a a lvalue, got entry<a>",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            struct entry<T> extends T { extra: int32; }
+            fn f(x: &entry<a>) -> &a { return x; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+    # ... and in the argument position (both previously formed a view whose
+    # table word was NULL -- entry has no decl-level chain -- so the caller's
+    # dispatch crashed at runtime).
+    with pytest.raises(
+        LangError, match=r"argument 1 of 'g': expected a a lvalue, got entry<a>"
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            struct entry<T> extends T { extra: int32; }
+            fn g(x: &a) -> int32 { return x.kind(); }
+            fn main() -> int32 {
+                let e: entry<a> = { n = 5, extra = 0 };
+                return g(e);
+            }
+            """
+        )
+
+
+def test_intrusive_payload_reaches_a_view_through_the_explicit_upcast():
+    # The documented route stays sound: deref the explicit pointer upcast to
+    # lend the payload prefix. The formed `&a` view carries a's own honest
+    # table (an intrusive extender cannot override anything), so dispatch
+    # binds the payload's method, and writes land in the embedding object.
+    assert (
+        run(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            struct entry<T> extends T { extra: int32; }
+            fn g(x: &a) -> int32 { return x.kind(); }
+            fn touch(x: &a) { x.n = 42; }
+            fn main() -> int32 {
+                let e: entry<a> = { n = 5, extra = 9 };
+                let p = &e as a*;
+                if (g(*p) != 1) { return 10; }
+                touch(*p);
+                if (e.n != 42) { return 20; }
+                if (e.extra != 9) { return 30; }
+                let v = e as a;
+                if (v.n != 42) { return 40; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_value_return_of_a_derived_still_requires_the_explicit_as():
+    # The asymmetry stands: only a REFERENCE upcasts at the return site. A
+    # by-value `-> a` return of a b still slices and must spell the `as`.
+    with pytest.raises(LangError, match=r"return value: expected a, got b"):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn f(x: &b) -> a { return x; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_covariant_override_return_dispatches_through_the_base_view():
+    # SIE-186 gap 2: the override declares `-> &b` over a base `-> &a`
+    # (spelling-level covariance). Through the base view the slot still
+    # returns the base-shaped fat view -- formed by the slot thunk from the
+    # override's thin `&b` result -- and the returned view dispatches the
+    # runtime type (2).
+    assert (
+        run(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            fn a::me(self: &a) -> &a { return self; }
+            @override fn b::me(self: &b) -> &b { return self; }
+            fn via(x: &a) -> int32 { return x.me().kind(); }
+            fn main() -> int32 {
+                let obj: b = { n = 0, m = 0 };
+                return via(obj);
+            }
+            """
+        )
+        == 2
+    )
+
+
+def test_covariant_override_narrows_at_a_static_call_site():
+    # A direct call on a concrete receiver types the result as the
+    # override's own spelling: the derived suffix field is reachable
+    # without a cast, and the write lands in the receiver.
+    assert (
+        run(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            fn a::me(self: &a) -> &a { return self; }
+            @override fn b::me(self: &b) -> &b { return self; }
+            fn main() -> int32 {
+                let obj: b = { n = 0, m = 0 };
+                obj.me().m = 7;
+                if (obj.m != 7) { return 60; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_covariant_returns_compose_down_a_three_level_chain():
+    # Covariance at every hop: the leaf's thin `-> &c` widens through the
+    # slot, an intermediate FAT `-> &b` passes through, and a dispatch from
+    # either view level reaches the runtime type (3).
+    assert (
+        run(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            struct c extends b { k: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            @override fn c::kind(const self: &c) -> int32 { return 3; }
+            fn a::me(self: &a) -> &a { return self; }
+            @override fn b::me(self: &b) -> &b { return self; }
+            @override fn c::me(self: &c) -> &c { return self; }
+            fn via_a(x: &a) -> int32 { return x.me().kind(); }
+            fn via_b(x: &b) -> int32 { return x.me().kind(); }
+            fn main() -> int32 {
+                let obj: c = { n = 0, m = 0, k = 0 };
+                if (via_a(obj) != 3) { return 10; }
+                if (via_b(obj) != 3) { return 20; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_covariant_return_over_an_unrelated_reference_hierarchy():
+    # The covariance is between the RETURN types' own extends chain (y
+    # extends x), independent of the receiver chain: dispatch returns the
+    # derived view (tag() -> 8), and a static call narrows to &y.
+    assert (
+        run(
+            """
+            struct x { v: int32; }
+            struct y extends x { w: int32; }
+            fn x::tag(const self: &x) -> int32 { return 7; }
+            @override fn y::tag(const self: &y) -> int32 { return 8; }
+            struct a { n: int32; store: y; }
+            struct b extends a { m: int32; }
+            fn a::get(self: &a) -> &x { return self.store; }
+            @override fn b::get(self: &b) -> &y { return self.store; }
+            fn via(q: &a) -> int32 { return q.get().tag(); }
+            fn main() -> int32 {
+                let obj: b = { n = 0, store = { v = 0, w = 0 }, m = 0 };
+                if (via(obj) != 8) { return 10; }
+                obj.get().w = 5;
+                if (obj.store.w != 5) { return 20; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
+def test_covariant_override_must_still_be_a_reference():
+    # A BY-VALUE return of a descendant would slice through the shared
+    # slot, so only references participate in covariance.
     with pytest.raises(
         LangError,
         match=r"@override method 'b::me' returns b but the base member",
@@ -2085,11 +2381,230 @@ def test_override_returning_the_derived_reference_is_still_rejected():
             struct b extends a { m: int32; }
             fn a::kind(const self: &a) -> int32 { return 1; }
             @override fn b::kind(const self: &b) -> int32 { return 2; }
-            fn a::me(self: &a) -> &a { return self; }
-            @override fn b::me(self: &b) -> &b { return self; }
+            fn a::me(const self: &a) -> a { return self; }
+            @override fn b::me(const self: &b) -> b { return self; }
             fn main() -> int32 { return 0; }
             """
         )
+
+
+def test_contravariant_override_return_is_rejected():
+    # The relaxation runs one way only: an override may NARROW to a declared
+    # descendant, never WIDEN to an ancestor -- a base-view caller would
+    # type the slot's result as the base's `&y` while the runtime override
+    # hands back an `&x` whose object lacks y's suffix fields.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::me' returns x but the base member",
+    ):
+        compile_ir(
+            """
+            struct x { v: int32; }
+            struct y extends x { w: int32; }
+            struct a { sy: y; }
+            struct b extends a { sx: x; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            fn a::me(self: &a) -> &y { return self.sy; }
+            @override fn b::me(self: &b) -> &x { return self.sx; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_covariant_return_on_an_unresolvable_generic_pattern_is_rejected():
+    # A struct-generic overload whose non-receiver parameters spell the
+    # struct's own type parameters keys its slot by the pre-body fallback
+    # pattern, which diverges between the override and the base member --
+    # a covariant marking registered under it would be a dead key (the slot
+    # boundaries would never adapt the return). Refused up front.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'entry::get' declares a covariant return, "
+        r"but its non-receiver parameters spell the struct's own type "
+        r"parameters",
+    ):
+        compile_ir(
+            """
+            struct x { v: int32; }
+            struct y extends x { w: int32; }
+            struct cell<T> { n: T; sx: x; }
+            struct entry<T> extends cell<T> { sy: y; }
+            fn cell<T>::get(self: &cell<T>, k: T) -> &x { return self.sx; }
+            @override fn entry<T>::get(self: &entry<T>, k: T) -> &y {
+                return self.sy;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_override_returning_an_unrelated_reference_is_still_rejected():
+    # The relaxation is exactly "a declared descendant of the base's
+    # reference return": an unrelated reference stays the return-ABI error.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::me' returns int32 but the base member",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            fn a::me(self: &a) -> &a { return self; }
+            @override fn b::me(self: &b) -> &int32 { return self.n; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_mci_stub_preserves_the_covariant_return_spelling(tmp_path):
+    # The stub re-emits the override's own `-> &b` return: the narrowing
+    # lives only in the checker, so a static caller importing through the
+    # interface would silently lose it if the stub flattened the spelling
+    # to the base's.
+    lib = tmp_path / "geo.mc"
+    lib.write_text(
+        "struct a { n: int32; }\n"
+        "struct b extends a { m: int32; }\n"
+        "fn a::kind(const self: &a) -> int32 { return 1; }\n"
+        "@override fn b::kind(const self: &b) -> int32 { return 2; }\n"
+        "fn a::me(self: &a) -> &a { return self; }\n"
+        "@override fn b::me(self: &b) -> &b { return self; }\n"
+    )
+    out = tmp_path / "geo.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    stub = out.read_text()
+    assert "fn a::me(self: &a) -> &a;" in stub
+    assert "@override fn b::me(self: &b) -> &b;" in stub
+
+
+def test_consumer_against_a_covariant_stub_keeps_the_narrowing(tmp_path):
+    # A consumer compiled against the stub alone: a static call on a
+    # concrete b still types me()'s result as &b (the derived field is
+    # assignable through it), and a base-view call dispatches indirectly.
+    (tmp_path / "geo.mci").write_text(
+        "struct a { n: int32; }\n"
+        "struct b extends a { m: int32; }\n"
+        "fn a::kind(const self: &a) -> int32;\n"
+        "@override fn b::kind(const self: &b) -> int32;\n"
+        "fn a::me(self: &a) -> &a;\n"
+        "@override fn b::me(self: &b) -> &b;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "geo";\n'
+        "fn narrow(x: &b) -> int32 { x.me().m = 7; return x.m; }\n"
+        "fn via(x: &a) -> int32 { return x.me().kind(); }\n"
+        "fn main() -> int32 { let obj: b = { n = 0, m = 0 };\n"
+        "    return narrow(obj) + via(obj); }\n"
+    )
+    ir = str(compile_to_ir(main, (tmp_path,)))
+    via = ir.split('define i32 @"via"')[1].split("\n}")[0]
+    assert "load i8*, i8**" in via  # the me() slot dispatches indirectly
+
+
+def test_extending_a_stubs_covariant_thin_return_is_rejected(tmp_path):
+    # The stub pinned b::me's covariant `-> &b` THIN (nothing extends b in
+    # its own closure). A consumer that declares `c extends b` holds objects
+    # that one-word return cannot describe: the slot thunk would stamp b's
+    # STATIC table on a returned reference whose runtime referent is a c,
+    # silently mis-dispatching -- so the pinned-width disagreement is a
+    # compile error, like every other ABI drift across the .mci boundary.
+    (tmp_path / "geo.mci").write_text(
+        "struct a { n: int32; }\n"
+        "struct b extends a { m: int32; }\n"
+        "fn a::kind(const self: &a) -> int32;\n"
+        "@override fn b::kind(const self: &b) -> int32;\n"
+        "fn a::me(self: &a) -> &a;\n"
+        "@override fn b::me(self: &b) -> &b;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "geo";\n'
+        "struct c extends b { k: int32; }\n"
+        "@override fn c::kind(const self: &c) -> int32 { return 3; }\n"
+        "fn via(x: &a) -> int32 { return x.me().kind(); }\n"
+        "fn main() -> int32 {\n"
+        "    let obj: c = { n = 0, m = 0, k = 0 };\n"
+        "    return via(obj);\n"
+        "}\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::me' occupies a covariant dispatch slot,"
+        r" but it returns a thin &b",
+    ):
+        compile_to_ir(main, (tmp_path,))
+
+
+def test_extending_a_stubs_thin_base_return_under_covariance_is_rejected(
+    tmp_path,
+):
+    # The other face: the consumer's own covariant override is fine, but the
+    # BASE member it overrides was pinned with a thin `-> &x` (the stub's
+    # closure sees no extension of x) while the consumer declares
+    # `y extends x`. A dispatch through the base view would type the slot
+    # call by the pinned-thin callee and drop the runtime table on the way
+    # out -- rejected instead.
+    (tmp_path / "geo2.mci").write_text(
+        "struct x { v: int32; }\n"
+        "struct a { n: int32; store: x; }\n"
+        "struct a2 extends a { p: int32; }\n"
+        "fn a::get(self: &a) -> &x;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "geo2";\n'
+        "struct y extends x { w: int32; }\n"
+        "fn x::tag(const self: &x) -> int32 { return 7; }\n"
+        "@override fn y::tag(const self: &y) -> int32 { return 8; }\n"
+        "struct b extends a { m: int32; store2: y; }\n"
+        "@override fn b::get(self: &b) -> &y { return self.store2; }\n"
+        "fn via(q: &a) -> int32 { return q.get().tag(); }\n"
+        "fn main() -> int32 {\n"
+        "    let obj: b = { n = 0, store = { v = 0 }, m = 0,\n"
+        "                   store2 = { v = 0, w = 0 } };\n"
+        "    return via(obj);\n"
+        "}\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::get' occupies a covariant dispatch "
+        r"slot, but the base member it overrides returns a thin &x",
+    ):
+        compile_to_ir(main, (tmp_path,))
+
+
+def test_stub_generic_thin_return_rejects_the_upcast(tmp_path):
+    # A generic body shipped in a stub instantiates under the STUB's pinned
+    # closure: `pick<a, b>`'s `-> &a` return is thin there (the stub sees no
+    # extension of a), so the return-position upcast has no table word to
+    # carry b -- rejected, where it would otherwise silently devirtualize
+    # the caller's dispatch to a::kind.
+    (tmp_path / "geo3.mci").write_text(
+        "fn pick<T, U>(x: &T, y: &U) -> &T { return y; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "geo3";\n'
+        "struct a { n: int32; }\n"
+        "struct b extends a { m: int32; }\n"
+        "fn a::kind(const self: &a) -> int32 { return 1; }\n"
+        "@override fn b::kind(const self: &b) -> int32 { return 2; }\n"
+        "fn main() -> int32 {\n"
+        "    let u: a = { n = 0 };\n"
+        "    let v: b = { n = 0, m = 0 };\n"
+        "    return pick(u, v).kind();\n"
+        "}\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"reference return: a b lvalue upcasts to the declared a only"
+        r" through a fat reference, and this return is thin",
+    ):
+        compile_to_ir(main, (tmp_path,))
 
 
 def test_stdlib_generic_container_instantiates_a_fat_reference_return():

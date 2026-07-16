@@ -234,7 +234,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the derived→base **reference** conversion is now **implicit at any parameter
   position** (a `fn f(const a: &A)` accepts a derived argument by forming a
   view — a reference upcast never slices; a *by-value* argument still needs an
-  explicit `as`). **Overload resolution ranks the conversion** (SIE-184 /
+  explicit `as`). The conversion follows the **declared base family only**: an
+  intrusive bare-parameter base (`struct entry<T> extends T`) embeds a layout
+  prefix but has no vtable chain, so an intrusive instance never converts
+  implicitly at a reference position (argument, return, or decay) — the
+  payload is lent through the explicit pointer upcast (`*(&e as my*)`)
+  instead, whose view carries the payload's own honest table. **Overload resolution ranks the conversion** (SIE-184 /
   SIE-181): a derived argument satisfies an overloaded candidate's `&base`
   reference position — adding an unrelated overload no longer turns a working
   call into "no overload of ..." — and a generic `&point<T>` reference
@@ -259,7 +264,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   still dispatch the runtime override across separately compiled objects. Because a dispatch override
   shares its base member's single table slot, an override must stay
   ABI-compatible with it: it must **return the same type** (the slot's indirect
-  call is typed with the base return type) and pass **every parameter** — the
+  call is typed with the base return type) — or, the return side's one
+  relaxation (SIE-186), declare a **covariant reference return**: a reference
+  to a declared `extends` descendant of the base member's reference return
+  (`-> &b` over the base's `-> &a`). The covariance is **spelling-level
+  only** — the slot's return ABI stays the base's fat view forever (a thin
+  leaf spelling widens at the slot boundary, so nothing reinterprets), while
+  a *static* call on a concrete receiver types the result as the override's
+  own narrower reference (derived fields reachable without a cast) and a
+  `.mci` stub re-emits the covariant spelling so importers keep the
+  narrowing; a *by-value* descendant return would slice through the slot and
+  stays rejected, a covariant slot member whose reference return was
+  **pinned thin by its interface's closure** is rejected in a program that
+  extends that return type (the one-word return cannot carry the runtime
+  type across the `.mci` boundary — recompile the interface with the
+  extension in its closure), and a covariant override whose non-receiver
+  parameters spell the struct's own type parameters is rejected (the
+  pre-body fallback slot key cannot carry the covariant marking) — and
+  pass **every parameter** — the
   receiver and each argument — the same way (by value vs. by reference, `const`
   vs. writable, `own`, `@nonnull`, `@noalias`), since the slot's indirect call
   and the stored thunk must agree on each value's ABI. Widening a read-only
@@ -271,9 +293,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   fat base is the same two-word `{object, table}` view a fat parameter is
   (SIE-183): a function forwarding a view parameter hands back the *runtime*
   type's table, so `relay(obj).kind()` dispatches the derived override, and
-  re-lending or re-returning the result forwards the same view; any other
-  returned lvalue carries its own exact static type's table (per the
-  reference-return exact-type rule). **Pointer decay composes with the view**
+  re-lending or re-returning the result forwards the same view; and **the
+  return position upcasts like an argument** (SIE-186): a lvalue of a
+  declared *descendant* of the declared return forms the view at the
+  `return` site (`fn first(x: &b, y: &b) -> &a { return x; }`), the derived
+  storage reinterpreted as the base prefix and paired with the **derived**
+  type's table — a reference upcast never slices, while a by-value `-> T`
+  return of a derived value still requires the explicit `as`, and the upcast
+  requires the **fat** return's table word (a thin reference return, possible
+  only under an `.mci` stub's pinned closure, rejects it); any other
+  returned lvalue carries its own evaluated static type's table.
+  **Pointer decay composes with the view**
   (SIE-187): a proven-non-null `derived*` argument at a fat `&base` /
   `const &base` slot decays and views — deref-then-view, identical to passing
   `*p`, the pointee's own table dispatching the override — with the decay
