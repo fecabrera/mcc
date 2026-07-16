@@ -236,11 +236,22 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   view — a reference upcast never slices; a *by-value* argument still needs an
   explicit `as`). A `.mci` stub's fatness is pinned to its own import closure,
   and a prototype/definition that disagree on a reference's fatness across that
-  boundary are rejected as a signature mismatch. A fat reference may not yet
-  ride in a function-pointer type (a clear compile error, liftable later); the
-  destructor table slot is deferred (base-view destruction stays manual). See
-  [docs/language.md](docs/language.md) and
-  [examples/types/polymorphic_views.mc](examples/types/polymorphic_views.mc).
+  boundary are rejected as a signature mismatch. Because a dispatch override
+  shares its base member's single table slot, an override must stay
+  ABI-compatible with it: it must **return the same type** (the slot's indirect
+  call is typed with the base return type) and may **not widen a read-only
+  `const self: &T` receiver to a writable `self: &T`** (a call through a `const
+  &base` view would otherwise mutate through it) — both are clean compile
+  errors. A few constructs a single slot cannot represent are rejected rather
+  than miscompiled, each liftable later: a fat reference may not ride in a
+  function-pointer type; a **method-owned generic override** may not be
+  *dynamically dispatched* through a base view (it stays a legal static
+  override on a concrete receiver); and a function may not **return a
+  reference** to a fat base that has overridden methods (the pointer-shaped
+  return would drop the table — an empty-table fat base such as the stdlib
+  `slice` still returns freely). The destructor table slot is deferred
+  (base-view destruction stays manual). See [docs/language.md](docs/language.md)
+  and [examples/types/polymorphic_views.mc](examples/types/polymorphic_views.mc).
 
 - **BREAKING: `@override` is now required on a method that shadows an
   inherited base member** — stage 1 of the [polymorphic base views](ROADMAP.md)

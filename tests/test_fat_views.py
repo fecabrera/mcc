@@ -704,3 +704,244 @@ def test_as_upcast_temporary_stays_base_dispatched():
         }
         """
     ) == 1
+
+
+# --- S2.7: dispatch-soundness gates -------------------------------------------
+#
+# A base-chain override shares its base member's single vtable slot, so it must
+# stay ABI-compatible with it, and a few constructs a slot cannot represent are
+# rejected cleanly rather than miscompiled. Each of these was a silent
+# wrong-answer or a crash before the gate (SIE-101 review round 2).
+
+
+def test_override_with_a_different_return_type_is_rejected():
+    # The slot's indirect call is typed with the BASE member's return type; a
+    # float64 override of an int32 base would reinterpret the returned bytes
+    # (the review's garbage 1801667688). Reject at declaration.
+    with pytest.raises(
+        LangError,
+        match=(
+            r"@override method 'b::val' returns float64 but the base member it "
+            r"overrides returns int32; an override must return the same type"
+        ),
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::val(const self: &a) -> int32 { return 7; }
+            @override fn b::val(const self: &b) -> float64 { return 3.0; }
+            fn via(const x: &a) -> int32 { return x.val(); }
+            fn main() -> int32 { let o: b = { n = 0, m = 0 }; return via(o); }
+            """
+        )
+
+
+def test_override_widening_a_const_receiver_to_mutable_is_rejected():
+    # A read-only `const self: &a` base overridden by a writable `self: &b`:
+    # a call dispatched through a `const &a` view would then mutate through a
+    # promise not to (the review's 198 = mutation leaking to the caller object).
+    with pytest.raises(
+        LangError,
+        match=(
+            r"@override method 'b::peek' takes a writable 'self: &T' receiver "
+            r"but the base member it overrides takes a read-only "
+            r"'const self: &T' receiver"
+        ),
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::peek(const self: &a) -> int32 { return self.n; }
+            @override fn b::peek(self: &b) -> int32 { self.m = 99; return self.m; }
+            fn via(const x: &a) -> int32 { return x.peek(); }
+            fn main() -> int32 { let o: b = { n = 1, m = 0 }; return via(o); }
+            """
+        )
+
+
+def test_override_may_narrow_a_mutable_receiver_to_const(capfd):
+    # The safe direction is allowed: a writable base receiver overridden by a
+    # read-only one accepts strictly less capability, so a call through a
+    # writable `&a` view dispatches to the const override with no soundness
+    # loss. Runs and dispatches to b (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::poke(self: &a) -> int32 { self.n = 5; return self.n; }
+        @override fn b::poke(const self: &b) -> int32 { return 2; }
+        fn via(x: &a) -> int32 { return x.poke(); }
+        fn main() -> int32 { let o: b = { n = 0, m = 0 }; return via(o); }
+        """
+    ) == 2
+
+
+def test_shadowing_a_fat_parameter_drops_its_dispatch_table():
+    # A local shadowing a fat-view parameter is fresh storage with no view: it
+    # must NOT keep the parameter's dispatch table, or a method call on the
+    # local would index the shadowed object's (larger) table -- reading past
+    # the new object. The shadow is a plain `a`, so `.kind()` binds to a::kind
+    # (1); before the fix the stale `b` table dispatched to b::kind (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn f(const p: &a) -> int32 {
+            let p: a = { n = 0 };   // shadows the fat parameter
+            return p.kind();
+        }
+        fn main() -> int32 {
+            let obj: b = { n = 0, m = 0 };
+            return f(obj);
+        }
+        """
+    ) == 1
+
+
+def test_generic_method_dispatch_through_a_base_view_is_rejected():
+    # A method-owned generic override cannot occupy one vtable slot (a slot per
+    # instantiation of its type parameter would be needed). Dispatching one
+    # through a base view is a clean error -- not a KeyError crash in slot
+    # construction (the review's finding), nor a silent slice to the base.
+    with pytest.raises(
+        LangError,
+        match=r"cannot dispatch the generic method 'a::pick' through a base view",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::pick<T>(const self: &a, x: T) -> int32 { return 1; }
+            @override fn b::pick<T>(const self: &b, x: T) -> int32 { return 2; }
+            fn via(const x: &a) -> int32 { return x.pick(5); }
+            fn main() -> int32 { let o: b = { n = 0, m = 0 }; return via(o); }
+            """
+        )
+
+
+def test_generic_method_override_on_a_concrete_receiver_still_resolves(capfd):
+    # The same generic override is a valid STATIC shadow: called on a concrete
+    # derived receiver (no dynamic dispatch) it resolves to the derived member
+    # by hop, exactly as before -- only the dynamic path is gated.
+    assert run(
+        """
+        import "std/io";
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::pick<T>(const self: &a, x: T) -> int32 { return 1; }
+        @override fn b::pick<T>(const self: &b, x: T) -> int32 { return 2; }
+        fn main() -> int32 {
+            let o: b = { n = 0, m = 0 };
+            println(f"{o.pick(5)}");   // concrete receiver -> static -> 2
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "2\n"
+
+
+def test_reference_return_of_a_dispatching_fat_base_is_rejected():
+    # A `-> &a` return lowers to a bare pointer and drops the table word, so a
+    # forwarded reference would slice a derived object back to the base (the
+    # review's relay() returning 1 instead of dispatching to 2). Rejected when
+    # the base has a live table.
+    with pytest.raises(
+        LangError,
+        match=(
+            r"function 'relay' cannot return the reference '&a' yet: its base "
+            r"has overridden methods"
+        ),
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            fn relay(x: &a) -> &a { return x; }
+            fn main() -> int32 { let o: b = { n = 0, m = 0 }; return 0; }
+            """
+        )
+
+
+def test_reference_return_of_an_empty_table_fat_base_is_allowed():
+    # A base that is fat (extended) but has NO overridden methods carries only a
+    # null table word, so a reference return loses nothing and stays legal --
+    # the accessor pattern the stdlib `slice` accessors rely on. `a` is fat
+    # (b extends it) yet has an empty table.
+    ir = compile_ir(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn firstref(x: &a, y: &a) -> &a { return x; }
+        fn main() -> int32 {
+            let p: a = { n = 3 };
+            let q: a = { n = 4 };
+            return firstref(p, q).n;
+        }
+        """
+    )
+    assert '@"firstref"' in ir  # compiled, not rejected
+
+
+def test_reference_return_of_a_thin_base_is_allowed():
+    # A reference to an un-extended (thin) struct is a plain pointer with no
+    # table at all, so a reference return is unaffected regardless of the
+    # struct's own methods.
+    ir = compile_ir(
+        """
+        struct s { x: int32; }
+        fn firstref(a: &s, b: &s) -> &s { return a; }
+        fn main() -> int32 {
+            let p: s = { x = 7 };
+            let q: s = { x = 8 };
+            return firstref(p, q).x;
+        }
+        """
+    )
+    assert '@"firstref"' in ir
+
+
+def test_generic_reference_return_is_rejected_when_instantiated_fat():
+    # The reference-return gate fires per generic instance too: `firstref<T> ->
+    # &T` instantiated at a dispatching fat base is rejected as the instance
+    # monomorphizes, while a thin instantiation (below) compiles.
+    with pytest.raises(
+        LangError,
+        match=r"function 'firstref' cannot return the reference '&a' yet",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            fn firstref<T>(x: &T, y: &T) -> &T { return x; }
+            fn main() -> int32 {
+                let p: a = { n = 0 };
+                let q: a = { n = 0 };
+                return firstref<a>(p, q).kind();
+            }
+            """
+        )
+
+
+def test_generic_reference_return_of_a_thin_instance_is_allowed():
+    # The counterpart: the same generic reference-return template instantiated
+    # at a thin type (int32) compiles -- the gate is per-instance, not on the
+    # template.
+    ir = compile_ir(
+        """
+        fn firstref<T>(x: &T, y: &T) -> &T { return x; }
+        fn main() -> int32 {
+            let p: int32 = 7;
+            let q: int32 = 8;
+            return firstref<int32>(p, q);
+        }
+        """
+    )
+    assert '@"firstref' in ir
