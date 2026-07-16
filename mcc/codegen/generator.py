@@ -1827,18 +1827,107 @@ class CodeGen:
     def return_abi(self, func: Func) -> tuple:
         """A member's return convention as a comparable tuple.
 
-        ``(own?, reference?, resolved-return-type spelling)`` -- the return
-        half of a member's ABI. Two members share a dispatch slot only if these
-        agree: the slot's indirect call is typed with the base member's return
-        type, so a mismatching override would reinterpret the returned bytes.
-        The type spelling is resolved under the member's own source. Only
-        non-generic members reach here (validate_dispatch_overrides skips
-        generic overrides, and their clone targets are non-generic too), so the
-        return type always resolves -- like override_pattern's concrete branch.
+        ``(own?, reference?, return-type key)`` -- the return half of a
+        member's ABI. Two members share a dispatch slot only if these agree:
+        the slot's indirect call is typed with the base member's return type, so
+        a mismatching override would reinterpret the returned bytes. The type
+        key is the resolved-type spelling where it resolves; for a
+        struct-generic member whose return names the struct parameter (``-> T``,
+        unbound at this pre-body pass) it falls back to the raw ``TypeRef``
+        spelling, which compares consistently because both the override and its
+        rebased base clone spell the return in the DERIVED struct's own
+        parameter names.
         """
         self.current_source = func.source
-        spelling = str(self.lang_type(func.ret_type, func.line))
-        return (func.own_return, func.mut_return, spelling)
+        try:
+            key = str(self.lang_type(func.ret_type, func.line))
+        except LangError:
+            key = ("<unresolved>", str(func.ret_type))
+        return (func.own_return, func.mut_return, key)
+
+    def method_type_params(self, func: Func) -> list[str]:
+        """A method's OWN type parameters -- those beyond its struct's.
+
+        A method on a generic struct carries the struct's type parameters in
+        :attr:`Func.type_params` (injected at registration so it monomorphizes
+        per struct instance); its method-owned parameters are what remain. For a
+        free function or a non-generic struct's method, every ``type_params``
+        entry is method-owned. The distinction gates dynamic dispatch: a
+        method-owned generic cannot occupy a single slot (one per instantiation
+        would be needed), while a struct-generic method dispatches fine (each
+        concrete struct instance has its own table with concrete slot types).
+        For a free function (no ``::``) no struct declaration is found, so every
+        entry is method-owned, as it should be.
+        """
+        decl = self.lookup_struct_decl(func.name.split("::", 1)[0])
+        struct_params = set(decl.type_params) if decl is not None else set()
+        return [t for t in func.type_params if t not in struct_params]
+
+    def param_pass_kind(self, func: Func, i: int) -> str:
+        """Parameter ``i``'s passing convention: how it is handed to the callee.
+
+        One of ``value`` (a by-value copy), ``constref`` (a read-only
+        ``const &T`` view), ``mutref`` (a writable ``&T`` reference), or ``own``
+        (a by-value owning move). This is the ABI/ownership-relevant half of a
+        parameter that its bare type does not capture -- the markers live in the
+        per-kind name sets, not on the stored ``TypeRef``.
+        """
+        name = func.params[i][0]
+        if name in func.own_params:
+            return "own"
+        if name in func.constref_params:
+            return "constref"
+        if name in func.mut_params:
+            return "mutref"
+        return "value"
+
+    def param_abi_mismatch(
+        self, base: Func, over: Func, i: int
+    ) -> "str | None":
+        """A description of an ABI mismatch at parameter ``i``, or ``None``.
+
+        A dispatch override shares its base member's slot, so every parameter --
+        the receiver included -- must be passed the same way, or the slot's
+        indirect call and the stored thunk disagree on the argument's ABI
+        (undefined behavior). The one safe relaxation is narrowing a writable
+        base reference to a read-only one in the override (same pointer ABI, and
+        the override merely promises to mutate less). A parameter the override
+        newly marks ``@nonnull`` where the base accepted null is also rejected
+        (the override would assume a guarantee the base does not make).
+        """
+        passing = {
+            "value": "by value",
+            "constref": "by a read-only 'const &' reference",
+            "mutref": "by a writable '&' reference",
+            "own": "by an owning 'own' value",
+        }
+        bk = self.param_pass_kind(base, i)
+        ok = self.param_pass_kind(over, i)
+        if bk != ok and not (bk == "mutref" and ok == "constref"):
+            if i == 0 and bk == "constref" and ok == "mutref":
+                return (
+                    "takes a writable 'self: &T' receiver but the base member "
+                    "it overrides takes a read-only 'const self: &T' receiver; "
+                    "a call dispatched through a 'const &base' view would "
+                    "mutate through it"
+                )
+            slot = (
+                "its receiver"
+                if i == 0
+                else f"parameter {over.params[i][0]!r}"
+            )
+            return (
+                f"passes {slot} {passing[ok]} where the base member it "
+                f"overrides passes it {passing[bk]}; they share one dispatch "
+                "slot, so the argument ABI must match"
+            )
+        bname, oname = base.params[i][0], over.params[i][0]
+        if oname in over.nonnull_params and bname not in base.nonnull_params:
+            return (
+                f"marks parameter {oname!r} @nonnull where the base member it "
+                "overrides accepts null"
+            )
+        return None
 
     def validate_dispatch_overrides(self):
         """Reject overrides that would corrupt dynamic dispatch (SIE-101 S2).
@@ -1850,16 +1939,21 @@ class CodeGen:
             indirect call is typed with the base member's return type, so a
             differing override (``int32`` base, ``float64`` override) would
             reinterpret the returned bytes as garbage.
-          * **receiver mutability** -- an override may not turn a read-only
-            ``const self: &T`` receiver into a writable ``self: &T`` one: a
-            call dispatched through a ``const &base`` view would then mutate
-            through a promise not to.
+          * **every parameter's passing convention** (the receiver and each
+            other argument) -- by-value vs by-reference, ``const`` vs writable,
+            ``own``, ``@nonnull``. The slot's indirect call and the stored thunk
+            must agree on each argument's ABI, or the call is undefined
+            behavior; and an override may not widen a read-only ``const``
+            reference to a writable one (mutation through a ``const`` promise).
+            The one safe relaxation is narrowing a writable base reference to a
+            read-only override one. See :meth:`param_abi_mismatch`.
 
         A method-owned generic override (one that declares its *own* type
         parameter, distinct from the struct's) is left to the dispatch site: it
         is a legal static shadow, so it is not rejected here -- only a dynamic
-        (base-view) call to one is an error (:meth:`dispatch_indirect`), and its
-        types cannot be resolved for the ABI comparison anyway. Runs after
+        (base-view) call to one is an error (:meth:`gen_generic_call`). A
+        struct-generic override (only the struct's parameters) IS validated: it
+        dispatches like any concrete one. Runs after
         :meth:`check_method_overrides` (so only genuine base-chain overrides
         reach here) and before :meth:`compute_dispatch_families`.
 
@@ -1875,10 +1969,9 @@ class CodeGen:
             self.current_source = func.source
             if not self.overrides_inherited(func):
                 continue  # a Mode-1 open-set override, not a base-chain one
-            if func.type_params:
-                continue  # a generic method: judged at the dynamic call site
+            if self.method_type_params(func):
+                continue  # a method-owned generic: judged at the call site
             over_abi = self.return_abi(func)
-            over_mut = "self" in func.mut_params
             for base in self.override_targets(func):
                 if self.return_abi(base) != over_abi:
                     raise LangError(
@@ -1889,15 +1982,15 @@ class CodeGen:
                         "dispatch slot)",
                         func.line,
                     )
-                if "self" in base.constref_params and over_mut:
-                    raise LangError(
-                        f"@override method {func.name!r} takes a writable "
-                        "'self: &T' receiver but the base member it overrides "
-                        "takes a read-only 'const self: &T' receiver; a call "
-                        "dispatched through a 'const &base' view would mutate "
-                        "through it",
-                        func.line,
-                    )
+                # override_pattern matched every parameter (it spells them all),
+                # so the base clone and the override have equal arity here.
+                for i in range(len(func.params)):
+                    mismatch = self.param_abi_mismatch(base, func, i)
+                    if mismatch is not None:
+                        raise LangError(
+                            f"@override method {func.name!r} {mismatch}",
+                            func.line,
+                        )
 
     def compute_dispatch_families(self):
         """Record which overloads earn a vtable slot (SIE-101 Stage 2).
@@ -1928,10 +2021,14 @@ class CodeGen:
             self.current_source = func.source
             if not self.overrides_inherited(func):
                 continue  # a Mode-1 open-set override, not a base-chain one
-            if func.type_params:
-                # A method-generic override: no slot, but remember the family
-                # so a base-view dispatch to it errors cleanly (its slot would
-                # have crashed construction, see validate_dispatch_overrides).
+            if self.method_type_params(func):
+                # A method-OWNED generic override (its own type parameter, not
+                # just the struct's): no slot -- one slot cannot cover every
+                # instantiation -- but remember the family so a base-view
+                # dispatch to it errors cleanly (its slot would have crashed
+                # construction, see gen_generic_call). A struct-generic override
+                # (only the struct's parameters) dispatches like a concrete one
+                # and falls through to earn a slot below.
                 introducer = self.family_introducer(qualifier, method)
                 if introducer is not None:
                     self.generic_override_families.add((introducer, method))
@@ -2210,23 +2307,12 @@ class CodeGen:
         if not (isinstance(recv, Var) and recv.name in self.param_tables):
             return None  # a statically-known object -> devirtualize (direct)
         if not self.is_dispatch_family(qualifier, method, pattern):
-            # Not a dispatch overload. A method-generic override of this family
-            # earns no slot, so a base-view call that resolves to it would
-            # otherwise slice to the base member -- reject cleanly instead. A
-            # plain, never-overridden overload is an ordinary direct call.
-            introducer = self.family_introducer(qualifier, method)
-            if (
-                introducer is not None
-                and (introducer, method) in self.generic_override_families
-            ):
-                raise LangError(
-                    f"cannot dispatch the generic method "
-                    f"'{qualifier}::{method}' through a base view: it declares "
-                    "its own type parameter, so no single vtable slot can "
-                    "represent it -- call it on a concrete receiver instead",
-                    expr.line,
-                )
-            return None  # this overload not overridden -> a plain direct call
+            # This overload is not overridden -> a plain direct call. (A
+            # base-view call that resolves to a method-owned generic override is
+            # rejected earlier, at the resolved-member-precise gate in
+            # gen_generic_call -- never here, where the coarse family key would
+            # also catch a non-generic sibling overload.)
+            return None
         slot_idx = self.dispatch_slot_index(qualifier, method, pattern)
         if slot_idx is None:
             return None
@@ -18939,7 +19025,16 @@ class CodeGen:
                 arg_tvs.append(self.gen_expr(arg.value))
                 continue
             proofs.append(self.proves_nonnull(arg))
-            if i in maybe_mut and self.denotes_storage(arg):
+            if (
+                i in maybe_mut
+                # The receiver of a method call also forms its address up
+                # front: a hidden-reference receiver must SHARE the caller's
+                # storage (like the direct path), not spill a prefix copy that
+                # slices a derived object below the fat view -- so a dispatched
+                # derived override reads through the actual object. Formed here
+                # (once, no double-eval), used in the hidden-reference arm.
+                or (i == 0 and "::" in expr.name)
+            ) and self.denotes_storage(arg):
                 addr, t, align, volatile = self.gen_addr(arg, expr.line)
                 addrs[i] = (addr, t, align, volatile)
                 # Inference sees the stored value, loaded once through the
@@ -19497,6 +19592,15 @@ class CodeGen:
                     if target is not None:
                         # A derived receiver borrows as the base prefix.
                         args.append(self.upcast_hidden_ref(tv, target))
+                    elif i in addrs and addrs[i][1] == p:
+                        # A same-type receiver whose storage matches the
+                        # parameter shares the caller's address (formed up
+                        # front) rather than a spilled prefix copy -- the actual
+                        # object, so a dispatched derived override does not read
+                        # past a base-sized slice. A receiver whose type does
+                        # NOT match (a mispinned instantiation) falls through to
+                        # the spill, which raises the coercion diagnostic.
+                        args.append(addrs[i][0])
                     else:
                         args.append(
                             self.spill_to_temp(tv, p, expr.line, context)
@@ -19569,10 +19673,32 @@ class CodeGen:
                 )
             )
         effect_owner = inh.origin if inh is not None else func
-        # SIE-101 Stage 2: on the overload/inherited path too (where a method
-        # call on an extended type resolves, its own member merging with
-        # inherited clones), fill each fat argument's dispatch table and, for a
-        # fat-view receiver of an overridden family, dispatch indirectly.
+        # SIE-101 Stage 2: a base-VIEW call resolving to a method-owned generic
+        # override cannot dispatch -- no single vtable slot covers every
+        # instantiation of its type parameter. Reject here, where the RESOLVED
+        # member is known generic (so a non-generic sibling of the same method
+        # name, resolving to its own concrete member, is unaffected -- the
+        # coarse family key alone would over-reject it). A concrete receiver
+        # devirtualizes and is fine; only a fat view (unknown runtime type) is
+        # the problem.
+        if "::" in expr.name and expr.args and self.method_type_params(func):
+            recv = expr.args[0]
+            if isinstance(recv, Var) and recv.name in self.param_tables:
+                qualifier, method = expr.name.split("::", 1)
+                introducer = self.family_introducer(qualifier, method)
+                if (introducer, method) in self.generic_override_families:
+                    raise LangError(
+                        f"cannot dispatch the generic method "
+                        f"'{qualifier}::{method}' through a base view: it "
+                        "declares its own type parameter, so no single vtable "
+                        "slot can represent it -- call it on a concrete "
+                        "receiver instead",
+                        expr.line,
+                    )
+        # On the overload/inherited path too (where a method call on an extended
+        # type resolves, its own member merging with inherited clones), fill
+        # each fat argument's dispatch table and, for a fat-view receiver of an
+        # overridden family, dispatch indirectly.
         fat = self.fat_ref.get(fn.name, frozenset())
         raw = None
         if fat:

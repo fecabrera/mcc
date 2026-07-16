@@ -239,19 +239,24 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   boundary are rejected as a signature mismatch. Because a dispatch override
   shares its base member's single table slot, an override must stay
   ABI-compatible with it: it must **return the same type** (the slot's indirect
-  call is typed with the base return type) and may **not widen a read-only
-  `const self: &T` receiver to a writable `self: &T`** (a call through a `const
-  &base` view would otherwise mutate through it) — both are clean compile
-  errors. A few constructs a single slot cannot represent are rejected rather
-  than miscompiled, each liftable later: a fat reference may not ride in a
-  function-pointer type; a **method-owned generic override** may not be
-  *dynamically dispatched* through a base view (it stays a legal static
-  override on a concrete receiver); and a function may not **return a
-  reference** to a fat base that has overridden methods (the pointer-shaped
-  return would drop the table — an empty-table fat base such as the stdlib
-  `slice` still returns freely). The destructor table slot is deferred
-  (base-view destruction stays manual). See [docs/language.md](docs/language.md)
-  and [examples/types/polymorphic_views.mc](examples/types/polymorphic_views.mc).
+  call is typed with the base return type) and pass **every parameter** — the
+  receiver and each argument — the same way (by value vs. by reference, `const`
+  vs. writable, `own`, `@nonnull`), since the slot's indirect call and the
+  stored thunk must agree on each value's ABI. Widening a read-only `const &T`
+  to a writable `&T`, changing by-value to by-reference, or adding `@nonnull`
+  are all clean compile errors; the one safe relaxation is *narrowing* a
+  writable base reference to a read-only override one. A few constructs a
+  single slot cannot represent are rejected rather than miscompiled, each
+  liftable later: a fat reference may not ride in a function-pointer type; a
+  **method-owned generic override** (one declaring its own type parameter, not
+  merely the struct's) may not be *dynamically dispatched* through a base view
+  (it stays a legal static override on a concrete receiver — a **struct-generic**
+  override dispatches normally); and a function may not **return a reference**
+  to a fat base that has overridden methods (the pointer-shaped return would
+  drop the table — an empty-table fat base such as the stdlib `slice` still
+  returns freely). The destructor table slot is deferred (base-view destruction
+  stays manual). See [docs/language.md](docs/language.md) and
+  [examples/types/polymorphic_views.mc](examples/types/polymorphic_views.mc).
 
 - **BREAKING: `@override` is now required on a method that shadows an
   inherited base member** — stage 1 of the [polymorphic base views](ROADMAP.md)

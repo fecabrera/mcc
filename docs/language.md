@@ -2283,13 +2283,18 @@ call still reaches the runtime type's override.
 **An override must be ABI-compatible with the base member.** Because every
 override of a family shares that family's single table slot, an
 [`@override`](#override-a-method) method must match the base member where the
-slot is concerned. It must **return the same type** — the slot's indirect call
-is typed with the base member's return type, so a divergent return (an `int32`
-base overridden by a `float64` one) would reinterpret the returned bytes — and
-it may **not** turn a read-only `const self: &T` receiver into a writable `self:
-&T` one, which would let a call dispatched through a `const &base` view mutate
-through a promise not to. The safe narrowing (a writable base receiver
-overridden by a read-only one) is allowed. Both violations are compile errors.
+slot is concerned — the slot's indirect call and the stored thunk have to agree
+on every value's ABI, or the call is undefined behavior. It must **return the
+same type** (a divergent return — an `int32` base overridden by a `float64` one
+— would reinterpret the returned bytes), and **every parameter**, the receiver
+and each argument alike, must be passed the same way: by value vs. by
+reference, `const` vs. writable, `own`, `@nonnull`. In particular an override
+may **not** widen a read-only `const &T` parameter to a writable `&T` one (a
+call dispatched through a `const` view would then mutate through a promise not
+to), nor change a by-value parameter to by-reference, nor add `@nonnull` where
+the base accepted null. The one safe relaxation is *narrowing* a writable base
+reference to a read-only override one (same pointer ABI, and the override merely
+promises to mutate less). Every violation is a compile error.
 
 **Copying out of a view is prefix extraction.** Reading a value *out* of a fat
 view yields a plain, byte-exact base value that carries **no** table:
@@ -2322,14 +2327,16 @@ miscompiled.
 Three cases are clean compile errors for now, each liftable in a later stage: a
 fat reference may **not** appear in a [function-pointer type](#function-pointers)
 (its width can differ across closures); a **method-owned generic override** (one
-declaring its own type parameter, distinct from the struct's) may **not** be
-dynamically dispatched through a base view — no single slot can stand in for
-every instantiation of its parameter — though it remains a legal *static*
-override when called on a concrete receiver; and a function may **not** return a
-`&T` **reference** to a fat base that has overridden methods, since the
+declaring *its own* type parameter, as opposed to merely the struct's) may
+**not** be dynamically dispatched through a base view — no single slot can stand
+in for every instantiation of that parameter — though it remains a legal
+*static* override when called on a concrete receiver; and a function may **not**
+return a `&T` **reference** to a fat base that has overridden methods, since the
 pointer-shaped return drops the table word (a fat base with an *empty* table,
 such as the stdlib `slice` extended only for layout reuse, still returns
-freely).
+freely). A **struct-generic** override — one whose only type parameters are its
+struct's (`gb<T>::m` over `ga<T>::m`) — dispatches normally: each concrete
+struct instantiation has its own table with concrete slot types.
 
 See [examples/types/polymorphic_views.mc](../examples/types/polymorphic_views.mc)
 and [method_inheritance.mc](../examples/types/method_inheritance.mc).

@@ -945,3 +945,237 @@ def test_generic_reference_return_of_a_thin_instance_is_allowed():
         """
     )
     assert '@"firstref' in ir
+
+
+# --- S2.8: non-receiver parameter ABI + precise generic gate ------------------
+#
+# The override compatibility check covers EVERY parameter, not just the
+# receiver and return: a shared slot means the slot's indirect call and the
+# stored thunk must agree on each argument's ABI. And the method-generic
+# dispatch gate is overload-precise, distinguishing method-owned type
+# parameters from a struct's and never rejecting a non-generic sibling
+# (SIE-101 review round 3).
+
+
+def test_override_widening_a_non_receiver_const_reference_is_rejected():
+    # A read-only `const p: &payload` base parameter overridden by a writable
+    # `p: &payload`: a call dispatched through a base view would mutate the
+    # caller's payload through the base's const promise (repro returned 198).
+    with pytest.raises(
+        LangError,
+        match=(
+            r"@override method 'b::apply' passes parameter 'p' by a writable "
+            r"'&' reference where the base member it overrides passes it by a "
+            r"read-only 'const &' reference"
+        ),
+    ):
+        compile_ir(
+            """
+            struct payload { v: int32; }
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::apply(const self: &a, const p: &payload) -> int32 { return p.v; }
+            @override fn b::apply(const self: &b, p: &payload) -> int32 {
+                p.v = 99; return p.v;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_override_changing_a_parameter_from_value_to_reference_is_rejected():
+    # A by-value `p: payload` base parameter overridden by a by-reference
+    # `p: &payload`: the slot is called as `(..., payload)` but the thunk is
+    # `(..., payload*)` -- incompatible LLVM ABIs, undefined behavior. Rejected.
+    with pytest.raises(
+        LangError,
+        match=(
+            r"@override method 'b::apply' passes parameter 'p' by a writable "
+            r"'&' reference where the base member it overrides passes it by "
+            r"value"
+        ),
+    ):
+        compile_ir(
+            """
+            struct payload { v: int32; }
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::apply(const self: &a, p: payload) -> int32 { return p.v; }
+            @override fn b::apply(const self: &b, p: &payload) -> int32 { return p.v; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_override_changing_a_parameter_ownership_is_rejected():
+    # `own p: payload` (a consuming move) vs a by-value copy is the same LLVM
+    # ABI but a different ownership contract -- dispatching the wrong one would
+    # consume an argument the caller never relinquished. Rejected.
+    with pytest.raises(
+        LangError,
+        match=(
+            r"@override method 'b::apply' passes parameter 'p' by value where "
+            r"the base member it overrides passes it by an owning 'own' value"
+        ),
+    ):
+        compile_ir(
+            """
+            struct payload { v: int32; }
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::apply(const self: &a, own p: payload) -> int32 { return p.v; }
+            @override fn b::apply(const self: &b, p: payload) -> int32 { return p.v; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_override_adding_nonnull_to_a_parameter_is_rejected():
+    # An override may not mark a parameter @nonnull where the base accepts null:
+    # it would assume a guarantee the base -- and therefore the caller -- never
+    # makes.
+    with pytest.raises(
+        LangError,
+        match=(
+            r"@override method 'b::apply' marks parameter 'p' @nonnull where "
+            r"the base member it overrides accepts null"
+        ),
+    ):
+        compile_ir(
+            """
+            struct payload { v: int32; }
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::apply(const self: &a, p: payload*) -> int32 { return 0; }
+            @override fn b::apply(const self: &b, @nonnull p: payload*) -> int32 {
+                return 0;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_override_may_narrow_a_non_receiver_mutable_reference_to_const():
+    # The safe direction is allowed for non-receiver parameters too: a writable
+    # `&payload` base parameter narrowed to a read-only `const &payload` in the
+    # override is ABI-identical (same pointer) and promises less, so it
+    # dispatches (to b, returning 2).
+    assert run(
+        """
+        struct payload { v: int32; }
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::apply(const self: &a, p: &payload) -> int32 { return 1; }
+        @override fn b::apply(const self: &b, const p: &payload) -> int32 { return 2; }
+        fn via(const x: &a, p: &payload) -> int32 { return x.apply(p); }
+        fn main() -> int32 {
+            let o: b = { n = 0, m = 0 };
+            let pl: payload = { v = 0 };
+            return via(o, pl);
+        }
+        """
+    ) == 2
+
+
+def test_non_generic_sibling_of_a_generic_override_dispatches_directly():
+    # A method-owned generic override (`pick<T>(x)`) must not make an unrelated,
+    # never-overridden no-arg `pick()` sibling reject through a base view. The
+    # gate is overload-precise: `pick()` resolves to its own concrete member and
+    # is a plain direct call, returning 10.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::pick(const self: &a) -> int32 { return 10; }
+        fn a::pick<T>(const self: &a, x: T) -> int32 { return 1; }
+        @override fn b::pick<T>(const self: &b, x: T) -> int32 { return 2; }
+        fn via(const x: &a) -> int32 { return x.pick(); }
+        fn main() -> int32 {
+            let o: b = { n = 0, m = 0 };
+            return via(o);
+        }
+        """
+    ) == 10
+
+
+def test_struct_generic_override_dispatches_through_a_base_view():
+    # A struct-generic override (`gb<T>::kind` over `ga<T>::kind`) declares no
+    # method-OWNED type parameter -- only the struct's -- so it dispatches like
+    # any concrete override: each concrete instance has its own table with
+    # concrete slot types. A `&ga<int32>` view of a `gb<int32>` reaches the
+    # derived override, returning 2. (Before the fix the gate conflated the
+    # struct parameter with a method-owned one and rejected the call.)
+    assert run(
+        """
+        struct ga<T> { x: T; }
+        struct gb<T> extends ga<T> { y: T; }
+        fn ga<T>::kind(const self: &ga<T>) -> int32 { return 1; }
+        @override fn gb<T>::kind(const self: &gb<T>) -> int32 { return 2; }
+        fn via(const x: &ga<int32>) -> int32 { return x.kind(); }
+        fn main() -> int32 {
+            let o: gb<int32> = { x = 0, y = 0 };
+            return via(o);
+        }
+        """
+    ) == 2
+
+
+def test_struct_generic_override_returning_the_struct_parameter_dispatches():
+    # A struct-generic override whose RETURN names the struct parameter
+    # (`-> T`, unresolved at the pre-body validation pass): the override and its
+    # base clone both spell the return in the derived struct's own parameter
+    # name, so the ABI comparison matches on the raw spelling and the override
+    # is accepted and dispatches. `via` reads the derived override's value (20).
+    assert run(
+        """
+        struct ga<T> { x: T; }
+        struct gb<T> extends ga<T> { y: T; }
+        fn ga<T>::first(const self: &ga<T>) -> T { return self.x; }
+        @override fn gb<T>::first(const self: &gb<T>) -> T { return self.y; }
+        fn via(const x: &ga<int32>) -> int32 { return x.first(); }
+        fn main() -> int32 {
+            let o: gb<int32> = { x = 10, y = 20 };
+            return via(o);
+        }
+        """
+    ) == 20
+
+
+def test_struct_generic_dispatch_reads_the_derived_object_not_a_slice(capfd):
+    # The receiver of a dispatched struct-generic override must reach the ACTUAL
+    # derived object, not a base-sized prefix copy: `gb<int32>::get` reads the
+    # derived-only field `y` (offset past the `ga` prefix). Through a `&ga`
+    # view, sharing the caller's storage (not spilling a slice) is what lets
+    # the read land on the real `y` (20). A slice would read past the copy.
+    assert run(
+        """
+        struct ga<T> { x: T; }
+        struct gb<T> extends ga<T> { y: T; }
+        fn ga<T>::get(const self: &ga<T>) -> int32 { return 1; }
+        @override fn gb<T>::get(const self: &gb<T>) -> int32 { return self.y; }
+        fn via(const x: &ga<int32>) -> int32 { return x.get(); }
+        fn main() -> int32 {
+            let o: gb<int32> = { x = 10, y = 20 };
+            return via(o);
+        }
+        """
+    ) == 20
+
+
+def test_struct_generic_override_with_a_mismatched_return_is_rejected():
+    # The counterpart guard: a struct-generic override that returns a DIFFERENT
+    # type than the base member it overrides is still rejected -- the raw-spelling
+    # fallback compares `int32` against `T` and finds them unequal.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'gb::first' returns .* but the base member",
+    ):
+        compile_ir(
+            """
+            struct ga<T> { x: T; }
+            struct gb<T> extends ga<T> { y: T; }
+            fn ga<T>::first(const self: &ga<T>) -> T { return self.x; }
+            @override fn gb<T>::first(const self: &gb<T>) -> int32 { return 1; }
+            fn main() -> int32 { return 0; }
+            """
+        )
