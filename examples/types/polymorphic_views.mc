@@ -158,6 +158,17 @@ fn main() -> int32 {
     println("relay2(leaf).speak():");
     relay2(v).speak();          // leaf::speak, through two returned views
 
+    // POINTER DECAY composes with the view (deref-then-view): a proven
+    // `leaf*` at the fat `&base` slot is exactly describe(*p) -- the pointer
+    // sheds its one level, the pointee lends its base prefix, and the view
+    // carries LEAF's table. A stack value and a heap pointer call the same
+    // function identically, extended bases included; the implicit decay
+    // keeps the null proof obligation (`&v` is its own proof -- see
+    // functions/pointer_decay.mc).
+    println("describe(leaf*):");
+    let p: leaf* = &v;
+    describe(p);                // leaf::speak, then base::speak (the copy)
+
     // Overload resolution ranks the view: the leaf reaches both prefer
     // overloads, and the nearer base (middle, one hop) beats the farther
     // one (base, two hops).

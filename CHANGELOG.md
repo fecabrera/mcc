@@ -273,7 +273,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   type's table, so `relay(obj).kind()` dispatches the derived override, and
   re-lending or re-returning the result forwards the same view; any other
   returned lvalue carries its own exact static type's table (per the
-  reference-return exact-type rule). Two constructs a
+  reference-return exact-type rule). **Pointer decay composes with the view**
+  (SIE-187): a proven-non-null `derived*` argument at a fat `&base` /
+  `const &base` slot decays and views — deref-then-view, identical to passing
+  `*p`, the pointee's own table dispatching the override — with the decay
+  proof, the one-level rule, exact-match-first ranking (an exact `&derived`
+  overload still beats the viewed `&base`, a direct pointer overload still
+  beats any decay reading), and the thin-`.mci` fatness gate all inherited
+  unchanged, on the read-only and writable reference paths alike. Two constructs a
   single slot cannot represent are rejected rather than miscompiled, each
   liftable later: a fat reference — parameter or return — may not ride in a
   function-pointer type, spelled or inferred from a function value; and a

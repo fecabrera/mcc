@@ -57,6 +57,9 @@ fn main() -> int32 {
 
 // Decay is exactly one level deep and only into hidden-reference slots: a
 // `const` scalar or a plain by-value `T` parameter still needs an explicit
-// `*p`. See also: reference_params.mc and const_params.mc for the receiving slots;
+// `*p`. Decay also composes with the polymorphic base view: a proven
+// `derived*` at a fat `&base` slot decays AND views (deref-then-view),
+// dispatching the pointee's own overrides -- see types/polymorphic_views.mc.
+// See also: reference_params.mc and const_params.mc for the receiving slots;
 // nonnull_narrowing.mc and nonnull_assert.mc for the ways a pointer becomes
 // proven; memory/pointers.mc for new/dealloc.

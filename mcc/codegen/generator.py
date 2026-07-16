@@ -18757,6 +18757,41 @@ class CodeGen:
             return bare.pointee == ptype
         return strip_const(bare.pointee) == strip_const(ptype)
 
+    def decay_view_target(
+        self, arg_type: LangType, ptype: LangType, mut: bool
+    ) -> "LangType | None":
+        """The base a decayed pointee views into a fat reference slot, or ``None``.
+
+        SIE-187: decay composes with the derived->base view. A ``b*``
+        argument at a fat ``&a`` / ``const &a`` slot (where ``b extends a``)
+        is ``f(*p)``: the pointer sheds exactly one level (the same rule as
+        :meth:`decays_to`) and the pointee lends its base prefix
+        (:meth:`receiver_upcast_target`, the marshal's own view predicate).
+        A ``mut`` slot demands a mutable pointee -- the callee writes
+        through the view -- while a ``const`` slot also accepts a pointer
+        to a ``const`` pointee. The caller carries the fatness gate (only
+        a fat position, or the method receiver, composes) and the decay
+        null proof (:meth:`check_decay_arg`).
+
+        Args:
+            arg_type: The argument's type.
+            ptype: The (resolved) parameter type of the reference slot.
+            mut: ``True`` for a ``&`` slot, ``False`` for a ``const &`` one.
+
+        Returns:
+            The (const-stripped) base target the pointee views, or ``None``
+            when the argument is not a pointer whose pointee nominal-subtypes
+            the parameter.
+        """
+        if arg_type is NULLT:
+            return None
+        bare = strip_const(arg_type)
+        if bare.pointee is None:
+            return None
+        if mut and bare.pointee.const:
+            return None
+        return self.receiver_upcast_target(bare.pointee, ptype)
+
     def check_decay_arg(
         self, arg_expr, arg_type: LangType, kind: str, ptype: LangType,
         context: str, line: int, proven: "bool | None" = None,
@@ -18804,8 +18839,12 @@ class CodeGen:
         shared directly -- no copy, which is the point of the optimization. A
         proven-non-null pointer to the parameter's type *decays*: the pointer
         value itself is forwarded as the hidden reference (see
-        :meth:`decays_to`). An rvalue (or a type that still needs coercion)
-        is materialized into a temporary whose address is passed instead.
+        :meth:`decays_to`); at a view-forming position (a fat parameter, or
+        the method receiver) a proven pointer to a pointee that
+        nominal-subtypes the parameter decays too, composing with the base
+        view (see :meth:`decay_view_target`). An rvalue (or a type that still
+        needs coercion) is materialized into a temporary whose address is
+        passed instead.
 
         Args:
             arg_expr: The argument expression.
@@ -18819,13 +18858,14 @@ class CodeGen:
         Returns:
             ``(pointer, static type, table)``: a pointer to the argument's
             storage; the static type the argument EVALUATED to -- the derived
-            type on an upcast path (the referenced object really is derived,
-            so a fat argument's dispatch table must be the derived one),
-            ``ptype`` when the referenced object is exactly the parameter's
-            type (a share, a decayed pointer's pointee, a spilled coerced
-            copy); and the RUNTIME table word forwarded by the argument's
-            source, when it carried one (a fat ``-> &T`` call result re-lent
-            here), else ``None``.
+            type on an upcast path, a direct lend or a composed decay+view
+            alike (the referenced object really is derived, so a fat
+            argument's dispatch table must be the derived one), ``ptype``
+            when the referenced object is exactly the parameter's type (a
+            share, an exact-pointee decay, a spilled coerced copy); and the
+            RUNTIME table word forwarded by the argument's source, when it
+            carried one (a fat ``-> &T`` call result re-lent here), else
+            ``None``.
         """
         if self.is_addressable_form(arg_expr):
             addr, t, align, volatile = self.gen_addr(arg_expr, line)
@@ -18850,6 +18890,26 @@ class CodeGen:
                     ptype,
                     None,
                 )
+            if receiver:
+                target = self.decay_view_target(t, ptype, mut=False)
+                if target is not None:
+                    # SIE-187: decay composes with the view -- the pointer
+                    # sheds its level and the pointee lends its base prefix,
+                    # exactly as f(*p) would; the pointee's (derived) type
+                    # sources the dispatch table.
+                    self.check_decay_arg(
+                        arg_expr, strip_const(t), "const", ptype, context, line
+                    )
+                    return (
+                        self.builder.bitcast(
+                            self.gen_load(
+                                addr, align=align, volatile=volatile
+                            ),
+                            target.ir.as_pointer(),
+                        ),
+                        strip_const(t).pointee,
+                        None,
+                    )
             tv = TypedValue(self.gen_load(addr), t)
         else:
             tv = self.gen_expr(arg_expr)
@@ -18877,6 +18937,21 @@ class CodeGen:
                     arg_expr, tv.type, "const", ptype, context, line
                 )
                 return tv.value, ptype, None
+            if receiver:
+                target = self.decay_view_target(tv.type, ptype, mut=False)
+                if target is not None:
+                    # SIE-187: a decayed rvalue pointer composes with the
+                    # view the same way -- the pointee is real storage.
+                    self.check_decay_arg(
+                        arg_expr, tv.type, "const", ptype, context, line
+                    )
+                    return (
+                        self.builder.bitcast(
+                            tv.value, target.ir.as_pointer()
+                        ),
+                        strip_const(tv.type).pointee,
+                        None,
+                    )
         if receiver:
             target = self.receiver_upcast_target(tv.type, ptype)
             if target is not None:
@@ -18967,7 +19042,10 @@ class CodeGen:
         ``ptype`` -- the callee writes through the pointer, so no coercion
         (not even an adapting literal) is possible -- or a proven-non-null
         pointer to ``ptype``, which *decays*: the pointer value itself is
-        forwarded (see :meth:`decays_to`). A decayed pointer may be an
+        forwarded (see :meth:`decays_to`). At a view-forming position (a fat
+        parameter, or the method receiver) a proven pointer to a mutable
+        pointee that nominal-subtypes ``ptype`` also decays, composing with
+        the base view (see :meth:`decay_view_target`). A decayed pointer may be an
         rvalue (the pointee is real storage even when the pointer expression
         is a temporary), and :meth:`check_mut_storage` does not apply to it:
         the const/volatile/packed facts describe the pointer's own storage,
@@ -18995,7 +19073,9 @@ class CodeGen:
 
         Raises:
             LangError: When the argument is not a writable lvalue of exactly
-                ``ptype`` and not a provably non-null pointer to ``ptype``.
+                ``ptype`` and not a provably non-null pointer to ``ptype``
+                (or, at a view-forming position, to a mutable derived type
+                of it).
         """
         if self.is_addressable_form(arg_expr):
             addr, t, align, volatile = self.gen_addr(arg_expr, line)
@@ -19008,6 +19088,29 @@ class CodeGen:
                     ptype,
                     None,
                 )
+            if receiver:
+                target = self.decay_view_target(t, ptype, mut=True)
+                if target is not None:
+                    # SIE-187: decay composes with the view on the writable
+                    # path too (parity with hidden_ref_arg): the pointee
+                    # lends its base prefix, writes land in the derived
+                    # value's leading fields, and the pointee's type sources
+                    # the dispatch table. The pointer's own storage facts
+                    # stay irrelevant, as for any decay.
+                    self.check_decay_arg(
+                        arg_expr, strip_const(t), "reference", ptype, context,
+                        line,
+                    )
+                    return (
+                        self.builder.bitcast(
+                            self.gen_load(
+                                addr, align=align, volatile=volatile
+                            ),
+                            target.ir.as_pointer(),
+                        ),
+                        strip_const(t).pointee,
+                        None,
+                    )
             self.check_mut_storage(arg_expr, t, align, volatile, line)
             if t != ptype:
                 if receiver:
@@ -19031,6 +19134,21 @@ class CodeGen:
                     arg_expr, tv.type, "reference", ptype, context, line
                 )
                 return tv.value, ptype, None
+            if receiver:
+                target = self.decay_view_target(tv.type, ptype, mut=True)
+                if target is not None:
+                    # SIE-187: a decayed rvalue pointer composes with the
+                    # view on the writable path too.
+                    self.check_decay_arg(
+                        arg_expr, tv.type, "reference", ptype, context, line
+                    )
+                    return (
+                        self.builder.bitcast(
+                            tv.value, target.ir.as_pointer()
+                        ),
+                        strip_const(tv.type).pointee,
+                        None,
+                    )
             if tv.lvalue is not None:
                 # A mut-returning call re-lends: the callee's formation rule
                 # vouched for the storage (and rejected const/@volatile/
@@ -19744,6 +19862,11 @@ class CodeGen:
         fat_static: dict[int, LangType] = {}
         fat_tables: dict[int, ir.Value] = {}
         decayed: set[int] = set()
+        # SIE-187: decayed positions whose pointee VIEWS the parameter (the
+        # decay+view composition): {position: (base target, pointee type)}.
+        # Emission bitcasts the forwarded pointer to the base prefix and
+        # sources the dispatch table from the pointee's (derived) type.
+        decay_views: dict[int, tuple[LangType, LangType]] = {}
         for i in sorted(mut_positions):
             context = f"argument {i + 1} of {expr.name!r}"
             p = params[i]
@@ -19759,6 +19882,19 @@ class CodeGen:
                     )
                     decayed.add(i)
                     continue
+                if (i == 0 and "::" in expr.name) or i in fat:
+                    target = self.decay_view_target(t, p, mut=True)
+                    if target is not None:
+                        # SIE-187: decay composes with the view (parity with
+                        # mut_ref_arg); the bitcast and the table sourcing
+                        # happen at emission, below.
+                        self.check_decay_arg(
+                            expr.args[i], strip_const(t), "reference", p,
+                            context, expr.line, proven=proofs[i],
+                        )
+                        decayed.add(i)
+                        decay_views[i] = (target, strip_const(t).pointee)
+                        continue
                 self.check_mut_storage(expr.args[i], t, align, volatile, expr.line)
                 if t != p:
                     target = (
@@ -19796,6 +19932,20 @@ class CodeGen:
                 )
                 decayed.add(i)
                 continue
+            if not isinstance(expr.args[i], StrLit) and (
+                (i == 0 and "::" in expr.name) or i in fat
+            ):
+                target = self.decay_view_target(tv.type, p, mut=True)
+                if target is not None:
+                    # SIE-187: a decayed rvalue pointer composes with the
+                    # view on the writable path too.
+                    self.check_decay_arg(
+                        expr.args[i], tv.type, "reference", p, context,
+                        expr.line, proven=proofs[i],
+                    )
+                    decayed.add(i)
+                    decay_views[i] = (target, strip_const(tv.type).pointee)
+                    continue
             if tv.lvalue is not None:
                 # A mut-return re-lend: the callee's formation rule vouched
                 # for the storage, so only the exact-type rule applies (as
@@ -19921,11 +20071,24 @@ class CodeGen:
                 # A decayed pointer is forwarded by value (it was already
                 # loaded, once, when the argument was evaluated); a direct
                 # lend passes the caller's storage address.
-                args.append(tv.value if i in decayed else addrs[i][0])
-                if i in fat and i not in decayed:
-                    # The lent storage's true type (addrs kept the derived
-                    # one on an upcast lend) sources the dispatch table.
-                    fat_static[i] = addrs[i][1]
+                if i in decayed:
+                    val = tv.value
+                    if i in decay_views:
+                        # SIE-187: the decayed pointee lends its base
+                        # prefix; its (derived) type sources the table.
+                        target, pointee = decay_views[i]
+                        val = self.builder.bitcast(
+                            val, target.ir.as_pointer()
+                        )
+                        if i in fat:
+                            fat_static[i] = pointee
+                    args.append(val)
+                else:
+                    args.append(addrs[i][0])
+                    if i in fat:
+                        # The lent storage's true type (addrs kept the derived
+                        # one on an upcast lend) sources the dispatch table.
+                        fat_static[i] = addrs[i][1]
             elif (
                 self.struct_literal_adapts(arg_node, p)
                 and not isinstance(arg_node, TupleLit)
@@ -19963,6 +20126,27 @@ class CodeGen:
                         context, expr.line, proven=proofs[i],
                     )
                     args.append(tv.value)
+                elif (
+                    ((i == 0 and "::" in expr.name) or i in fat)
+                    and (
+                        target := self.decay_view_target(
+                            tv.type, p, mut=False
+                        )
+                    )
+                    is not None
+                ):
+                    # SIE-187: decay composes with the view (parity with
+                    # hidden_ref_arg): the pointee lends its base prefix
+                    # and its (derived) type sources the dispatch table.
+                    self.check_decay_arg(
+                        arg_node, strip_const(tv.type), "const", p,
+                        context, expr.line, proven=proofs[i],
+                    )
+                    args.append(
+                        self.builder.bitcast(tv.value, target.ir.as_pointer())
+                    )
+                    if i in fat:
+                        fat_static[i] = strip_const(tv.type).pointee
                 elif tv.lvalue is not None and tv.type.ir is p.ir:
                     # A mut-returning call's storage is shared as the hidden
                     # reference directly (parity with hidden_ref_arg's
@@ -20233,6 +20417,18 @@ class CodeGen:
                 if self.decays_to(
                     arg_tvs[i].type, params[i], mut=True
                 ) and not isinstance(expr.args[i], StrLit):
+                    continue
+                if not isinstance(expr.args[i], StrLit) and (
+                    self.decay_view_target(
+                        arg_tvs[i].type, params[i], mut=True
+                    )
+                    is not None
+                ):
+                    # SIE-187: the decay+view reading is emittable too. The
+                    # fatness gate already ran inside resolve_bindings' view
+                    # upcast (concrete_view_target / is_fat_base): a thin
+                    # position never produced bindings, so this candidate's
+                    # viewed positions are exactly emission's.
                     continue
                 ok = False
                 break
