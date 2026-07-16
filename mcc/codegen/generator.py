@@ -857,6 +857,16 @@ class CodeGen:
         # (dynamic) call to one cleanly -- instead of slicing to the base member
         # -- rather than crash slot construction. Populated with the two above.
         self.generic_override_families: set[tuple[str, str]] = set()
+        # SIE-186: (introducer, method, pattern) slots where some override
+        # declares a COVARIANT return -- a reference to a declared `extends`
+        # descendant of the base member's return. The slot's return ABI stays
+        # the base's two-word fat view; a hop whose spelling is a THIN leaf
+        # reference is adapted at the boundaries (the slot thunk widens the
+        # winner's thin result into the view, the dispatch site narrows the
+        # view back to the resolved spelling). Populated by
+        # :meth:`validate_dispatch_overrides`; read by
+        # :meth:`build_dispatch_thunk` and :meth:`dispatch_indirect`.
+        self.covariant_ret_slots: set[tuple[str, str, tuple]] = set()
         # SIE-101 Stage 2 emitted vtables: concrete type (mangled) name -> the
         # i8* constant pointing at its dispatch table, built on demand at the
         # first fat-view formation of that type (:meth:`vtable_for`).
@@ -1831,9 +1841,11 @@ class CodeGen:
         """A member's return convention as a comparable tuple.
 
         ``(own?, reference?, return-type key)`` -- the return half of a
-        member's ABI. Two members share a dispatch slot only if these agree:
-        the slot's indirect call is typed with the base member's return type, so
-        a mismatching override would reinterpret the returned bytes. The type
+        member's ABI. Two members share a dispatch slot only if these agree,
+        or differ by the one legal relaxation -- a covariant reference return
+        (:meth:`covariant_return_ok`): the slot's indirect call is typed with
+        the base member's return type, so any other mismatching override
+        would reinterpret the returned bytes. The type
         key is the resolved-type spelling where it resolves; for a
         struct-generic member whose return names the struct parameter (``-> T``,
         unbound at this pre-body pass) it falls back to the raw ``TypeRef``
@@ -1847,6 +1859,45 @@ class CodeGen:
         except LangError:
             key = ("<unresolved>", str(func.ret_type))
         return (func.own_return, func.mut_return, key)
+
+    def covariant_return_ok(self, base: Func, over: Func) -> bool:
+        """Whether ``over``'s return covariantly narrows ``base``'s (SIE-186).
+
+        Spelling-level covariance: an ``@override`` may declare a return that
+        is a reference to a declared ``extends`` descendant of the base
+        member's reference return. The narrowing lives only in the checker --
+        through the shared slot the override still returns the base-shaped
+        fat view (the slot thunk widens a thin leaf result, see
+        :meth:`build_dispatch_thunk`) -- so the relaxation is ABI-safe.
+        Only reference returns participate (a by-value return of a descendant
+        would slice through the slot), the ``own`` marker must agree, and
+        both spellings must resolve to concrete structs here (a
+        struct-generic return that does not resolve at this pre-body pass
+        keeps the same-spelling requirement).
+
+        Args:
+            base: The base member's rebased clone.
+            over: The ``@override`` candidate.
+
+        Returns:
+            ``True`` when the differing return conventions are the legal
+            covariant pair.
+        """
+        if not (base.mut_return and over.mut_return):
+            return False
+        if base.own_return != over.own_return:
+            return False
+        saved = self.current_source
+        try:
+            self.current_source = base.source
+            base_ret = self.lang_type(base.ret_type, base.line)
+            self.current_source = over.source
+            over_ret = self.lang_type(over.ret_type, over.line)
+        except LangError:
+            return False
+        finally:
+            self.current_source = saved
+        return self.receiver_upcast_target(over_ret, base_ret) is not None
 
     def method_type_params(self, func: Func) -> list[str]:
         """A method's OWN type parameters -- those beyond its struct's.
@@ -1962,10 +2013,14 @@ class CodeGen:
         A base-chain ``@override`` shares its base member's vtable slot, so the
         two must be ABI-compatible where the slot is concerned:
 
-          * **return convention** -- identical own/reference/type. The slot's
-            indirect call is typed with the base member's return type, so a
-            differing override (``int32`` base, ``float64`` override) would
-            reinterpret the returned bytes as garbage.
+          * **return convention** -- identical own/reference/type, with one
+            relaxation: a reference return may covariantly narrow to a
+            reference to a declared ``extends`` descendant of the base's
+            return (SIE-186, :meth:`covariant_return_ok`). The narrowing is
+            spelling-level only -- the slot's return ABI stays the base's --
+            so any other difference (``int32`` base, ``float64`` override; a
+            by-value descendant, which would slice) would reinterpret the
+            returned bytes as garbage and is rejected.
           * **every parameter's passing convention** (the receiver and each
             other argument) -- by-value vs by-reference, ``const`` vs writable,
             ``own``, ``@nonnull``, ``@noalias``. The slot's indirect call and
@@ -2001,16 +2056,20 @@ class CodeGen:
             if self.method_type_params(func):
                 continue  # a method-owned generic: judged at the call site
             over_abi = self.return_abi(func)
+            covariant = False
             for base in self.override_targets(func):
                 if self.return_abi(base) != over_abi:
-                    raise LangError(
-                        f"@override method {func.name!r} returns "
-                        f"{self.return_abi(func)[2]} but the base member it "
-                        f"overrides returns {self.return_abi(base)[2]}; an "
-                        "override must return the same type (they share one "
-                        "dispatch slot)",
-                        func.line,
-                    )
+                    if not self.covariant_return_ok(base, func):
+                        raise LangError(
+                            f"@override method {func.name!r} returns "
+                            f"{self.return_abi(func)[2]} but the base member "
+                            f"it overrides returns {self.return_abi(base)[2]};"
+                            " an override must return the same type, or a "
+                            "reference to a declared descendant of the base's"
+                            " reference return (they share one dispatch slot)",
+                            func.line,
+                        )
+                    covariant = True
                 # override_pattern matched every parameter (it spells them all),
                 # so the base clone and the override have equal arity here.
                 for i in range(len(func.params)):
@@ -2020,6 +2079,16 @@ class CodeGen:
                             f"@override method {func.name!r} {mismatch}",
                             func.line,
                         )
+            if covariant:
+                # SIE-186: remember the slot, so the thunk builder and the
+                # dispatch site adapt a thin covariant spelling to the slot's
+                # base-shaped fat return.
+                pattern = self.dispatch_pattern(func)
+                introducer = self.overload_introducer(
+                    func.name.split("::", 1)[0], method, pattern
+                )
+                if introducer is not None:
+                    self.covariant_ret_slots.add((introducer, method, pattern))
 
     def compute_dispatch_families(self):
         """Record which overloads earn a vtable slot (SIE-101 Stage 2).
@@ -2227,6 +2296,17 @@ class CodeGen:
         the winner's own receiver is fat (so a re-dispatch inside it reaches
         the same dynamic type) or passing the bare pointer to a thin leaf.
 
+        The RETURN adapts too (SIE-186): a covariant slot's return ABI is
+        the base member's two-word fat view, so a winner whose covariant
+        spelling is a THIN leaf reference (its ``-> &leaf`` return is
+        one word because nothing extends the leaf in its closure) has its
+        result widened here -- paired with the leaf type's own static table
+        (a thin reference's referent is exactly its spelling). A winner
+        whose return is already fat passes through unchanged: every fat
+        view is the same two-word layout, so the slot's callers read it
+        as the base's shape via the function-pointer bitcast they already
+        perform.
+
         Args:
             concrete: The runtime concrete type owning this table.
             method: The family's method name.
@@ -2247,11 +2327,25 @@ class CodeGen:
         winner_arg_irs = list(winner.function_type.args)
         other_irs = winner_arg_irs[1:]
         fat_recv_ir = self.fat_ref_ir(concrete.ir)
-        thunk_ty = ir.FunctionType(
-            winner.function_type.return_type, [fat_recv_ir, *other_irs]
+        # SIE-186: a covariant slot returns the base-shaped fat view, so a
+        # winner spelling a THIN leaf reference is widened on the way out.
+        introducer = self.overload_introducer(
+            concrete.template or concrete.name, method, pattern
         )
+        widen_ret = (
+            introducer, method, pattern
+        ) in self.covariant_ret_slots and symbol not in self.fat_ret
+        if widen_ret:
+            ret_ir = self.fat_ref_ir(winner.function_type.return_type.pointee)
+        else:
+            ret_ir = winner.function_type.return_type
+        thunk_ty = ir.FunctionType(ret_ir, [fat_recv_ir, *other_irs])
         thunk = ir.Function(self.module, thunk_ty, name=mangled)
         thunk.linkage = "linkonce_odr"
+        # Register before the body: the dedup lookup above must hit if table
+        # construction re-enters (a covariant widen asks for a vtable while
+        # this thunk is being built).
+        self.funcs[mangled] = thunk
         saved_builder = self.builder
         try:
             self.builder = ir.IRBuilder(thunk.append_basic_block("entry"))
@@ -2273,6 +2367,15 @@ class CodeGen:
             else:
                 recv = self.builder.bitcast(obj, winner_recv_ir)  # thin W*
             result = self.builder.call(winner, [recv, *list(thunk.args)[1:]])
+            if widen_ret:
+                # The winner returned a thin leaf pointer: pair it with the
+                # leaf's own static table (nothing extends the leaf in the
+                # winner's closure, so the referent IS its spelling; a type
+                # with no dispatch slots carries a null word, as everywhere).
+                leaf_ret, _, _ = self.signatures[symbol]
+                result = self.wrap_fat_view(
+                    result, self.dispatch_table_of(None, leaf_ret)
+                )
             if isinstance(thunk_ty.return_type, ir.VoidType):
                 self.builder.ret_void()
             else:
@@ -2302,17 +2405,21 @@ class CodeGen:
             return cached
         i8ptr = ir.IntType(8).as_pointer()
         specs = self.dispatch_slot_specs(concrete.template or concrete.name)
+        # Create and cache the global BEFORE building the thunks: a thunk
+        # that widens a covariant thin return (SIE-186) asks for this very
+        # table (the leaf's own), and the early cache turns that recursion
+        # into a plain hit instead of a duplicate global.
+        arr_ty = ir.ArrayType(i8ptr, len(specs))
+        glob = ir.GlobalVariable(self.module, arr_ty, name=f"{mangled}.vtable")
+        glob.linkage = "linkonce_odr"
+        glob.global_constant = True
+        table = glob.bitcast(i8ptr)
+        self.vtables[mangled] = table
         entries = [
             self.build_dispatch_thunk(concrete, method, pattern).bitcast(i8ptr)
             for method, pattern, _introducer in specs
         ]
-        arr_ty = ir.ArrayType(i8ptr, len(entries))
-        glob = ir.GlobalVariable(self.module, arr_ty, name=f"{mangled}.vtable")
-        glob.linkage = "linkonce_odr"
-        glob.global_constant = True
         glob.initializer = ir.Constant(arr_ty, entries)
-        table = glob.bitcast(i8ptr)
-        self.vtables[mangled] = table
         return table
 
     def dispatch_indirect(
@@ -2359,17 +2466,34 @@ class CodeGen:
             return None
         i8ptr = ir.IntType(8).as_pointer()
         table = self.param_tables[recv.name]
+        # SIE-186: a covariant slot's return ABI is the base's two-word fat
+        # view. When the statically-resolved hop spells a THIN leaf reference
+        # (its own return is one word), the indirect call must still be typed
+        # two words wide -- the thunk in the slot returns the view -- and the
+        # result narrows back to the resolved spelling: the object pointer is
+        # the view's first word, and the table drops (nothing extends the
+        # leaf, so its referent is exactly its spelling).
+        introducer = self.overload_introducer(qualifier, method, pattern)
+        narrow_ret = (
+            introducer, method, pattern
+        ) in self.covariant_ret_slots and callee.name not in self.fat_ret
+        if narrow_ret:
+            ret_ir = self.fat_ref_ir(callee.function_type.return_type.pointee)
+        else:
+            ret_ir = callee.function_type.return_type
         # The slot's function type: the fat receiver (as widened at this site)
-        # plus the other argument types, returning the callee's return type.
+        # plus the other argument types, returning the callee's return type
+        # (widened to the slot's view shape for a thin covariant spelling).
         # Layout-compatible with the concrete thunk stored in the slot.
-        slot_ty = ir.FunctionType(
-            callee.function_type.return_type, [a.type for a in args]
-        )
+        slot_ty = ir.FunctionType(ret_ir, [a.type for a in args])
         slots = self.builder.bitcast(table, i8ptr.as_pointer())
         entry = self.builder.gep(slots, [ir.Constant(ir.IntType(32), slot_idx)])
         raw_fn = self.builder.load(entry)
         fnptr = self.builder.bitcast(raw_fn, slot_ty.as_pointer())
-        return self.emit_call(fnptr, args)
+        raw = self.emit_call(fnptr, args)
+        if narrow_ret:
+            raw = self.builder.extract_value(raw, 0)
+        return raw
 
     def dispatch_table_of(
         self, expr, concrete: "LangType | None",
@@ -11952,9 +12076,15 @@ class CodeGen:
         root must be caller-reachable -- see
         :meth:`check_mut_return_formation`), storage legality (reusing the
         ``mut``-argument rules: no ``const``, ``@volatile``, ``@packed``, or
-        ``@nonnull``-parameter storage), and the exact-type rule every
-        ``mut`` reference obeys (the caller writes through it, so nothing
-        can adapt or widen).
+        ``@nonnull``-parameter storage), and the type rule: the returned
+        lvalue must be exactly the declared return type, or (SIE-186) a
+        declared ``extends`` descendant of it -- the return-position
+        reference upcast, mirroring the argument side: the derived storage
+        reinterprets as the base prefix and the fat wrap below pairs it with
+        the DERIVED type's table, so the returned view keeps dispatching the
+        runtime type. A reference never slices, which is what makes the
+        upcast legal where a by-value ``-> T`` return still requires the
+        explicit ``as``.
 
         Args:
             stmt: The ``Return`` node (``stmt.value`` is not ``None``).
@@ -11973,9 +12103,19 @@ class CodeGen:
             stmt.value, t, align, volatile, stmt.line, what="a reference return"
         )
         if t != self.ret_type:
-            raise LangError(
-                f"reference return: expected a {self.ret_type} lvalue, got {t}",
-                stmt.line,
+            if self.receiver_upcast_target(t, self.ret_type) is None:
+                raise LangError(
+                    f"reference return: expected a {self.ret_type} lvalue, "
+                    f"got {t}",
+                    stmt.line,
+                )
+            # SIE-186: a derived lvalue returns as its declared base --
+            # reinterpret the storage as the base prefix; the wrap below
+            # pairs it with the derived table (``static=t``), so the view
+            # dispatches the runtime type. A descendant in this closure means
+            # the base is extended here, so the return is always fat.
+            addr = self.builder.bitcast(
+                addr, strip_const(self.ret_type).ir.as_pointer()
             )
         if self.ret_fat:
             # SIE-101: the return is a two-word {address, table} view. The
@@ -11985,9 +12125,10 @@ class CodeGen:
             # armed -- consulted only when the returned lvalue IS a call's
             # result, so a call that merely fed a subexpression, or an
             # exact-typed field carved out of one, keeps the static table),
-            # and any other lvalue is an object of exactly the return's
-            # static type (the exact-type rule above), whose table is its
-            # own vtable (null when the base has no dispatch slots).
+            # and any other lvalue is an object of its EVALUATED static type
+            # (``static=t`` -- the return's own type, or the derived type an
+            # upcast just reinterpreted), whose table is its own vtable (null
+            # when that type has no dispatch slots).
             addr = self.wrap_fat_view(
                 addr,
                 self.dispatch_table_of(

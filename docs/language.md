@@ -273,7 +273,13 @@ of a legal chain. The storage rules `&` arguments obey apply at the
 `return` too: `@volatile` storage, `@packed` fields, and read-only
 `const T` lvalues are rejected, and the lvalue's type must match the
 declared return **exactly** (the caller writes through the reference, so
-nothing adapts or widens).
+nothing adapts or widens) — with one exception mirroring the argument
+side: a struct lvalue returns as a reference to any of its **declared
+[`extends`](#extends-structs) ancestors**, the [return-position reference
+upcast](#polymorphic-base-views). Like the argument-side view, the upcast
+reinterprets the derived storage as the base prefix in place — a
+reference never slices — while a *by-value* `-> T` return of a derived
+value still requires the explicit `as`.
 
 `-> &` works on generics (`fn pick<T>(a: &T, b: &T, f: bool) ->
 &T`), with the formation and void rules checked per instance. It is
@@ -2348,6 +2354,22 @@ relaxation is *narrowing* a writable base
 reference to a read-only override one (same pointer ABI, and the override merely
 promises to mutate less). Every violation is a compile error.
 
+**Covariant override returns** are the return side's one relaxation: an
+override may declare a return that is a **reference to a declared `extends`
+descendant** of the base member's reference return (`-> &b` over a base's
+`-> &a`, given `b extends a`). The narrowing is **spelling-level only** — the
+shared slot's return ABI stays the base's fat view forever, and every override
+hands the base-shaped view back through it (a thin leaf spelling is widened at
+the slot boundary), so the relaxation never reinterprets bytes. What changes
+is the checker's typing at *static* call sites: a direct call on a concrete
+`b` receiver types `me()`'s result as `&b`, so derived fields are reachable
+without a cast, while a call through a base view still types the result `&a`
+(and its dispatch table still carries the runtime type). Only references
+participate — a *by-value* return of a descendant would slice through the slot
+and stays rejected — and an [interface stub](#interface-files) re-emits the
+covariant spelling, so static callers importing through a `.mci` keep the
+narrowing.
+
 **Copying out of a view is prefix extraction.** Reading a value *out* of a fat
 view yields a plain, byte-exact base value that carries **no** table:
 
@@ -2381,9 +2403,14 @@ the same two-word `{object, table}` view a fat parameter is, so a returned
 reference keeps its dispatch table across the hop: a function that forwards a
 view parameter (`fn relay(x: &a) -> &a { return x; }`) hands back the
 *runtime* type's table, `relay(obj).kind()` dispatches the derived override,
-and re-lending or re-returning the result forwards the same view. Any other
-returned lvalue is an object of exactly the return's static type (the
-exact-type rule), so it carries that type's own table. The lvalue surfaces
+and re-lending or re-returning the result forwards the same view. **The
+return position upcasts like an argument**: a lvalue of a declared
+*descendant* of the return type forms the view at the `return` site
+(`fn first(x: &b, y: &b) -> &a { return x; }`), reinterpreting the derived
+storage as the base prefix and pairing it with the **derived** type's table —
+so the caller's dispatch on the result reaches the runtime type. Any other
+returned lvalue is an object of exactly its evaluated static type, so it
+carries that type's own table. The lvalue surfaces
 are unchanged: assignment and projection through the result consume the
 object pointer exactly as a thin reference return's. **Binding the result to
 a local does not preserve the view**: references are not storable types, so
