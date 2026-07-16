@@ -2173,11 +2173,11 @@ prefix in place** — the same storage viewed as the base, so a `self: &T`
 method's writes land in the derived value's leading fields. Every receiver is
 reference-shaped (a by-value copy receiver is rejected precisely because it
 would slice the derived value), so the base prefix is always lent, never
-copied. Since [polymorphic base views](#polymorphic-base-views) (SIE-101 Stage
-2) the same derived→base reference upcast applies to **any** `&<extended base>`
+copied. With [polymorphic base views](#polymorphic-base-views) the same
+derived→base reference upcast applies to **any** `&<extended base>`
 parameter, at any position — a reference upcast is a view, never a slice — so a
 free function `fn f(const a: &A)` accepts a derived argument too. **Overload
-resolution ranks the conversion** (SIE-184/SIE-181): a derived argument
+resolution ranks the conversion**: a derived argument
 satisfies an overloaded candidate's `&base` reference position, and a generic
 `&point<T>` reference parameter infers `T` through the derived argument's
 declared base instantiation (`f(p)` with a `pointf` binds `T = float64`). The
@@ -2300,9 +2300,9 @@ whole program, while a separately compiled interface stub is pinned to the
 closure it was built with (below).
 
 **The view forms at the derived→base conversion.** Passing a derived value
-where a fat `&A` is expected — a method receiver, or (since Stage 2) **any**
-`&A` parameter — forms the fat view: the object pointer plus that object's
-table. The reference upcast is a view, never a copy, so it is implicit at any
+where a fat `&A` is expected — a method receiver, or **any** `&A` parameter —
+forms the fat view: the object pointer plus that object's table. The
+reference upcast is a view, never a copy, so it is implicit at any
 argument position (a by-value argument still needs an explicit
 [`as`](#casts) — that conversion slices). A proven-non-null `derived*`
 argument [decays](#pointer-decay-into-constreference-parameters) into the
@@ -2426,7 +2426,6 @@ its definition that disagree on a reference's fatness (they can only diverge
 across this boundary) are rejected as a signature mismatch, never silently
 miscompiled.
 
-**Constructs a single slot cannot represent are rejected, not miscompiled.**
 **A reference return carries the view.** A `-> &T` return of a fat base is
 the same two-word `{object, table}` view a fat parameter is, so a returned
 reference keeps its dispatch table across the hop: a function that forwards a
@@ -2452,6 +2451,7 @@ value carrying no table, and `r.kind()` binds statically — exactly as a
 `let` from a view parameter. The view survives only while the result stays
 an expression: chain, re-lend, or re-return it.
 
+**Constructs a single slot cannot represent are rejected, not miscompiled.**
 Two cases are clean compile errors for now, each liftable in a later stage: a
 fat reference — a `&A` parameter or a `-> &A` return — may **not** appear in a
 [function-pointer type](#function-pointers), spelled or inferred from a
