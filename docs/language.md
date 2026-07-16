@@ -279,7 +279,11 @@ side: a struct lvalue returns as a reference to any of its **declared
 upcast](#polymorphic-base-views). Like the argument-side view, the upcast
 reinterprets the derived storage as the base prefix in place — a
 reference never slices — while a *by-value* `-> T` return of a derived
-value still requires the explicit `as`.
+value still requires the explicit `as`. The upcast needs the fat
+return's table word to carry the derived type, so a **thin** reference
+return — possible only for a body compiled under an
+[interface stub](#interface-files)'s pinned closure, such as a generic
+shipped in a `.mci` that never saw the extension — rejects it.
 
 `-> &` works on generics (`fn pick<T>(a: &T, b: &T, f: bool) ->
 &T`), with the formation and void rules checked per instance. It is
@@ -2368,7 +2372,14 @@ without a cast, while a call through a base view still types the result `&a`
 participate — a *by-value* return of a descendant would slice through the slot
 and stays rejected — and an [interface stub](#interface-files) re-emits the
 covariant spelling, so static callers importing through a `.mci` keep the
-narrowing.
+narrowing. The boundary widening leans on the whole program agreeing that a
+thin spelling's referent is exactly its type, so a slot member whose reference
+return was **pinned thin by its interface's closure** (no extension of the
+return type was visible when the stub was compiled) is incompatible with a
+program that *does* extend that type: the one-word return cannot carry the
+runtime type, and the disagreement is a compile error — like every pinned-ABI
+drift across the `.mci` boundary — asking for the interface to be recompiled
+with the extension in its closure.
 
 **Copying out of a view is prefix extraction.** Reading a value *out* of a fat
 view yields a plain, byte-exact base value that carries **no** table:

@@ -1899,6 +1899,63 @@ class CodeGen:
             self.current_source = saved
         return self.receiver_upcast_target(over_ret, base_ret) is not None
 
+    def check_covariant_member_width(self, func: Func, member: Func):
+        """Reject a covariant-slot member whose pinned thin return the
+        program outgrew (SIE-186).
+
+        A covariant slot hands the base-shaped fat view back through every
+        hop; a member whose own return spelling is THIN is adapted at the
+        slot boundaries -- the thunk widens its result with the referent
+        type's static table, the dispatch site drops the table word -- which
+        is sound only while nothing in the program extends the return type
+        (then the referent really is its spelling). A member compiled into
+        an ``.mci`` stub pins its return width to the stub's import closure
+        (:meth:`is_fat_base`), so a consumer that extends the type holds
+        objects the member's one-word return cannot describe: the widened
+        view would carry a stale static table, the narrowed result would
+        drop the runtime one -- a silent mis-dispatch either way. Like
+        every pinned-width disagreement across the interface boundary
+        (:meth:`pair_prototype`), it is a hard error.
+
+        Args:
+            func: The ``@override`` under validation (the error site).
+            member: A member sharing its slot (possibly ``func`` itself).
+
+        Raises:
+            LangError: When ``member``'s return is pinned thin but its type
+                is extended somewhere in the merged program.
+        """
+        if not member.mut_return:
+            return
+        saved = self.current_source
+        try:
+            self.current_source = member.source
+            ret = strip_const(self.lang_type(member.ret_type, member.line))
+        except LangError:
+            return  # a struct-generic spelling: no covariance, nothing to pin
+        finally:
+            self.current_source = saved
+        if not is_struct(ret):
+            return
+        name = ret.template or ret.name
+        if self.is_fat_base(name, member.source) or not self.is_fat_base(
+            name, None
+        ):
+            return
+        # A base target is a rebased clone carrying the derived name, so
+        # point at it by role, not by name.
+        member_desc = "it" if member is func else "the base member it overrides"
+        raise LangError(
+            f"@override method {func.name!r} occupies a covariant dispatch "
+            f"slot, but {member_desc} returns a thin &{name} -- no "
+            f"extension of {name!r} is visible in its interface's import "
+            f"closure, while this program extends {name!r}; the one-word "
+            "return cannot carry the runtime type across the interface "
+            "boundary (recompile the interface with the extension in its "
+            "closure)",
+            func.line,
+        )
+
     def method_type_params(self, func: Func) -> list[str]:
         """A method's OWN type parameters -- those beyond its struct's.
 
@@ -2057,7 +2114,8 @@ class CodeGen:
                 continue  # a method-owned generic: judged at the call site
             over_abi = self.return_abi(func)
             covariant = False
-            for base in self.override_targets(func):
+            targets = self.override_targets(func)
+            for base in targets:
                 if self.return_abi(base) != over_abi:
                     if not self.covariant_return_ok(base, func):
                         raise LangError(
@@ -2089,6 +2147,13 @@ class CodeGen:
                 )
                 if introducer is not None:
                     self.covariant_ret_slots.add((introducer, method, pattern))
+                # ... and that adaptation is only sound while each member's
+                # pinned return width agrees with the whole program's view
+                # of its return type: an .mci-pinned THIN return whose type
+                # this program extends cannot carry the runtime type.
+                self.check_covariant_member_width(func, func)
+                for base in targets:
+                    self.check_covariant_member_width(func, base)
 
     def compute_dispatch_families(self):
         """Record which overloads earn a vtable slot (SIE-101 Stage 2).
@@ -2136,6 +2201,11 @@ class CodeGen:
             if introducer is not None:
                 self.dispatch_families.add((introducer, method))
                 self.dispatch_overloads.add((introducer, method, pattern))
+                if (introducer, method, pattern) in self.covariant_ret_slots:
+                    # SIE-186: an exact-spelling override sharing a covariant
+                    # slot (validated without the covariant flag) still has
+                    # its pinned return width checked against the program.
+                    self.check_covariant_member_width(func, func)
 
     def dispatch_slot_specs(
         self, concrete_name: str
@@ -2369,9 +2439,11 @@ class CodeGen:
             result = self.builder.call(winner, [recv, *list(thunk.args)[1:]])
             if widen_ret:
                 # The winner returned a thin leaf pointer: pair it with the
-                # leaf's own static table (nothing extends the leaf in the
-                # winner's closure, so the referent IS its spelling; a type
-                # with no dispatch slots carries a null word, as everywhere).
+                # leaf's own static table (nothing extends the leaf anywhere
+                # in the program -- :meth:`check_covariant_member_width`
+                # rejects a pinned-thin member the program outgrew -- so the
+                # referent IS its spelling; a type with no dispatch slots
+                # carries a null word, as everywhere).
                 leaf_ret, _, _ = self.signatures[symbol]
                 result = self.wrap_fat_view(
                     result, self.dispatch_table_of(None, leaf_ret)
@@ -2472,7 +2544,8 @@ class CodeGen:
         # two words wide -- the thunk in the slot returns the view -- and the
         # result narrows back to the resolved spelling: the object pointer is
         # the view's first word, and the table drops (nothing extends the
-        # leaf, so its referent is exactly its spelling).
+        # leaf anywhere in the program, per check_covariant_member_width, so
+        # its referent is exactly its spelling).
         introducer = self.overload_introducer(qualifier, method, pattern)
         narrow_ret = (
             introducer, method, pattern
@@ -12084,7 +12157,9 @@ class CodeGen:
         the DERIVED type's table, so the returned view keeps dispatching the
         runtime type. A reference never slices, which is what makes the
         upcast legal where a by-value ``-> T`` return still requires the
-        explicit ``as``.
+        explicit ``as``. The upcast needs the fat return's table word to
+        carry the derived type, so a THIN reference return (possible only
+        under an ``.mci`` stub's pinned closure) rejects it.
 
         Args:
             stmt: The ``Return`` node (``stmt.value`` is not ``None``).
@@ -12109,11 +12184,27 @@ class CodeGen:
                     f"got {t}",
                     stmt.line,
                 )
+            if not self.ret_fat:
+                # A THIN return has no table word to carry the derived type:
+                # an ordinary `.mc` upcast is always fat (the descendant's
+                # `extends` makes the base a fat one program-wide), but a
+                # body compiled under an `.mci` stub's pinned closure (a
+                # generic shipped in an interface) can spell a thin return
+                # whose type the consuming program extends -- upcasting
+                # through it would silently drop the runtime type.
+                raise LangError(
+                    f"reference return: a {t} lvalue upcasts to the "
+                    f"declared {self.ret_type} only through a fat "
+                    f"reference, and this return is thin -- no extension "
+                    f"of {self.ret_type} is visible in its declaring "
+                    "closure, so the one-word return cannot carry the "
+                    "runtime type",
+                    stmt.line,
+                )
             # SIE-186: a derived lvalue returns as its declared base --
             # reinterpret the storage as the base prefix; the wrap below
             # pairs it with the derived table (``static=t``), so the view
-            # dispatches the runtime type. A descendant in this closure means
-            # the base is extended here, so the return is always fat.
+            # dispatches the runtime type.
             addr = self.builder.bitcast(
                 addr, strip_const(self.ret_type).ir.as_pointer()
             )

@@ -269,7 +269,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   own narrower reference (derived fields reachable without a cast) and a
   `.mci` stub re-emits the covariant spelling so importers keep the
   narrowing; a *by-value* descendant return would slice through the slot and
-  stays rejected — and pass **every parameter** — the
+  stays rejected, and a covariant slot member whose reference return was
+  **pinned thin by its interface's closure** is rejected in a program that
+  extends that return type (the one-word return cannot carry the runtime
+  type across the `.mci` boundary — recompile the interface with the
+  extension in its closure) — and pass **every parameter** — the
   receiver and each argument — the same way (by value vs. by reference, `const`
   vs. writable, `own`, `@nonnull`, `@noalias`), since the slot's indirect call
   and the stored thunk must agree on each value's ABI. Widening a read-only
@@ -287,7 +291,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `return` site (`fn first(x: &b, y: &b) -> &a { return x; }`), the derived
   storage reinterpreted as the base prefix and paired with the **derived**
   type's table — a reference upcast never slices, while a by-value `-> T`
-  return of a derived value still requires the explicit `as`; any other
+  return of a derived value still requires the explicit `as`, and the upcast
+  requires the **fat** return's table word (a thin reference return, possible
+  only under an `.mci` stub's pinned closure, rejects it); any other
   returned lvalue carries its own evaluated static type's table.
   **Pointer decay composes with the view**
   (SIE-187): a proven-non-null `derived*` argument at a fat `&base` /

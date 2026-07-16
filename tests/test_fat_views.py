@@ -2381,6 +2381,108 @@ def test_consumer_against_a_covariant_stub_keeps_the_narrowing(tmp_path):
     assert "load i8*, i8**" in via  # the me() slot dispatches indirectly
 
 
+def test_extending_a_stubs_covariant_thin_return_is_rejected(tmp_path):
+    # The stub pinned b::me's covariant `-> &b` THIN (nothing extends b in
+    # its own closure). A consumer that declares `c extends b` holds objects
+    # that one-word return cannot describe: the slot thunk would stamp b's
+    # STATIC table on a returned reference whose runtime referent is a c,
+    # silently mis-dispatching -- so the pinned-width disagreement is a
+    # compile error, like every other ABI drift across the .mci boundary.
+    (tmp_path / "geo.mci").write_text(
+        "struct a { n: int32; }\n"
+        "struct b extends a { m: int32; }\n"
+        "fn a::kind(const self: &a) -> int32;\n"
+        "@override fn b::kind(const self: &b) -> int32;\n"
+        "fn a::me(self: &a) -> &a;\n"
+        "@override fn b::me(self: &b) -> &b;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "geo";\n'
+        "struct c extends b { k: int32; }\n"
+        "@override fn c::kind(const self: &c) -> int32 { return 3; }\n"
+        "fn via(x: &a) -> int32 { return x.me().kind(); }\n"
+        "fn main() -> int32 {\n"
+        "    let obj: c = { n = 0, m = 0, k = 0 };\n"
+        "    return via(obj);\n"
+        "}\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::me' occupies a covariant dispatch slot,"
+        r" but it returns a thin &b",
+    ):
+        compile_to_ir(main, (tmp_path,))
+
+
+def test_extending_a_stubs_thin_base_return_under_covariance_is_rejected(
+    tmp_path,
+):
+    # The other face: the consumer's own covariant override is fine, but the
+    # BASE member it overrides was pinned with a thin `-> &x` (the stub's
+    # closure sees no extension of x) while the consumer declares
+    # `y extends x`. A dispatch through the base view would type the slot
+    # call by the pinned-thin callee and drop the runtime table on the way
+    # out -- rejected instead.
+    (tmp_path / "geo2.mci").write_text(
+        "struct x { v: int32; }\n"
+        "struct a { n: int32; store: x; }\n"
+        "struct a2 extends a { p: int32; }\n"
+        "fn a::get(self: &a) -> &x;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "geo2";\n'
+        "struct y extends x { w: int32; }\n"
+        "fn x::tag(const self: &x) -> int32 { return 7; }\n"
+        "@override fn y::tag(const self: &y) -> int32 { return 8; }\n"
+        "struct b extends a { m: int32; store2: y; }\n"
+        "@override fn b::get(self: &b) -> &y { return self.store2; }\n"
+        "fn via(q: &a) -> int32 { return q.get().tag(); }\n"
+        "fn main() -> int32 {\n"
+        "    let obj: b = { n = 0, store = { v = 0 }, m = 0,\n"
+        "                   store2 = { v = 0, w = 0 } };\n"
+        "    return via(obj);\n"
+        "}\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::get' occupies a covariant dispatch "
+        r"slot, but the base member it overrides returns a thin &x",
+    ):
+        compile_to_ir(main, (tmp_path,))
+
+
+def test_stub_generic_thin_return_rejects_the_upcast(tmp_path):
+    # A generic body shipped in a stub instantiates under the STUB's pinned
+    # closure: `pick<a, b>`'s `-> &a` return is thin there (the stub sees no
+    # extension of a), so the return-position upcast has no table word to
+    # carry b -- rejected, where it would otherwise silently devirtualize
+    # the caller's dispatch to a::kind.
+    (tmp_path / "geo3.mci").write_text(
+        "fn pick<T, U>(x: &T, y: &U) -> &T { return y; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "geo3";\n'
+        "struct a { n: int32; }\n"
+        "struct b extends a { m: int32; }\n"
+        "fn a::kind(const self: &a) -> int32 { return 1; }\n"
+        "@override fn b::kind(const self: &b) -> int32 { return 2; }\n"
+        "fn main() -> int32 {\n"
+        "    let u: a = { n = 0 };\n"
+        "    let v: b = { n = 0, m = 0 };\n"
+        "    return pick(u, v).kind();\n"
+        "}\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"reference return: a b lvalue upcasts to the declared a only"
+        r" through a fat reference, and this return is thin",
+    ):
+        compile_to_ir(main, (tmp_path,))
+
+
 def test_stdlib_generic_container_instantiates_a_fat_reference_return():
     # `list<a>::at` instantiated at a fat base widens its `-> &T` return per
     # instance: element reads dispatch the element's own (base) table, and
