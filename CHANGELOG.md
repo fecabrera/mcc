@@ -221,10 +221,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   so ordinary `const self: &T` container methods are unaffected). Fatness is a
   property of the base **type**, independent of whether any family is
   overridden, so adding the first override to a hierarchy never changes a
-  reference's width. Dispatch is emitted only for a family with an `@override`
-  chain (a fixed table slot at the family's introducing base, prefix-compatible
-  down the chain); a non-overridden family, and a receiver of statically known
-  concrete type, stay direct calls (**devirtualized**). Copying a value *out*
+  reference's width. Dispatch is emitted only for a method with an `@override`
+  chain (a fixed table slot at the overload's introducing base, prefix-compatible
+  down the chain — overloads of one method name take separate slots keyed by the
+  resolved signature, so a call dispatches the exact sibling picked); a
+  non-overridden method, and a receiver of statically known concrete type, stay
+  direct calls (**devirtualized**). Copying a value *out*
   of a view is **prefix extraction** — a byte-exact base value carrying no
   table, so behavioral slicing is impossible. **ABI implications (BREAKING):**
   every `&A` to an extended base `A` is now a two-word argument (the stdlib

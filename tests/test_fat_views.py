@@ -596,3 +596,111 @@ def test_mci_proto_def_fatness_mismatch_is_a_clean_error(tmp_path):
         match=r"definition of 'viewit' does not match its prototype",
     ):
         compile_to_ir(main, (tmp_path,))
+
+
+# --- S2.6: overload-aware slots + rvalue table sourcing -----------------------
+
+
+def test_overloaded_family_dispatches_the_resolved_sibling():
+    # Two overloads of one method name earn DISTINCT slots. `b` overrides only
+    # the no-arg `pick`; a `pick(5)` through a base view must resolve and
+    # dispatch the (non-overridden) `pick(int32)` overload -- returning 15 --
+    # not silently invoke the wrong-arity no-arg override (which returned 2
+    # when overloads shared a single method-name-keyed slot).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::pick(const self: &a) -> int32 { return 1; }
+        fn a::pick(const self: &a, x: int32) -> int32 { return x + 10; }
+        @override fn b::pick(const self: &b) -> int32 { return 2; }
+        fn via(const x: &a) -> int32 { return x.pick(5); }
+        fn main() -> int32 {
+            let obj: b = { n = 0, m = 0 };
+            return via(obj);
+        }
+        """
+    ) == 15
+
+
+def test_each_overload_dispatches_to_its_own_override():
+    # Both overloads overridden on `b`: each base-view call must reach the
+    # sibling with the matching signature -- `pick()` -> b's no-arg (2),
+    # `pick(5)` -> b's one-arg (105) -- so the sum is 107, proving the two
+    # overloads occupy independent slots down the chain.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::pick(const self: &a) -> int32 { return 1; }
+        fn a::pick(const self: &a, x: int32) -> int32 { return x + 10; }
+        @override fn b::pick(const self: &b) -> int32 { return 2; }
+        @override fn b::pick(const self: &b, x: int32) -> int32 { return x + 100; }
+        fn via0(const x: &a) -> int32 { return x.pick(); }
+        fn via1(const x: &a) -> int32 { return x.pick(5); }
+        fn main() -> int32 {
+            let obj: b = { n = 0, m = 0 };
+            return via0(obj) + via1(obj);
+        }
+        """
+    ) == 107
+
+
+def test_overloaded_slots_stay_prefix_compatible():
+    # The two `pick` overloads take two adjacent slots at their introducer `a`;
+    # `b`'s slot list is a prefix-compatible extension (identical here), so a
+    # `&a` view indexing a `b` object reaches the right slot for each overload.
+    cg = _gen(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::pick(const self: &a) -> int32 { return 1; }
+        fn a::pick(const self: &a, x: int32) -> int32 { return x + 10; }
+        @override fn b::pick(const self: &b) -> int32 { return 2; }
+        @override fn b::pick(const self: &b, x: int32) -> int32 { return x + 100; }
+        fn main() -> int32 { return 0; }
+        """
+    )
+    specs = cg.dispatch_slot_specs("b")
+    # both overloads earn a slot, keyed by their receiver-stripped patterns,
+    # both introduced at `a`, and `a`'s specs are a prefix of `b`'s.
+    assert [(m, p) for m, p, _i in specs] == [("pick", ()), ("pick", ("int32",))]
+    assert all(intro == "a" for _m, _p, intro in specs)
+    assert cg.dispatch_slot_specs("a") == cg.dispatch_slot_specs("b")
+
+
+def test_derived_rvalue_argument_carries_the_derived_table():
+    # A call-result rvalue (`make()` returns the derived `b`) passed into a fat
+    # `&a` parameter must carry `b`'s table, so the base view dispatches to
+    # b::kind (2) -- not slice back to the declared base `a` (1), which the
+    # lvalue-only table probe did by falling through to the parameter type.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn make() -> b { return b { n = 0, m = 0 }; }
+        fn via(const x: &a) -> int32 { return x.kind(); }
+        fn main() -> int32 { return via(make()); }
+        """
+    ) == 2
+
+
+def test_as_upcast_temporary_stays_base_dispatched():
+    # The counterpart: a by-value `as` upcast produces a GENUINE base value, so
+    # it must carry the BASE table and dispatch to a::kind (1) -- the intended
+    # slicing. Only a plain derived rvalue keeps its derived table.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn via(const x: &a) -> int32 { return x.kind(); }
+        fn main() -> int32 {
+            let obj: b = { n = 0, m = 0 };
+            return via(obj as a);
+        }
+        """
+    ) == 1

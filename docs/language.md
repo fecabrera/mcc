@@ -2265,11 +2265,15 @@ fn main() -> int32 {
 ```
 
 **Dispatch happens only where a family is overridden.** A call through a fat
-view routes through the table **iff** the method family has an
-[`@override`](#override-a-method) chain (a fixed slot, assigned at the family's
-introducing base and shared down the chain). A family that is never overridden
-has no slot and stays an ordinary **direct** call — no indirection, even
-through a base view. When the receiver's concrete type is statically known (a
+view routes through the table **iff** the resolved method has an
+[`@override`](#override-a-method) chain (a fixed slot, assigned at the
+overload's introducing base and shared down the chain). A method that is never
+overridden has no slot and stays an ordinary **direct** call — no indirection,
+even through a base view. Overloading is slot-precise: two overloads of one
+method name take **separate** slots, keyed by the resolved overload's
+signature, so a call always dispatches the exact sibling overload resolution
+picked — and if only *some* overloads of a name are overridden, the others
+stay direct calls. When the receiver's concrete type is statically known (a
 plain `let c: c; c.greet()`) the call is **devirtualized** to the direct call;
 the indirect path is taken only for a genuine view whose runtime type is
 unknown (a `&A` parameter). A base method that calls another overridden family

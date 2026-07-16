@@ -828,6 +828,14 @@ class CodeGen:
         # family, not of any one concrete chain. Populated by
         # :meth:`compute_dispatch_families`; read by :meth:`dispatch_slots`.
         self.dispatch_families: set[tuple[str, str]] = set()
+        # SIE-101 Stage 2 (overload-aware slots): the same fact refined to a
+        # single OVERLOAD -- (introducer, method, receiver-stripped pattern).
+        # Two overloads of one method name earn DISTINCT slots, so a call
+        # dispatches through the slot of the specific overload resolution
+        # picked, never a wrong-arity sibling. ``dispatch_families`` stays the
+        # family-granular projection (any overload overridden); this is the
+        # per-overload one the slot model and the dispatch site key on.
+        self.dispatch_overloads: set[tuple[str, str, tuple]] = set()
         # SIE-101 Stage 2 emitted vtables: concrete type (mangled) name -> the
         # i8* constant pointing at its dispatch table, built on demand at the
         # first fat-view formation of that type (:meth:`vtable_for`).
@@ -1667,20 +1675,87 @@ class CodeGen:
                 introducer = name  # keep walking up; the last (root-most) wins
         return introducer
 
+    def dispatch_pattern(self, func: Func) -> tuple:
+        """A method overload's receiver-stripped slot key.
+
+        The tuple of the member's NON-receiver parameter types (the receiver,
+        ``params[0]``, is dropped -- its type is the ``&base`` at each hop and
+        so differs down the chain, while the overload discriminator that must
+        stay constant is the rest of the signature). This is the identity that
+        gives sibling overloads of one method name distinct vtable slots and
+        maps an ``@override`` to the specific base overload it overrides.
+
+        Args:
+            func: The method (its name contains ``::``).
+
+        Returns:
+            A hashable tuple of the non-receiver parameter type spellings; for
+            a generic member whose non-receiver types cannot resolve here, the
+            order-independent template base as an opaque fallback key.
+        """
+        # This runs during call emission (slot lookup / winner selection), so
+        # it must leave the caller's source context untouched: resolve the
+        # member's parameter types under ITS source, then restore.
+        saved_source = self.current_source
+        self.current_source = func.source
+        try:
+            types = [self.lang_type(t, func.line) for _, t in func.params[1:]]
+            return tuple(str(strip_const(t)) for t in types)
+        except LangError:
+            return ("t", self.template_base(func))
+        finally:
+            self.current_source = saved_source
+
+    def family_members(self, type_name: str, method: str) -> list:
+        """The members of ``type_name::method`` declared directly on the type.
+
+        The same union :meth:`slot_winner` collects -- template instances,
+        overload-set members, and lone concrete decls -- so slot assignment,
+        winner selection, and the overload patterns all read one source.
+        """
+        family = f"{type_name}::{method}"
+        members = list(self.templates.get(family, ()))
+        if family in self.overloads:
+            members += self.overloads[family]
+        else:
+            members += list(self.concrete_decls.get(family, {}).values())
+        return members
+
+    def overload_introducer(
+        self, type_name: str, method: str, pattern: tuple
+    ) -> "str | None":
+        """The root-most type in ``type_name``'s chain declaring this overload.
+
+        Like :meth:`family_introducer`, but for a single overload identified by
+        its :meth:`dispatch_pattern` -- so two overloads of one method name can
+        be introduced at (and slotted from) different bases.
+        """
+        chain = [type_name] + [
+            base for base, _a, _h, _s in self.base_chain(type_name)
+        ]
+        introducer: "str | None" = None
+        for name in chain:
+            for member in self.family_members(name, method):
+                if self.dispatch_pattern(member) == pattern:
+                    introducer = name  # keep walking up; root-most wins
+                    break
+        return introducer
+
     def compute_dispatch_families(self):
-        """Record which families earn a vtable slot (SIE-101 Stage 2).
+        """Record which overloads earn a vtable slot (SIE-101 Stage 2).
 
-        A family is a *dispatch family* -- gets a table slot -- exactly when a
-        derived struct method overrides an inherited base member of it (the
-        Stage-1 ``@override`` criterion, :meth:`overrides_inherited`). The slot
-        is keyed on the family's *introducer* (its root-most declaring base),
-        so a base and all its descendants agree on the index. Constructors and
-        destructors are excluded: special members sit outside dispatch (the
-        destructor slot is deferred).
+        An overload is a *dispatch overload* -- gets a table slot -- exactly
+        when a derived struct method overrides an inherited base member of it
+        (the Stage-1 ``@override`` criterion, :meth:`overrides_inherited`). The
+        slot is keyed on the overload's *introducer* (its root-most declaring
+        base) and its receiver-stripped :meth:`dispatch_pattern`, so a base and
+        all its descendants agree on the index AND sibling overloads of one
+        method name never collide. Constructors and destructors are excluded:
+        special members sit outside dispatch (the destructor slot is deferred).
 
-        Runs once every family and override is registered (after
-        :meth:`check_method_overrides`). Additive: only :meth:`dispatch_slots`
-        reads the set.
+        Populates the per-overload :attr:`dispatch_overloads` and its
+        family-granular projection :attr:`dispatch_families`. Runs once every
+        family and override is registered (after :meth:`check_method_overrides`).
         """
         for func in self.program.functions:
             if not func.override or "::" not in func.name:
@@ -1691,71 +1766,117 @@ class CodeGen:
             self.current_source = func.source
             if not self.overrides_inherited(func):
                 continue  # a Mode-1 open-set override, not a base-chain one
-            introducer = self.family_introducer(qualifier, method)
+            pattern = self.dispatch_pattern(func)
+            introducer = self.overload_introducer(qualifier, method, pattern)
             if introducer is not None:
                 self.dispatch_families.add((introducer, method))
+                self.dispatch_overloads.add((introducer, method, pattern))
 
-    def dispatch_slots(self, concrete_name: str) -> list[tuple[str, str]]:
-        """The ordered vtable slots for a concrete type's hierarchy.
+    def dispatch_slot_specs(
+        self, concrete_name: str
+    ) -> list[tuple[str, tuple, str]]:
+        """The ordered vtable slots for a concrete type, one per overload.
 
-        Walks ``concrete_name``'s chain root-first and, for each family
-        introduced along it that is a :attr:`dispatch_families` member, assigns
-        the next slot. The order is stable (root-most introducer first, then
-        method name), so a base's slot list is a prefix of every descendant's
-        -- the prefix-compatibility a fat view of the base relies on when it
-        indexes a derived object's table.
+        Walks ``concrete_name``'s chain root-first and, for each overload
+        introduced along it that is a :attr:`dispatch_overloads` member,
+        assigns the next slot. The order is stable (root-most introducer
+        first, then method name, then pattern), so a base's slot list is a
+        prefix of every descendant's -- the prefix-compatibility a fat view of
+        the base relies on when it indexes a derived object's table. Sibling
+        overloads of one method name occupy separate slots, keyed by their
+        receiver-stripped :meth:`dispatch_pattern`.
 
         Args:
             concrete_name: The concrete struct's template name.
 
         Returns:
-            ``[(method_name, introducing_base)]`` in slot-index order.
+            ``[(method_name, pattern, introducing_base)]`` in slot-index order.
         """
         chain = [concrete_name] + [
             base for base, _a, _h, _s in self.base_chain(concrete_name)
         ]
         chain.reverse()  # root first, so lower indices sit at the base
-        introduced: set[str] = set()
-        slots: list[tuple[str, str]] = []
+        introduced: set[tuple[str, tuple]] = set()
+        specs: list[tuple[str, tuple, str]] = []
         for type_name in chain:
-            for method in sorted(self.declared_family_methods(type_name)):
-                if method in introduced or method in ("constructor", "destructor"):
+            entries: set[tuple[str, tuple]] = set()
+            for method in self.declared_family_methods(type_name):
+                if method in ("constructor", "destructor"):
                     continue
-                introduced.add(method)
-                if (type_name, method) in self.dispatch_families:
-                    slots.append((method, type_name))
-        return slots
+                for member in self.family_members(type_name, method):
+                    entries.add((method, self.dispatch_pattern(member)))
+            for method, pattern in sorted(entries):
+                if (method, pattern) in introduced:
+                    continue
+                introduced.add((method, pattern))
+                if (type_name, method, pattern) in self.dispatch_overloads:
+                    specs.append((method, pattern, type_name))
+        return specs
 
-    def is_dispatch_family(self, type_name: str, method: str) -> bool:
-        """Whether the family ``type_name::method`` dispatches through a slot.
+    def dispatch_slots(self, concrete_name: str) -> list[tuple[str, str]]:
+        """The vtable slots of a concrete type as ``(method, introducer)``.
 
-        True iff the family is overridden somewhere in its hierarchy -- i.e.
-        its introducer/method pair is a :attr:`dispatch_families` member.
+        The pattern-blind projection of :meth:`dispatch_slot_specs` -- one
+        entry per slot, in slot-index order (so two overrides of one method
+        name appear twice). Kept for callers that only need slot presence and
+        count (the fat/empty-table checks and interface parity).
         """
+        return [(method, intro) for method, _pat, intro in
+                self.dispatch_slot_specs(concrete_name)]
+
+    def is_dispatch_family(
+        self, type_name: str, method: str, pattern: "tuple | None" = None
+    ) -> bool:
+        """Whether ``type_name::method`` dispatches through a slot.
+
+        With ``pattern`` given, tests the specific overload: True iff that
+        overload's introducer/method/pattern triple is a
+        :attr:`dispatch_overloads` member. Without it, tests the family:
+        True iff ANY overload of the method name is overridden in the
+        hierarchy (the :attr:`dispatch_families` projection).
+        """
+        if pattern is not None:
+            introducer = self.overload_introducer(type_name, method, pattern)
+            return introducer is not None and (
+                introducer, method, pattern
+            ) in self.dispatch_overloads
         introducer = self.family_introducer(type_name, method)
         return introducer is not None and (
             introducer, method
         ) in self.dispatch_families
 
-    def dispatch_slot_index(self, type_name: str, method: str) -> "int | None":
-        """The fixed vtable slot index of a family for a type's hierarchy."""
-        for idx, (m, _intro) in enumerate(self.dispatch_slots(type_name)):
-            if m == method:
+    def dispatch_slot_index(
+        self, type_name: str, method: str, pattern: "tuple | None" = None
+    ) -> "int | None":
+        """The fixed vtable slot index of an overload for a type's hierarchy.
+
+        With ``pattern`` given, the slot of that specific overload; without it,
+        the first slot of the method name (an unambiguous single-overload
+        family).
+        """
+        for idx, (m, pat, _intro) in enumerate(
+            self.dispatch_slot_specs(type_name)
+        ):
+            if m == method and (pattern is None or pat == pattern):
                 return idx
         return None
 
-    def slot_winner(self, concrete: LangType, method: str):
-        """The nearest-hop implementation of a dispatch family for a type.
+    def slot_winner(self, concrete: LangType, method: str, pattern: tuple):
+        """The nearest-hop implementation of a dispatch overload for a type.
 
         Walks ``concrete``'s ``extends`` chain (nearest first, using the
         resolved per-instantiation :attr:`LangType.base` links) to the first
-        type that declares ``method``, and returns that member's monomorphic
-        LLVM function -- instantiating a generic base member at the chain's
-        instantiation arguments when needed.
+        type that declares an overload of ``method`` whose
+        :meth:`dispatch_pattern` equals ``pattern``, and returns that member's
+        monomorphic LLVM function -- instantiating a generic base member at the
+        chain's instantiation arguments when needed. A hop that declares the
+        method but not this overload is skipped (its own overrides do not fill
+        another overload's slot).
 
         Args:
             concrete: The runtime concrete type whose table slot to fill.
             method: The family's method name.
+            pattern: The overload's receiver-stripped pattern.
 
         Returns:
             ``(ir.Function, symbol)`` for the winning implementation.
@@ -1763,14 +1884,15 @@ class CodeGen:
         current: "LangType | None" = strip_const(concrete)
         while current is not None:
             owner = current.template or current.name
-            family = f"{owner}::{method}"
-            members = list(self.templates.get(family, ()))
-            if family in self.overloads:
-                members += self.overloads[family]
-            else:
-                members += list(self.concrete_decls.get(family, {}).values())
-            if members:
-                member = members[0]  # a dispatch family: one member per type
+            member = next(
+                (
+                    m
+                    for m in self.family_members(owner, method)
+                    if self.dispatch_pattern(m) == pattern
+                ),
+                None,
+            )
+            if member is not None:
                 if not member.type_params:
                     symbol = self.overload_symbols.get(id(member), member.name)
                     return self.funcs[symbol], symbol
@@ -1784,7 +1906,9 @@ class CodeGen:
             f"no implementation of {method!r} for {concrete}", 0
         )
 
-    def build_dispatch_thunk(self, concrete: LangType, method: str) -> ir.Function:
+    def build_dispatch_thunk(
+        self, concrete: LangType, method: str, pattern: tuple
+    ) -> ir.Function:
         """Emit (once) the thin->fat thunk for one vtable slot.
 
         The thunk has the uniform slot ABI -- a fat ``{concrete*, i8*}``
@@ -1798,12 +1922,16 @@ class CodeGen:
         Args:
             concrete: The runtime concrete type owning this table.
             method: The family's method name.
+            pattern: The overload's receiver-stripped pattern (the slot key).
 
         Returns:
             The thunk function.
         """
-        winner, symbol = self.slot_winner(concrete, method)
-        mangled = f"{concrete.name}::{method}.vthunk"
+        winner, symbol = self.slot_winner(concrete, method, pattern)
+        # The pattern is part of the thunk symbol: sibling overloads of one
+        # method name have distinct slots and so distinct thunks.
+        suffix = f"({','.join(map(str, pattern))})" if pattern else ""
+        mangled = f"{concrete.name}::{method}{suffix}.vthunk"
         existing = self.funcs.get(mangled)
         if existing is not None:
             return existing
@@ -1865,10 +1993,10 @@ class CodeGen:
         if cached is not None:
             return cached
         i8ptr = ir.IntType(8).as_pointer()
-        slots = self.dispatch_slots(concrete.template or concrete.name)
+        specs = self.dispatch_slot_specs(concrete.template or concrete.name)
         entries = [
-            self.build_dispatch_thunk(concrete, method).bitcast(i8ptr)
-            for method, _introducer in slots
+            self.build_dispatch_thunk(concrete, method, pattern).bitcast(i8ptr)
+            for method, pattern, _introducer in specs
         ]
         arr_ty = ir.ArrayType(i8ptr, len(entries))
         glob = ir.GlobalVariable(self.module, arr_ty, name=f"{mangled}.vtable")
@@ -1879,23 +2007,28 @@ class CodeGen:
         self.vtables[mangled] = table
         return table
 
-    def dispatch_indirect(self, expr, args: list, callee: ir.Function):
+    def dispatch_indirect(
+        self, expr, args: list, callee: ir.Function, pattern: tuple = ()
+    ):
         """Dispatch a method-family call through a fat view's table, or ``None``.
 
         Fires only when the call is a receiver-method call
         (``Qualifier::method``), the receiver argument is a fat VIEW parameter
         (a bare reference parameter, so its runtime type is unknown), and the
-        family is overridden (:meth:`is_dispatch_family`). It loads the
-        receiver's table (already threaded onto its fat value / in
-        :attr:`param_tables`), indexes the family's fixed slot, and calls the
-        thunk there indirectly. Any other receiver -- an object of statically
-        known type -- returns ``None`` so the caller devirtualizes to the
-        static direct call.
+        specific overload resolution picked is overridden
+        (:meth:`is_dispatch_family` for ``pattern``). It loads the receiver's
+        table (already threaded onto its fat value / in :attr:`param_tables`),
+        indexes that overload's fixed slot, and calls the thunk there
+        indirectly. Any other receiver -- an object of statically known type,
+        or a resolved overload no descendant overrides -- returns ``None`` so
+        the caller devirtualizes to the static direct call.
 
         Args:
             expr: The ``Call`` node.
             args: The already fat-widened argument values.
             callee: The statically-resolved callee (for its return type).
+            pattern: The resolved overload's receiver-stripped pattern, so the
+                slot of the exact overload (not a wrong-arity sibling) is used.
 
         Returns:
             The call result, or ``None`` to fall back to the direct call.
@@ -1906,9 +2039,9 @@ class CodeGen:
         recv = expr.args[0]
         if not (isinstance(recv, Var) and recv.name in self.param_tables):
             return None  # a statically-known object -> devirtualize (direct)
-        if not self.is_dispatch_family(qualifier, method):
-            return None  # not overridden anywhere -> a plain direct call
-        slot_idx = self.dispatch_slot_index(qualifier, method)
+        if not self.is_dispatch_family(qualifier, method, pattern):
+            return None  # this overload not overridden -> a plain direct call
+        slot_idx = self.dispatch_slot_index(qualifier, method, pattern)
         if slot_idx is None:
             return None
         i8ptr = ir.IntType(8).as_pointer()
@@ -1946,7 +2079,7 @@ class CodeGen:
         i8ptr = ir.IntType(8).as_pointer()
         if isinstance(expr, Var) and expr.name in self.param_tables:
             return self.param_tables[expr.name]
-        static = self.lvalue_type(expr)
+        static = self.fat_arg_static_type(expr)
         if static is None:
             static = concrete
         if static is None:
@@ -1957,6 +2090,40 @@ class CodeGen:
         ):
             return ir.Constant(i8ptr, None)
         return self.vtable_for(static)
+
+    def fat_arg_static_type(self, expr) -> "LangType | None":
+        """The static type a fat-reference argument EVALUATES to, or ``None``.
+
+        A fat ``&base`` parameter takes a derived argument by forming a view;
+        the table word must reflect the ARGUMENT's own static type so a
+        re-dispatch reaches the right override -- not the declared base, which
+        would slice a derived rvalue back to the base. So this reads the type
+        the expression actually produces, including rvalues an lvalue probe
+        misses:
+
+          * a call result -- a named, non-overloaded function's declared
+            return type (``via(make())`` where ``make`` returns the derived
+            ``b`` dispatches through ``b``'s table, not ``a``'s);
+          * an ``as`` cast -- its target type, so a genuine by-value upcast
+            ``(d as base)`` correctly carries the BASE table (intended
+            slicing), while a plain derived value keeps its own.
+
+        Everything :meth:`dot_receiver_type` already types (a variable, a
+        field, an index, a deref, a nonnull assertion) types the same here.
+        ``None`` when the concrete static type genuinely cannot be read, so
+        the caller falls back to the declared base type.
+        """
+        t = self.dot_receiver_type(expr)
+        if t is not None:
+            return t
+        if (
+            isinstance(expr, Call)
+            and not expr.type_args
+            and expr.name not in self.overloads
+            and expr.name in self.signatures
+        ):
+            return self.signatures[expr.name][0]
+        return None
 
     def template_base(self, func: Func, groups: bool = True) -> str:
         """Spell a generic template's order-independent symbol base.
@@ -16769,7 +16936,13 @@ class CodeGen:
                 if i < len(expr.args)
             }
             args = self.wrap_fat_args(args, fat, tables)
-            raw = self.dispatch_indirect(expr, args, self.funcs[symbol])
+            # The resolved overload's receiver-stripped pattern: its non-
+            # receiver parameter types, matching the slot key so the exact
+            # overload's slot (never a wrong-arity sibling) is dispatched.
+            pattern = tuple(str(strip_const(p)) for p in params[1:])
+            raw = self.dispatch_indirect(
+                expr, args, self.funcs[symbol], pattern
+            )
         if raw is None:
             raw = self.emit_call(
                 self.funcs[symbol],
@@ -19209,7 +19382,12 @@ class CodeGen:
                 if i < len(expr.args)
             }
             args = self.wrap_fat_args(args, fat, tables)
-            raw = self.dispatch_indirect(expr, args, fn)
+            # The resolved overload's receiver-stripped pattern keys the exact
+            # slot -- so an overloaded method dispatches to the sibling the
+            # overload resolution actually picked, not a same-named other.
+            raw = self.dispatch_indirect(
+                expr, args, fn, self.dispatch_pattern(func)
+            )
         if raw is None:
             raw = self.emit_call(
                 fn, args, preserves=self.effect_bits.get(id(effect_owner)) is False
