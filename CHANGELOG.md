@@ -209,6 +209,60 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Polymorphic base views — dynamic dispatch through base-typed references**
+  — stage 2 of [polymorphic base views](ROADMAP.md) (SIE-101) completes the
+  feature atop stage 1's `@override` marker. A method call through a
+  base-typed reference now dispatches to the runtime object's own override,
+  with **no `class` kind and no vtable pointer in the object**: the dispatch
+  table lives in the *reference*, so objects keep their exact byte layout and
+  value semantics. A reference `&A` / `const &A` becomes a two-word fat pointer
+  `{object, table}` exactly when `A` is `extends`-extended in the module's
+  import closure; an un-extended struct's references stay one word (zero cost,
+  so ordinary `const self: &T` container methods are unaffected). Fatness is a
+  property of the base **type**, independent of whether any family is
+  overridden, so adding the first override to a hierarchy never changes a
+  reference's width. Dispatch is emitted only for a family with an `@override`
+  chain (a fixed table slot at the family's introducing base, prefix-compatible
+  down the chain); a non-overridden family, and a receiver of statically known
+  concrete type, stay direct calls (**devirtualized**). Copying a value *out*
+  of a view is **prefix extraction** — a byte-exact base value carrying no
+  table, so behavioral slicing is impossible. **ABI implications (BREAKING):**
+  every `&A` to an extended base `A` is now a two-word argument (the stdlib
+  `slice`/`pair`/`set_entry` bases included — the ABI-stability tradeoff), and
+  the derived→base **reference** conversion is now **implicit at any parameter
+  position** (a `fn f(const a: &A)` accepts a derived argument by forming a
+  view — a reference upcast never slices; a *by-value* argument still needs an
+  explicit `as`). A `.mci` stub's fatness is pinned to its own import closure,
+  and a prototype/definition that disagree on a reference's fatness across that
+  boundary are rejected as a signature mismatch. A fat reference may not yet
+  ride in a function-pointer type (a clear compile error, liftable later); the
+  destructor table slot is deferred (base-view destruction stays manual). See
+  [docs/language.md](docs/language.md) and
+  [examples/types/polymorphic_views.mc](examples/types/polymorphic_views.mc).
+
+- **BREAKING: `@override` is now required on a method that shadows an
+  inherited base member** — stage 1 of the [polymorphic base views](ROADMAP.md)
+  (SIE-101) redesign gives the existing `@override` annotation a second mode.
+  Mode 1 (unchanged) replaces a same-pattern member of *another module's* open
+  overload set. Mode 2 (new) is a derived struct method (via `extends`) whose
+  signature pattern matches an inherited base-chain member it would shadow: the
+  marker is now **mandatory** on it. A derived member whose pattern equals one
+  of the rebased inherited candidates — the same pattern notion `@override`
+  already uses (concrete → resolved parameter types, template → template base)
+  — *overrides* that member and must carry `@override`; leaving it bare is a
+  compile error (`method 'd::describe' shadows the inherited base member of the
+  same signature and must be marked @override`). Conversely an `@override`
+  method that shadows no inherited base member (and has no Mode-1 target) is
+  the inverse error (`@override method 'd::note' overrides no inherited base
+  member`). A differently-shaped derived member merely *overloads* the merged
+  family and takes no marker, exactly as before. This defines what "an
+  override" **is** — the criterion stage 2's dynamic dispatch (fat base views)
+  will key on. Constructors and destructors are **exempt** — special members
+  shadow the base's by nature and are never dispatched, so the marker is
+  neither required nor rejected on one. **Migration:** add `@override` to any
+  derived (non-special) method that shadows an inherited member. See
+  [examples/types/method_inheritance.mc](examples/types/method_inheritance.mc).
+
 - **`own self: T` — the consuming (by-value move) receiver, and `own`
   by-value parameters** — Phase 2 of the [receiver-kind](ROADMAP.md) redesign
   adds a fourth receiver kind: a method whose receiver is `own self: T` takes
