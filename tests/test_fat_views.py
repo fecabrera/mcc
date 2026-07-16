@@ -2439,6 +2439,89 @@ def test_covariant_return_on_an_unresolvable_generic_pattern_is_rejected():
         )
 
 
+def test_override_on_an_unresolvable_generic_pattern_is_rejected():
+    # SIE-190: the same dead-key divergence WITHOUT covariance. The base and
+    # the override would key separate slots (the fallback embeds each
+    # member's own template base), so validate_dispatch_overrides accepted
+    # the @override while the dispatch site silently bound the BASE member
+    # -- via(e) returned 7 where dispatch demands 8, a behavioral slice
+    # with no diagnostic. Rejected outright now.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'entry::get' overrides an overload whose "
+        r"non-receiver parameters spell the struct's own type parameters",
+    ):
+        compile_ir(
+            """
+            struct cell<T> { n: T; }
+            struct entry<T> extends cell<T> { m: int32; }
+            fn cell<T>::get(self: &cell<T>, k: T) -> int32 { return 7; }
+            @override fn entry<T>::get(self: &entry<T>, k: T) -> int32 {
+                return 8;
+            }
+            fn via(q: &cell<int32>) -> int32 { return q.get(0); }
+            fn main() -> int32 {
+                let e: entry<int32> = { n = 0, m = 0 };
+                return via(e);
+            }
+            """
+        )
+
+
+def test_override_deep_in_a_chain_on_an_unresolvable_pattern_is_rejected():
+    # The rejection is per-override, so a three-level chain errors on its
+    # first unkeyable @override -- never half-dispatches.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'mid::get' overrides an overload whose "
+        r"non-receiver parameters spell the struct's own type parameters",
+    ):
+        compile_ir(
+            """
+            struct cell<T> { n: T; }
+            struct mid<T> extends cell<T> { m: int32; }
+            struct leaf<T> extends mid<T> { k: int32; }
+            fn cell<T>::get(self: &cell<T>, k: T) -> int32 { return 1; }
+            @override fn mid<T>::get(self: &mid<T>, k: T) -> int32 {
+                return 2;
+            }
+            @override fn leaf<T>::get(self: &leaf<T>, k: T) -> int32 {
+                return 3;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_unoverridden_generic_pattern_sibling_stays_a_direct_call():
+    # An overload spelling `k: T` that nobody overrides is untouched: it has
+    # no slot to key, so its calls are honest direct calls -- while the
+    # resolvable sibling overload of the same method name dispatches.
+    assert (
+        run(
+            """
+            struct cell<T> { n: T; }
+            struct entry<T> extends cell<T> { m: int32; }
+            fn cell<T>::get(self: &cell<T>, k: T) -> int32 { return 7; }
+            fn cell<T>::get(const self: &cell<T>) -> int32 { return 1; }
+            @override fn entry<T>::get(const self: &entry<T>) -> int32 {
+                return 2;
+            }
+            fn via(q: &cell<int32>) -> int32 {
+                if (q.get(0) != 7) { return 100; }
+                return q.get();
+            }
+            fn main() -> int32 {
+                let e: entry<int32> = { n = 0, m = 0 };
+                if (via(e) != 2) { return 10; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
 def test_override_returning_an_unrelated_reference_is_still_rejected():
     # The relaxation is exactly "a declared descendant of the base's
     # reference return": an unrelated reference stays the return-ABI error.

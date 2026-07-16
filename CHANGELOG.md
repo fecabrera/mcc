@@ -324,14 +324,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   proof, the one-level rule, exact-match-first ranking (an exact `&derived`
   overload still beats the viewed `&base`, a direct pointer overload still
   beats any decay reading), and the thin-`.mci` fatness gate all inherited
-  unchanged, on the read-only and writable reference paths alike. Two constructs a
-  single slot cannot represent are rejected rather than miscompiled, each
-  liftable later: a fat reference — parameter or return — may not ride in a
-  function-pointer type, spelled or inferred from a function value; and a
-  **method-owned generic override** (one declaring its own type parameter, not
-  merely the struct's) may not be *dynamically dispatched* through a base view
-  (it stays a legal static override on a concrete receiver — a **struct-generic**
-  override dispatches normally). The destructor table slot is deferred (base-view
+  unchanged, on the read-only and writable reference paths alike. Three
+  constructs a single slot cannot represent are rejected rather than
+  miscompiled, each liftable later: a fat reference — parameter or return —
+  may not ride in a function-pointer type, spelled or inferred from a function
+  value; a **method-owned generic override** (one declaring its own type
+  parameter, not merely the struct's) may not be *dynamically dispatched*
+  through a base view (it stays a legal static override on a concrete
+  receiver); and an overload whose **non-receiver parameters spell the
+  struct's own type parameters** (`get(self: &cell<T>, k: T)`) may not be
+  overridden at all (SIE-190) — such a spelling resolves to no slot key
+  before bodies, so the base's and the override's keys could never agree and
+  a call through a base view would silently have bound the base member; the
+  un-overridden overload itself stays an honest direct call. A
+  **struct-generic** override whose non-receiver parameters resolve
+  dispatches normally. The destructor table slot is deferred (base-view
   destruction stays manual). See [docs/language.md](docs/language.md) and
   [examples/types/polymorphic_views.mc](examples/types/polymorphic_views.mc).
 

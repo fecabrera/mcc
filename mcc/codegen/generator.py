@@ -2330,8 +2330,11 @@ class CodeGen:
         parameter, distinct from the struct's) is left to the dispatch site: it
         is a legal static shadow, so it is not rejected here -- only a dynamic
         (base-view) call to one is an error (:meth:`gen_generic_call`). A
-        struct-generic override (only the struct's parameters) IS validated: it
-        dispatches like any concrete one. Runs after
+        struct-generic override (only the struct's parameters) IS validated
+        and dispatches like any concrete one -- provided its non-receiver
+        parameters resolve before bodies: an overload spelling the struct's
+        own parameters there (``get(self: &cell<T>, k: T)``) can key no
+        shared slot and its override is rejected (SIE-190). Runs after
         :meth:`check_method_overrides` (so only genuine base-chain overrides
         reach here) and before :meth:`compute_dispatch_families`.
 
@@ -2383,16 +2386,22 @@ class CodeGen:
                             func.line,
                             source=func.source,
                         )
-            if covariant:
-                # SIE-186: remember the slot, so the thunk builder and the
-                # dispatch site adapt a thin covariant spelling to the slot's
-                # base-shaped fat return. The key must be the RESOLVED
-                # pattern: the fallback key embeds each member's own
-                # template base, so it diverges between the override and the
-                # base member and the registration would be dead -- the
-                # boundaries would never adapt, a silent return-ABI mismatch.
-                pattern = self.dispatch_pattern_resolved(func)
-                if pattern is None:
+            # The shared slot is keyed on the overload's RESOLVED
+            # non-receiver pattern. A member whose non-receiver parameters
+            # spell the struct's own type parameters (`get(self: &cell<T>,
+            # k: T)`) resolves to no key before bodies, and the fallback key
+            # embeds each member's own template base -- it DIVERGES between
+            # the override and the base member, so the two would take
+            # separate slots and a call through a base view would silently
+            # bind the BASE member: a behavioral slice with no diagnostic
+            # (SIE-190). Reject the override outright; the base overload
+            # itself stays callable (it simply has no override, so its
+            # calls are honest direct calls).
+            pattern = self.dispatch_pattern_resolved(func)
+            if pattern is None:
+                if covariant:
+                    # The scoped message: the covariant registration is what
+                    # the dead key would silently break first (SIE-186).
                     raise LangError(
                         f"@override method {func.name!r} declares a covariant"
                         " return, but its non-receiver parameters spell the "
@@ -2401,7 +2410,24 @@ class CodeGen:
                         "carry the covariance; spell the base member's "
                         "return type instead",
                         func.line,
+                        source=func.source,
                     )
+                raise LangError(
+                    f"@override method {func.name!r} overrides an overload "
+                    "whose non-receiver parameters spell the struct's own "
+                    "type parameters, which do not resolve before bodies, "
+                    "so the shared dispatch slot cannot be keyed and a call "
+                    "through a base view would silently bind the base "
+                    "member; spell resolvable parameter types, or rename "
+                    "the method",
+                    func.line,
+                    source=func.source,
+                )
+            if covariant:
+                # SIE-186: remember the slot, so the thunk builder and the
+                # dispatch site adapt a thin covariant spelling to the slot's
+                # base-shaped fat return. The key must be the RESOLVED
+                # pattern (guaranteed above).
                 introducer = self.overload_introducer(
                     func.name.split("::", 1)[0], method, pattern
                 )

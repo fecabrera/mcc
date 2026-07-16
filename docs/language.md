@@ -2385,12 +2385,8 @@ and a concrete type argument spelled through an alias compares resolved.
 The relaxation is granted exactly when **every** instantiation's
 returns narrow — `-> &b<int32>` over `-> &a<T>` is rejected, since it narrows
 at one instantiation only — and each concrete instantiation's slot then
-adapts independently (`b<int32>`'s thunk widens with `b<int32>`'s table). The
-overload's **non-receiver parameters must resolve before
-bodies**: on a generic struct, an overload whose other parameters spell the
-struct's own type parameters (`get(self: &cell<T>, k: T)`) cannot key the
-shared slot's covariant adaptation and is rejected — spell the base member's
-return there. The boundary widening leans on the whole program agreeing that a
+adapts independently (`b<int32>`'s thunk widens with `b<int32>`'s table).
+The boundary widening leans on the whole program agreeing that a
 thin spelling's referent is exactly its type, so a slot member whose reference
 return was **pinned thin by its interface's closure** (no extension of the
 return type was visible when the stub was compiled) is incompatible with a
@@ -2452,17 +2448,25 @@ value carrying no table, and `r.kind()` binds statically — exactly as a
 an expression: chain, re-lend, or re-return it.
 
 **Constructs a single slot cannot represent are rejected, not miscompiled.**
-Two cases are clean compile errors for now, each liftable in a later stage: a
-fat reference — a `&A` parameter or a `-> &A` return — may **not** appear in a
-[function-pointer type](#function-pointers), spelled or inferred from a
-function value (its width can differ across closures); and a **method-owned
+Three cases are clean compile errors for now, each liftable in a later stage:
+a fat reference — a `&A` parameter or a `-> &A` return — may **not** appear in
+a [function-pointer type](#function-pointers), spelled or inferred from a
+function value (its width can differ across closures); a **method-owned
 generic override** (one declaring *its own* type parameter, as opposed to
 merely the struct's) may **not** be dynamically dispatched through a base view
 — no single slot can stand in for every instantiation of that parameter —
 though it remains a legal *static* override when called on a concrete
-receiver. A **struct-generic** override — one whose only type parameters are
-its struct's (`gb<T>::m` over `ga<T>::m`) — dispatches normally: each concrete
-struct instantiation has its own table with concrete slot types.
+receiver; and on a generic struct, an overload whose **non-receiver
+parameters spell the struct's own type parameters**
+(`get(self: &cell<T>, k: T)`) may **not** be overridden at all — the shared
+slot is keyed on the overload's resolved parameter pattern, which such a
+spelling does not have before bodies, so the base's and the override's keys
+could never agree — spell resolvable parameter types, or rename the method
+(the un-overridden overload itself stays callable, as an honest direct
+call). A **struct-generic** override — one whose only type parameters are
+its struct's (`gb<T>::m` over `ga<T>::m`) and whose non-receiver parameters
+resolve — dispatches normally: each concrete struct instantiation has its
+own table with concrete slot types.
 
 See [examples/types/polymorphic_views.mc](../examples/types/polymorphic_views.mc)
 and [method_inheritance.mc](../examples/types/method_inheritance.mc).
