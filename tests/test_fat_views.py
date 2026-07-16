@@ -2117,3 +2117,27 @@ def test_stdlib_generic_container_instantiates_a_fat_reference_return():
         )
         == 0
     )
+
+
+def test_let_binding_a_fat_reference_result_is_copy_on_read():
+    # References are not storable types, so `let r = relay(o);` binds the
+    # eagerly loaded VALUE -- prefix extraction into a plain base carrying no
+    # table, exactly like a `let` from a view parameter (ruling #3's
+    # copy-on-read). The copy's data is real (r.n reads through) and its call
+    # binds statically (1); only an expression-position result -- chained,
+    # re-lent, re-returned -- keeps the view.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn relay(x: &a) -> &a { return x; }
+        fn main() -> int32 {
+            let o: b = { n = 5, m = 0 };
+            let r = relay(o);
+            if (r.n != 5) { return 10; }
+            return r.kind();
+        }
+        """
+    ) == 1
