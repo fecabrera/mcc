@@ -234,7 +234,23 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the derived→base **reference** conversion is now **implicit at any parameter
   position** (a `fn f(const a: &A)` accepts a derived argument by forming a
   view — a reference upcast never slices; a *by-value* argument still needs an
-  explicit `as`). A `.mci` stub's fatness is pinned to its own import closure,
+  explicit `as`). **Overload resolution ranks the conversion** (SIE-184 /
+  SIE-181): a derived argument satisfies an overloaded candidate's `&base`
+  reference position — adding an unrelated overload no longer turns a working
+  call into "no overload of ..." — and a generic `&point<T>` reference
+  parameter infers `T` through the derived argument's declared base
+  instantiation. The conversion is ranked **per position** (the dominance
+  rule): a candidate wins on it only when no farther at *every* reference
+  position — an exact-typed candidate beats a view-conversion one, a nearer
+  base beats a farther one — while a mixed comparison (nearer here, farther
+  there) is an ambiguity error settled by an explicit `as`, never a silent
+  total; the distances arbitrate below the tier and the inheritance hop, so
+  no resolution among exactly-matching candidates changes. Viability through
+  the conversion is exactly emission's upcast — resolved in the candidate's
+  own context (aliases chased, an enclosing generic's same-named binding
+  never captures a parameter struct, a losing trial instantiates nothing)
+  and gated by the callee's own-closure fatness, so a thin `.mci` `&base`
+  parameter stays cleanly non-viable. A `.mci` stub's fatness is pinned to its own import closure,
   and a prototype/definition that disagree on a reference's fatness across that
   boundary are rejected as a signature mismatch. A stub re-emits a method's
   `@override` marker on its prototype (a method-qualified `@override` proto is

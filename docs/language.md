@@ -2137,7 +2137,24 @@ would slice the derived value), so the base prefix is always lent, never
 copied. Since [polymorphic base views](#polymorphic-base-views) (SIE-101 Stage
 2) the same derived→base reference upcast applies to **any** `&<extended base>`
 parameter, at any position — a reference upcast is a view, never a slice — so a
-free function `fn f(const a: &A)` accepts a derived argument too. This also
+free function `fn f(const a: &A)` accepts a derived argument too. **Overload
+resolution ranks the conversion** (SIE-184/SIE-181): a derived argument
+satisfies an overloaded candidate's `&base` reference position, and a generic
+`&point<T>` reference parameter infers `T` through the derived argument's
+declared base instantiation (`f(p)` with a `pointf` binds `T = float64`). The
+conversion is charged per position as its `extends`-chain distance, compared
+**position by position** (the dominance rule): a candidate wins on the
+conversion only when it is no farther at *every* reference position — so an
+exact-typed candidate beats one reached only through the view, and a nearer
+base beats a farther one — while a mixed comparison (nearer at one position,
+farther at another) is an **ambiguity error**, resolved by an explicit `as`
+on an argument, never by a silent total across positions. The distances
+arbitrate below the tier and the inheritance hop, and a call with no viewed
+positions charges nothing, so no resolution among exactly-matching candidates
+ever changes. Viability through the conversion is exactly what emission can
+form: a parameter whose `&base` is thin in the callee's own import closure
+(see [polymorphic base views](#polymorphic-base-views)) never admits a
+derived argument. This also
 covers the explicit qualified spelling: `point::magnitude(p)` accepts a
 `pointf`, and a derived constructor **chains** by calling the base's directly:
 

@@ -865,6 +865,11 @@ class CodeGen:
         # dispatch-table word, keyed by name, for re-dispatch on it. Declared
         # here too so GenContext.capture always finds it.
         self.param_tables: dict[str, ir.Value] = {}
+        # Per-candidate (set by resolve_bindings, read by the viable-entry
+        # builders): the extends hops each reference position upcast through
+        # for the derived->base view, 0 where no view formed. Candidate
+        # selection compares these per position (:meth:`view_dominance`).
+        self.view_dists: list[int] = []
         # @override definitions that reconcile_overrides could not resolve as a
         # cross-module (Mode-1) replacement -- `others` was empty. Their verdict
         # is deferred to check_method_overrides, which accepts each as a Mode-2
@@ -16383,23 +16388,23 @@ class CodeGen:
     def receiver_view(
         self, pattern: TypeRef, actual: LangType, type_params: list[str]
     ) -> LangType:
-        """The base-chain view a method call's receiver unifies through.
+        """The base-chain view a reference argument unifies through.
 
-        The receiver position of a method-family call upcasts: when the
-        first parameter's pattern heads a struct that is a declared base of
-        the argument's ``extends`` lineage, inference and the shape filter
-        see the receiver AS that base instantiation -- so
+        When the parameter's pattern heads a struct that is a declared base
+        of the argument's ``extends`` lineage, inference and the shape filter
+        see the argument AS that base instantiation -- so
         ``point::magnitude(p)`` with a ``pointf`` receiver binds
-        ``T = float64``. This inference-time upcast is receiver-only. (A fat
-        ``&<extended base>`` *reference* parameter also upcasts a derived
-        argument into a base view, but that happens at the marshalling
-        boundary, on already-resolved concrete parameter types -- see the fat
-        argument handling in :meth:`marshal_args`; a by-value argument still
-        needs the explicit ``as``.)
+        ``T = float64``. :meth:`resolve_bindings` routes a reference
+        position here only when its pattern names a TYPE PARAMETER (the
+        matched ancestor then pins the bindings, so the name-keyed walk is
+        emission-exact by construction); a concrete pattern resolves through
+        :meth:`concrete_view_target` instead. A by-value argument still
+        needs the explicit ``as``, so plain positions never route through
+        here.
 
         Args:
-            pattern: The candidate's first parameter pattern.
-            actual: The receiver argument's type.
+            pattern: The candidate's parameter pattern at the position.
+            actual: The argument's type.
             type_params: The candidate's type-parameter names.
 
         Returns:
@@ -16422,6 +16427,120 @@ class CodeGen:
                 return const_of(anc) if actual.const else anc
             current = anc.base
         return actual
+
+    @staticmethod
+    def chain_hops(bare: LangType, target: LangType) -> int:
+        """How many ``extends`` hops up ``bare``'s lineage ``target`` sits.
+
+        ``target`` is a view target the resolve-time upcast just produced
+        (:meth:`receiver_view` or :meth:`concrete_view_target`), so it is an
+        ancestor of ``bare`` by construction. :meth:`resolve_bindings`
+        records this distance per viewed position; candidate selection then
+        prefers a candidate that is uniformly nearer (see
+        :meth:`view_dominance`).
+
+        Args:
+            bare: The argument's (const-stripped) type.
+            target: The base instantiation the position viewed to.
+
+        Returns:
+            The chain distance, at least ``1``.
+        """
+        tgt = strip_const(target)
+        hops, current = 0, bare.base
+        while current is not None:
+            hops += 1
+            anc = strip_const(current)
+            if anc == tgt:
+                return hops
+            current = anc.base
+        return hops
+
+    def concrete_view_target(
+        self,
+        func: Func,
+        ptype: TypeRef,
+        actual: LangType,
+        receiver: bool = False,
+    ) -> "LangType | None":
+        """The emission-parity view target for a CONCRETE reference pattern.
+
+        Resolves the candidate's parameter in the candidate's own context
+        (its source AND empty type bindings, like
+        :meth:`resolve_concrete_pattern` -- an enclosing generic body's live
+        binding must not capture a same-named concrete struct) and asks
+        :meth:`receiver_upcast_target` -- the exact predicate the marshal's
+        view formation uses -- so a candidate is viable through the
+        conversion iff emission can actually form it. A non-receiver
+        position additionally requires the resolved base to be
+        :meth:`is_fat_base` under ``func``'s source: emission only upcasts
+        the positions :meth:`fat_ref_indices` reports, so a thin ``.mci``
+        parameter must stay non-viable (the receiver position upcasts
+        thin or fat, and skips the gate). ``None`` when the pattern does not
+        resolve here (a lenient trial's mismatched candidate) or the
+        argument's lineage does not reach the resolved instance.
+
+        The resolution is guarded by a name pre-walk: the pattern's head
+        (generic aliases expanded, plain aliases chased) must appear among
+        the argument's ancestor family names before :meth:`lang_type` runs,
+        so a losing candidate's generic pattern never instantiates a struct
+        into the module for a call that cannot reach it.
+
+        Args:
+            func: The candidate (its source scopes the resolution).
+            ptype: The parameter's ``TypeRef`` pattern (names no type
+                parameter of ``func``).
+            actual: The argument's type.
+            receiver: Whether this is the method-family receiver position.
+
+        Returns:
+            The (const-stripped) base target, or ``None``.
+        """
+        if actual is CTOR_SELF or actual is NULLT:
+            return None
+        bare = strip_const(actual)
+        if not is_struct(bare) or bare.base is None:
+            return None
+        outer_bindings = self.type_bindings
+        outer_source = self.current_source
+        self.type_bindings = {}
+        self.current_source = func.source
+        try:
+            p = self.dealias_pattern(ptype, func.type_params)
+            if p.stars or p.dims or p.params is not None:
+                return None
+            # Chase plain (non-generic) aliases to the family name the
+            # `extends` chain spells, so an alias-spelled pattern views --
+            # and pre-walks -- exactly like the direct spelling.
+            name, seen = p.name, set()
+            while (
+                name not in seen
+                and (alias := self.lookup_alias(name)) is not None
+                and not alias.type_params
+            ):
+                seen.add(name)
+                t = alias.target
+                if t.stars or t.dims or t.params is not None:
+                    return None
+                name = t.name
+            current = bare.base
+            while current is not None:
+                anc = strip_const(current)
+                if anc.template == name or anc.name == name:
+                    break
+                current = anc.base
+            if current is None:
+                return None
+            if not receiver and not self.is_fat_base(name, func.source):
+                return None
+            try:
+                pi = self.lang_type(ptype, func.line)
+            except LangError:
+                return None
+        finally:
+            self.type_bindings = outer_bindings
+            self.current_source = outer_source
+        return self.receiver_upcast_target(actual, pi)
 
     def receiver_upcast_target(
         self, t: LangType, p: LangType
@@ -19426,7 +19545,12 @@ class CodeGen:
                 if unaddressed:
                     mut_failures.append(min(unaddressed))
                     continue
-                viable.append((self.call_rank(func, arg_tvs), func, bindings))
+                viable.append((
+                    self.call_rank(func, arg_tvs),
+                    self.view_dists,
+                    func,
+                    bindings,
+                ))
             if not viable:
                 # Two-tier viability: decay readings enter resolution only
                 # when no candidate matched the pointer type directly, so
@@ -19473,6 +19597,7 @@ class CodeGen:
                     expr.line,
                 )
             viable.sort(key=lambda entry: entry[0], reverse=True)
+            viable = self.view_dominance(viable, expr)
             if len(viable) > 1 and viable[0][0] == viable[1][0]:
                 # A rank tie is not yet an ambiguity: among the tied cohort,
                 # a candidate whose parameter pattern is strictly an instance
@@ -19481,7 +19606,7 @@ class CodeGen:
                 # :meth:`subsumption_winner`. Only a cohort with no such
                 # maximum stays ambiguous.
                 top = viable[0][0]
-                cohort = [f for key, f, _ in viable if key == top]
+                cohort = [f for key, _, f, _ in viable if key == top]
                 winner = self.subsumption_winner(cohort)
                 if winner is None:
                     # Open sets make cross-module ties possible, so cite the
@@ -19490,7 +19615,7 @@ class CodeGen:
                         f"call to {expr.name!r} is ambiguous between overloads",
                         expr.line,
                     )
-                    for rank_key, contender, _ in viable:
+                    for rank_key, _, contender, _ in viable:
                         if rank_key != top:
                             break
                         # An inherited contender's note points at the ORIGIN
@@ -19512,11 +19637,11 @@ class CodeGen:
                             )
                         )
                     raise err
-                _, func, bindings = next(
-                    entry for entry in viable if entry[1] is winner
+                _, _, func, bindings = next(
+                    entry for entry in viable if entry[2] is winner
                 )
             else:
-                _, func, bindings = viable[0]
+                _, _, func, bindings = viable[0]
         # The winner is known; a mixed overload set warns only when resolution
         # picks a deprecated candidate.
         self.warn_deprecated(expr.name, func.deprecated_msg, expr.line)
@@ -20077,8 +20202,8 @@ class CodeGen:
                 ``None`` (see :meth:`gen_generic_call`).
 
         Returns:
-            ``(specificity, func, bindings)`` entries for the viable decay
-            readings (possibly empty).
+            ``(rank, view distances, func, bindings)`` entries for the
+            viable decay readings (possibly empty).
         """
         viable = []
         for func in candidates:
@@ -20112,7 +20237,12 @@ class CodeGen:
                 ok = False
                 break
             if ok:
-                viable.append((self.call_rank(func, arg_tvs), func, bindings))
+                viable.append((
+                    self.call_rank(func, arg_tvs),
+                    self.view_dists,
+                    func,
+                    bindings,
+                ))
         return viable
 
     def fill_default_bindings(self, decl, bindings: dict[str, LangType], line: int):
@@ -20354,10 +20484,70 @@ class CodeGen:
         # A method-family call's receiver upcasts: inference and the shape
         # filter see it as the base instantiation the first parameter's
         # pattern names, when its declared `extends` lineage reaches one.
-        if "::" in expr.name and actuals and n_fixed >= 1:
-            actuals[0] = self.receiver_view(
-                func.params[0][1], actuals[0], func.type_params
-            )
+        # SIE-181/SIE-184: every REFERENCE position (`&T` / `const &T`, the
+        # positions marshalling forms a base view at) upcasts the same way,
+        # so resolution finally sees the derived->base view conversion it
+        # will emit: a derived argument satisfies a candidate's `&base`
+        # pattern (SIE-184's concrete-candidate viability) and a generic
+        # `&point<T>` pattern binds T through the derived argument's declared
+        # base instantiation (SIE-181's inference). A by-value position never
+        # upcasts here -- it still takes the explicit `as`. Exact matches
+        # keep winning: each viewed position's chain distance is recorded in
+        # `self.view_dists` -- computed HERE, on the same post-decay actuals
+        # the view applies to, so ranking can never disagree with viability
+        # -- and candidate selection prefers a uniformly nearer candidate
+        # (see view_dominance), below the tier and hop.
+        #
+        # Viability must be exactly emission's upcast, never looser. A
+        # pattern that names a TYPE PARAMETER routes through receiver_view's
+        # name-keyed chain walk -- the matched ancestor instance then PINS
+        # the bindings, so the instantiated parameter equals that ancestor
+        # and the marshal's upcast succeeds by construction. A CONCRETE
+        # pattern (receiver or not) instead resolves and asks
+        # receiver_upcast_target directly (the marshal's own predicate): the
+        # name walk alone would admit an ancestor of the right family but
+        # the wrong instance -- e.g. a list<char> argument reaching
+        # `&slice<const char>` through its slice<char> base -- which
+        # emission cannot form. And a NON-RECEIVER position carries
+        # emission's fatness gate (fat_ref_indices upcasts fat positions
+        # only), so a thin `.mci` parameter stays cleanly non-viable instead
+        # of failing coercion at the marshal.
+        dists = [0] * n_fixed
+        for i, (pname, ptype) in enumerate(func.params[:n_fixed]):
+            if i >= len(actuals):
+                break
+            is_receiver = i == 0 and "::" in expr.name
+            if not (
+                is_receiver
+                or pname in func.mut_params
+                or pname in func.constref_params
+            ):
+                continue
+            if self.names_type_param(ptype, func.type_params):
+                viewed = self.receiver_view(
+                    ptype, actuals[i], func.type_params
+                )
+                if viewed is actuals[i]:
+                    continue
+                bare = strip_const(viewed)
+                if not is_receiver and not self.is_fat_base(
+                    bare.template or bare.name, func.source
+                ):
+                    continue
+                dists[i] = self.chain_hops(strip_const(actuals[i]), viewed)
+                actuals[i] = viewed
+            else:
+                target = self.concrete_view_target(
+                    func, ptype, actuals[i], receiver=is_receiver
+                )
+                if target is not None:
+                    dists[i] = self.chain_hops(
+                        strip_const(actuals[i]), target
+                    )
+                    actuals[i] = (
+                        const_of(target) if actuals[i].const else target
+                    )
+        self.view_dists = dists
         try:
             if expr.type_args and len(expr.type_args) < len(func.type_params):
                 self.fill_default_bindings(func, bindings, expr.line)
@@ -20426,12 +20616,25 @@ class CodeGen:
                 expr.line,
             )
         if lenient:
-            for (_, ptype), tv, actual, arg in zip(
+            for i, ((_, ptype), tv, actual, arg) in enumerate(zip(
                 func.params[:n_fixed], arg_tvs, actuals, expr.args
-            ):
+            )):
                 if actual is CTOR_SELF:
                     # The receiver placeholder matches any receiver pattern;
                     # the winner's own first parameter types the slot.
+                    continue
+                if dists[i] and not self.names_type_param(
+                    ptype, func.type_params
+                ):
+                    # A concrete-pattern view: concrete_view_target already
+                    # resolved the parameter in the CANDIDATE's own context
+                    # and proved the argument's lineage reaches it -- the
+                    # viewed actual IS the resolved parameter type. The
+                    # shape filter's bare-name resolution runs in the
+                    # caller's context instead, where an enclosing generic
+                    # body's live binding may capture a same-named struct
+                    # (g<T>'s T = int32 hijacking a parameter struct named
+                    # T), so re-checking here would deny a formed view.
                     continue
                 if self.shape_matches(
                     ptype, actual, tv.adaptable, func.type_params, expr.line
@@ -20857,6 +21060,76 @@ class CodeGen:
         ]
         return winners[0] if len(winners) == 1 else None
 
+    def view_dominance(self, viable: list, expr: Call) -> list:
+        """Arbitrate rank-tied candidates by per-position view distance.
+
+        Among the candidates tied on the rank components above the view
+        distance -- ``(no-collect, tier, -hop)`` -- a candidate loses when
+        another is no farther at EVERY reference position and nearer at
+        some (the dominance rule, SIE-184): the dominated entries drop
+        before the specificity tie-breaks run. Surviving vectors that still
+        differ are incomparable -- nearer at one position, farther at
+        another -- and the call is ambiguous (an explicit ``as`` on an
+        argument picks a side); a total is never summed, so a candidate
+        exact at one position cannot be silently outvoted elsewhere. A call
+        with no viewed positions (every vector zero, the pre-SIE-184 world)
+        passes through untouched, so no pre-existing resolution moves.
+
+        Args:
+            viable: The non-empty ``(rank, view distances, func, bindings)``
+                entries, sorted by rank descending.
+            expr: The ``Call`` node, for diagnostics.
+
+        Returns:
+            ``viable`` unchanged, or the head cohort's undominated
+            survivors (which contain every possible winner).
+
+        Raises:
+            LangError: When the surviving distance vectors differ.
+        """
+        head = viable[0][0][:3]
+        cohort = [e for e in viable if e[0][:3] == head]
+        if len(cohort) < 2:
+            return viable
+        width = max(len(e[1]) for e in cohort)
+        padded = [tuple(e[1]) + (0,) * (width - len(e[1])) for e in cohort]
+        if len(set(padded)) == 1:
+            return viable
+
+        def dominates(x, y) -> bool:
+            return x != y and all(a <= b for a, b in zip(x, y))
+
+        keep = [
+            i
+            for i in range(len(cohort))
+            if not any(
+                dominates(padded[j], padded[i])
+                for j in range(len(cohort))
+                if j != i
+            )
+        ]
+        if len({padded[i] for i in keep}) > 1:
+            err = LangError(
+                f"call to {expr.name!r} is ambiguous between overloads: no "
+                "candidate is uniformly nearest through the derived->base "
+                "view",
+                expr.line,
+            )
+            for i in keep:
+                contender = cohort[i][2]
+                contender_inh = self.inherited_origins.get(id(contender))
+                label = (
+                    "candidate is here (inherited from "
+                    f"{contender_inh.base_label})"
+                    if contender_inh is not None
+                    else "candidate is here"
+                )
+                err.notes.append(
+                    Note(label, contender.line, contender.source)
+                )
+            raise err
+        return [cohort[i] for i in keep]
+
     def call_rank(
         self, func: Func, arg_tvs: list[TypedValue]
     ) -> tuple[int, int, int, int, int]:
@@ -20872,14 +21145,19 @@ class CodeGen:
         0 for a member declared on the receiver type itself -- sits below
         the tier and above specificity: a derived same-shape member shadows
         an inherited one, while a base member of a better tier (an inherited
-        exact/concrete match) still beats a derived generic. A collecting
-        match scores specificity over its fixed prefix only -- the trailing
-        ``slice<const any>`` pattern's own points must never arbitrate
-        against a competing prefix -- and more fixed parameters break the
-        remaining tie; equal fixed counts with a tying fixed-prefix
-        specificity stay the ambiguity error. Non-collecting matches all
-        share this call's arity, so their trailing count is inert and every
-        pre-collection ordering is preserved.
+        exact/concrete match) still beats a derived generic. Between the hop
+        and the specificity sits the VIEW-DISTANCE dominance rule (SIE-184),
+        which is not part of this key: candidates tied on ``(no-collect,
+        tier, -hop)`` are compared position by position on the ``extends``
+        hops their reference arguments upcast through (recorded by
+        :meth:`resolve_bindings`, applied by :meth:`view_dominance`). A
+        collecting match scores specificity over its fixed prefix only --
+        the trailing ``slice<const any>`` pattern's own points must never
+        arbitrate against a competing prefix -- and more fixed parameters
+        break the remaining tie; equal fixed counts with a tying
+        fixed-prefix specificity stay the ambiguity error. Non-collecting
+        matches all share this call's arity, so their trailing count is
+        inert and every pre-collection ordering is preserved.
 
         Args:
             func: The viable candidate.

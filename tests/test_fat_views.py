@@ -2141,3 +2141,522 @@ def test_let_binding_a_fat_reference_result_is_copy_on_read():
         }
         """
     ) == 1
+
+
+# --- SIE-184 + SIE-181: resolution ranks the derived->base view conversion ---
+
+
+def test_overloaded_callee_accepts_a_derived_argument_at_a_fat_position():
+    # SIE-184: overload resolution now considers the derived->base view
+    # conversion, so a derived rvalue at an overloaded callee's `const &a`
+    # position resolves (previously "no overload of 'via' with signature
+    # via(b)" -- adding an unrelated overload broke a working call) and the
+    # formed view dispatches the runtime override (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn make(x: int32) -> b { let r: b = { n = x, m = x }; return r; }
+        fn make(x: float64) -> a { let r: a = { n = 0 }; return r; }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn via(x: int32) -> int32 { return x; }
+        fn main() -> int32 { return via(make(1)); }
+        """
+    ) == 2
+
+
+def test_overloaded_method_family_accepts_a_derived_non_receiver_argument():
+    # SIE-184's method-family shape: the overloaded `pick` resolves its
+    # `const other: &a` member for a derived argument and dispatches (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn a::pick(const self: &a, const other: &a) -> int32 {
+            return other.who();
+        }
+        fn a::pick(const self: &a, x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let base: a = { n = 0 };
+            let derived: b = { n = 0, m = 0 };
+            return base.pick(derived);
+        }
+        """
+    ) == 2
+
+
+def test_generic_inference_binds_through_a_fat_reference_position():
+    # SIE-181: a generic `&point<T>` reference parameter infers T through the
+    # derived argument's declared base instantiation (pointf extends
+    # point<float64> binds T = float64), receiver and free positions alike.
+    assert run(
+        """
+        struct point<T> { x: T; y: T; }
+        struct pointf extends point<float64> { tag: int32; }
+        fn f<T>(const a: &point<T>) -> int32 {
+            if (a.x == (1.5 as T)) { return 7; }
+            return 0;
+        }
+        fn main() -> int32 {
+            let p: pointf = { x = 1.5, y = 2.5, tag = 0 };
+            return f(p);
+        }
+        """
+    ) == 7
+
+
+def test_generic_inference_unifies_derived_and_base_arguments():
+    # Two arguments at `&point<T>` positions -- one derived, one the base
+    # instantiation itself -- unify to the same binding (no conflict): both
+    # view to point<float64>.
+    assert run(
+        """
+        struct point<T> { x: T; y: T; }
+        struct pointf extends point<float64> { tag: int32; }
+        fn same<T>(const a: &point<T>, const b: &point<T>) -> int32 {
+            if (a.x == b.x) { return 3; }
+            return 0;
+        }
+        fn main() -> int32 {
+            let p: pointf = { x = 1.5, y = 2.5, tag = 0 };
+            let q: point<float64> = { x = 1.5, y = 0.0 };
+            return same(p, q);
+        }
+        """
+    ) == 3
+
+
+def test_exact_candidates_outrank_view_conversion_candidates():
+    # The ranking rule: an exact-typed candidate beats one the argument only
+    # reaches through the view conversion -- reference vs reference, by-value
+    # vs reference, and nearer base vs farther base. Every previously-viable
+    # candidate has view distance zero, so no pre-existing resolution moves.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct c extends b { k: int32; }
+        fn f(const it: &a) -> int32 { return 10; }
+        fn f(const it: &b) -> int32 { return 20; }
+        fn g(x: b) -> int32 { return 30; }
+        fn g(const x: &a) -> int32 { return 40; }
+        fn h(const it: &a) -> int32 { return 50; }
+        fn h(const it: &b) -> int32 { return 60; }
+        fn main() -> int32 {
+            let vb: b = { n = 0, m = 0 };
+            let vc: c = { n = 0, m = 0, k = 0 };
+            if (f(vb) != 20) { return 1; }   // exact &b beats upcast &a
+            if (g(vb) != 30) { return 2; }   // exact by-value beats &a view
+            if (h(vc) != 60) { return 3; }   // &b (1 hop) beats &a (2 hops)
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_view_viability_matches_what_emission_can_form():
+    # Viability through the conversion is exactly emission's upcast: a
+    # candidate whose reference names the right FAMILY but the wrong
+    # INSTANCE (gb's chain holds ga<int32>, never ga<float64>) stays
+    # non-viable -- the name-keyed walk alone would admit it and emission
+    # could not form the view.
+    with pytest.raises(
+        LangError,
+        match=r"no overload of 'f' with signature f\(gb\)",
+    ):
+        compile_ir(
+            """
+            struct ga<T> { x: T; }
+            struct gb extends ga<int32> { y: int32; }
+            fn f(const v: &ga<float64>) -> int32 { return 1; }
+            fn f(x: int32) -> int32 { return x; }
+            fn main() -> int32 {
+                let o: gb = { x = 0, y = 0 };
+                return f(o);
+            }
+            """
+        )
+
+
+def test_by_value_positions_still_require_the_explicit_as():
+    # The conversion is reference-only: a derived argument at an overloaded
+    # callee's BY-VALUE base position stays rejected (the honest data slice
+    # takes an explicit `as`, per the copy ruling).
+    with pytest.raises(
+        LangError,
+        match=r"no overload of 'f' with signature f\(b\)",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn f(x: a) -> int32 { return 1; }
+            fn f(x: int32) -> int32 { return x; }
+            fn main() -> int32 {
+                let o: b = { n = 0, m = 0 };
+                return f(o);
+            }
+            """
+        )
+
+
+def test_overloaded_writable_reference_takes_a_derived_lvalue():
+    # The writable flavor through the overload set: the `&a` member resolves
+    # for a derived lvalue, lends its storage as the view (the write lands),
+    # and dispatches the override (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn poke(it: &a) -> int32 { it.n = 9; return it.who(); }
+        fn poke(x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let o: b = { n = 0, m = 0 };
+            let r = poke(o);
+            if (o.n != 9) { return 80; }
+            return r;
+        }
+        """
+    ) == 2
+
+
+# --- SIE-184 review round: viability, ranking, and emission are ONE predicate -
+
+
+def test_decayed_pointer_argument_keeps_the_exact_overload():
+    # The view runs AFTER pointer decay and its distance is recorded on the
+    # same post-decay actuals, so a `b*` argument decaying to `b` charges the
+    # `&a` candidate its hop and the exact `&b` wins (a distance computed on
+    # the raw pointer type saw 0 for both and manufactured an ambiguity).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn f(const it: &a) -> int32 { return 1; }
+        fn f(const it: &b) -> int32 { return 2; }
+        fn main() -> int32 {
+            let v: b = { n = 1, m = 2 };
+            let p: b* = &v;
+            return f(p);
+        }
+        """
+    ) == 2
+
+
+def test_enclosing_generic_binding_does_not_hijack_a_concrete_pattern():
+    # Inside g<int32>, the live binding T = int32 must not capture the
+    # candidate's parameter STRUCT named T: the concrete pattern resolves in
+    # the candidate's own context (empty bindings), and the shape filter
+    # trusts the formed view instead of re-resolving the bare name in the
+    # caller's scope.
+    assert run(
+        """
+        struct T { n: int32; }
+        struct d extends T { m: int32; }
+        fn f(const v: &T) -> int32 { return 7; }
+        fn f(x: int32) -> int32 { return x; }
+        fn g<T>(x: T) -> int32 {
+            let o: d = { n = 1, m = 2 };
+            return f(o);
+        }
+        fn main() -> int32 { return g(0); }
+        """
+    ) == 7
+
+
+def test_qualified_member_overloads_rank_the_receiver_position():
+    # A qualified `a::f(d)` charges position 0 its view distance like any
+    # other reference position (the old method-position exclusion dropped it
+    # and left the pair tied), so the exact `&b` member wins.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::f(const it: &a) -> int32 { return 1; }
+        fn a::f(const it: &b) -> int32 { return 2; }
+        fn main() -> int32 {
+            let d: b = { n = 1, m = 2 };
+            return a::f(d);
+        }
+        """
+    ) == 2
+
+
+def test_alias_spelled_view_candidate_is_charged_its_distance():
+    # `&abase` (a plain alias of `a`) views -- and is charged -- exactly like
+    # the direct spelling: the distance comes from the formed view itself,
+    # never a separate name walk that an alias spelling slips past.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        type abase = a;
+        fn h(const it: &abase) -> int32 { return 1; }
+        fn h(const it: &b) -> int32 { return 2; }
+        fn main() -> int32 {
+            let vb: b = { n = 1, m = 2 };
+            return h(vb);
+        }
+        """
+    ) == 2
+
+
+def test_concrete_receiver_specialization_does_not_capture_the_family():
+    # The receiver position routes CONCRETE patterns through the same
+    # emission-parity resolution as every other position: the
+    # `ga<const char>` specialization (whose instance gb's chain never holds)
+    # stays non-viable, and the generic member wins -- adding the
+    # specialization must not break the working call with a late marshal
+    # error.
+    assert run(
+        """
+        struct ga<T> { x: int32; }
+        struct gb extends ga<char> { y: int32; }
+        fn ga<T>::m(const self: &ga<T>) -> int32 { return 1; }
+        fn ga<const char>::m(const self: &ga<const char>) -> int32 {
+            return 3;
+        }
+        fn main() -> int32 {
+            let b: gb = { x = 1, y = 2 };
+            return ga::m(b);
+        }
+        """
+    ) == 1
+
+
+def test_thin_mci_parameter_stays_cleanly_non_viable(tmp_path):
+    # Resolution carries emission's fatness gate: the stub never saw `a`
+    # extended, so its `&a` is THIN and emission cannot form a view for a
+    # derived argument -- the candidate is cleanly non-viable (the honest
+    # no-overload diagnostic), never admitted and then failed at the marshal
+    # with a misleading coercion error.
+    (tmp_path / "api.mci").write_text(
+        "struct a { n: int32; }\n"
+        "fn viewit(const it: &a) -> int32;\n"
+        "fn viewit(x: int32) -> int32;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "api";\n'
+        "struct b extends a { m: int32; }\n"
+        "fn main() -> int32 {\n"
+        "    let v: b = { n = 1, m = 2 };\n"
+        "    return viewit(v);\n"
+        "}\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"no overload of 'viewit' with signature viewit\(b\)",
+    ):
+        compile_to_ir(main, (tmp_path,))
+
+
+def test_mixed_view_distances_are_ambiguous():
+    # The dominance rule (maintainer ruling): a candidate wins on view
+    # distance only when it is no farther at EVERY position. Nearer here,
+    # farther there is incomparable -- the call is ambiguous, never resolved
+    # by a silent total that lets one position outvote another's exact match.
+    with pytest.raises(
+        LangError,
+        match=r"call to 'f' is ambiguous between overloads: no candidate "
+        r"is uniformly nearest through the derived->base view",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            struct c extends b { o: int32; }
+            struct d extends c { p: int32; }
+            fn f(const x: &c, const y: &c) -> int32 { return 1; }
+            fn f(const x: &d, const y: &a) -> int32 { return 2; }
+            fn main() -> int32 {
+                let v: d = { n = 1, m = 2, o = 3, p = 4 };
+                return f(v, v);
+            }
+            """
+        )
+
+
+def test_uniformly_nearer_candidate_wins_across_positions():
+    # The dominance rule's resolving half: nearer (or equal) at BOTH
+    # positions is a genuine win, so the `&b` pair beats the `&a` pair for
+    # two `c` arguments.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct c extends b { o: int32; }
+        fn f(const x: &a, const y: &a) -> int32 { return 1; }
+        fn f(const x: &b, const y: &b) -> int32 { return 2; }
+        fn main() -> int32 {
+            let v: c = { n = 1, m = 2, o = 3 };
+            return f(v, v);
+        }
+        """
+    ) == 2
+
+
+def test_losing_candidates_do_not_instantiate_generic_structs():
+    # The name pre-walk: a losing candidate's generic reference pattern
+    # (box<heavy>, a family the argument's chain never reaches) is rejected
+    # before its parameter type resolves, so the trial leaves no orphan
+    # monomorphized struct in the module IR.
+    ir = compile_ir(
+        """
+        struct heavy { n: int32; }
+        struct box<T> { it: T; }
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn f<U>(const it: &box<heavy>, u: U) -> int32 { return 1; }
+        fn f<U>(const it: &a, u: U) -> int32 { return 2; }
+        fn main() -> int32 {
+            let v: b = { n = 1, m = 2 };
+            return f(v, 0);
+        }
+        """
+    )
+    assert 'box<heavy>' not in ir
+
+
+# --- SIE-184 review round 2: viability halves the round-1 asserts left open --
+
+
+def test_alias_spelled_view_candidate_stays_viable_alone():
+    # The complement of the round-1 alias RANKING test (which an over-eager
+    # rejection would also pass): with no exact competitor, the alias-spelled
+    # `&abase` candidate must still be VIABLE through the view -- the name
+    # pre-walk chases the plain alias to the family, it does not reject it.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        type abase = a;
+        fn h(const it: &abase) -> int32 { return 1; }
+        fn h(x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let vb: b = { n = 1, m = 2 };
+            return h(vb);
+        }
+        """
+    ) == 1
+
+
+def test_qualified_member_view_candidate_stays_viable_alone():
+    # The complement of the round-1 qualified-member RANKING test: charging
+    # position 0 of `a::f(d)` its view distance must not have cost the
+    # position its upcast -- the sole `&a` member still takes the derived
+    # argument through the view.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::f(const it: &a) -> int32 { return 1; }
+        fn a::f(x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let d: b = { n = 1, m = 2 };
+            return a::f(d);
+        }
+        """
+    ) == 1
+
+
+def test_concrete_receiver_specialization_wins_when_the_chain_holds_it():
+    # The capture test's other half: routing concrete receiver patterns
+    # through emission's predicate rejects the WRONG instance, but the RIGHT
+    # instance (gb's chain holds ga<char>) must keep beating the generic
+    # member -- specialization-over-generic ranking is undisturbed when the
+    # view really can form.
+    assert run(
+        """
+        struct ga<T> { x: int32; }
+        struct gb extends ga<char> { y: int32; }
+        fn ga<T>::m(const self: &ga<T>) -> int32 { return 1; }
+        fn ga<char>::m(const self: &ga<char>) -> int32 { return 3; }
+        fn main() -> int32 {
+            let b: gb = { x = 1, y = 2 };
+            return ga::m(b);
+        }
+        """
+    ) == 3
+
+
+def test_exact_candidate_wins_over_incomparable_view_candidates():
+    # Dominance's all-zero fast path in a crowd: two view candidates that are
+    # incomparable to each other (nearer here, farther there) must not drag
+    # the call into ambiguity when a third candidate is exact at every
+    # position -- the zero vector dominates both.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct c extends b { o: int32; }
+        struct d extends c { p: int32; }
+        fn f(const x: &c, const y: &c) -> int32 { return 1; }
+        fn f(const x: &d, const y: &a) -> int32 { return 2; }
+        fn f(const x: &d, const y: &d) -> int32 { return 3; }
+        fn main() -> int32 {
+            let v: d = { n = 1, m = 2, o = 3, p = 4 };
+            return f(v, v);
+        }
+        """
+    ) == 3
+
+
+def test_writable_reference_positions_charge_the_view_distance():
+    # The distance gate covers mut positions too (`it: &a` vs `it: &b`): the
+    # exact `&b` wins for a derived lvalue, and its write lands -- the const
+    # tests alone would not catch a gate keyed only to constref_params.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn f(it: &a) -> int32 { it.n = 9; return 1; }
+        fn f(it: &b) -> int32 { it.m = 9; return 2; }
+        fn main() -> int32 {
+            let v: b = { n = 0, m = 0 };
+            if (f(v) != 2) { return 10; }
+            if (v.m != 9) { return 11; }
+            if (v.n != 0) { return 12; }
+            return 2;
+        }
+        """
+    ) == 2
+
+
+def test_cross_module_alias_candidate_ranks_and_stays_viable(tmp_path):
+    # The alias chase runs in the CANDIDATE's own context: a `&abase`
+    # parameter spelled through an alias private to the candidate's module
+    # is charged its distance (the caller's exact `&b` wins) yet stays
+    # viable through the view when it is the only reference candidate.
+    (tmp_path / "shapes.mc").write_text(
+        "struct a { n: int32; }\n"
+        "type abase = a;\n"
+        "fn h(const it: &abase) -> int32 { return 1; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "shapes";\n'
+        "struct b extends a { m: int32; }\n"
+        "fn h(const it: &b) -> int32 { return 2; }\n"
+        "fn main() -> int32 {\n"
+        "    let vb: b = { n = 1, m = 2 };\n"
+        "    return h(vb);\n"
+        "}\n"
+    )
+    assert run_path(main) == 2
+    sole = tmp_path / "sole.mc"
+    sole.write_text(
+        'import "shapes";\n'
+        "struct b extends a { m: int32; }\n"
+        "fn main() -> int32 {\n"
+        "    let vb: b = { n = 1, m = 2 };\n"
+        "    return h(vb);\n"
+        "}\n"
+    )
+    assert run_path(sole) == 1
