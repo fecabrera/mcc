@@ -2288,11 +2288,14 @@ on every value's ABI, or the call is undefined behavior. It must **return the
 same type** (a divergent return — an `int32` base overridden by a `float64` one
 — would reinterpret the returned bytes), and **every parameter**, the receiver
 and each argument alike, must be passed the same way: by value vs. by
-reference, `const` vs. writable, `own`, `@nonnull`. In particular an override
-may **not** widen a read-only `const &T` parameter to a writable `&T` one (a
-call dispatched through a `const` view would then mutate through a promise not
-to), nor change a by-value parameter to by-reference, nor add `@nonnull` where
-the base accepted null. The one safe relaxation is *narrowing* a writable base
+reference, `const` vs. writable, `own`, `@nonnull`, `@noalias`. In particular an
+override may **not** widen a read-only `const &T` parameter to a writable `&T`
+one (a call dispatched through a `const` view would then mutate through a
+promise not to), nor change a by-value parameter to by-reference, nor add
+`@nonnull` where the base accepted null, nor add `@noalias` where the base
+permits aliasing (the override body would assume non-aliasing that a call
+through the base signature, which permits it, need not honor). The one safe
+relaxation is *narrowing* a writable base
 reference to a read-only override one (same pointer ABI, and the override merely
 promises to mutate less). Every violation is a compile error.
 

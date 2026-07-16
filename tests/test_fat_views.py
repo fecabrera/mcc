@@ -1179,3 +1179,77 @@ def test_struct_generic_override_with_a_mismatched_return_is_rejected():
             fn main() -> int32 { return 0; }
             """
         )
+
+
+def test_shadowing_let_restores_the_outer_dispatch_table_after_the_block():
+    # A `let` shadowing a fat reference parameter drops the shadowed name's
+    # dispatch table for the block's duration (the inner local is a plain,
+    # statically-dispatched value). The OUTER parameter's table must be
+    # restored on scope exit, or a dynamic-dispatch call on it after the block
+    # would fall back to a static (base) call. Through a `&a` view of a `b`,
+    # the post-block `p.kind()` must still reach the derived override (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn via(const p: &a) -> int32 {
+            { let p: a = { n = 0 }; let inner = p.kind(); }
+            return p.kind();
+        }
+        fn main() -> int32 {
+            let o: b = { n = 0, m = 0 };
+            return via(o);
+        }
+        """
+    ) == 2
+
+
+def test_renamed_generic_struct_qualifier_parameter_dispatches():
+    # A generic qualifier parameter is POSITIONAL: `fn ga<X>::kind` names the
+    # struct parameter `X`, not the declaration's `T`. A struct-generic override
+    # spelled with a different name (`gb<Y>::kind`) declares no method-OWNED
+    # type parameter, so it dispatches like any concrete override -- a `&ga<int32>`
+    # view of a `gb<int32>` reaches the derived member (2). (Before the fix the
+    # name-equality classification misread `X`/`Y` as method-owned and rejected
+    # the base-view call with "declares its own type parameter".)
+    assert run(
+        """
+        struct ga<T> { x: T; }
+        struct gb<T> extends ga<T> { y: T; }
+        fn ga<X>::kind(const self: &ga<X>) -> int32 { return 1; }
+        @override fn gb<Y>::kind(const self: &gb<Y>) -> int32 { return 2; }
+        fn via(const x: &ga<int32>) -> int32 { return x.kind(); }
+        fn main() -> int32 {
+            let o: gb<int32> = { x = 0, y = 0 };
+            return via(o);
+        }
+        """
+    ) == 2
+
+
+def test_override_adding_noalias_to_a_parameter_is_rejected():
+    # An override may not mark a parameter @noalias where the base does not: the
+    # override body would assume non-aliasing, but a call dispatched through the
+    # base signature -- which permits aliasing -- may pass aliasing pointers,
+    # making the derived LLVM `noalias` assumption unsound.
+    with pytest.raises(
+        LangError,
+        match=(
+            r"@override method 'b::apply' marks parameter 'p' @noalias where "
+            r"the base member it overrides permits aliasing"
+        ),
+    ):
+        compile_ir(
+            """
+            struct payload { v: int32; }
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::apply(const self: &a, p: payload*) -> int32 { return 0; }
+            @override fn b::apply(const self: &b, @noalias p: payload*) -> int32 {
+                return 0;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )

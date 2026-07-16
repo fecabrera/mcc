@@ -1849,18 +1849,33 @@ class CodeGen:
         """A method's OWN type parameters -- those beyond its struct's.
 
         A method on a generic struct carries the struct's type parameters in
-        :attr:`Func.type_params` (injected at registration so it monomorphizes
-        per struct instance); its method-owned parameters are what remain. For a
-        free function or a non-generic struct's method, every ``type_params``
-        entry is method-owned. The distinction gates dynamic dispatch: a
-        method-owned generic cannot occupy a single slot (one per instantiation
-        would be needed), while a struct-generic method dispatches fine (each
-        concrete struct instance has its own table with concrete slot types).
-        For a free function (no ``::``) no struct declaration is found, so every
-        entry is method-owned, as it should be.
+        :attr:`Func.type_params` (prepended at registration so it monomorphizes
+        per struct instance); its method-owned parameters are what remain. The
+        prepended names come from the method's pre-``::`` qualifier, which is
+        POSITIONAL: ``fn a<X>::m`` on ``struct a<T>`` names the struct
+        parameter ``X``, not ``T``. So classify against the fresh qualifier
+        arguments (:attr:`Func.qualifier_args`), not by name equality against
+        the struct declaration's parameter list -- a renamed qualifier
+        parameter would otherwise be misread as method-owned and a valid
+        struct-generic override rejected. For a free function or a method on a
+        non-generic struct (no qualifier annotation) ``qualifier_args`` is
+        ``None`` and every entry is method-owned, as it should be. The
+        distinction gates dynamic dispatch: a method-owned generic cannot
+        occupy a single slot (one per instantiation would be needed), while a
+        struct-generic method dispatches fine (each concrete struct instance
+        has its own table with concrete slot types).
         """
-        decl = self.lookup_struct_decl(func.name.split("::", 1)[0])
-        struct_params = set(decl.type_params) if decl is not None else set()
+        qargs = func.qualifier_args
+        if not qargs:
+            return list(func.type_params)
+        # The struct-generic parameters are the fresh names among the qualifier
+        # arguments -- the exact set prepended to ``type_params`` at
+        # registration (concrete arguments bind and drop out). A registration
+        # shadow check guarantees these are disjoint from the method's own, so
+        # filtering by membership recovers the method-owned tail.
+        struct_params = {
+            a.name for a in qargs if self.struct_arg_is_param(a, func.line)
+        }
         return [t for t in func.type_params if t not in struct_params]
 
     def param_pass_kind(self, func: Func, i: int) -> str:
@@ -1892,8 +1907,11 @@ class CodeGen:
         (undefined behavior). The one safe relaxation is narrowing a writable
         base reference to a read-only one in the override (same pointer ABI, and
         the override merely promises to mutate less). A parameter the override
-        newly marks ``@nonnull`` where the base accepted null is also rejected
-        (the override would assume a guarantee the base does not make).
+        newly marks ``@nonnull`` (a guarantee the base does not make) or
+        ``@noalias`` (the override body would assume non-aliasing that a call
+        through the base signature, which permits aliasing, does not honor) is
+        also rejected: both let the override assume a promise the base -- and so
+        a base-view caller -- never makes.
         """
         passing = {
             "value": "by value",
@@ -1927,6 +1945,12 @@ class CodeGen:
                 f"marks parameter {oname!r} @nonnull where the base member it "
                 "overrides accepts null"
             )
+        if oname in over.noalias_params and bname not in base.noalias_params:
+            return (
+                f"marks parameter {oname!r} @noalias where the base member it "
+                "overrides permits aliasing; a call dispatched through the "
+                "base signature may pass aliasing pointers"
+            )
         return None
 
     def validate_dispatch_overrides(self):
@@ -1941,10 +1965,12 @@ class CodeGen:
             reinterpret the returned bytes as garbage.
           * **every parameter's passing convention** (the receiver and each
             other argument) -- by-value vs by-reference, ``const`` vs writable,
-            ``own``, ``@nonnull``. The slot's indirect call and the stored thunk
-            must agree on each argument's ABI, or the call is undefined
-            behavior; and an override may not widen a read-only ``const``
-            reference to a writable one (mutation through a ``const`` promise).
+            ``own``, ``@nonnull``, ``@noalias``. The slot's indirect call and
+            the stored thunk must agree on each argument's ABI, or the call is
+            undefined behavior; and an override may not widen a read-only
+            ``const`` reference to a writable one (mutation through a ``const``
+            promise) nor add ``@noalias`` where the base permits aliasing (the
+            body would assume non-aliasing a base-view caller need not honor).
             The one safe relaxation is narrowing a writable base reference to a
             read-only override one. See :meth:`param_abi_mismatch`.
 
@@ -2164,8 +2190,20 @@ class CodeGen:
                     symbol = self.overload_symbols.get(id(member), member.name)
                     return self.funcs[symbol], symbol
                 # A generic base member: instantiate at this hop's arguments.
-                decl = self.lookup_struct_decl(owner)
-                bindings = dict(zip(decl.type_params, current.args))
+                # Key the bindings by the MEMBER's own struct-generic parameter
+                # names, which come from its (positional) qualifier and need not
+                # reuse the declaration's names -- `fn ga<X>::kind` binds `X`,
+                # not the declaration's `T`. A generic member always carries
+                # such a qualifier (`qualifier_args` is set); its arguments
+                # align position-for-position with the declaration's parameter
+                # list and thus with this hop's `current.args`, and a concrete
+                # (specialized) position carries no fresh name -- it was already
+                # substituted into the signature, so it binds nothing.
+                bindings = {
+                    qa.name: arg
+                    for qa, arg in zip(member.qualifier_args, current.args)
+                    if self.struct_arg_is_param(qa, member.line)
+                }
                 fn, _ret, _params = self.instantiate(member, bindings, member.line)
                 return fn, fn.name
             current = current.base
@@ -7227,6 +7265,12 @@ class CodeGen:
         outer_locals, outer_names = dict(self.locals), self.scope_names
         outer_narrowed = set(self.narrowed_nonnull)
         outer_paths = set(self.narrowed_paths)
+        # A `let` shadowing a fat reference parameter drops the shadowed name's
+        # dispatch table (bind_local), correctly making the inner local static.
+        # Snapshot so the outer parameter's table is restored on scope exit --
+        # otherwise a dynamic-dispatch call on it after the block would index a
+        # missing table and fall back to a static (base) call.
+        outer_tables = dict(self.param_tables)
         self.scope_names = set()
         self.defer_stack.append([])
         if on_enter is not None:
@@ -7264,6 +7308,10 @@ class CodeGen:
             # local (not in this block's names) stays moved past the block.
             self.moved_locals -= self.scope_names
             self.locals, self.scope_names = outer_locals, outer_names
+            # Restore any dispatch table a shadowing `let` dropped inside the
+            # block (see the snapshot above): the outer fat reference parameter
+            # dynamic-dispatches again past the block.
+            self.param_tables = outer_tables
             # Narrowed facts established inside the block (early-guard
             # narrowing, shadowed names) end with it; invalidations from
             # inside persist outward. Intersecting achieves both.

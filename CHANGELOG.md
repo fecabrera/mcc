@@ -241,11 +241,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   ABI-compatible with it: it must **return the same type** (the slot's indirect
   call is typed with the base return type) and pass **every parameter** — the
   receiver and each argument — the same way (by value vs. by reference, `const`
-  vs. writable, `own`, `@nonnull`), since the slot's indirect call and the
-  stored thunk must agree on each value's ABI. Widening a read-only `const &T`
-  to a writable `&T`, changing by-value to by-reference, or adding `@nonnull`
-  are all clean compile errors; the one safe relaxation is *narrowing* a
-  writable base reference to a read-only override one. A few constructs a
+  vs. writable, `own`, `@nonnull`, `@noalias`), since the slot's indirect call
+  and the stored thunk must agree on each value's ABI. Widening a read-only
+  `const &T` to a writable `&T`, changing by-value to by-reference, adding
+  `@nonnull`, or adding `@noalias` where the base permits aliasing (the body
+  would assume non-aliasing a base-view caller need not honor) are all clean
+  compile errors; the one safe relaxation is *narrowing* a writable base
+  reference to a read-only override one. A few constructs a
   single slot cannot represent are rejected rather than miscompiled, each
   liftable later: a fat reference may not ride in a function-pointer type; a
   **method-owned generic override** (one declaring its own type parameter, not
