@@ -1253,3 +1253,133 @@ def test_override_adding_noalias_to_a_parameter_is_rejected():
             fn main() -> int32 { return 0; }
             """
         )
+
+
+def test_overloaded_call_result_argument_keeps_its_derived_table():
+    # A fat argument's table word is sourced from the type the argument
+    # EVALUATED to, not re-probed from the AST: an OVERLOADED function's call
+    # result (a shape the old by-name probe bailed on) forming a `&a` view
+    # keeps the derived `b` table, so the callee's dispatch reaches b::who (2)
+    # -- the object was always a full `b`; only the table used to slice.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn make(x: int32) -> b { let r: b = { n = x, m = x }; return r; }
+        fn make(x: float64) -> a { let r: a = { n = 0 }; return r; }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 { return via(make(1)); }
+        """
+    ) == 2
+
+
+def test_method_call_result_argument_keeps_its_derived_table():
+    # Same rvalue-shape coverage for a METHOD call's result: `fc.make()`
+    # returns a derived `b`, and the view formed from it dispatches to the
+    # derived override (2), not the sliced base (1).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct factory { seed: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn factory::make(const self: &factory) -> b {
+            let r: b = { n = self.seed, m = 0 }; return r;
+        }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 {
+            let fc: factory = { seed = 0 };
+            return via(fc.make());
+        }
+        """
+    ) == 2
+
+
+def test_ternary_argument_keeps_its_derived_table():
+    # And for a ternary of two derived values: either arm is a full `b`, so
+    # the view's table must be b's (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 {
+            let x: b = { n = 0, m = 0 };
+            let y: b = { n = 1, m = 1 };
+            let cond: bool = true;
+            return via(cond ? x : y);
+        }
+        """
+    ) == 2
+
+
+def test_as_upcast_argument_carries_the_base_table():
+    # The guard for the other direction: `x as a` BUILDS a genuine base value
+    # (intended, explicit data slicing), so the view formed from it carries the
+    # BASE table and dispatches a::who (1). Sourcing the table from the
+    # evaluated type keeps this correct for free -- the cast's result type IS
+    # the base.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 {
+            let x: b = { n = 0, m = 0 };
+            return via(x as a);
+        }
+        """
+    ) == 1
+
+
+def test_writable_reference_view_of_a_derived_lvalue_dispatches_and_writes():
+    # The writable `&a` (mut) marshal path: a derived lvalue lends its actual
+    # storage as the view, so the callee's dispatch reaches b::who (2) AND its
+    # write through the reference lands in the caller's derived object.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn via(it: &a) -> int32 { it.n = 9; return it.who(); }
+        fn main() -> int32 {
+            let x: b = { n = 0, m = 0 };
+            let r = via(x);
+            if (x.n != 9) { return 100; }
+            return r;
+        }
+        """
+    ) == 2
+
+
+def test_derived_argument_at_a_non_receiver_fat_position_via_inheritance():
+    # The overload/inherited call path (gen_generic_call): the receiver
+    # inherits `pick` from the base, and the derived `other` argument sits at
+    # a NON-receiver fat position -- the derived->base view forms there too
+    # (any-position reference conversion), with the derived table (2). Before
+    # the fix this path never upcast a non-receiver fat argument: it spilled a
+    # base-coerced copy carrying the base table (a silent slice).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn a::pick(const self: &a, const other: &a) -> int32 {
+            return other.who();
+        }
+        fn main() -> int32 {
+            let d1: b = { n = 0, m = 0 };
+            let d2: b = { n = 0, m = 0 };
+            return d1.pick(d2);
+        }
+        """
+    ) == 2

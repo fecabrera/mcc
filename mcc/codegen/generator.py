@@ -2368,7 +2368,10 @@ class CodeGen:
         fnptr = self.builder.bitcast(raw_fn, slot_ty.as_pointer())
         return self.emit_call(fnptr, args)
 
-    def dispatch_table_of(self, expr, concrete: "LangType | None"):
+    def dispatch_table_of(
+        self, expr, concrete: "LangType | None",
+        static: "LangType | None" = None,
+    ):
         """The dispatch-table ``i8*`` for a fat-reference argument's source.
 
         A bare fat-view parameter propagates its own table (from
@@ -2378,10 +2381,21 @@ class CodeGen:
         undeterminable one) carries a null table -- it can never be dispatched
         through.
 
+        The static type comes from ``static`` -- the type the marshalling
+        just EVALUATED the argument to, the authoritative source: a derived
+        rvalue of any shape (an overloaded call's result, a method call's, a
+        ternary's) keeps its own table rather than slicing to the declared
+        base's, and an ``as`` upcast correctly carries the BASE table (the
+        cast built a genuine base value). Re-probing the AST instead would
+        re-derive, more weakly, a fact the marshalling already holds.
+
         Args:
-            expr: The argument expression.
-            concrete: The declared parameter (base) type, a fallback when the
-                argument's own concrete type cannot be read statically.
+            expr: The argument expression (for the fat-view propagation
+                check only -- the type is never probed from it).
+            concrete: The declared parameter (base) type, a fallback when no
+                evaluated type is supplied.
+            static: The argument's evaluated static type, from the
+                marshalling (see :meth:`marshal_args`'s ``fat_static``).
 
         Returns:
             An ``i8*`` value for the table word.
@@ -2389,7 +2403,6 @@ class CodeGen:
         i8ptr = ir.IntType(8).as_pointer()
         if isinstance(expr, Var) and expr.name in self.param_tables:
             return self.param_tables[expr.name]
-        static = self.fat_arg_static_type(expr)
         if static is None:
             static = concrete
         if static is None:
@@ -2400,40 +2413,6 @@ class CodeGen:
         ):
             return ir.Constant(i8ptr, None)
         return self.vtable_for(static)
-
-    def fat_arg_static_type(self, expr) -> "LangType | None":
-        """The static type a fat-reference argument EVALUATES to, or ``None``.
-
-        A fat ``&base`` parameter takes a derived argument by forming a view;
-        the table word must reflect the ARGUMENT's own static type so a
-        re-dispatch reaches the right override -- not the declared base, which
-        would slice a derived rvalue back to the base. So this reads the type
-        the expression actually produces, including rvalues an lvalue probe
-        misses:
-
-          * a call result -- a named, non-overloaded function's declared
-            return type (``via(make())`` where ``make`` returns the derived
-            ``b`` dispatches through ``b``'s table, not ``a``'s);
-          * an ``as`` cast -- its target type, so a genuine by-value upcast
-            ``(d as base)`` correctly carries the BASE table (intended
-            slicing), while a plain derived value keeps its own.
-
-        Everything :meth:`dot_receiver_type` already types (a variable, a
-        field, an index, a deref, a nonnull assertion) types the same here.
-        ``None`` when the concrete static type genuinely cannot be read, so
-        the caller falls back to the declared base type.
-        """
-        t = self.dot_receiver_type(expr)
-        if t is not None:
-            return t
-        if (
-            isinstance(expr, Call)
-            and not expr.type_args
-            and expr.name not in self.overloads
-            and expr.name in self.signatures
-        ):
-            return self.signatures[expr.name][0]
-        return None
 
     def template_base(self, func: Func, groups: bool = True) -> str:
         """Spell a generic template's order-independent symbol base.
@@ -17221,6 +17200,11 @@ class CodeGen:
         # returns (the terminated path discards the queue unemitted), so
         # snapshot the queue and warn on the growth below.
         drops_base = len(self.pending_drops)
+        fat = self.fat_ref.get(symbol, frozenset())
+        # Each fat argument's evaluated static type, filled by the marshal:
+        # the dispatch table word is sourced from what the argument actually
+        # evaluated to (a derived rvalue keeps its own table).
+        fat_static: dict[int, LangType] = {}
         args = self.marshal_args(
             expr.args,
             params,
@@ -17254,18 +17238,20 @@ class CodeGen:
             # argument by forming a base VIEW (the derived->base reference
             # conversion), at any position -- the reference upcast never slices,
             # unlike a by-value one.
-            fat=self.fat_ref.get(symbol, frozenset()),
+            fat=fat,
+            fat_static=fat_static,
         )
         # SIE-101 Stage 2: fill each fat-reference argument's dispatch table
         # (its object's, or a propagated fat-view table) and, for a method-
         # family call whose receiver is a fat VIEW of an overridden family,
         # dispatch INDIRECTLY through the receiver's table slot instead of the
         # statically-resolved direct call.
-        fat = self.fat_ref.get(symbol, frozenset())
         raw = None
         if fat and abi is None:
             tables = {
-                i: self.dispatch_table_of(expr.args[i], params[i])
+                i: self.dispatch_table_of(
+                    expr.args[i], params[i], fat_static.get(i)
+                )
                 for i in fat
                 if i < len(expr.args)
             }
@@ -17610,6 +17596,7 @@ class CodeGen:
         sret_slot=None,
         receiver_upcast: bool = False,
         fat: frozenset[int] = frozenset(),
+        fat_static: "dict[int, LangType] | None" = None,
     ) -> list:
         """Evaluate and coerce a call's arguments against the parameter types.
 
@@ -17662,6 +17649,12 @@ class CodeGen:
                 ``extends`` base of its type: a ``mut``/hidden reference
                 lends the storage's base prefix, a by-value receiver
                 prefix-copies. Never set for indirect or ``@extern`` calls.
+            fat_static: An optional out-dict filled with each fat argument's
+                EVALUATED static type (``{index: LangType}``) -- the derived
+                type when the argument's storage really is derived, so the
+                caller sources the dispatch table word from what the argument
+                evaluated to (see :meth:`dispatch_table_of`) rather than
+                slicing every rvalue to the declared base's table.
 
         Returns:
             The marshalled LLVM argument values.
@@ -17739,12 +17732,13 @@ class CodeGen:
             if i in mut:
                 # Before the string-literal adaptation: a literal is not the
                 # caller's storage, so it must be rejected, not spilled.
-                args.append(
-                    self.mut_ref_arg(
-                        arg_expr, params[i], line, context,
-                        receiver=(receiver_upcast and i == 0) or i in fat,
-                    )
+                ptr, src = self.mut_ref_arg(
+                    arg_expr, params[i], line, context,
+                    receiver=(receiver_upcast and i == 0) or i in fat,
                 )
+                if fat_static is not None and i in fat:
+                    fat_static[i] = src
+                args.append(ptr)
                 continue
             if i < len(params) and (
                 self.struct_literal_adapts(arg_expr, params[i])
@@ -17758,18 +17752,22 @@ class CodeGen:
                 # reference (a `const` slice or struct) takes the value's
                 # address, so spill the adapted value to a temporary first.
                 tv = self.gen_adapted_literal(arg_expr, params[i], line)
+                if fat_static is not None and i in fat:
+                    # An adapted literal builds the parameter's type exactly.
+                    fat_static[i] = tv.type
                 if i in hidden:
                     args.append(self.spill_to_temp(tv, params[i], line, context))
                 else:
                     args.append(tv.value)
                 continue
             if i in hidden:
-                args.append(
-                    self.hidden_ref_arg(
-                        arg_expr, params[i], line, context,
-                        receiver=(receiver_upcast and i == 0) or i in fat,
-                    )
+                ptr, src = self.hidden_ref_arg(
+                    arg_expr, params[i], line, context,
+                    receiver=(receiver_upcast and i == 0) or i in fat,
                 )
+                if fat_static is not None and i in fat:
+                    fat_static[i] = src
+                args.append(ptr)
                 continue
             if i < len(params) and is_valist(params[i]):
                 # A va_list is handed over in its platform-specific passed form,
@@ -18532,7 +18530,7 @@ class CodeGen:
     def hidden_ref_arg(
         self, arg_expr, ptype: LangType, line: int, context: str,
         receiver: bool = False,
-    ) -> ir.Value:
+    ) -> "tuple[ir.Value, LangType]":
         """Lower a hidden-reference (const struct) argument to a pointer.
 
         When the argument already has storage of the exact type, its address is
@@ -18552,23 +18550,32 @@ class CodeGen:
                 lent viewed as the declared base prefix.
 
         Returns:
-            A pointer to the argument's storage.
+            ``(pointer, static type)``: a pointer to the argument's storage,
+            and the static type the argument EVALUATED to -- the derived type
+            on an upcast path (the referenced object really is derived, so a
+            fat argument's dispatch table must be the derived one), ``ptype``
+            when the referenced object is exactly the parameter's type (a
+            share, a decayed pointer's pointee, a spilled coerced copy).
         """
         if self.is_addressable_form(arg_expr):
             addr, t, align, volatile = self.gen_addr(arg_expr, line)
             if t.ir is ptype.ir:
-                return addr
+                return addr, t
             if receiver:
                 target = self.receiver_upcast_target(t, ptype)
                 if target is not None:
                     # A derived receiver borrows as the base prefix: the
                     # same no-copy storage share, viewed as the base.
-                    return self.builder.bitcast(addr, target.ir.as_pointer())
+                    return (
+                        self.builder.bitcast(addr, target.ir.as_pointer()), t
+                    )
             if self.decays_to(t, ptype, mut=False):
                 self.check_decay_arg(
                     arg_expr, strip_const(t), "const", ptype, context, line
                 )
-                return self.gen_load(addr, align=align, volatile=volatile)
+                return (
+                    self.gen_load(addr, align=align, volatile=volatile), ptype
+                )
             tv = TypedValue(self.gen_load(addr), t)
         else:
             tv = self.gen_expr(arg_expr)
@@ -18580,25 +18587,28 @@ class CodeGen:
                 # reference directly -- the same no-copy path an addressable
                 # argument takes (a const parameter promises not to write
                 # through it).
-                return tv.lvalue
+                return tv.lvalue, tv.type
             if receiver and tv.lvalue is not None:
                 target = self.receiver_upcast_target(tv.type, ptype)
                 if target is not None:
-                    return self.builder.bitcast(
-                        tv.lvalue, target.ir.as_pointer()
+                    return (
+                        self.builder.bitcast(
+                            tv.lvalue, target.ir.as_pointer()
+                        ),
+                        tv.type,
                     )
             if self.decays_to(tv.type, ptype, mut=False):
                 self.check_decay_arg(
                     arg_expr, tv.type, "const", ptype, context, line
                 )
-                return tv.value
+                return tv.value, ptype
         if receiver:
             target = self.receiver_upcast_target(tv.type, ptype)
             if target is not None:
                 # A derived rvalue receiver spills to its own temporary,
                 # lent viewed as the base prefix.
-                return self.upcast_hidden_ref(tv, target)
-        return self.spill_to_temp(tv, ptype, line, context)
+                return self.upcast_hidden_ref(tv, target), tv.type
+        return self.spill_to_temp(tv, ptype, line, context), ptype
 
     def check_mut_storage(
         self, arg_expr, t: LangType, align: int | None, volatile: bool,
@@ -18702,7 +18712,10 @@ class CodeGen:
                 storage, viewed as the declared base).
 
         Returns:
-            A pointer to the argument's storage (or the decayed pointer).
+            ``(pointer, static type)``: a pointer to the argument's storage
+            (or the decayed pointer), and the static type the argument
+            EVALUATED to -- the derived type on an upcast path, ``ptype``
+            otherwise (see :meth:`hidden_ref_arg`).
 
         Raises:
             LangError: When the argument is not a writable lvalue of exactly
@@ -18714,26 +18727,31 @@ class CodeGen:
                 self.check_decay_arg(
                     arg_expr, strip_const(t), "reference", ptype, context, line
                 )
-                return self.gen_load(addr, align=align, volatile=volatile)
+                return (
+                    self.gen_load(addr, align=align, volatile=volatile), ptype
+                )
             self.check_mut_storage(arg_expr, t, align, volatile, line)
             if t != ptype:
                 if receiver:
                     target = self.receiver_upcast_target(t, ptype)
                     if target is not None:
-                        return self.builder.bitcast(
-                            addr, target.ir.as_pointer()
+                        return (
+                            self.builder.bitcast(
+                                addr, target.ir.as_pointer()
+                            ),
+                            t,
                         )
                 raise LangError(
                     f"{context}: expected a {ptype} lvalue, got {t}", line
                 )
-            return addr
+            return addr, t
         if not isinstance(arg_expr, StrLit):
             tv = self.gen_expr(arg_expr)
             if self.decays_to(tv.type, ptype, mut=True):
                 self.check_decay_arg(
                     arg_expr, tv.type, "reference", ptype, context, line
                 )
-                return tv.value
+                return tv.value, ptype
             if tv.lvalue is not None:
                 # A mut-returning call re-lends: the callee's formation rule
                 # vouched for the storage (and rejected const/@volatile/
@@ -18744,14 +18762,17 @@ class CodeGen:
                     if receiver:
                         target = self.receiver_upcast_target(tv.type, ptype)
                         if target is not None:
-                            return self.builder.bitcast(
-                                tv.lvalue, target.ir.as_pointer()
+                            return (
+                                self.builder.bitcast(
+                                    tv.lvalue, target.ir.as_pointer()
+                                ),
+                                tv.type,
                             )
                     raise LangError(
                         f"{context}: expected a {ptype} lvalue, got {tv.type}",
                         line,
                     )
-                return tv.lvalue
+                return tv.lvalue, tv.type
         raise LangError(
             f"{context} is not assignable; a reference parameter needs a "
             "variable, field, element, or dereference",
@@ -19420,6 +19441,19 @@ class CodeGen:
             addrs[0] = (slot, recv, None, False)
             arg_tvs[0] = self.value_at(slot, recv)
         mut_positions = self.mut_indices(func)
+        # SIE-101 Stage 2: the winner's fat-reference positions. A fat
+        # parameter accepts a derived argument by forming a base VIEW at ANY
+        # position (the derived->base reference conversion, in parity with the
+        # direct path's marshal), so the upcast gates below fire for a fat
+        # position of a receiver-less callee too -- not just a method
+        # receiver. fat_static records each fat argument's evaluated static
+        # type where the marshal knows the storage's TRUE (derived) type; the
+        # dispatch table is sourced from it (a derived rvalue keeps its own
+        # table). A position with no entry referenced an exactly-base object,
+        # and the declared parameter type serves as dispatch_table_of's
+        # fallback.
+        fat = self.fat_ref.get(fn.name, frozenset())
+        fat_static: dict[int, LangType] = {}
         decayed: set[int] = set()
         for i in sorted(mut_positions):
             context = f"argument {i + 1} of {expr.name!r}"
@@ -19440,7 +19474,7 @@ class CodeGen:
                 if t != p:
                     target = (
                         self.receiver_upcast_target(t, p)
-                        if i == 0 and "::" in expr.name
+                        if (i == 0 and "::" in expr.name) or i in fat
                         else None
                     )
                     if target is None:
@@ -19481,7 +19515,7 @@ class CodeGen:
                 if tv.type != p:
                     target = (
                         self.receiver_upcast_target(tv.type, p)
-                        if i == 0 and "::" in expr.name
+                        if (i == 0 and "::" in expr.name) or i in fat
                         else None
                     )
                     if target is None:
@@ -19594,6 +19628,10 @@ class CodeGen:
                 # loaded, once, when the argument was evaluated); a direct
                 # lend passes the caller's storage address.
                 args.append(tv.value if i in decayed else addrs[i][0])
+                if i in fat and i not in decayed:
+                    # The lent storage's true type (addrs kept the derived
+                    # one on an upcast lend) sources the dispatch table.
+                    fat_static[i] = addrs[i][1]
             elif (
                 self.struct_literal_adapts(arg_node, p)
                 and not isinstance(arg_node, TupleLit)
@@ -19634,12 +19672,15 @@ class CodeGen:
                 else:
                     target = (
                         self.receiver_upcast_target(tv.type, p)
-                        if i == 0 and "::" in expr.name
+                        if (i == 0 and "::" in expr.name) or i in fat
                         else None
                     )
                     if target is not None:
-                        # A derived receiver borrows as the base prefix.
+                        # A derived receiver borrows as the base prefix; its
+                        # true (derived) type sources the dispatch table.
                         args.append(self.upcast_hidden_ref(tv, target))
+                        if i in fat:
+                            fat_static[i] = tv.type
                     elif i in addrs and addrs[i][1] == p:
                         # A same-type receiver whose storage matches the
                         # parameter shares the caller's address (formed up
@@ -19747,11 +19788,12 @@ class CodeGen:
         # type resolves, its own member merging with inherited clones), fill
         # each fat argument's dispatch table and, for a fat-view receiver of an
         # overridden family, dispatch indirectly.
-        fat = self.fat_ref.get(fn.name, frozenset())
         raw = None
         if fat:
             tables = {
-                i: self.dispatch_table_of(expr.args[i], params[i])
+                i: self.dispatch_table_of(
+                    expr.args[i], params[i], fat_static.get(i)
+                )
                 for i in fat
                 if i < len(expr.args)
             }
