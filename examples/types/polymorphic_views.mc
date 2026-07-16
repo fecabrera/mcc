@@ -130,6 +130,25 @@ fn base::me(self: &base) -> &base {
     return self;
 }
 
+// ... and covariance extends to GENERIC hierarchies (SIE-189): `-> &sack<T>`
+// over `-> &box<T>` resolves at no pre-body pass, so the narrowing is judged
+// at the TEMPLATE level -- the return's declared `extends` chain, checked
+// once for every instantiation -- and each concrete instantiation's slot
+// then adapts independently (sack<int32>'s thunk widens with sack<int32>'s
+// own table).
+struct box<T>  { v: T; }
+struct sack<T> extends box<T> { extra: T; }
+
+fn box<T>::what(const self: &box<T>)  { println("  box::what"); }
+@override fn sack<T>::what(const self: &sack<T>) { println("  sack::what"); }
+
+fn box<T>::me(self: &box<T>) -> &box<T> { return self; }
+@override fn sack<T>::me(self: &sack<T>) -> &sack<T> { return self; }
+
+fn poke(x: &box<int32>) {
+    x.me().what();              // dynamic: the covariant slot, per instance
+}
+
 // ---- Overload resolution sees the view ----
 
 // A derived argument reaches EVERY overload whose reference position is a
@@ -201,6 +220,16 @@ fn main() -> int32 {
     // base-shaped view with the runtime table: the chained call dispatches.
     println("relay(leaf).me().speak():");
     relay(v).me().speak();      // leaf::speak, covariance through the slot
+
+    // Generic-hierarchy covariance, the same two faces per instantiation:
+    // dispatched through a &box<int32> view the slot hands back the
+    // base-shaped view (sack::what runs), and a static call on the concrete
+    // sack narrows to `&sack<int32>` -- the derived field writes through.
+    let s: sack<int32> = { v = 1, extra = 2 };
+    println("poke(sack<int32>):");
+    poke(s);                    // sack::what, through the covariant slot
+    s.me().extra = 8;
+    println(f"s.me().extra = {s.extra}");           // 8
 
     // POINTER DECAY composes with the view (deref-then-view): a proven
     // `leaf*` at the fat `&base` slot is exactly describe(*p) -- the pointer
