@@ -2336,7 +2336,12 @@ and re-lending or re-returning the result forwards the same view. Any other
 returned lvalue is an object of exactly the return's static type (the
 exact-type rule), so it carries that type's own table. The lvalue surfaces
 are unchanged: assignment and projection through the result consume the
-object pointer exactly as a thin reference return's.
+object pointer exactly as a thin reference return's. **Binding the result to
+a local does not preserve the view**: references are not storable types, so
+`let r = relay(obj);` is copy-on-read — prefix extraction into a plain base
+value carrying no table, and `r.kind()` binds statically — exactly as a
+`let` from a view parameter. The view survives only while the result stays
+an expression: chain, re-lend, or re-return it.
 
 Two cases are clean compile errors for now, each liftable in a later stage: a
 fat reference — a `&A` parameter or a `-> &A` return — may **not** appear in a

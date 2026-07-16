@@ -90,7 +90,10 @@ fn show_announce(const it: &base) {
 // type across the hop -- relay(v).speak() dispatches leaf::speak, and the
 // result re-lends onward (or re-returns, as relay2 shows) with the table
 // intact. Contrast copy-on-read above: reading a VALUE out drops the view,
-// forwarding a REFERENCE keeps it.
+// forwarding a REFERENCE keeps it. That includes `let`: references are not
+// storable, so `let r = relay(v);` binds a prefix-extracted COPY (static
+// dispatch) -- the view survives only while the result stays an expression
+// (chained, re-lent, or re-returned).
 fn relay(x: &base) -> &base {
     return x;                   // forwards the incoming view, table and all
 }
