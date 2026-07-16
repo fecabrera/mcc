@@ -18839,8 +18839,12 @@ class CodeGen:
         shared directly -- no copy, which is the point of the optimization. A
         proven-non-null pointer to the parameter's type *decays*: the pointer
         value itself is forwarded as the hidden reference (see
-        :meth:`decays_to`). An rvalue (or a type that still needs coercion)
-        is materialized into a temporary whose address is passed instead.
+        :meth:`decays_to`); at a view-forming position (a fat parameter, or
+        the method receiver) a proven pointer to a pointee that
+        nominal-subtypes the parameter decays too, composing with the base
+        view (see :meth:`decay_view_target`). An rvalue (or a type that still
+        needs coercion) is materialized into a temporary whose address is
+        passed instead.
 
         Args:
             arg_expr: The argument expression.
@@ -18854,13 +18858,14 @@ class CodeGen:
         Returns:
             ``(pointer, static type, table)``: a pointer to the argument's
             storage; the static type the argument EVALUATED to -- the derived
-            type on an upcast path (the referenced object really is derived,
-            so a fat argument's dispatch table must be the derived one),
-            ``ptype`` when the referenced object is exactly the parameter's
-            type (a share, a decayed pointer's pointee, a spilled coerced
-            copy); and the RUNTIME table word forwarded by the argument's
-            source, when it carried one (a fat ``-> &T`` call result re-lent
-            here), else ``None``.
+            type on an upcast path, a direct lend or a composed decay+view
+            alike (the referenced object really is derived, so a fat
+            argument's dispatch table must be the derived one), ``ptype``
+            when the referenced object is exactly the parameter's type (a
+            share, an exact-pointee decay, a spilled coerced copy); and the
+            RUNTIME table word forwarded by the argument's source, when it
+            carried one (a fat ``-> &T`` call result re-lent here), else
+            ``None``.
         """
         if self.is_addressable_form(arg_expr):
             addr, t, align, volatile = self.gen_addr(arg_expr, line)
@@ -19037,7 +19042,10 @@ class CodeGen:
         ``ptype`` -- the callee writes through the pointer, so no coercion
         (not even an adapting literal) is possible -- or a proven-non-null
         pointer to ``ptype``, which *decays*: the pointer value itself is
-        forwarded (see :meth:`decays_to`). A decayed pointer may be an
+        forwarded (see :meth:`decays_to`). At a view-forming position (a fat
+        parameter, or the method receiver) a proven pointer to a mutable
+        pointee that nominal-subtypes ``ptype`` also decays, composing with
+        the base view (see :meth:`decay_view_target`). A decayed pointer may be an
         rvalue (the pointee is real storage even when the pointer expression
         is a temporary), and :meth:`check_mut_storage` does not apply to it:
         the const/volatile/packed facts describe the pointer's own storage,
@@ -19065,7 +19073,9 @@ class CodeGen:
 
         Raises:
             LangError: When the argument is not a writable lvalue of exactly
-                ``ptype`` and not a provably non-null pointer to ``ptype``.
+                ``ptype`` and not a provably non-null pointer to ``ptype``
+                (or, at a view-forming position, to a mutable derived type
+                of it).
         """
         if self.is_addressable_form(arg_expr):
             addr, t, align, volatile = self.gen_addr(arg_expr, line)

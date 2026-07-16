@@ -2970,3 +2970,104 @@ def test_rvalue_pointer_composes_at_an_overloaded_writable_slot():
         }
         """
     ) == 2
+
+
+def test_const_pointee_cannot_compose_into_a_writable_slot():
+    # decay_view_target's mut guard: a pointer to a CONST pointee never
+    # composes into a writable `&a` -- the callee writes through the view.
+    # (The const slot flavor is fine; see the next test.)
+    with pytest.raises(
+        LangError,
+        match=r"argument 1 of 'poke': expected a a lvalue, got const b\*",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn poke(it: &a) { it.n = 9; }
+            fn g(p: const b*) {
+                if (p == null) { return; }
+                poke(p);
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_const_pointee_stays_non_viable_at_an_overloaded_writable_slot():
+    # The same guard through decay_viable's re-check: the writable candidate
+    # is cleanly non-viable for a const-pointee pointer, so the honest
+    # no-overload diagnostic fires.
+    with pytest.raises(
+        LangError,
+        match=r"no overload of 'poke' with signature poke\(const b\*\)",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn poke(it: &a) { it.n = 9; }
+            fn poke(x: int32) { }
+            fn g(@nonnull p: const b*) { poke(p); }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_const_pointee_composes_at_a_read_only_slot():
+    # The const flavor of the guard's other half: a `const b*` pointee
+    # composes into `const &a` fine (a const slot also accepts a pointer to
+    # a const pointee, exactly as for an exact-pointee decay).
+    assert compile_ir(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn f(const it: &a) -> int32 { return it.n; }
+        fn g(@nonnull p: const b*) -> int32 { return f(p); }
+        fn main() -> int32 { return 0; }
+        """
+    )
+
+
+def test_decayed_pointer_writes_across_a_two_hop_chain():
+    # The writable analog of the two-hop const test: a `c*` at `&a` views
+    # two hops up, the write lands in the derived value's leading fields,
+    # and the view still dispatches c's override.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct c extends b { k: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn c::who(const self: &c) -> int32 { return 3; }
+        fn poke(it: &a) -> int32 { it.n = 9; return it.who(); }
+        fn main() -> int32 {
+            let v: c = { n = 1, m = 2, k = 3 };
+            let p: c* = &v;
+            let r = poke(p);
+            if (v.n != 9) { return 80; }
+            return r;
+        }
+        """
+    ) == 3
+
+
+def test_generic_inference_composes_at_a_writable_slot():
+    # The writable analog of the generic-inference composition: a `gb*` at
+    # `v: &ga<T>` binds T = int32 through the decayed pointee's declared
+    # base, and the instantiated function's own fatness gates the view (the
+    # winner-marshal's fat check runs against the instance), so the write
+    # lands through the composed view.
+    assert run(
+        """
+        struct ga<T> { x: T; }
+        struct gb extends ga<int32> { y: int32; }
+        fn bump<T>(v: &ga<T>, by: T) { v.x = v.x + by; }
+        fn main() -> int32 {
+            let o: gb = { x = 40, y = 1 };
+            let p: gb* = &o;
+            bump(p, 2);
+            return o.x;
+        }
+        """
+    ) == 42
