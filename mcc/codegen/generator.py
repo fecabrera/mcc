@@ -415,6 +415,7 @@ class GenContext:
     locals: dict = dataclass_field(metadata={"fork": dict})
     ret_type: LangType = dataclass_field(metadata={})
     ret_mut: bool = dataclass_field(metadata={})
+    ret_fat: bool = dataclass_field(metadata={})
     ret_own: bool = dataclass_field(metadata={})
     formation_params: dict = dataclass_field(metadata={"fork": dict})
     loops: list = dataclass_field(metadata={"fork": list})
@@ -683,6 +684,18 @@ class CodeGen:
         # the same four registration sites as mut_ref: @static, overload-set
         # member, plain concrete, and generic instance.
         self.mut_ret: set[str] = set()
+        # The subset of mut_ret whose returned reference is FAT (SIE-101: the
+        # referenced base is extended in the declaring file's closure): the
+        # LLVM return is the two-word {object*, table*} view, and a call
+        # result unpacks it -- lvalue = element 0, dispatch table = element 1.
+        # Fed by the same four registration sites as mut_ret.
+        self.fat_ret: set[str] = set()
+        # The dispatch-table word of the most recent fat `-> &T` call result
+        # (set by both call paths' result builders). gen_mut_return consults
+        # it -- only when the returned lvalue IS a call's result, judged by
+        # the return expression's shape -- so `return relay(x);` forwards the
+        # inner view's runtime table instead of downgrading to the static one.
+        self.last_result_table: "ir.Value | None" = None
         # Symbols declared `-> own T`: a call hands the caller the cleanup
         # obligation (no ABI change -- pure policy). Fed by the same four
         # registration sites as mut_ret, and spelled into a function
@@ -939,6 +952,10 @@ class CodeGen:
         # `return` statements hand back an address under the formation rule
         # instead of a value. Set per body by gen_function, like ret_type.
         self.ret_mut: bool = False
+        # Whether the mut return is a FAT reference (SIE-101: the returned
+        # base is extended in this closure): each `return` builds the
+        # two-word {address, table} view. Set per body by gen_function.
+        self.ret_fat: bool = False
         # Whether it returns own (`-> own T`): its `return` statements
         # transfer the cleanup obligation under the own formation rule
         # (see the Return arm). Set per body by gen_function, like ret_mut.
@@ -1436,63 +1453,40 @@ class CodeGen:
                 func.line,
             )
 
-    def reject_fat_reference_return(self, func: Func, ret: LangType):
-        """Reject a ``-> &T`` return of a fat base with a live dispatch table.
+    def returns_fat_view(self, func: Func, ret: LangType) -> bool:
+        """Whether ``func``'s ``-> &T`` return is a two-word fat view.
 
-        A reference to a fat base is a two-word ``{obj*, table*}`` view, but a
-        reference return lowers to a bare pointer (:meth:`ret_ir`) and drops the
-        table word -- forwarding such a reference would slice a derived object
-        back to the base. This bites only when the base has a NON-EMPTY dispatch
-        table (a family overridden in its hierarchy, so a call through the
-        returned view would dispatch): a fat-but-empty-table base (e.g. an
-        extended-for-layout stdlib ``slice`` with no overrides) carries only a
-        null word, so returning it loses nothing and stays legal. Until
-        reference returns carry the table, the hazardous case is a clean error,
-        mirroring the fat-reference function-pointer rejection.
+        Mirrors :meth:`fat_ref_indices` on the return side: a reference return
+        of a struct whose base is :meth:`is_fat_base` (extended somewhere
+        ``func``'s file can see) carries the ``{object*, table*}`` view, so the
+        returned reference keeps its dispatch table across the hop. Like a fat
+        parameter, the widening is a pure function of the signature and the
+        import closure -- never of method bodies -- so an empty-table fat base
+        (an extended-for-layout ``slice`` with no overrides) still returns two
+        words, its table word null, and adding the first override to a
+        hierarchy never changes a declared return's width.
 
-        Reads :meth:`dispatch_slots`, so it runs only after
-        :meth:`compute_dispatch_families` -- from :meth:`check_reference_returns`
-        (non-generic functions) and :meth:`instantiate` (each generic instance).
+        Args:
+            func: The declared function.
+            ret: Its resolved return type.
 
-        Raises:
-            LangError: When ``func`` returns a hazardous fat reference.
+        Returns:
+            ``True`` when the return is a fat reference.
         """
-        if not func.mut_return or not is_struct(ret):
-            return
-        base = ret.template or ret.name
-        if self.is_fat_base(base, func.source) and self.dispatch_slots(base):
-            raise LangError(
-                f"function {func.name!r} cannot return the reference '&{ret}' "
-                "yet: its base has overridden methods, so the reference is a "
-                "two-word fat view whose dispatch table a reference return does "
-                "not carry (the returned view would dispatch to the base)",
-                func.line,
-            )
-
-    def check_reference_returns(self):
-        """Reject hazardous fat-reference returns of non-generic functions.
-
-        Runs after :meth:`compute_dispatch_families` (dispatch slots known).
-        Each non-generic, non-``@extern`` function whose resolved return is a
-        fat base with a live table is rejected (:meth:`reject_fat_reference_return`).
-        Generic templates -- whose return may name an unresolved type parameter
-        -- are skipped here (a ``-> &T`` return carries the struct/method type
-        parameter, so ``type_params`` is non-empty) and checked as each instance
-        is monomorphized in :meth:`instantiate`. Every function that passes the
-        guard had its return type resolved at declaration, so it resolves here.
-        """
-        for func in self.program.functions:
-            if not func.mut_return or func.type_params or func.extern:
-                continue
-            self.current_source = func.source
-            ret = self.lang_type(func.ret_type, func.line)
-            self.reject_fat_reference_return(func, ret)
+        return (
+            func.mut_return
+            and is_struct(ret)
+            and self.is_fat_base(ret.template or ret.name, func.source)
+        )
 
     def ret_ir(self, func: Func, ret: LangType) -> ir.Type:
         """The LLVM return type for a declaration.
 
         A ``-> mut T`` function returns a pointer to the caller-reachable
-        storage it formed; everything else returns its value.
+        storage it formed -- widened to the two-word ``{object*, table*}``
+        view when the reference is fat (:meth:`returns_fat_view`), so the
+        dispatch table travels with the returned reference; everything else
+        returns its value.
 
         Args:
             func: The declared function.
@@ -1501,7 +1495,11 @@ class CodeGen:
         Returns:
             The IR return type.
         """
-        return ret.ir.as_pointer() if func.mut_return else ret.ir
+        if not func.mut_return:
+            return ret.ir
+        if self.returns_fat_view(func, ret):
+            return self.fat_ref_ir(ret.ir)
+        return ret.ir.as_pointer()
 
     def mark_noreturn(self, fn: ir.Function, func: Func):
         """Apply ``@noreturn`` by attaching LLVM's ``noreturn`` attribute.
@@ -2371,6 +2369,7 @@ class CodeGen:
     def dispatch_table_of(
         self, expr, concrete: "LangType | None",
         static: "LangType | None" = None,
+        table: "ir.Value | None" = None,
     ):
         """The dispatch-table ``i8*`` for a fat-reference argument's source.
 
@@ -2396,6 +2395,11 @@ class CodeGen:
                 evaluated type is supplied.
             static: The argument's evaluated static type, from the
                 marshalling (see :meth:`marshal_args`'s ``fat_static``).
+            table: A RUNTIME table word carried by the argument's source (a
+                fat ``-> &T`` call result re-lent as this argument, see
+                :attr:`TypedValue.table`). Wins over the static derivation:
+                the forwarded view's dynamic type is what the callee must
+                re-dispatch to.
 
         Returns:
             An ``i8*`` value for the table word.
@@ -2403,6 +2407,8 @@ class CodeGen:
         i8ptr = ir.IntType(8).as_pointer()
         if isinstance(expr, Var) and expr.name in self.param_tables:
             return self.param_tables[expr.name]
+        if table is not None:
+            return table
         if static is None:
             static = concrete
         if static is None:
@@ -3725,6 +3731,9 @@ class CodeGen:
             # so the mismatch is the "does not match its prototype" error, not
             # a silently miscompiled body.
             or self.fat_ref[symbol] != self.fat_ref_indices(func, params)
+            # ... and on whether the RETURN is fat, for the same reason: a
+            # one- vs two-word return is a genuinely different ABI.
+            or (symbol in self.fat_ret) != self.returns_fat_view(func, ret)
             or self.mut_ref[symbol] != self.mut_indices(func)
             or self.nonnull_ref[symbol] != self.nonnull_indices(func)
             or self.own_ref[symbol] != self.own_indices(func)
@@ -4305,6 +4314,20 @@ class CodeGen:
                     raise LangError(
                         "a return cannot be both a reference and const "
                         "(a reference return must be writable)",
+                        line,
+                    )
+                # SIE-101: a fat `-> &A` return is two words, and its width
+                # can differ across import closures, so it may not ride in a
+                # function-pointer type -- the same ambiguity the fat
+                # PARAMETER rejection above closes. Per use, like the rest.
+                if is_struct(ret) and self.is_fat_base(
+                    ret.template or ret.name, self.current_source
+                ):
+                    raise LangError(
+                        f"a fat reference return type (-> &{ret.name}, whose "
+                        "base is extended) may not appear in a "
+                        "function-pointer type yet; return the object by "
+                        "pointer instead",
                         line,
                     )
             if ownret:
@@ -6573,6 +6596,8 @@ class CodeGen:
                     self.format_syms.add(symbol)
                 if func.mut_return:
                     self.mut_ret.add(symbol)
+                    if self.returns_fat_view(func, ret):
+                        self.fat_ret.add(symbol)
                 if func.own_return:
                     self.own_ret.add(symbol)
                 self.static_funcs[key] = symbol
@@ -6820,6 +6845,8 @@ class CodeGen:
                 self.own_ref[symbol] = self.own_indices(func)
                 if func.mut_return:
                     self.mut_ret.add(symbol)
+                    if self.returns_fat_view(func, ret):
+                        self.fat_ret.add(symbol)
                 if func.own_return:
                     self.own_ret.add(symbol)
                 members = self.overloads.setdefault(func.name, [])
@@ -6932,6 +6959,8 @@ class CodeGen:
                 self.format_syms.add(func.name)
             if func.mut_return:
                 self.mut_ret.add(func.name)
+                if self.returns_fat_view(func, ret):
+                    self.fat_ret.add(func.name)
             if func.own_return:
                 self.own_ret.add(func.name)
             if func.deprecated_msg is not None:
@@ -6988,10 +7017,6 @@ class CodeGen:
         # slot (overridden somewhere in their hierarchy), keyed at the family's
         # introducer for prefix-compatible slot indices (SIE-101 Stage 2).
         self.compute_dispatch_families()
-        # Dispatch slots are known now: reject a reference return of a fat base
-        # that carries a live table (the pointer-shaped return would drop it).
-        # Generic instances are checked as they monomorphize (in instantiate).
-        self.check_reference_returns()
         # Every declaration is registered and @if arms are resolved: compute
         # the per-function write-effect bits the call-emission sites consult
         # (a call to a proven write-free callee preserves projection facts).
@@ -7119,6 +7144,9 @@ class CodeGen:
         """
         self.ret_type = ret
         self.ret_mut = func.mut_return
+        # SIE-101: whether the reference return is the two-word fat view, so
+        # each `return` builds {address, table} instead of a bare pointer.
+        self.ret_fat = self.returns_fat_view(func, ret)
         self.ret_own = func.own_return
         self.current_source = func.source
         self.current_variadic = func.variadic  # gates va_start
@@ -11934,6 +11962,7 @@ class CodeGen:
         # Address the lvalue before the defers run, so a defer cannot
         # redirect what is being returned (the same clobber rule as a value
         # return).
+        self.last_result_table = None  # armed by a fat call inside gen_addr
         addr, t, align, volatile = self.gen_addr(stmt.value, stmt.line)
         self.check_mut_storage(
             stmt.value, t, align, volatile, stmt.line, what="a reference return"
@@ -11943,9 +11972,89 @@ class CodeGen:
                 f"reference return: expected a {self.ret_type} lvalue, got {t}",
                 stmt.line,
             )
+        if self.ret_fat:
+            # SIE-101: the return is a two-word {address, table} view. The
+            # table follows the argument-side sourcing: a bare forwarded view
+            # parameter propagates its runtime table, a returned CALL result
+            # forwards the inner view's (the channel gen_addr's call just
+            # armed -- consulted only when the returned lvalue IS a call's
+            # result, so a call that merely fed a subexpression, or an
+            # exact-typed field carved out of one, keeps the static table),
+            # and any other lvalue is an object of exactly the return's
+            # static type (the exact-type rule above), whose table is its
+            # own vtable (null when the base has no dispatch slots).
+            addr = self.wrap_fat_view(
+                addr,
+                self.dispatch_table_of(
+                    stmt.value,
+                    self.ret_type,
+                    static=t,
+                    table=self.returned_call_table(stmt.value),
+                ),
+            )
         self.run_defers_through(0)
         if not self.builder.block.is_terminated:
             self.builder.ret(addr)
+
+    def returned_call_table(self, expr) -> "ir.Value | None":
+        """The armed result-table channel, iff ``expr``'s lvalue IS a call result.
+
+        :meth:`gen_mut_return` clears :attr:`last_result_table`, lets
+        :meth:`gen_addr` evaluate the return expression (arming the channel at
+        every fat ``-> &T`` call result built inside), then forwards the
+        channel only when the returned lvalue is the LAST such call's own
+        storage: a plain call, a dot-call, or an ``@accessor``/``@property``
+        sugar that rewrites to one -- for those the producing call is by
+        construction the last one emitted. Any other shape (a field or element
+        carved out of a call result, a plain variable after an argument
+        evaluated some fat call) returns ``None``: its lvalue is exactly the
+        return's static type, whose own table is correct, and forwarding a
+        bystander call's table would attach the wrong dynamic type.
+        """
+        produced_by_call = (
+            isinstance(expr, (Call, CallExpr))
+            or (
+                isinstance(expr, Index)
+                and self.as_accessor_call(expr) is not None
+            )
+            or (
+                isinstance(expr, Member)
+                and self.as_property_call(expr) is not None
+            )
+        )
+        return self.last_result_table if produced_by_call else None
+
+    def wrap_fat_view(self, addr, table) -> ir.Value:
+        """Pack an object pointer and a table word into a fat view value."""
+        fat_ty = self.fat_ref_ir(addr.type.pointee)
+        value = self.builder.insert_value(
+            ir.Constant(fat_ty, ir.Undefined), addr, 0
+        )
+        return self.builder.insert_value(value, table, 1)
+
+    def fat_result(self, raw, ret: LangType) -> TypedValue:
+        """Unpack a fat ``-> &T`` call result into its ``TypedValue``.
+
+        The call returned the two-word ``{address, table}`` view: element 0
+        is the vouched storage's address (the ``lvalue`` every assignment,
+        projection, and re-lend surface consumes, exactly as a thin mut
+        return's pointer), element 1 the dispatch table, carried on the
+        result (:attr:`TypedValue.table`) so a method call on it dispatches
+        the view's runtime type and a re-lend or re-return forwards it. Also
+        arms :attr:`last_result_table` for :meth:`gen_mut_return`'s
+        forwarded-call case.
+
+        Args:
+            raw: The call instruction's two-word result.
+            ret: The resolved return type (the referenced object's type).
+
+        Returns:
+            The unpacked result value.
+        """
+        ptr = self.builder.extract_value(raw, 0)
+        table = self.builder.extract_value(raw, 1)
+        self.last_result_table = table
+        return TypedValue(self.gen_load(ptr), ret, lvalue=ptr, table=table)
 
     def check_mut_return_formation(self, expr, line: int, crossed=False,
                                    top=True):
@@ -12777,6 +12886,12 @@ class CodeGen:
         hidden = f"0recv{self.hidden_seq}"
         self.hidden_seq += 1
         self.locals[hidden] = (slot, held)
+        # SIE-101: a fat `-> &T` receiver carries its dispatch table on the
+        # result. Register it for the hidden local, so the re-dispatched
+        # dot-call finds the view's runtime type exactly as it would for a
+        # fat parameter -- `relay(x).kind()` reaches the derived override.
+        if tv.lvalue is not None and tv.table is not None:
+            self.param_tables[hidden] = tv.table
         try:
             return self.gen_expr(
                 CallExpr(
@@ -12788,6 +12903,7 @@ class CodeGen:
             )
         finally:
             del self.locals[hidden]
+            self.param_tables.pop(hidden, None)
 
     def sizeof_operand(self, ref: TypeRef, line: int) -> LangType:
         """Resolve a ``sizeof`` operand to the type whose size is wanted.
@@ -17083,6 +17199,19 @@ class CodeGen:
         # through the pointer are indirect and can no longer be attributed.
         self.warn_deprecated(name, self.deprecated_syms.get(symbol), line)
         ret, params, variadic = self.signatures[symbol]
+        # SIE-101: a fat reference (a `&A` parameter or `-> &A` return whose
+        # base is extended) is two words wide, and its width can differ
+        # across import closures, so it may not ride in a function-pointer
+        # type -- the same restriction lang_type enforces on a SPELLED fn
+        # type, applied to the inferred one (without it the value's calls
+        # would marshal one word against a two-word definition).
+        if self.fat_ref.get(symbol) or symbol in self.fat_ret:
+            raise LangError(
+                f"cannot take {name!r} as a function value: its signature "
+                "carries a fat reference (to an extended base), which may "
+                "not ride in a function-pointer type yet",
+                line,
+            )
         # The value's type spells the function's whole call contract --
         # @nonnull, mut, const-aggregate hidden references, `own` by-value
         # consuming parameters, and a mut return -- so a call through it runs
@@ -17203,8 +17332,10 @@ class CodeGen:
         fat = self.fat_ref.get(symbol, frozenset())
         # Each fat argument's evaluated static type, filled by the marshal:
         # the dispatch table word is sourced from what the argument actually
-        # evaluated to (a derived rvalue keeps its own table).
+        # evaluated to (a derived rvalue keeps its own table). fat_tables
+        # carries the RUNTIME table a re-lent fat call result forwarded.
         fat_static: dict[int, LangType] = {}
+        fat_tables: dict[int, ir.Value] = {}
         args = self.marshal_args(
             expr.args,
             params,
@@ -17240,6 +17371,7 @@ class CodeGen:
             # unlike a by-value one.
             fat=fat,
             fat_static=fat_static,
+            fat_tables=fat_tables,
         )
         # SIE-101 Stage 2: fill each fat-reference argument's dispatch table
         # (its object's, or a propagated fat-view table) and, for a method-
@@ -17250,7 +17382,8 @@ class CodeGen:
         if fat and abi is None:
             tables = {
                 i: self.dispatch_table_of(
-                    expr.args[i], params[i], fat_static.get(i)
+                    expr.args[i], params[i], fat_static.get(i),
+                    fat_tables.get(i),
                 )
                 for i in fat
                 if i < len(expr.args)
@@ -17281,6 +17414,11 @@ class CodeGen:
             result = TypedValue(
                 self.reconstruct_abi_return(raw, ret, abi.ret, sret_slot), ret
             )
+        elif symbol in self.fat_ret:
+            # A fat reference return arrives as the two-word {address, table}
+            # view: unpack it (see fat_result), so every lvalue surface keeps
+            # consuming a plain pointer and the table rides on the result.
+            result = self.fat_result(raw, ret)
         elif symbol in self.mut_ret:
             # A mut return arrives as a pointer to the vouched storage: load
             # eagerly for value contexts (folded away when unused) and carry
@@ -17597,6 +17735,7 @@ class CodeGen:
         receiver_upcast: bool = False,
         fat: frozenset[int] = frozenset(),
         fat_static: "dict[int, LangType] | None" = None,
+        fat_tables: "dict[int, ir.Value] | None" = None,
     ) -> list:
         """Evaluate and coerce a call's arguments against the parameter types.
 
@@ -17655,6 +17794,11 @@ class CodeGen:
                 caller sources the dispatch table word from what the argument
                 evaluated to (see :meth:`dispatch_table_of`) rather than
                 slicing every rvalue to the declared base's table.
+            fat_tables: An optional out-dict filled with each fat argument's
+                forwarded RUNTIME table (``{index: i8*}``), when its source
+                carried one -- a fat ``-> &T`` call result re-lent as the
+                argument. Wins over ``fat_static``'s derivation at
+                :meth:`dispatch_table_of`.
 
         Returns:
             The marshalled LLVM argument values.
@@ -17732,12 +17876,14 @@ class CodeGen:
             if i in mut:
                 # Before the string-literal adaptation: a literal is not the
                 # caller's storage, so it must be rejected, not spilled.
-                ptr, src = self.mut_ref_arg(
+                ptr, src, table = self.mut_ref_arg(
                     arg_expr, params[i], line, context,
                     receiver=(receiver_upcast and i == 0) or i in fat,
                 )
                 if fat_static is not None and i in fat:
                     fat_static[i] = src
+                if fat_tables is not None and i in fat and table is not None:
+                    fat_tables[i] = table
                 args.append(ptr)
                 continue
             if i < len(params) and (
@@ -17761,12 +17907,14 @@ class CodeGen:
                     args.append(tv.value)
                 continue
             if i in hidden:
-                ptr, src = self.hidden_ref_arg(
+                ptr, src, table = self.hidden_ref_arg(
                     arg_expr, params[i], line, context,
                     receiver=(receiver_upcast and i == 0) or i in fat,
                 )
                 if fat_static is not None and i in fat:
                     fat_static[i] = src
+                if fat_tables is not None and i in fat and table is not None:
+                    fat_tables[i] = table
                 args.append(ptr)
                 continue
             if i < len(params) and is_valist(params[i]):
@@ -18550,31 +18698,38 @@ class CodeGen:
                 lent viewed as the declared base prefix.
 
         Returns:
-            ``(pointer, static type)``: a pointer to the argument's storage,
-            and the static type the argument EVALUATED to -- the derived type
-            on an upcast path (the referenced object really is derived, so a
-            fat argument's dispatch table must be the derived one), ``ptype``
-            when the referenced object is exactly the parameter's type (a
-            share, a decayed pointer's pointee, a spilled coerced copy).
+            ``(pointer, static type, table)``: a pointer to the argument's
+            storage; the static type the argument EVALUATED to -- the derived
+            type on an upcast path (the referenced object really is derived,
+            so a fat argument's dispatch table must be the derived one),
+            ``ptype`` when the referenced object is exactly the parameter's
+            type (a share, a decayed pointer's pointee, a spilled coerced
+            copy); and the RUNTIME table word forwarded by the argument's
+            source, when it carried one (a fat ``-> &T`` call result re-lent
+            here), else ``None``.
         """
         if self.is_addressable_form(arg_expr):
             addr, t, align, volatile = self.gen_addr(arg_expr, line)
             if t.ir is ptype.ir:
-                return addr, t
+                return addr, t, None
             if receiver:
                 target = self.receiver_upcast_target(t, ptype)
                 if target is not None:
                     # A derived receiver borrows as the base prefix: the
                     # same no-copy storage share, viewed as the base.
                     return (
-                        self.builder.bitcast(addr, target.ir.as_pointer()), t
+                        self.builder.bitcast(addr, target.ir.as_pointer()),
+                        t,
+                        None,
                     )
             if self.decays_to(t, ptype, mut=False):
                 self.check_decay_arg(
                     arg_expr, strip_const(t), "const", ptype, context, line
                 )
                 return (
-                    self.gen_load(addr, align=align, volatile=volatile), ptype
+                    self.gen_load(addr, align=align, volatile=volatile),
+                    ptype,
+                    None,
                 )
             tv = TypedValue(self.gen_load(addr), t)
         else:
@@ -18586,8 +18741,8 @@ class CodeGen:
                 # A mut-returning call's storage is shared as the hidden
                 # reference directly -- the same no-copy path an addressable
                 # argument takes (a const parameter promises not to write
-                # through it).
-                return tv.lvalue, tv.type
+                # through it). A fat call result forwards its table with it.
+                return tv.lvalue, tv.type, tv.table
             if receiver and tv.lvalue is not None:
                 target = self.receiver_upcast_target(tv.type, ptype)
                 if target is not None:
@@ -18596,19 +18751,20 @@ class CodeGen:
                             tv.lvalue, target.ir.as_pointer()
                         ),
                         tv.type,
+                        tv.table,
                     )
             if self.decays_to(tv.type, ptype, mut=False):
                 self.check_decay_arg(
                     arg_expr, tv.type, "const", ptype, context, line
                 )
-                return tv.value, ptype
+                return tv.value, ptype, None
         if receiver:
             target = self.receiver_upcast_target(tv.type, ptype)
             if target is not None:
                 # A derived rvalue receiver spills to its own temporary,
                 # lent viewed as the base prefix.
-                return self.upcast_hidden_ref(tv, target), tv.type
-        return self.spill_to_temp(tv, ptype, line, context), ptype
+                return self.upcast_hidden_ref(tv, target), tv.type, None
+        return self.spill_to_temp(tv, ptype, line, context), ptype, None
 
     def check_mut_storage(
         self, arg_expr, t: LangType, align: int | None, volatile: bool,
@@ -18712,10 +18868,11 @@ class CodeGen:
                 storage, viewed as the declared base).
 
         Returns:
-            ``(pointer, static type)``: a pointer to the argument's storage
-            (or the decayed pointer), and the static type the argument
+            ``(pointer, static type, table)``: a pointer to the argument's
+            storage (or the decayed pointer); the static type the argument
             EVALUATED to -- the derived type on an upcast path, ``ptype``
-            otherwise (see :meth:`hidden_ref_arg`).
+            otherwise; and the RUNTIME table a re-lent fat ``-> &T`` call
+            result forwarded, else ``None`` (see :meth:`hidden_ref_arg`).
 
         Raises:
             LangError: When the argument is not a writable lvalue of exactly
@@ -18728,7 +18885,9 @@ class CodeGen:
                     arg_expr, strip_const(t), "reference", ptype, context, line
                 )
                 return (
-                    self.gen_load(addr, align=align, volatile=volatile), ptype
+                    self.gen_load(addr, align=align, volatile=volatile),
+                    ptype,
+                    None,
                 )
             self.check_mut_storage(arg_expr, t, align, volatile, line)
             if t != ptype:
@@ -18740,24 +18899,26 @@ class CodeGen:
                                 addr, target.ir.as_pointer()
                             ),
                             t,
+                            None,
                         )
                 raise LangError(
                     f"{context}: expected a {ptype} lvalue, got {t}", line
                 )
-            return addr, t
+            return addr, t, None
         if not isinstance(arg_expr, StrLit):
             tv = self.gen_expr(arg_expr)
             if self.decays_to(tv.type, ptype, mut=True):
                 self.check_decay_arg(
                     arg_expr, tv.type, "reference", ptype, context, line
                 )
-                return tv.value, ptype
+                return tv.value, ptype, None
             if tv.lvalue is not None:
                 # A mut-returning call re-lends: the callee's formation rule
                 # vouched for the storage (and rejected const/@volatile/
                 # @packed at the return site), so no caller-side storage
                 # re-check -- just the exact-type rule every mut reference
                 # obeys, plus the receiver upcast (the base prefix re-lends).
+                # A fat call result forwards its table with the storage.
                 if tv.type != ptype:
                     if receiver:
                         target = self.receiver_upcast_target(tv.type, ptype)
@@ -18767,12 +18928,13 @@ class CodeGen:
                                     tv.lvalue, target.ir.as_pointer()
                                 ),
                                 tv.type,
+                                tv.table,
                             )
                     raise LangError(
                         f"{context}: expected a {ptype} lvalue, got {tv.type}",
                         line,
                     )
-                return tv.lvalue, tv.type
+                return tv.lvalue, tv.type, tv.table
         raise LangError(
             f"{context} is not assignable; a reference parameter needs a "
             "variable, field, element, or dereference",
@@ -19451,9 +19613,11 @@ class CodeGen:
         # dispatch table is sourced from it (a derived rvalue keeps its own
         # table). A position with no entry referenced an exactly-base object,
         # and the declared parameter type serves as dispatch_table_of's
-        # fallback.
+        # fallback. fat_tables carries the RUNTIME table a re-lent fat call
+        # result forwarded (it wins over the static derivation).
         fat = self.fat_ref.get(fn.name, frozenset())
         fat_static: dict[int, LangType] = {}
+        fat_tables: dict[int, ir.Value] = {}
         decayed: set[int] = set()
         for i in sorted(mut_positions):
             context = f"argument {i + 1} of {expr.name!r}"
@@ -19529,8 +19693,13 @@ class CodeGen:
                         ),
                         tv.type, None, False,
                     )
+                    if i in fat and tv.table is not None:
+                        # A re-lent fat call result forwards its table.
+                        fat_tables[i] = tv.table
                     continue
                 addrs[i] = (tv.lvalue, tv.type, None, False)
+                if i in fat and tv.table is not None:
+                    fat_tables[i] = tv.table
                 continue
             raise LangError(self.not_assignable(i, expr.name), expr.line)
         # The proof is syntactic, so it runs on the argument expressions even
@@ -19669,13 +19838,34 @@ class CodeGen:
                         context, expr.line, proven=proofs[i],
                     )
                     args.append(tv.value)
+                elif tv.lvalue is not None and tv.type.ir is p.ir:
+                    # A mut-returning call's storage is shared as the hidden
+                    # reference directly (parity with hidden_ref_arg's
+                    # no-copy share); a fat result forwards its table, so a
+                    # re-lent view keeps dispatching its runtime type.
+                    args.append(tv.lvalue)
+                    if i in fat and tv.table is not None:
+                        fat_tables[i] = tv.table
                 else:
                     target = (
                         self.receiver_upcast_target(tv.type, p)
                         if (i == 0 and "::" in expr.name) or i in fat
                         else None
                     )
-                    if target is not None:
+                    if target is not None and tv.lvalue is not None:
+                        # A derived lvalue-carrying result lends its base
+                        # prefix in place, its table (a re-lent fat view's
+                        # runtime type) riding along.
+                        args.append(
+                            self.builder.bitcast(
+                                tv.lvalue, target.ir.as_pointer()
+                            )
+                        )
+                        if i in fat:
+                            fat_static[i] = tv.type
+                            if tv.table is not None:
+                                fat_tables[i] = tv.table
+                    elif target is not None:
                         # A derived receiver borrows as the base prefix; its
                         # true (derived) type sources the dispatch table.
                         args.append(self.upcast_hidden_ref(tv, target))
@@ -19792,7 +19982,8 @@ class CodeGen:
         if fat:
             tables = {
                 i: self.dispatch_table_of(
-                    expr.args[i], params[i], fat_static.get(i)
+                    expr.args[i], params[i], fat_static.get(i),
+                    fat_tables.get(i),
                 )
                 for i in fat
                 if i < len(expr.args)
@@ -19808,7 +19999,11 @@ class CodeGen:
             raw = self.emit_call(
                 fn, args, preserves=self.effect_bits.get(id(effect_owner)) is False
             )
-        if func.mut_return:
+        if func.mut_return and fn.name in self.fat_ret:
+            # A fat reference return: unpack the {address, table} view, as on
+            # the direct path.
+            result = self.fat_result(raw, ret)
+        elif func.mut_return:
             # As in gen_direct_call: the eager load serves value contexts,
             # the carried address serves the lvalue surfaces.
             result = TypedValue(self.gen_load(raw), ret, lvalue=raw)
@@ -20837,9 +21032,6 @@ class CodeGen:
             # (though T itself can never bind to void).
             self.check_noreturn_decl(func, ret)
             self.check_mut_return_decl(func, ret)
-            # Post-compute (bodies emit after compute_dispatch_families), so the
-            # instance's resolved return can be tested for a live fat-view table.
-            self.reject_fat_reference_return(func, ret)
             params = [self.lang_type(t, func.line) for _, t in func.params]
             # A generic @format is validated per instance: the marked
             # parameter's type may only now have resolved.
@@ -20875,6 +21067,8 @@ class CodeGen:
             self.own_ref[mangled] = self.own_indices(func)
             if func.mut_return:
                 self.mut_ret.add(mangled)
+                if self.returns_fat_view(func, ret):
+                    self.fat_ret.add(mangled)
             if func.own_return:
                 self.own_ret.add(mangled)
             self.instances[key] = mangled

@@ -158,6 +158,13 @@ class TypedValue:
             The lvalue surfaces -- assignment, projection, re-lending as a
             ``mut`` argument -- consume it; value contexts use ``value`` and
             the unused load folds away.
+        table: For the result of a ``-> &T`` call whose reference is FAT
+            (SIE-101: ``T`` is an extended base, so the call returned a
+            two-word ``{object*, table*}`` view), the dispatch-table word
+            (``lvalue`` holds the unpacked object pointer). A method call on
+            the result dispatches through it, and re-lending the result as a
+            fat argument (or re-returning it) forwards it, so the view's
+            runtime type survives the hop. ``None`` for everything else.
         result_pending: Set when this value is a bare ``ok(...)``/``error(...)``
             reached outside a direct result sink -- a *pending* result whose
             free arm is not yet bound (see :class:`ResultPending`). ``value`` is
@@ -173,6 +180,7 @@ class TypedValue:
     adaptable: bool = False
     decayed: "LangType | None" = None
     lvalue: "ir.Value | None" = None
+    table: "ir.Value | None" = None
     result_pending: "ResultPending | None" = None
 
 

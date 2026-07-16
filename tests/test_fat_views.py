@@ -844,28 +844,25 @@ def test_generic_method_override_on_a_concrete_receiver_still_resolves(capfd):
     assert capfd.readouterr().out == "2\n"
 
 
-def test_reference_return_of_a_dispatching_fat_base_is_rejected():
-    # A `-> &a` return lowers to a bare pointer and drops the table word, so a
-    # forwarded reference would slice a derived object back to the base (the
-    # review's relay() returning 1 instead of dispatching to 2). Rejected when
-    # the base has a live table.
-    with pytest.raises(
-        LangError,
-        match=(
-            r"function 'relay' cannot return the reference '&a' yet: its base "
-            r"has overridden methods"
-        ),
-    ):
-        compile_ir(
-            """
-            struct a { n: int32; }
-            struct b extends a { m: int32; }
-            fn a::kind(const self: &a) -> int32 { return 1; }
-            @override fn b::kind(const self: &b) -> int32 { return 2; }
-            fn relay(x: &a) -> &a { return x; }
-            fn main() -> int32 { let o: b = { n = 0, m = 0 }; return 0; }
-            """
-        )
+def test_reference_return_forwards_the_view_and_dispatches():
+    # SIE-183: a `-> &a` return of a fat base is the two-word {address, table}
+    # view, so a forwarded reference keeps its dispatch table -- the review's
+    # relay() case now dispatches the runtime override (2) instead of being
+    # rejected (the round-2 stopgap) or slicing to the base (1).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn relay(x: &a) -> &a { return x; }
+        fn via(x: &a) -> int32 { return relay(x).kind(); }
+        fn main() -> int32 {
+            let obj: b = { n = 0, m = 0 };
+            return via(obj);
+        }
+        """
+    ) == 2
 
 
 def test_reference_return_of_an_empty_table_fat_base_is_allowed():
@@ -906,28 +903,27 @@ def test_reference_return_of_a_thin_base_is_allowed():
     assert '@"firstref"' in ir
 
 
-def test_generic_reference_return_is_rejected_when_instantiated_fat():
-    # The reference-return gate fires per generic instance too: `firstref<T> ->
-    # &T` instantiated at a dispatching fat base is rejected as the instance
-    # monomorphizes, while a thin instantiation (below) compiles.
-    with pytest.raises(
-        LangError,
-        match=r"function 'firstref' cannot return the reference '&a' yet",
-    ):
-        compile_ir(
-            """
-            struct a { n: int32; }
-            struct b extends a { m: int32; }
-            fn a::kind(const self: &a) -> int32 { return 1; }
-            @override fn b::kind(const self: &b) -> int32 { return 2; }
-            fn firstref<T>(x: &T, y: &T) -> &T { return x; }
-            fn main() -> int32 {
-                let p: a = { n = 0 };
-                let q: a = { n = 0 };
-                return firstref<a>(p, q).kind();
-            }
-            """
-        )
+def test_generic_reference_return_instantiated_fat_dispatches():
+    # SIE-183: the generic counterpart -- `firstref<T> -> &T` instantiated at
+    # a fat base widens its return per instance and forwards the view: a
+    # derived argument's table survives the hop, so the returned reference
+    # dispatches the override (2); the base argument's dispatches the base
+    # (1). A thin instantiation (below) is untouched.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn firstref<T>(x: &T, y: &T) -> &T { return x; }
+        fn main() -> int32 {
+            let p: b = { n = 0, m = 0 };
+            let q: a = { n = 0 };
+            if (firstref<a>(q, q).kind() != 1) { return 10; }
+            return firstref<a>(p, q).kind();
+        }
+        """
+    ) == 2
 
 
 def test_generic_reference_return_of_a_thin_instance_is_allowed():
@@ -1796,3 +1792,328 @@ def test_override_proto_shadowing_nothing_is_rejected():
             fn main() -> int32 { return 0; }
             """
         )
+
+
+def test_chained_reference_returns_forward_the_view():
+    # `return relay(x);` forwards the INNER call's returned view -- the table
+    # channel -- so a two-hop relay still dispatches the runtime type (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn relay(x: &a) -> &a { return x; }
+        fn relay2(x: &a) -> &a { return relay(x); }
+        fn main() -> int32 {
+            let obj: b = { n = 0, m = 0 };
+            return relay2(obj).kind();
+        }
+        """
+    ) == 2
+
+
+def test_fat_call_result_re_lent_as_a_const_view_argument_dispatches():
+    # A fat `-> &a` result re-lent as a `const &a` argument shares its storage
+    # AND forwards its table, so the callee's re-dispatch reaches the runtime
+    # override (2) -- on the direct path and, with an unrelated overload
+    # sibling forcing the overload-set path, on the generic path too.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn relay(x: &a) -> &a { return x; }
+        fn look(const it: &a) -> int32 { return it.kind(); }
+        fn peek(const it: &a) -> int32 { return it.kind(); }
+        fn peek(x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let obj: b = { n = 0, m = 0 };
+            if (look(relay(obj)) != 2) { return 10; }
+            return peek(relay(obj));
+        }
+        """
+    ) == 2
+
+
+def test_fat_call_result_re_lent_as_a_writable_view_dispatches_and_writes():
+    # The writable re-lend: the fat result's storage re-lends as `&a`, its
+    # table riding along -- the callee dispatches the override (2) and its
+    # write lands in the caller's derived object.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn relay(x: &a) -> &a { return x; }
+        fn poke(it: &a) -> int32 { it.n = 9; return it.kind(); }
+        fn main() -> int32 {
+            let obj: b = { n = 0, m = 0 };
+            let r = poke(relay(obj));
+            if (obj.n != 9) { return 80; }
+            return r;
+        }
+        """
+    ) == 2
+
+
+def test_assignment_through_a_fat_reference_result_writes_the_caller_storage():
+    # The lvalue surfaces consume the unpacked object pointer exactly as a
+    # thin mut return's: assignment through the fat result lands in the
+    # caller's derived object.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn relay(x: &a) -> &a { return x; }
+        fn main() -> int32 {
+            let obj: b = { n = 0, m = 0 };
+            relay(obj).n = 42;
+            return obj.n;
+        }
+        """
+    ) == 42
+
+
+def test_field_carved_out_of_a_fat_result_keeps_its_own_static_table():
+    # A field projected OUT of a fat call result is its own exactly-typed
+    # object: the returned view's runtime table must NOT transfer to it (the
+    # field is a genuine `a`, not a view of the derived receiver), so its
+    # method binds the base (1). Guards the channel's producer-shape gating.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct holder { pad: int32; inner: a; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn hrelay(h: &holder) -> &holder { return h; }
+        fn inner_of(h: &holder) -> &a { return h.inner; }
+        fn main() -> int32 {
+            let h: holder = { pad = 0, inner = { n = 0 } };
+            if (inner_of(h).kind() != 1) { return 10; }
+            return hrelay(h).inner.kind();
+        }
+        """
+    ) == 1
+
+
+def test_property_returning_a_fat_reference_forwards_through_the_sugar():
+    # An @accessor's mut return riding the index sugar: the fat view returned
+    # by `box::at` reaches the dot-call through gen_addr's accessor rewrite,
+    # and the element -- exactly the base type -- binds its static table (1),
+    # while a forwarded fat parameter through a plain method call keeps the
+    # runtime table (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct box { item: a; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        @accessor fn box::at(self: &box, i: int64) -> &a { return self.item; }
+        fn box::pass(self: &box, w: &a) -> &a { return w; }
+        fn main() -> int32 {
+            let bx: box = { item = { n = 0 } };
+            let obj: b = { n = 0, m = 0 };
+            if (bx[0].kind() != 1) { return 10; }
+            return bx.pass(obj).kind();
+        }
+        """
+    ) == 2
+
+
+def test_function_value_of_a_fat_signature_is_rejected():
+    # A fat reference may not ride in a function-pointer type, so taking a
+    # function VALUE whose inferred signature carries one -- a fat parameter
+    # or a fat return -- is the same clean rejection (previously the fat
+    # parameter case crashed the compiler with an LLVM type mismatch).
+    for fn_line in (
+        "fn takes(const it: &a) -> int32 { return it.kind(); }",
+        "fn relay(x: &a) -> &a { return x; }",
+    ):
+        name = fn_line.split()[1].split("(")[0]
+        with pytest.raises(
+            LangError,
+            match=(
+                rf"cannot take '{name}' as a function value: its signature "
+                r"carries a fat reference"
+            ),
+        ):
+            compile_ir(
+                f"""
+                struct a {{ n: int32; }}
+                struct b extends a {{ m: int32; }}
+                fn a::kind(const self: &a) -> int32 {{ return 1; }}
+                @override fn b::kind(const self: &b) -> int32 {{ return 2; }}
+                {fn_line}
+                fn main() -> int32 {{
+                    let f = {name};
+                    return 0;
+                }}
+                """
+            )
+
+
+def test_fat_reference_return_in_a_function_pointer_type_is_rejected():
+    # The spelled counterpart: a `fn(...) -> &a` function-pointer TYPE where
+    # `&a` is fat is rejected per use, mirroring the fat-parameter rule.
+    with pytest.raises(
+        LangError,
+        match=(
+            r"a fat reference return type \(-> &a, whose base is extended\) "
+            r"may not appear in a function-pointer type yet"
+        ),
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn main() -> int32 {
+                let f: fn(a*) -> &a = null;
+                return 0;
+            }
+            """
+        )
+
+
+def test_mci_fat_return_produces_matching_fat_abi(tmp_path):
+    # A stub whose own closure sees the extension declares the `-> &a` return
+    # fat, so its declaration and call sites match the two-word ABI the
+    # defining object was compiled with.
+    (tmp_path / "geo.mci").write_text(
+        "struct a { n: int32; }\n"
+        "struct b extends a { m: int32; }\n"
+        "fn relay(x: &a) -> &a;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "geo";\n'
+        "fn main() -> int32 { let x: a = { n = 9 }; return relay(x).n; }\n"
+    )
+    ir = str(compile_to_ir(main, (tmp_path,)))
+    assert 'declare {%"a"*, i8*} @"relay"' in ir  # fat return proto
+    assert 'call {%"a"*, i8*} @"relay"' in ir     # fat return call site
+
+
+def test_mci_proto_def_fat_return_mismatch_is_a_clean_error(tmp_path):
+    # A stub that did not see `a` extended declares a THIN `-> &a`; a
+    # definition that DOES see it declares a fat one. One- vs two-word
+    # returns are different ABIs, so the pairing is the prototype-mismatch
+    # error, not a silent miscompile.
+    (tmp_path / "api.mci").write_text(
+        "struct a { n: int32; }\nfn relay(x: &a) -> &a;\n"
+    )
+    (tmp_path / "impl.mc").write_text(
+        'import "api";\n'
+        "struct b extends a { m: int32; }\n"
+        "fn relay(x: &a) -> &a { return x; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "api";\nimport "impl";\nfn main() -> int32 { return 0; }'
+    )
+    with pytest.raises(
+        LangError,
+        match=r"definition of 'relay' does not match its prototype",
+    ):
+        compile_to_ir(main, (tmp_path,))
+
+
+def test_method_returning_fat_self_forwards_the_receiver_view():
+    # `fn a::me(self: &a) -> &a { return self; }` -- self is the fat receiver
+    # view, so the return forwards its RUNTIME table and the chained call
+    # dispatches the derived override (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn a::me(self: &a) -> &a { return self; }
+        fn via(x: &a) -> int32 { return x.me().kind(); }
+        fn main() -> int32 {
+            let obj: b = { n = 0, m = 0 };
+            return via(obj);
+        }
+        """
+    ) == 2
+
+
+def test_dispatched_override_with_a_fat_reference_return():
+    # A fat-returning family that IS overridden: the slot's indirect call and
+    # the stored thunk both carry the two-word return (same-type returns, per
+    # the override return-ABI rule), and the override's forwarded view keeps
+    # its runtime table -- pick dispatches to b's body (self.n = 5 lands) and
+    # the returned view dispatches w's runtime type (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::kind(const self: &a) -> int32 { return 1; }
+        @override fn b::kind(const self: &b) -> int32 { return 2; }
+        fn a::pick(self: &a, w: &a) -> &a { self.n = 4; return w; }
+        @override fn b::pick(self: &b, w: &a) -> &a { self.n = 5; return w; }
+        fn via(x: &a, w: &a) -> int32 { return x.pick(w).kind(); }
+        fn main() -> int32 {
+            let recv: b = { n = 0, m = 0 };
+            let arg: b = { n = 0, m = 0 };
+            let r = via(recv, arg);
+            if (recv.n != 5) { return 50 + recv.n; }  // b::pick ran
+            return r;
+        }
+        """
+    ) == 2
+
+
+def test_override_returning_the_derived_reference_is_still_rejected():
+    # The return-ABI rule is unchanged: an override spelling `-> &b` where the
+    # base returns `-> &a` is rejected (they share one slot). And spelling
+    # `-> &a` while returning `self` hits the reference-return exact-type rule
+    # -- there is no return-position reference upcast yet (a liftable gap).
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::me' returns b but the base member",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            fn a::me(self: &a) -> &a { return self; }
+            @override fn b::me(self: &b) -> &b { return self; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_stdlib_generic_container_instantiates_a_fat_reference_return():
+    # `list<a>::at` instantiated at a fat base widens its `-> &T` return per
+    # instance: element reads dispatch the element's own (base) table, and
+    # writes through the returned reference land in the container.
+    assert (
+        run(
+            """
+            import "std/list";
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            fn main() -> int32 {
+                let xs = list<a>();
+                defer list::destructor(xs);
+                xs.push({ n = 7 });
+                if (xs.at(0).kind() != 1) { return 10; }
+                xs.at(0).n = 42;
+                if (xs.at(0).n != 42) { return 20; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )

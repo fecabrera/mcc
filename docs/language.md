@@ -2327,18 +2327,27 @@ across this boundary) are rejected as a signature mismatch, never silently
 miscompiled.
 
 **Constructs a single slot cannot represent are rejected, not miscompiled.**
-Three cases are clean compile errors for now, each liftable in a later stage: a
-fat reference may **not** appear in a [function-pointer type](#function-pointers)
-(its width can differ across closures); a **method-owned generic override** (one
-declaring *its own* type parameter, as opposed to merely the struct's) may
-**not** be dynamically dispatched through a base view — no single slot can stand
-in for every instantiation of that parameter — though it remains a legal
-*static* override when called on a concrete receiver; and a function may **not**
-return a `&T` **reference** to a fat base that has overridden methods, since the
-pointer-shaped return drops the table word (a fat base with an *empty* table,
-such as the stdlib `slice` extended only for layout reuse, still returns
-freely). A **struct-generic** override — one whose only type parameters are its
-struct's (`gb<T>::m` over `ga<T>::m`) — dispatches normally: each concrete
+**A reference return carries the view.** A `-> &T` return of a fat base is
+the same two-word `{object, table}` view a fat parameter is, so a returned
+reference keeps its dispatch table across the hop: a function that forwards a
+view parameter (`fn relay(x: &a) -> &a { return x; }`) hands back the
+*runtime* type's table, `relay(obj).kind()` dispatches the derived override,
+and re-lending or re-returning the result forwards the same view. Any other
+returned lvalue is an object of exactly the return's static type (the
+exact-type rule), so it carries that type's own table. The lvalue surfaces
+are unchanged: assignment and projection through the result consume the
+object pointer exactly as a thin reference return's.
+
+Two cases are clean compile errors for now, each liftable in a later stage: a
+fat reference — a `&A` parameter or a `-> &A` return — may **not** appear in a
+[function-pointer type](#function-pointers), spelled or inferred from a
+function value (its width can differ across closures); and a **method-owned
+generic override** (one declaring *its own* type parameter, as opposed to
+merely the struct's) may **not** be dynamically dispatched through a base view
+— no single slot can stand in for every instantiation of that parameter —
+though it remains a legal *static* override when called on a concrete
+receiver. A **struct-generic** override — one whose only type parameters are
+its struct's (`gb<T>::m` over `ga<T>::m`) — dispatches normally: each concrete
 struct instantiation has its own table with concrete slot types.
 
 See [examples/types/polymorphic_views.mc](../examples/types/polymorphic_views.mc)
