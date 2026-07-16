@@ -1383,3 +1383,145 @@ def test_derived_argument_at_a_non_receiver_fat_position_via_inheritance():
         }
         """
     ) == 2
+
+
+def test_constructor_call_argument_keeps_its_derived_table():
+    # Constructor sugar's result is a fresh derived rvalue: `via(b())` forms
+    # the view from a full `b`, so dispatch reaches the override (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::constructor(self: &a) { self.n = 0; }
+        fn b::constructor(self: &b) { self.n = 0; self.m = 0; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 { return via(b()); }
+        """
+    ) == 2
+
+
+def test_block_expression_argument_keeps_its_derived_table():
+    # A block expression's emitted derived value is one more rvalue shape the
+    # old AST probe could not type: the view formed from it must carry the
+    # derived table (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 {
+            return via({ let r: b = { n = 0, m = 0 }; emit r; });
+        }
+        """
+    ) == 2
+
+
+def test_three_level_rvalue_dispatches_through_top_and_mid_chain_views():
+    # A leaf-typed rvalue (`make()` returning c) forms a view at ANY hop of
+    # its chain -- `&a` and `&b` alike -- and both dispatch to the leaf
+    # override (3): the table travels with the runtime type, not the view's
+    # declared hop.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct c extends b { k: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        @override fn c::who(const self: &c) -> int32 { return 3; }
+        fn make() -> c { let r: c = { n = 0, m = 0, k = 0 }; return r; }
+        fn via_a(const it: &a) -> int32 { return it.who(); }
+        fn via_b(const it: &b) -> int32 { return it.who(); }
+        fn main() -> int32 {
+            if (via_a(make()) != 3) { return 10; }
+            if (via_b(make()) != 3) { return 20; }
+            return 3;
+        }
+        """
+    ) == 3
+
+
+def test_struct_generic_call_result_argument_keeps_its_derived_table():
+    # The generic-instance flavor: a call returning `gb<int32>` forms a
+    # `&ga<int32>` view carrying the derived instance's table (2).
+    assert run(
+        """
+        struct ga<T> { x: T; }
+        struct gb<T> extends ga<T> { y: T; }
+        fn ga<T>::kind(const self: &ga<T>) -> int32 { return 1; }
+        @override fn gb<T>::kind(const self: &gb<T>) -> int32 { return 2; }
+        fn make() -> gb<int32> { let r: gb<int32> = { x = 0, y = 0 }; return r; }
+        fn via(const x: &ga<int32>) -> int32 { return x.kind(); }
+        fn main() -> int32 { return via(make()); }
+        """
+    ) == 2
+
+
+def test_decayed_pointer_argument_carries_its_static_type_table():
+    # The raw-pointer contract: tables live in REFERENCES, never objects, so
+    # an `a*` -- even one actually aimed at a derived `b` -- has genuinely
+    # erased the runtime type. The view formed from `*p` carries `a`'s table
+    # and binds the base (1). Static one-word pointers stay static by design.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 {
+            let x: b = { n = 0, m = 0 };
+            let p: a* = &x as a*;
+            if (p == null) { return 100; }
+            return via(*p);
+        }
+        """
+    ) == 1
+
+
+def test_destructor_owning_rvalue_view_dispatches_and_drops_once():
+    # A destructor-owning derived rvalue lent as a view: the callee's dispatch
+    # reaches the override AND the spilled temporary drops exactly once, after
+    # the call (statement end) -- the upcast spill must not lose or double the
+    # own obligation.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        @static let drops: int32 = 0;
+        fn b::destructor(self: &b) { drops = drops + 1; }
+        fn make() -> own b { let r: b = { n = 0, m = 0 }; return move(r); }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 {
+            let r = via(make());
+            if (drops != 1) { return 50 + drops; }
+            return r;
+        }
+        """
+    ) == 2
+
+
+def test_view_re_lent_at_a_non_receiver_fat_position_propagates_its_table():
+    # A fat view parameter re-lent at a NON-receiver fat position forwards its
+    # runtime table (the propagation is per-argument, not receiver-only), so
+    # the inner callee's dispatch still reaches the derived override (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn inner(x: int32, const other: &a) -> int32 { return other.who(); }
+        fn outer(const p: &a) -> int32 { return inner(0, p); }
+        fn main() -> int32 {
+            let o: b = { n = 0, m = 0 };
+            return outer(o);
+        }
+        """
+    ) == 2
