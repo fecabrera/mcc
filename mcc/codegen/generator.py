@@ -1888,14 +1888,18 @@ class CodeGen:
         POSITION (``$0``, ``$1``, ...) -- the identity the ``extends``
         composition preserves -- makes the spellings of the override and its
         rebased base clone directly comparable. A concrete (specialized)
-        qualifier position binds no name and passes through unchanged.
-        Callers must have ``current_source`` set to ``func``'s file.
+        qualifier position binds no name and passes through unchanged. A
+        fresh position is judged by ``type_params`` MEMBERSHIP -- the
+        registration-time fact -- not by re-probing
+        :meth:`struct_arg_is_param`, which reads whatever type bindings
+        happen to be live and would misclassify under a caller's
+        instantiation context (the :meth:`slot_winner` hazard).
         """
         qargs = func.qualifier_args or []
         binding = {
             qa.name: TypeRef(f"${i}")
             for i, qa in enumerate(qargs)
-            if self.struct_arg_is_param(qa, func.line)
+            if qa.name in func.type_params
         }
         if not binding:
             return func.ret_type
@@ -1967,12 +1971,17 @@ class CodeGen:
         return's declared ``extends`` chain -- substituting the spelled
         arguments hop by hop, exactly as :meth:`base_chain` composes -- lands
         on the base's spelling precisely when the resolved returns are
-        covariant at EVERY instantiation. The walk mirrors
-        :meth:`receiver_upcast_target`'s refusals: only plain struct
-        references participate (no pointers, arrays, or function types), and
-        an intrusive ``extends T`` edge ends the lineage
-        (:meth:`struct_base_ref` returns ``None`` there). Anything that does
-        not match conservatively keeps the same-spelling requirement.
+        covariant at EVERY instantiation. Spellings are compared by
+        DECLARATION, never by name: each hop's head resolves in the file
+        that spelled it (:meth:`template_walk_head`) and each concrete
+        argument canonicalizes there (:meth:`canon_template_arg`), so two
+        same-named file-scoped ``@static`` types from different files never
+        conflate. The walk mirrors :meth:`receiver_upcast_target`'s
+        refusals: only plain struct references participate (no pointers,
+        arrays, or function types), and an intrusive ``extends T`` edge
+        ends the lineage (:meth:`struct_base_ref` returns ``None`` there).
+        Anything that does not match conservatively keeps the same-spelling
+        requirement.
 
         Args:
             base: The base member's rebased clone.
@@ -1986,38 +1995,134 @@ class CodeGen:
         def plain(ref: TypeRef) -> bool:
             return ref.params is None and not ref.stars and not ref.dims
 
-        saved = self.current_source
-        try:
-            self.current_source = base.source
-            target = self.generic_ret_spelling(base)
-            self.current_source = over.source
-            current = self.generic_ret_spelling(over)
-            if not (plain(target) and plain(current)):
+        def key(head) -> "str | int":
+            return head if isinstance(head, str) else id(head)
+
+        target = self.generic_ret_spelling(base)
+        current = self.generic_ret_spelling(over)
+        if not (plain(target) and plain(current)):
+            return False
+        target_head = self.template_walk_head(target.name, base.source)
+        target_args = self.canon_template_args(target.args, base.source)
+        head = self.template_walk_head(current.name, over.source)
+        args = self.canon_template_args(current.args, over.source)
+        if target_head is None or target_args is None or args is None:
+            return False
+        target_key = [str(a) for a in target_args]
+        seen = {key(head)}
+        while True:
+            if head is None or isinstance(head, str):
+                return False  # a builtin/unknown head: the chain ends
+            decl = head
+            if len(decl.type_params) != len(args):
+                return False  # arity mismatch; instantiation reports it
+            ref = self.struct_base_ref(decl)
+            if ref is None or not plain(ref):
+                return False  # a root, or an intrusive `extends T` edge
+            # The hop's spelling belongs to the DECLARING file: mark its
+            # parameters off (``$h<i>``, distinct from the ``$<i>``
+            # placeholders riding in `args`), canonicalize every concrete
+            # name it spells under decl.source, then splice this hop's
+            # already-canonical arguments into the marks.
+            marks = {
+                p: TypeRef(f"$h{i}") for i, p in enumerate(decl.type_params)
+            }
+            hop_args = self.canon_template_args(
+                self.subst_struct_args(ref, marks).args, decl.source
+            )
+            if hop_args is None:
                 return False
-            target_args = [str(a) for a in target.args]
-            seen = {current.name}
-            while True:
-                decl = self.lookup_struct_decl(current.name)
-                if decl is None:
-                    return False  # a builtin/unknown head: the chain ends
-                if len(decl.type_params) != len(current.args):
-                    return False  # arity mismatch; instantiation reports it
-                ref = self.struct_base_ref(decl)
-                if ref is None or not plain(ref):
-                    return False  # a root, or an intrusive `extends T` edge
-                ref = self.subst_struct_args(
-                    ref, dict(zip(decl.type_params, current.args))
-                )
-                if ref.name in seen:
-                    return False  # cyclic extends; instantiation reports it
-                seen.add(ref.name)
-                if ref.name == target.name and (
-                    [str(a) for a in ref.args] == target_args
-                ):
-                    return True
-                current = ref
-        finally:
-            self.current_source = saved
+            binding = {f"$h{i}": a for i, a in enumerate(args)}
+            args = [self.subst_struct_args(a, binding) for a in hop_args]
+            head = self.template_walk_head(ref.name, decl.source)
+            if key(head) == key(target_head) and (
+                [str(a) for a in args] == target_key
+            ):
+                return True
+            if key(head) in seen:
+                return False  # cyclic extends; instantiation reports it
+            seen.add(key(head))
+
+    def template_walk_head(self, name: str, source: "str | None"):
+        """The declaration (or builtin) a template-walk head names.
+
+        Resolution happens under the file that SPELLED the name -- a
+        file-scoped ``@static`` struct there shadows a global template,
+        exactly as :meth:`lang_type` resolves -- and the returned
+        declaration object is the head's program-wide identity, so
+        same-named types from different files compare unequal.
+
+        Args:
+            name: The head's spelled name.
+            source: The file the spelling belongs to.
+
+        Returns:
+            The ``StructDecl``/``UnionDecl``, the name itself for a builtin
+            head, or ``None`` for an unknown (alias/unresolvable) one.
+        """
+        decl = self.static_structs.get((source, name))
+        if decl is not None:
+            return decl
+        decl = self.struct_templates.get(name)
+        if decl is not None:
+            return decl
+        if name in TYPES or name in RESERVED_TYPE_NAMES:
+            return name
+        return None
+
+    def canon_template_args(
+        self, args: "list[TypeRef]", source: "str | None"
+    ) -> "list[TypeRef] | None":
+        """:meth:`canon_template_arg` over an argument list, or ``None``."""
+        out = []
+        for arg in args:
+            canon = self.canon_template_arg(arg, source)
+            if canon is None:
+                return None
+            out.append(canon)
+        return out
+
+    def canon_template_arg(
+        self, ref: TypeRef, source: "str | None"
+    ) -> "TypeRef | None":
+        """A template-walk argument spelling as a program-wide identity.
+
+        A fully concrete spelling resolves under its declaring file
+        (:meth:`resolve_ref_at` -- so aliases chase and a file-scoped
+        ``@static`` type canonicalizes to its unique instantiation name); a
+        ``$``-placeholder passes through to compare positionally; a spelling
+        structured OVER a placeholder (``slice<$0>``) keeps its shape with
+        the head name replaced by its unique identity (the ``@static``
+        mangled base where file-scoped). ``None`` -- an unresolvable name,
+        or a placeholder under an alias or function-type head -- keeps the
+        conservative same-spelling requirement.
+
+        Args:
+            ref: The argument spelling.
+            source: The file the spelling belongs to.
+
+        Returns:
+            The canonicalized spelling, or ``None``.
+        """
+        if "$" not in str(ref):
+            resolved = self.resolve_ref_at(ref, source)
+            return None if resolved is None else TypeRef(str(resolved))
+        if ref.name.startswith("$"):
+            return ref if not ref.args else None
+        if ref.params is not None:
+            return None  # a fn(...) type over a placeholder: conservative
+        head = self.template_walk_head(ref.name, source)
+        if head is None:
+            return None
+        token = (
+            head
+            if isinstance(head, str)
+            else self.symbol_bases.get((head.source, head.name), head.name)
+        )
+        args = self.canon_template_args(ref.args, source)
+        if args is None:
+            return None
+        return dataclasses_replace(ref, name=token, args=args)
 
     def check_covariant_member_width(self, func: Func, member: Func):
         """Reject a covariant-slot member whose pinned thin return the
@@ -2252,7 +2357,11 @@ class CodeGen:
                     if not self.covariant_return_ok(base, func):
                         # Render SOURCE spellings, never return_abi's internal
                         # fallback key (an unresolved struct-generic return
-                        # would otherwise print as a raw tuple).
+                        # would otherwise print as a raw tuple). Attribute
+                        # the error to the override's own file explicitly:
+                        # ret_desc(base) leaves current_source at the base
+                        # clone's file, which generate() would otherwise
+                        # stamp onto the error.
                         raise LangError(
                             f"@override method {func.name!r} returns "
                             f"{self.ret_desc(func)} but the base member "
@@ -2261,6 +2370,7 @@ class CodeGen:
                             "reference to a declared descendant of the base's"
                             " reference return (they share one dispatch slot)",
                             func.line,
+                            source=func.source,
                         )
                     covariant = True
                 # override_pattern matched every parameter (it spells them all),
@@ -2271,6 +2381,7 @@ class CodeGen:
                         raise LangError(
                             f"@override method {func.name!r} {mismatch}",
                             func.line,
+                            source=func.source,
                         )
             if covariant:
                 # SIE-186: remember the slot, so the thunk builder and the

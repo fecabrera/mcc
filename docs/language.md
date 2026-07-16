@@ -2378,7 +2378,11 @@ covariance is judged **at the template level** instead: the override return's
 declared `extends` chain is walked with the spelled type arguments
 substituted hop by hop (and each side's parameter names alpha-renamed to
 qualifier position, so a method that renames the struct's parameters still
-compares). The relaxation is granted exactly when **every** instantiation's
+compares). The walk matches **declarations, never names**: each spelled name
+resolves in the file that spelled it, so two same-named file-scoped
+[`@static`](#visibility) types from different files never conflate,
+and a concrete type argument spelled through an alias compares resolved.
+The relaxation is granted exactly when **every** instantiation's
 returns narrow — `-> &b<int32>` over `-> &a<T>` is rejected, since it narrows
 at one instantiation only — and each concrete instantiation's slot then
 adapts independently (`b<int32>`'s thunk widens with `b<int32>`'s table). The

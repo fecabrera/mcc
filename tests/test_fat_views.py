@@ -2713,6 +2713,70 @@ def test_slot_winner_binds_inside_a_generic_body():
     )
 
 
+def test_generic_covariance_does_not_conflate_file_scoped_types(tmp_path):
+    # The template walk compares DECLARATIONS, not names: a file-scoped
+    # `@static struct y<T>` in the override's file is not the base file's
+    # same-named `@static struct y<T>`, so `-> &z<T>` (extending the LOCAL
+    # y) does not covariantly narrow the base's `-> &y<T>` -- before the
+    # fix the name match granted it, and a dynamic caller read fields of
+    # the wrong struct. The error also attributes to the OVERRIDE's file
+    # (ret_desc leaves current_source at the base clone's).
+    (tmp_path / "basefile.mc").write_text(
+        "@static struct y<T> { v: T; }\n"
+        "struct a<T> { store: y<T>; }\n"
+        "fn a<T>::tag(const self: &a<T>) -> int32 { return 1; }\n"
+        "fn a<T>::get(self: &a<T>) -> &y<T> { return self.store; }\n"
+    )
+    main = tmp_path / "prog.mc"
+    main.write_text(
+        'import "basefile";\n'
+        "@static struct y<T> { q: T; big: int64; }\n"
+        "@static struct z<T> extends y<T> { w: T; }\n"
+        "struct b<T> extends a<T> { s2: z<T>; }\n"
+        "@override fn b<T>::tag(const self: &b<T>) -> int32 { return 2; }\n"
+        "@override fn b<T>::get(self: &b<T>) -> &z<T> { return self.s2; }\n"
+        "fn main() -> int32 { return 0; }\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'b::get' returns z<T> but the base member "
+        r"it overrides returns y<T>",
+    ) as excinfo:
+        run_path(main)
+    assert excinfo.value.source == str(main)
+
+
+def test_generic_covariance_crosses_files_through_one_hierarchy(tmp_path):
+    # The cross-file positive control: the override's return extends the
+    # IMPORTED (global) return hierarchy, the walk resolves both spellings
+    # to the same declarations, and each instantiation's slot dispatches.
+    (tmp_path / "basefile.mc").write_text(
+        "struct x<T> { v: T; }\n"
+        "struct a<T> { store: x<T>; }\n"
+        "fn a<T>::tag(const self: &a<T>) -> int32 { return 1; }\n"
+        "fn a<T>::get(self: &a<T>) -> &x<T> { return self.store; }\n"
+    )
+    main = tmp_path / "prog.mc"
+    main.write_text(
+        'import "basefile";\n'
+        "struct z<T> extends x<T> { w: T; }\n"
+        "fn x<T>::what(const self: &x<T>) -> int32 { return 7; }\n"
+        "@override fn z<T>::what(const self: &z<T>) -> int32 { return 8; }\n"
+        "struct b<T> extends a<T> { s2: z<T>; }\n"
+        "@override fn b<T>::tag(const self: &b<T>) -> int32 { return 2; }\n"
+        "@override fn b<T>::get(self: &b<T>) -> &z<T> { return self.s2; }\n"
+        "fn via(q: &a<int32>) -> int32 { return q.get().what(); }\n"
+        "fn main() -> int32 {\n"
+        "    let obj: b<int32> = { store = { v = 0 }, s2 = { v = 1, w = 2 } };\n"
+        "    if (via(obj) != 8) { return 10; }\n"
+        "    obj.get().w = 5;\n"
+        "    if (obj.s2.w != 5) { return 20; }\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    assert run_path(main) == 0
+
+
 def test_mci_stub_preserves_the_covariant_return_spelling(tmp_path):
     # The stub re-emits the override's own `-> &b` return: the narrowing
     # lives only in the checker, so a static caller importing through the
