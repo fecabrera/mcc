@@ -2660,3 +2660,313 @@ def test_cross_module_alias_candidate_ranks_and_stays_viable(tmp_path):
         "}\n"
     )
     assert run_path(sole) == 1
+
+
+# --- SIE-187: decay composes with the base view (deref-then-view) -------------
+
+
+def test_sole_candidate_decayed_pointer_forms_the_view_and_dispatches():
+    # The residual gap: resolution admitted the decay+view reading but
+    # emission demanded the exact pointee. A sole `f(const it: &a)` now takes
+    # a proven `b*` -- the pointer sheds its level, the pointee lends its
+    # base prefix, and the pointee's (derived) table dispatches the
+    # @override -- identical to f(*p).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn f(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 {
+            let v: b = { n = 5, m = 2 };
+            let p: b* = &v;
+            return f(p);
+        }
+        """
+    ) == 2
+
+
+def test_decayed_pointer_call_is_identical_to_the_explicit_deref():
+    # The ruling's shape: `f(p)` IS `f(*p)`, differing only in who carries
+    # the null obligation -- so the two spellings dispatch identically.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn f(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 {
+            let v: b = { n = 5, m = 2 };
+            let p: b* = &v;
+            if (f(p) != f(*p)) { return 90; }
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_overload_set_admits_and_emits_the_decayed_view():
+    # The ticket's exact shape: the decay tier admits `b*` at the fat `&a`
+    # candidate (the int32 sibling is not viable), and emission now forms
+    # the view it admitted -- previously "argument 1 of 'f': expected a,
+    # got b*" after resolution had already said yes.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn f(const it: &a) -> int32 { return it.who(); }
+        fn f(x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let v: b = { n = 5, m = 2 };
+            let p: b* = &v;
+            return f(p);
+        }
+        """
+    ) == 2
+
+
+def test_write_through_a_decayed_writable_view_lands():
+    # Mut-path parity (the decay_viable re-check adopts the shared view
+    # predicate): `b*` decays into the writable `&a`, the callee's write
+    # lands in the derived value's leading fields, and the view still
+    # dispatches the override.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn poke(it: &a) -> int32 { it.n = 9; return it.who(); }
+        fn poke(x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let o: b = { n = 0, m = 0 };
+            let p: b* = &o;
+            let r = poke(p);
+            if (o.n != 9) { return 80; }
+            return r;
+        }
+        """
+    ) == 2
+
+
+def test_sole_writable_reference_takes_a_decayed_derived_pointer():
+    # The direct (non-overloaded) marshal's mut path: mut_ref_arg composes
+    # the same view instead of demanding the exact pointee.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn poke(it: &a) { it.n = 9; }
+        fn main() -> int32 {
+            let v: b = { n = 5, m = 2 };
+            let p: b* = &v;
+            poke(p);
+            return v.n;
+        }
+        """
+    ) == 9
+
+
+def test_rvalue_pointer_composes_with_the_view():
+    # `&v` is an rvalue pointer expression; the pointee is real storage, so
+    # it decays and views like the named pointer (the rvalue marshal arm).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn f(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 {
+            let v: b = { n = 5, m = 2 };
+            return f(&v);
+        }
+        """
+    ) == 2
+
+
+def test_decayed_pointer_views_across_a_two_hop_chain():
+    # The composition inherits the view's chain walk: a `c*` at `&a` views
+    # two hops up and still dispatches c's override.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct c extends b { k: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn c::who(const self: &c) -> int32 { return 3; }
+        fn f(const it: &a) -> int32 { return it.who(); }
+        fn main() -> int32 {
+            let v: c = { n = 1, m = 2, k = 3 };
+            let p: c* = &v;
+            return f(p);
+        }
+        """
+    ) == 3
+
+
+def test_qualified_receiver_decays_into_the_base_view():
+    # A method-family call's receiver composes too: `a::get(p)` with a `b*`
+    # receiver is `a::get(*p)`.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::get(const self: &a) -> int32 { return self.n; }
+        fn main() -> int32 {
+            let v: b = { n = 7, m = 2 };
+            let p: b* = &v;
+            return a::get(p);
+        }
+        """
+    ) == 7
+
+
+def test_generic_inference_composes_decay_with_the_view():
+    # SIE-181's inference composes with decay: a `gb*` at `const v: &ga<T>`
+    # sheds its level, then binds T = int32 through the pointee's declared
+    # base instantiation.
+    assert run(
+        """
+        struct ga<T> { x: T; }
+        struct gb extends ga<int32> { y: int32; }
+        fn f<T>(const v: &ga<T>) -> T { return v.x; }
+        fn main() -> int32 {
+            let o: gb = { x = 41, y = 1 };
+            let p: gb* = &o;
+            return f(p) + 1;
+        }
+        """
+    ) == 42
+
+
+def test_unproven_pointer_error_still_fires_at_a_viewed_const_slot():
+    # The null story is inherited unchanged: the decay proof guards the view
+    # exactly as it guards an exact-pointee decay.
+    with pytest.raises(
+        LangError,
+        match=r"cannot pass a possibly-null b\* as argument 1 of 'f': "
+        r"decaying into a const a parameter forms a hidden reference",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn f(const it: &a) -> int32 { return it.n; }
+            fn get() -> b* { return null; }
+            fn main() -> int32 {
+                let p: b* = get();
+                return f(p);
+            }
+            """
+        )
+
+
+def test_unproven_pointer_error_still_fires_at_a_viewed_writable_slot():
+    # The writable flavor of the same inherited obligation.
+    with pytest.raises(
+        LangError,
+        match=r"cannot pass a possibly-null b\* as argument 1 of 'poke': "
+        r"decaying into a reference a parameter forms a hidden reference",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn poke(it: &a) { it.n = 9; }
+            fn get() -> b* { return null; }
+            fn main() -> int32 {
+                let p: b* = get();
+                poke(p);
+                return 0;
+            }
+            """
+        )
+
+
+def test_thin_mci_parameter_rejects_the_decayed_derived_pointer(tmp_path):
+    # The fatness gate applies unchanged: the stub never saw `a` extended,
+    # so its `&a` is thin, emission cannot form a view there, and the
+    # decayed reading is cleanly non-viable -- the honest no-overload
+    # diagnostic on the pointer's own signature.
+    (tmp_path / "api.mci").write_text(
+        "struct a { n: int32; }\n"
+        "fn viewit(const it: &a) -> int32;\n"
+        "fn viewit(x: int32) -> int32;\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "api";\n'
+        "struct b extends a { m: int32; }\n"
+        "fn main() -> int32 {\n"
+        "    let v: b = { n = 1, m = 2 };\n"
+        "    let p: b* = &v;\n"
+        "    return viewit(p);\n"
+        "}\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"no overload of 'viewit' with signature viewit\(b\*\)",
+    ):
+        compile_to_ir(main, (tmp_path,))
+
+
+def test_exact_pointer_overload_still_beats_the_composed_reading():
+    # Two-tier viability is untouched: the decay tier (and with it the
+    # composed view) opens only when no candidate matches the pointer type
+    # directly, so the `b*` overload wins without ambiguity.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn f(x: b*) -> int32 { return 3; }
+        fn f(const it: &a) -> int32 { return 1; }
+        fn main() -> int32 {
+            let v: b = { n = 1, m = 2 };
+            let p: b* = &v;
+            return f(p);
+        }
+        """
+    ) == 3
+
+
+def test_rvalue_pointer_composes_at_a_sole_writable_slot():
+    # The direct marshal's rvalue arm: `&v` is a b* rvalue, and the pointee
+    # is real storage, so it decays into the writable `&a` and views.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn poke(it: &a) { it.n = 9; }
+        fn main() -> int32 {
+            let v: b = { n = 5, m = 2 };
+            poke(&v);
+            return v.n;
+        }
+        """
+    ) == 9
+
+
+def test_rvalue_pointer_composes_at_an_overloaded_writable_slot():
+    # The overload path's rvalue arm: same composition through the decay
+    # tier, write landing and override dispatching.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn poke(it: &a) -> int32 { it.n = 9; return it.who(); }
+        fn poke(x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let o: b = { n = 0, m = 0 };
+            let r = poke(&o);
+            if (o.n != 9) { return 80; }
+            return r;
+        }
+        """
+    ) == 2

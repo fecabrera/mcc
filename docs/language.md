@@ -382,10 +382,39 @@ The rule is fenced in four ways:
   readings enter resolution only when no candidate matches the pointer type
   directly, so `fn f(x: T*)` beside `fn f(x: &T)` stays unambiguous.
 
+Decay **composes with the
+[polymorphic base view](#polymorphic-base-views)** at a fat reference slot: a
+proven `derived*` argument at a fat `&base` / `const &base` parameter (where
+`derived extends base`) is legal and identical to passing `*p` —
+deref-then-view. The pointer sheds its one level, the pointee lends its base
+prefix, and the view carries the pointee's **own** dispatch table, so an
+overridden family still dispatches the derived override:
+
+```c
+struct b extends a { m: int32; }        // a::who overridden by b::who
+fn f(const it: &a) -> int32 { return it.who(); }
+
+let v: b = { n = 5, m = 2 };
+let p: b* = &v;
+f(p);        // == f(*p): decays, views, dispatches b::who
+```
+
+The composition inherits every fence above — one level, proven non-null
+(implicit decay keeps the proof obligation; the visible `*p` keeps the
+caller's usual dereference responsibility), and exact matches first: the
+decay tier still only opens when no candidate took the pointer directly, and
+an exact `&derived` overload still beats the viewed `&base` one. It also
+inherits the view's own fatness gate: a **thin** `&base` slot (a `.mci` stub
+whose closure never saw the extension) forms no view, so it still demands
+the exact pointee. With this, the "stack value and a heap pointer call the
+same function identically" rule above holds for extended bases too.
+
 Generic inference participates: at a `const`/`&` slot, unification also
 tries the argument's pointee against the parameter pattern, one level down,
 so a `list<int32>*` at `self: &list<T>` binds `T = int32` (previously
-"cannot infer type parameter(s) T"). Facts about the *pointer's own storage*
+"cannot infer type parameter(s) T") — and the decayed pointee upcasts like
+any reference argument, so a `gb*` (where `gb extends ga<int32>`) at
+`const v: &ga<T>` binds `T = int32` through the declared base instantiation. Facts about the *pointer's own storage*
 are irrelevant to the callee — a `const` or `@volatile` pointer variable
 decays fine (the load of the pointer itself honors them) — and because the
 pointer is passed **by value**, a flow-narrowed non-null fact survives the
@@ -2265,7 +2294,10 @@ where a fat `&A` is expected — a method receiver, or (since Stage 2) **any**
 `&A` parameter — forms the fat view: the object pointer plus that object's
 table. The reference upcast is a view, never a copy, so it is implicit at any
 argument position (a by-value argument still needs an explicit
-[`as`](#casts) — that conversion slices):
+[`as`](#casts) — that conversion slices). A proven-non-null `derived*`
+argument [decays](#pointer-decay-into-constreference-parameters) into the
+same slot and forms the same view — deref-then-view, identical to passing
+`*p`:
 
 ```c
 struct a { n: int32; }             fn a::greet(const self: &a) { println("a"); }
