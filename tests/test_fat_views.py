@@ -2141,3 +2141,186 @@ def test_let_binding_a_fat_reference_result_is_copy_on_read():
         }
         """
     ) == 1
+
+
+# --- SIE-184 + SIE-181: resolution ranks the derived->base view conversion ---
+
+
+def test_overloaded_callee_accepts_a_derived_argument_at_a_fat_position():
+    # SIE-184: overload resolution now considers the derived->base view
+    # conversion, so a derived rvalue at an overloaded callee's `const &a`
+    # position resolves (previously "no overload of 'via' with signature
+    # via(b)" -- adding an unrelated overload broke a working call) and the
+    # formed view dispatches the runtime override (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn make(x: int32) -> b { let r: b = { n = x, m = x }; return r; }
+        fn make(x: float64) -> a { let r: a = { n = 0 }; return r; }
+        fn via(const it: &a) -> int32 { return it.who(); }
+        fn via(x: int32) -> int32 { return x; }
+        fn main() -> int32 { return via(make(1)); }
+        """
+    ) == 2
+
+
+def test_overloaded_method_family_accepts_a_derived_non_receiver_argument():
+    # SIE-184's method-family shape: the overloaded `pick` resolves its
+    # `const other: &a` member for a derived argument and dispatches (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn a::pick(const self: &a, const other: &a) -> int32 {
+            return other.who();
+        }
+        fn a::pick(const self: &a, x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let base: a = { n = 0 };
+            let derived: b = { n = 0, m = 0 };
+            return base.pick(derived);
+        }
+        """
+    ) == 2
+
+
+def test_generic_inference_binds_through_a_fat_reference_position():
+    # SIE-181: a generic `&point<T>` reference parameter infers T through the
+    # derived argument's declared base instantiation (pointf extends
+    # point<float64> binds T = float64), receiver and free positions alike.
+    assert run(
+        """
+        struct point<T> { x: T; y: T; }
+        struct pointf extends point<float64> { tag: int32; }
+        fn f<T>(const a: &point<T>) -> int32 {
+            if (a.x == (1.5 as T)) { return 7; }
+            return 0;
+        }
+        fn main() -> int32 {
+            let p: pointf = { x = 1.5, y = 2.5, tag = 0 };
+            return f(p);
+        }
+        """
+    ) == 7
+
+
+def test_generic_inference_unifies_derived_and_base_arguments():
+    # Two arguments at `&point<T>` positions -- one derived, one the base
+    # instantiation itself -- unify to the same binding (no conflict): both
+    # view to point<float64>.
+    assert run(
+        """
+        struct point<T> { x: T; y: T; }
+        struct pointf extends point<float64> { tag: int32; }
+        fn same<T>(const a: &point<T>, const b: &point<T>) -> int32 {
+            if (a.x == b.x) { return 3; }
+            return 0;
+        }
+        fn main() -> int32 {
+            let p: pointf = { x = 1.5, y = 2.5, tag = 0 };
+            let q: point<float64> = { x = 1.5, y = 0.0 };
+            return same(p, q);
+        }
+        """
+    ) == 3
+
+
+def test_exact_candidates_outrank_view_conversion_candidates():
+    # The ranking rule: an exact-typed candidate beats one the argument only
+    # reaches through the view conversion -- reference vs reference, by-value
+    # vs reference, and nearer base vs farther base. Every previously-viable
+    # candidate has view distance zero, so no pre-existing resolution moves.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct c extends b { k: int32; }
+        fn f(const it: &a) -> int32 { return 10; }
+        fn f(const it: &b) -> int32 { return 20; }
+        fn g(x: b) -> int32 { return 30; }
+        fn g(const x: &a) -> int32 { return 40; }
+        fn h(const it: &a) -> int32 { return 50; }
+        fn h(const it: &b) -> int32 { return 60; }
+        fn main() -> int32 {
+            let vb: b = { n = 0, m = 0 };
+            let vc: c = { n = 0, m = 0, k = 0 };
+            if (f(vb) != 20) { return 1; }   // exact &b beats upcast &a
+            if (g(vb) != 30) { return 2; }   // exact by-value beats &a view
+            if (h(vc) != 60) { return 3; }   // &b (1 hop) beats &a (2 hops)
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_view_viability_matches_what_emission_can_form():
+    # Viability through the conversion is exactly emission's upcast: a
+    # candidate whose reference names the right FAMILY but the wrong
+    # INSTANCE (gb's chain holds ga<int32>, never ga<float64>) stays
+    # non-viable -- the name-keyed walk alone would admit it and emission
+    # could not form the view.
+    with pytest.raises(
+        LangError,
+        match=r"no overload of 'f' with signature f\(gb\)",
+    ):
+        compile_ir(
+            """
+            struct ga<T> { x: T; }
+            struct gb extends ga<int32> { y: int32; }
+            fn f(const v: &ga<float64>) -> int32 { return 1; }
+            fn f(x: int32) -> int32 { return x; }
+            fn main() -> int32 {
+                let o: gb = { x = 0, y = 0 };
+                return f(o);
+            }
+            """
+        )
+
+
+def test_by_value_positions_still_require_the_explicit_as():
+    # The conversion is reference-only: a derived argument at an overloaded
+    # callee's BY-VALUE base position stays rejected (the honest data slice
+    # takes an explicit `as`, per the copy ruling).
+    with pytest.raises(
+        LangError,
+        match=r"no overload of 'f' with signature f\(b\)",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn f(x: a) -> int32 { return 1; }
+            fn f(x: int32) -> int32 { return x; }
+            fn main() -> int32 {
+                let o: b = { n = 0, m = 0 };
+                return f(o);
+            }
+            """
+        )
+
+
+def test_overloaded_writable_reference_takes_a_derived_lvalue():
+    # The writable flavor through the overload set: the `&a` member resolves
+    # for a derived lvalue, lends its storage as the view (the write lands),
+    # and dispatches the override (2).
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::who(const self: &a) -> int32 { return 1; }
+        @override fn b::who(const self: &b) -> int32 { return 2; }
+        fn poke(it: &a) -> int32 { it.n = 9; return it.who(); }
+        fn poke(x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let o: b = { n = 0, m = 0 };
+            let r = poke(o);
+            if (o.n != 9) { return 80; }
+            return r;
+        }
+        """
+    ) == 2

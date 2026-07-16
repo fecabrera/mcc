@@ -16383,23 +16383,22 @@ class CodeGen:
     def receiver_view(
         self, pattern: TypeRef, actual: LangType, type_params: list[str]
     ) -> LangType:
-        """The base-chain view a method call's receiver unifies through.
+        """The base-chain view a reference argument unifies through.
 
-        The receiver position of a method-family call upcasts: when the
-        first parameter's pattern heads a struct that is a declared base of
-        the argument's ``extends`` lineage, inference and the shape filter
-        see the receiver AS that base instantiation -- so
+        When the parameter's pattern heads a struct that is a declared base
+        of the argument's ``extends`` lineage, inference and the shape filter
+        see the argument AS that base instantiation -- so
         ``point::magnitude(p)`` with a ``pointf`` receiver binds
-        ``T = float64``. This inference-time upcast is receiver-only. (A fat
-        ``&<extended base>`` *reference* parameter also upcasts a derived
-        argument into a base view, but that happens at the marshalling
-        boundary, on already-resolved concrete parameter types -- see the fat
-        argument handling in :meth:`marshal_args`; a by-value argument still
-        needs the explicit ``as``.)
+        ``T = float64``. :meth:`resolve_bindings` applies this at the
+        receiver position of a method-family call and (SIE-181/SIE-184) at
+        every REFERENCE position -- the positions marshalling forms a base
+        view at -- so resolution sees the same derived->base conversion
+        emission performs. A by-value argument still needs the explicit
+        ``as``, so plain positions never route through here.
 
         Args:
-            pattern: The candidate's first parameter pattern.
-            actual: The receiver argument's type.
+            pattern: The candidate's parameter pattern at the position.
+            actual: The argument's type.
             type_params: The candidate's type-parameter names.
 
         Returns:
@@ -16422,6 +16421,83 @@ class CodeGen:
                 return const_of(anc) if actual.const else anc
             current = anc.base
         return actual
+
+    def view_distance(
+        self, pattern: TypeRef, actual: LangType, type_params: list[str]
+    ) -> int:
+        """How many ``extends`` hops :meth:`receiver_view` upcast through.
+
+        ``0`` for an exact (or inapplicable) match, ``k`` when the argument's
+        declared lineage reaches the pattern's struct ``k`` hops up.
+        :meth:`call_rank` charges a viable candidate this distance per
+        reference position, so an exact-typed candidate outranks one the
+        argument only reaches through the view conversion -- and a nearer
+        base outranks a farther one -- without disturbing any ranking among
+        candidates that never needed the view (their distance is ``0`` by
+        construction).
+
+        Args:
+            pattern: The candidate's parameter pattern at the position.
+            actual: The argument's type.
+            type_params: The candidate's type-parameter names.
+
+        Returns:
+            The chain distance, ``0`` when no view was involved.
+        """
+        if actual is CTOR_SELF or actual is NULLT:
+            return 0
+        p = self.dealias_pattern(pattern, type_params)
+        if p.stars or p.dims or p.params is not None or p.name in type_params:
+            return 0
+        bare = strip_const(actual)
+        if not is_struct(bare):
+            return 0
+        if bare.template == p.name or bare.name == p.name:
+            return 0
+        hops, current = 0, bare.base
+        while current is not None:
+            hops += 1
+            anc = strip_const(current)
+            if anc.template == p.name or anc.name == p.name:
+                return hops
+            current = anc.base
+        return 0
+
+    def concrete_view_target(
+        self, func: Func, ptype: TypeRef, actual: LangType
+    ) -> "LangType | None":
+        """The emission-parity view target for a CONCRETE reference pattern.
+
+        Resolves the candidate's parameter (under its own source, like
+        :meth:`try_param_types`) and asks :meth:`receiver_upcast_target` --
+        the exact predicate the marshal's view formation uses -- so a
+        candidate is viable through the conversion iff emission can actually
+        form it. ``None`` when the pattern does not resolve here (a lenient
+        trial's mismatched candidate) or the argument's lineage does not
+        reach the resolved instance.
+
+        Args:
+            func: The candidate (its source scopes the resolution).
+            ptype: The parameter's ``TypeRef`` pattern (names no type
+                parameter of ``func``).
+            actual: The argument's type.
+
+        Returns:
+            The (const-stripped) base target, or ``None``.
+        """
+        if actual is CTOR_SELF or actual is NULLT:
+            return None
+        if not is_struct(strip_const(actual)):
+            return None
+        outer = self.current_source
+        self.current_source = func.source
+        try:
+            pi = self.lang_type(ptype, func.line)
+        except LangError:
+            return None
+        finally:
+            self.current_source = outer
+        return self.receiver_upcast_target(actual, pi)
 
     def receiver_upcast_target(
         self, t: LangType, p: LangType
@@ -19426,7 +19502,13 @@ class CodeGen:
                 if unaddressed:
                     mut_failures.append(min(unaddressed))
                     continue
-                viable.append((self.call_rank(func, arg_tvs), func, bindings))
+                viable.append((
+                    self.call_rank(
+                        func, arg_tvs, method="::" in expr.name
+                    ),
+                    func,
+                    bindings,
+                ))
             if not viable:
                 # Two-tier viability: decay readings enter resolution only
                 # when no candidate matched the pointer type directly, so
@@ -20112,7 +20194,13 @@ class CodeGen:
                 ok = False
                 break
             if ok:
-                viable.append((self.call_rank(func, arg_tvs), func, bindings))
+                viable.append((
+                    self.call_rank(
+                        func, arg_tvs, method="::" in expr.name
+                    ),
+                    func,
+                    bindings,
+                ))
         return viable
 
     def fill_default_bindings(self, decl, bindings: dict[str, LangType], line: int):
@@ -20354,10 +20442,48 @@ class CodeGen:
         # A method-family call's receiver upcasts: inference and the shape
         # filter see it as the base instantiation the first parameter's
         # pattern names, when its declared `extends` lineage reaches one.
-        if "::" in expr.name and actuals and n_fixed >= 1:
-            actuals[0] = self.receiver_view(
-                func.params[0][1], actuals[0], func.type_params
-            )
+        # SIE-181/SIE-184: every REFERENCE position (`&T` / `const &T`, the
+        # positions marshalling forms a base view at) upcasts the same way,
+        # so resolution finally sees the derived->base view conversion it
+        # will emit: a derived argument satisfies a candidate's `&base`
+        # pattern (SIE-184's concrete-candidate viability) and a generic
+        # `&point<T>` pattern binds T through the derived argument's declared
+        # base instantiation (SIE-181's inference). A by-value position never
+        # upcasts here -- it still takes the explicit `as`. Exact matches
+        # keep winning: call_rank charges each viewed position its chain
+        # distance (see view_distance), below the tier and hop.
+        #
+        # Viability must be exactly emission's upcast, never looser. A
+        # pattern that names a TYPE PARAMETER routes through receiver_view's
+        # name-keyed chain walk -- the matched ancestor instance then PINS
+        # the bindings, so the instantiated parameter equals that ancestor
+        # and the marshal's upcast succeeds by construction. A CONCRETE
+        # pattern instead resolves and asks receiver_upcast_target directly
+        # (the marshal's own predicate): the name walk alone would admit an
+        # ancestor of the right family but the wrong instance -- e.g. a
+        # list<char> argument reaching `&slice<const char>` through its
+        # slice<char> base -- which emission cannot form.
+        for i, (pname, ptype) in enumerate(func.params[:n_fixed]):
+            if i >= len(actuals):
+                break
+            if not (
+                (i == 0 and "::" in expr.name)
+                or pname in func.mut_params
+                or pname in func.constref_params
+            ):
+                continue
+            if (i == 0 and "::" in expr.name) or self.names_type_param(
+                ptype, func.type_params
+            ):
+                actuals[i] = self.receiver_view(
+                    ptype, actuals[i], func.type_params
+                )
+            else:
+                target = self.concrete_view_target(func, ptype, actuals[i])
+                if target is not None:
+                    actuals[i] = (
+                        const_of(target) if actuals[i].const else target
+                    )
         try:
             if expr.type_args and len(expr.type_args) < len(func.type_params):
                 self.fill_default_bindings(func, bindings, expr.line)
@@ -20858,32 +20984,41 @@ class CodeGen:
         return winners[0] if len(winners) == 1 else None
 
     def call_rank(
-        self, func: Func, arg_tvs: list[TypedValue]
-    ) -> tuple[int, int, int, int, int]:
+        self, func: Func, arg_tvs: list[TypedValue], method: bool = False
+    ) -> tuple[int, int, int, int, int, int]:
         """A viable candidate's per-call sort key.
 
-        ``(no-collect, tier, -hop, specificity, fixed count)``: a candidate
-        that matches this call without collecting beats any candidate that
-        must collect, as the outermost component regardless of tier -- an
-        exact-arity generic beats a concrete collecting fallback (the C++
-        ellipsis-ranks-worst analogue). A pass-through-shaped match counts
-        as not-collecting at full specificity (see :meth:`passes_through`).
-        The hop -- an inherited member's distance up the ``extends`` chain,
-        0 for a member declared on the receiver type itself -- sits below
-        the tier and above specificity: a derived same-shape member shadows
-        an inherited one, while a base member of a better tier (an inherited
-        exact/concrete match) still beats a derived generic. A collecting
-        match scores specificity over its fixed prefix only -- the trailing
-        ``slice<const any>`` pattern's own points must never arbitrate
-        against a competing prefix -- and more fixed parameters break the
-        remaining tie; equal fixed counts with a tying fixed-prefix
-        specificity stay the ambiguity error. Non-collecting matches all
-        share this call's arity, so their trailing count is inert and every
-        pre-collection ordering is preserved.
+        ``(no-collect, tier, -hop, -view distance, specificity, fixed
+        count)``: a candidate that matches this call without collecting
+        beats any candidate that must collect, as the outermost component
+        regardless of tier -- an exact-arity generic beats a concrete
+        collecting fallback (the C++ ellipsis-ranks-worst analogue). A
+        pass-through-shaped match counts as not-collecting at full
+        specificity (see :meth:`passes_through`). The hop -- an inherited
+        member's distance up the ``extends`` chain, 0 for a member declared
+        on the receiver type itself -- sits below the tier and above
+        specificity: a derived same-shape member shadows an inherited one,
+        while a base member of a better tier (an inherited exact/concrete
+        match) still beats a derived generic. The VIEW DISTANCE (SIE-184) is
+        the total ``extends`` hops the call's non-receiver reference
+        arguments upcast through (:meth:`view_distance`): an exact-typed
+        candidate beats one reached only through the derived->base view
+        conversion, and a nearer base beats a farther one -- zero for every
+        previously-viable candidate, so no pre-existing ordering moves. A
+        collecting match scores specificity over its fixed prefix only --
+        the trailing ``slice<const any>`` pattern's own points must never
+        arbitrate against a competing prefix -- and more fixed parameters
+        break the remaining tie; equal fixed counts with a tying
+        fixed-prefix specificity stay the ambiguity error. Non-collecting
+        matches all share this call's arity, so their trailing count is
+        inert and every pre-collection ordering is preserved.
 
         Args:
             func: The viable candidate.
             arg_tvs: The already-evaluated argument values.
+            method: Whether the call is a method-family call, whose receiver
+                position is excluded from the view distance (the hop already
+                ranks receiver-chain nearness there).
 
         Returns:
             The sort key, greater meaning preferred.
@@ -20891,12 +21026,22 @@ class CodeGen:
         tier, spec = self.rank(func)
         inh = self.inherited_origins.get(id(func))
         hop = inh.hop if inh is not None else 0
+        n_fixed = len(func.params) - (
+            1 if self.collecting_candidate(func) else 0
+        )
+        dist = sum(
+            self.view_distance(ptype, arg_tvs[i].type, func.type_params)
+            for i, (pname, ptype) in enumerate(func.params[:n_fixed])
+            if i < len(arg_tvs)
+            and not (method and i == 0)
+            and (pname in func.mut_params or pname in func.constref_params)
+        )
         if self.collecting_candidate(func) and not self.passes_through(
             func, arg_tvs
         ):
             fixed = len(func.params) - 1
-            return (0, tier, -hop, self.specificity(func, fixed), fixed)
-        return (1, tier, -hop, spec, len(func.params))
+            return (0, tier, -hop, -dist, self.specificity(func, fixed), fixed)
+        return (1, tier, -hop, -dist, spec, len(func.params))
 
     def passes_through(self, func: Func, arg_tvs: list[TypedValue]) -> bool:
         """Whether a call to a collecting candidate is pass-through-shaped.

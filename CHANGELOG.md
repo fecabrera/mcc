@@ -234,7 +234,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the derived→base **reference** conversion is now **implicit at any parameter
   position** (a `fn f(const a: &A)` accepts a derived argument by forming a
   view — a reference upcast never slices; a *by-value* argument still needs an
-  explicit `as`). A `.mci` stub's fatness is pinned to its own import closure,
+  explicit `as`). **Overload resolution ranks the conversion** (SIE-184 /
+  SIE-181): a derived argument satisfies an overloaded candidate's `&base`
+  reference position — adding an unrelated overload no longer turns a working
+  call into "no overload of ..." — and a generic `&point<T>` reference
+  parameter infers `T` through the derived argument's declared base
+  instantiation; an exact-typed candidate always outranks a view-conversion
+  one and a nearer base outranks a farther one (the view distance ranks below
+  the tier and the inheritance hop), so no resolution among exactly-matching
+  candidates changes. A `.mci` stub's fatness is pinned to its own import closure,
   and a prototype/definition that disagree on a reference's fatness across that
   boundary are rejected as a signature mismatch. A stub re-emits a method's
   `@override` marker on its prototype (a method-qualified `@override` proto is
