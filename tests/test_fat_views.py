@@ -2522,3 +2522,141 @@ def test_losing_candidates_do_not_instantiate_generic_structs():
         """
     )
     assert 'box<heavy>' not in ir
+
+
+# --- SIE-184 review round 2: viability halves the round-1 asserts left open --
+
+
+def test_alias_spelled_view_candidate_stays_viable_alone():
+    # The complement of the round-1 alias RANKING test (which an over-eager
+    # rejection would also pass): with no exact competitor, the alias-spelled
+    # `&abase` candidate must still be VIABLE through the view -- the name
+    # pre-walk chases the plain alias to the family, it does not reject it.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        type abase = a;
+        fn h(const it: &abase) -> int32 { return 1; }
+        fn h(x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let vb: b = { n = 1, m = 2 };
+            return h(vb);
+        }
+        """
+    ) == 1
+
+
+def test_qualified_member_view_candidate_stays_viable_alone():
+    # The complement of the round-1 qualified-member RANKING test: charging
+    # position 0 of `a::f(d)` its view distance must not have cost the
+    # position its upcast -- the sole `&a` member still takes the derived
+    # argument through the view.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn a::f(const it: &a) -> int32 { return 1; }
+        fn a::f(x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let d: b = { n = 1, m = 2 };
+            return a::f(d);
+        }
+        """
+    ) == 1
+
+
+def test_concrete_receiver_specialization_wins_when_the_chain_holds_it():
+    # The capture test's other half: routing concrete receiver patterns
+    # through emission's predicate rejects the WRONG instance, but the RIGHT
+    # instance (gb's chain holds ga<char>) must keep beating the generic
+    # member -- specialization-over-generic ranking is undisturbed when the
+    # view really can form.
+    assert run(
+        """
+        struct ga<T> { x: int32; }
+        struct gb extends ga<char> { y: int32; }
+        fn ga<T>::m(const self: &ga<T>) -> int32 { return 1; }
+        fn ga<char>::m(const self: &ga<char>) -> int32 { return 3; }
+        fn main() -> int32 {
+            let b: gb = { x = 1, y = 2 };
+            return ga::m(b);
+        }
+        """
+    ) == 3
+
+
+def test_exact_candidate_wins_over_incomparable_view_candidates():
+    # Dominance's all-zero fast path in a crowd: two view candidates that are
+    # incomparable to each other (nearer here, farther there) must not drag
+    # the call into ambiguity when a third candidate is exact at every
+    # position -- the zero vector dominates both.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        struct c extends b { o: int32; }
+        struct d extends c { p: int32; }
+        fn f(const x: &c, const y: &c) -> int32 { return 1; }
+        fn f(const x: &d, const y: &a) -> int32 { return 2; }
+        fn f(const x: &d, const y: &d) -> int32 { return 3; }
+        fn main() -> int32 {
+            let v: d = { n = 1, m = 2, o = 3, p = 4 };
+            return f(v, v);
+        }
+        """
+    ) == 3
+
+
+def test_writable_reference_positions_charge_the_view_distance():
+    # The distance gate covers mut positions too (`it: &a` vs `it: &b`): the
+    # exact `&b` wins for a derived lvalue, and its write lands -- the const
+    # tests alone would not catch a gate keyed only to constref_params.
+    assert run(
+        """
+        struct a { n: int32; }
+        struct b extends a { m: int32; }
+        fn f(it: &a) -> int32 { it.n = 9; return 1; }
+        fn f(it: &b) -> int32 { it.m = 9; return 2; }
+        fn main() -> int32 {
+            let v: b = { n = 0, m = 0 };
+            if (f(v) != 2) { return 10; }
+            if (v.m != 9) { return 11; }
+            if (v.n != 0) { return 12; }
+            return 2;
+        }
+        """
+    ) == 2
+
+
+def test_cross_module_alias_candidate_ranks_and_stays_viable(tmp_path):
+    # The alias chase runs in the CANDIDATE's own context: a `&abase`
+    # parameter spelled through an alias private to the candidate's module
+    # is charged its distance (the caller's exact `&b` wins) yet stays
+    # viable through the view when it is the only reference candidate.
+    (tmp_path / "shapes.mc").write_text(
+        "struct a { n: int32; }\n"
+        "type abase = a;\n"
+        "fn h(const it: &abase) -> int32 { return 1; }\n"
+    )
+    main = tmp_path / "main.mc"
+    main.write_text(
+        'import "shapes";\n'
+        "struct b extends a { m: int32; }\n"
+        "fn h(const it: &b) -> int32 { return 2; }\n"
+        "fn main() -> int32 {\n"
+        "    let vb: b = { n = 1, m = 2 };\n"
+        "    return h(vb);\n"
+        "}\n"
+    )
+    assert run_path(main) == 2
+    sole = tmp_path / "sole.mc"
+    sole.write_text(
+        'import "shapes";\n'
+        "struct b extends a { m: int32; }\n"
+        "fn main() -> int32 {\n"
+        "    let vb: b = { n = 1, m = 2 };\n"
+        "    return h(vb);\n"
+        "}\n"
+    )
+    assert run_path(sole) == 1
