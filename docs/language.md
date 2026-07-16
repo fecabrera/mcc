@@ -273,7 +273,17 @@ of a legal chain. The storage rules `&` arguments obey apply at the
 `return` too: `@volatile` storage, `@packed` fields, and read-only
 `const T` lvalues are rejected, and the lvalue's type must match the
 declared return **exactly** (the caller writes through the reference, so
-nothing adapts or widens).
+nothing adapts or widens) — with one exception mirroring the argument
+side: a struct lvalue returns as a reference to any of its **declared
+[`extends`](#extends-structs) ancestors**, the [return-position reference
+upcast](#polymorphic-base-views). Like the argument-side view, the upcast
+reinterprets the derived storage as the base prefix in place — a
+reference never slices — while a *by-value* `-> T` return of a derived
+value still requires the explicit `as`. The upcast needs the fat
+return's table word to carry the derived type, so a **thin** reference
+return — possible only for a body compiled under an
+[interface stub](#interface-files)'s pinned closure, such as a generic
+shipped in a `.mci` that never saw the extension — rejects it.
 
 `-> &` works on generics (`fn pick<T>(a: &T, b: &T, f: bool) ->
 &T`), with the formation and void rules checked per instance. It is
@@ -382,10 +392,39 @@ The rule is fenced in four ways:
   readings enter resolution only when no candidate matches the pointer type
   directly, so `fn f(x: T*)` beside `fn f(x: &T)` stays unambiguous.
 
+Decay **composes with the
+[polymorphic base view](#polymorphic-base-views)** at a fat reference slot: a
+proven `derived*` argument at a fat `&base` / `const &base` parameter (where
+`derived extends base`) is legal and identical to passing `*p` —
+deref-then-view. The pointer sheds its one level, the pointee lends its base
+prefix, and the view carries the pointee's **own** dispatch table, so an
+overridden family still dispatches the derived override:
+
+```c
+struct b extends a { m: int32; }        // a::who overridden by b::who
+fn f(const it: &a) -> int32 { return it.who(); }
+
+let v: b = { n = 5, m = 2 };
+let p: b* = &v;
+f(p);        // == f(*p): decays, views, dispatches b::who
+```
+
+The composition inherits every fence above — one level, proven non-null
+(implicit decay keeps the proof obligation; the visible `*p` keeps the
+caller's usual dereference responsibility), and exact matches first: the
+decay tier still only opens when no candidate took the pointer directly, and
+an exact `&derived` overload still beats the viewed `&base` one. It also
+inherits the view's own fatness gate: a **thin** `&base` slot (a `.mci` stub
+whose closure never saw the extension) forms no view, so it still demands
+the exact pointee. With this, the "stack value and a heap pointer call the
+same function identically" rule above holds for extended bases too.
+
 Generic inference participates: at a `const`/`&` slot, unification also
 tries the argument's pointee against the parameter pattern, one level down,
 so a `list<int32>*` at `self: &list<T>` binds `T = int32` (previously
-"cannot infer type parameter(s) T"). Facts about the *pointer's own storage*
+"cannot infer type parameter(s) T") — and the decayed pointee upcasts like
+any reference argument, so a `gb*` (where `gb extends ga<int32>`) at
+`const v: &ga<T>` binds `T = int32` through the declared base instantiation. Facts about the *pointer's own storage*
 are irrelevant to the callee — a `const` or `@volatile` pointer variable
 decays fine (the load of the pointer itself honors them) — and because the
 pointer is passed **by value**, a flow-narrowed non-null fact survives the
@@ -2108,8 +2147,9 @@ chain, `0` for a member declared on the receiver type itself:
   derived member never *hides* a base family (no C++ name hiding): a
   different signature simply **overloads** the merged set.
 - **The hop beats specificity**: a derived member shadows a same-shape
-  inherited one, and a nearer base's shadows a farther one — override
-  semantics with no marker.
+  inherited one, and a nearer base's shadows a farther one — this is an
+  **override**, and the shadowing member must carry
+  [`@override`](#override-a-method) (see below).
 
 The merged set is built per hop with **no cascade** — each base contributes
 exactly the members declared on it — and membership is judged against the
@@ -2125,17 +2165,37 @@ generic: `struct pd<T> extends point<T>` inherits `point<T>`'s members with
 the receiver binding `T`, bare-head constructor inference included
 (`pd(1, 2)` builds a `pd<int32>`).
 
-**The receiver upcasts — and only the receiver.** In the receiver position
-(the first argument) of any method-family call, a derived value passes where
-the resolved parameter is a declared base of its lineage: a `self: &T` or
-`const self: &T` (hidden-reference) receiver **lends its base prefix in place** —
-the same storage viewed as the base, so a `self: &T` method's writes land in the
-derived value's leading fields. Every receiver is reference-shaped (a by-value
-copy receiver is rejected precisely because it would slice the derived value),
-so the base prefix is always lent, never copied. This covers the explicit
-qualified spelling too:
-`point::magnitude(p)` accepts a `pointf`, and a derived constructor
-**chains** by calling the base's directly:
+**The receiver upcasts — and so does any fat reference parameter.** In the
+receiver position (the first argument) of any method-family call, a derived
+value passes where the resolved parameter is a declared base of its lineage: a
+`self: &T` or `const self: &T` (hidden-reference) receiver **lends its base
+prefix in place** — the same storage viewed as the base, so a `self: &T`
+method's writes land in the derived value's leading fields. Every receiver is
+reference-shaped (a by-value copy receiver is rejected precisely because it
+would slice the derived value), so the base prefix is always lent, never
+copied. With [polymorphic base views](#polymorphic-base-views) the same
+derived→base reference upcast applies to **any** `&<extended base>`
+parameter, at any position — a reference upcast is a view, never a slice — so a
+free function `fn f(const a: &A)` accepts a derived argument too. **Overload
+resolution ranks the conversion**: a derived argument
+satisfies an overloaded candidate's `&base` reference position, and a generic
+`&point<T>` reference parameter infers `T` through the derived argument's
+declared base instantiation (`f(p)` with a `pointf` binds `T = float64`). The
+conversion is charged per position as its `extends`-chain distance, compared
+**position by position** (the dominance rule): a candidate wins on the
+conversion only when it is no farther at *every* reference position — so an
+exact-typed candidate beats one reached only through the view, and a nearer
+base beats a farther one — while a mixed comparison (nearer at one position,
+farther at another) is an **ambiguity error**, resolved by an explicit `as`
+on an argument, never by a silent total across positions. The distances
+arbitrate below the tier and the inheritance hop, and a call with no viewed
+positions charges nothing, so no resolution among exactly-matching candidates
+ever changes. Viability through the conversion is exactly what emission can
+form: a parameter whose `&base` is thin in the callee's own import closure
+(see [polymorphic base views](#polymorphic-base-views)) never admits a
+derived argument. This also
+covers the explicit qualified spelling: `point::magnitude(p)` accepts a
+`pointf`, and a derived constructor **chains** by calling the base's directly:
 
 ```c
 struct point3f extends point<float64> { z: float64; }
@@ -2146,8 +2206,10 @@ fn point3f::constructor(self: &point3f, x: float64, y: float64, z: float64) {
 }
 ```
 
-Every **non-receiver** argument keeps the explicit `as`: `b::plus(v, w)`
-with a derived `w` is a type error until it is written `w as b`. An
+A **by-value** argument still keeps the explicit `as`: `b::plus(v, w)` with a
+by-value derived `w` is a type error until written `w as b`, because that
+conversion is a prefix **copy** and the slice is made explicit (a `&<extended
+base>` reference argument, by contrast, upcasts implicitly — it is a view). An
 inherited constructor never sees the derived type's added fields — they keep
 their `let s: S;` semantics (declared field defaults apply, anything else
 starts uninitialized) — and an inherited method's **return type stays
@@ -2170,6 +2232,244 @@ cross-module `@private` base member is filtered per file, exactly as in any
 [open overload set](#function-overloading).
 
 See [examples/types/method_inheritance.mc](../examples/types/method_inheritance.mc).
+
+##### @override a method
+
+A derived member that shadows a same-shape inherited one — a member whose
+signature **pattern** equals one of the rebased inherited candidates — is an
+**override**, and it must be marked [`@override`](#function-overloading).
+The pattern is the same notion `@override` already uses for open sets: a
+concrete member's resolved parameter types, or a template's
+[order-independent base](#template-symbols). This is the *second mode* of the
+one `@override` annotation: mode 1 replaces a same-pattern member of another
+module's open overload set; mode 2 (here) declares that a derived method
+deliberately overrides an inherited base member.
+
+```c
+struct b { n: int32; }
+struct d extends b {}
+
+fn b::describe(const self: &b) -> int32 { return 1; }
+@override fn d::describe(const self: &d) -> int32 { return 2; }   // shadows b::describe
+
+fn main() -> int32 {
+    let v: d = { n = 0 };
+    return v.describe()          // 2 — the override wins by hop
+         - b::describe(v);       // 1 — the base body is still reachable qualified
+}
+```
+
+Two errors enforce the marker:
+
+- An **unmarked** derived member whose pattern matches an inherited base
+  member it would shadow is the accidental-shadow error: `method 'd::describe'
+  shadows the inherited base member of the same signature and must be marked
+  @override`.
+- An **`@override`** member that shadows no inherited base member (and has no
+  cross-module mode-1 target either) overrides nothing: `@override method
+  'd::note' overrides no inherited base member`.
+
+A **differently-shaped** derived member merely *overloads* the merged family
+(there is no C++ name hiding), so it needs no marker. **Constructors and
+destructors are exempt**: a derived `T::constructor` / `T::destructor` shadows
+the base's same-shape special member by nature (base construction and cleanup
+chain manually) and neither is ever dynamically dispatched, so the marker is
+neither required nor rejected on one — special members sit outside the
+override system. The marker defines what "an override" *is* — the criterion
+[polymorphic base views](#polymorphic-base-views) key on for dynamic dispatch.
+
+#### Polymorphic base views
+
+A method call through a **base-typed reference** dispatches to the runtime
+object's own override. There is no `class` keyword and no vtable pointer in the
+object: the dispatch table lives in the **reference**, not the value, so
+objects keep their exact byte layout and value semantics.
+
+**A fat reference carries the table.** A reference `&A` / `const &A` is a
+two-word **fat pointer** `{object, table}` — the object's address plus a
+pointer to its dispatch table — exactly when struct `A` is **extended** (has a
+declared subtype) somewhere the forming site can see. An un-extended struct's
+references stay one word (a plain pointer, zero cost), so every ordinary
+`const self: &T` container method is unaffected. Fatness is a property of the
+**base type**, uniform across all of its references and **independent of
+whether any family is overridden** — so introducing the first override into a
+hierarchy never changes a reference's width. This keeps the ABI stable:
+fatness is committed at `extends` time. It is scoped per **import closure**
+(like an [open overload set](#function-overloading)): a normal build sees the
+whole program, while a separately compiled interface stub is pinned to the
+closure it was built with (below).
+
+**The view forms at the derived→base conversion.** Passing a derived value
+where a fat `&A` is expected — a method receiver, or **any** `&A` parameter —
+forms the fat view: the object pointer plus that object's table. The
+reference upcast is a view, never a copy, so it is implicit at any
+argument position (a by-value argument still needs an explicit
+[`as`](#casts) — that conversion slices). A proven-non-null `derived*`
+argument [decays](#pointer-decay-into-constreference-parameters) into the
+same slot and forms the same view — deref-then-view, identical to passing
+`*p`:
+
+```c
+struct a { n: int32; }             fn a::greet(const self: &a) { println("a"); }
+struct b extends a { m: int32; }   @override fn b::greet(const self: &b) { println("b"); }
+struct c extends b { k: int32; }   @override fn c::greet(const self: &c) { println("c"); }
+
+fn f(const it: &a) { it.greet(); }         // dispatches on it's runtime type
+
+fn main() -> int32 {
+    let v: c = { n = 1, m = 2, k = 3 };
+    f(v);                                  // prints "c" — v's table reaches C::greet
+    return 0;
+}
+```
+
+**Dispatch happens only where a family is overridden.** A call through a fat
+view routes through the table **iff** the resolved method has an
+[`@override`](#override-a-method) chain (a fixed slot, assigned at the
+overload's introducing base and shared down the chain). A method that is never
+overridden has no slot and stays an ordinary **direct** call — no indirection,
+even through a base view. Overloading is slot-precise: two overloads of one
+method name take **separate** slots, keyed by the resolved overload's
+signature, so a call always dispatches the exact sibling overload resolution
+picked — and if only *some* overloads of a name are overridden, the others
+stay direct calls. When the receiver's concrete type is statically known (a
+plain `let c: c; c.greet()`) the call is **devirtualized** to the direct call;
+the indirect path is taken only for a genuine view whose runtime type is
+unknown (a `&A` parameter). A base method that calls another overridden family
+on `self` **re-dispatches**: `self` carries the table through, so the inner
+call still reaches the runtime type's override.
+
+**An override must be ABI-compatible with the base member.** Because every
+override of a family shares that family's single table slot, an
+[`@override`](#override-a-method) method must match the base member where the
+slot is concerned — the slot's indirect call and the stored thunk have to agree
+on every value's ABI, or the call is undefined behavior. It must **return the
+same type** (a divergent return — an `int32` base overridden by a `float64` one
+— would reinterpret the returned bytes), and **every parameter**, the receiver
+and each argument alike, must be passed the same way: by value vs. by
+reference, `const` vs. writable, `own`, `@nonnull`, `@noalias`. In particular an
+override may **not** widen a read-only `const &T` parameter to a writable `&T`
+one (a call dispatched through a `const` view would then mutate through a
+promise not to), nor change a by-value parameter to by-reference, nor add
+`@nonnull` where the base accepted null, nor add `@noalias` where the base
+permits aliasing (the override body would assume non-aliasing that a call
+through the base signature, which permits it, need not honor). The one safe
+relaxation is *narrowing* a writable base
+reference to a read-only override one (same pointer ABI, and the override merely
+promises to mutate less). Every violation is a compile error.
+
+**Covariant override returns** are the return side's one relaxation: an
+override may declare a return that is a **reference to a declared `extends`
+descendant** of the base member's reference return (`-> &b` over a base's
+`-> &a`, given `b extends a`). The narrowing is **spelling-level only** — the
+shared slot's return ABI stays the base's fat view forever, and every override
+hands the base-shaped view back through it (a thin leaf spelling is widened at
+the slot boundary), so the relaxation never reinterprets bytes. What changes
+is the checker's typing at *static* call sites: a direct call on a concrete
+`b` receiver types `me()`'s result as `&b`, so derived fields are reachable
+without a cast, while a call through a base view still types the result `&a`
+(and its dispatch table still carries the runtime type). Only references
+participate — a *by-value* return of a descendant would slice through the slot
+and stays rejected — and an [interface stub](#interface-files) re-emits the
+covariant spelling, so static callers importing through a `.mci` keep the
+narrowing. On a **generic struct hierarchy** the return spellings (`-> &b<T>`
+over `-> &a<T>`, given `b<T> extends a<T>`) resolve at no pre-body pass, so
+covariance is judged **at the template level** instead: the override return's
+declared `extends` chain is walked with the spelled type arguments
+substituted hop by hop (and each side's parameter names alpha-renamed to
+qualifier position, so a method that renames the struct's parameters still
+compares). The walk matches **declarations, never names**: each spelled name
+resolves in the file that spelled it, so two same-named file-scoped
+[`@static`](#visibility) types from different files never conflate,
+and a concrete type argument spelled through an alias compares resolved.
+The relaxation is granted exactly when **every** instantiation's
+returns narrow — `-> &b<int32>` over `-> &a<T>` is rejected, since it narrows
+at one instantiation only — and each concrete instantiation's slot then
+adapts independently (`b<int32>`'s thunk widens with `b<int32>`'s table).
+The boundary widening leans on the whole program agreeing that a
+thin spelling's referent is exactly its type, so a slot member whose reference
+return was **pinned thin by its interface's closure** (no extension of the
+return type was visible when the stub was compiled) is incompatible with a
+program that *does* extend that type: the one-word return cannot carry the
+runtime type, and the disagreement is a compile error — like every pinned-ABI
+drift across the `.mci` boundary — asking for the interface to be recompiled
+with the extension in its closure.
+
+**Copying out of a view is prefix extraction.** Reading a value *out* of a fat
+view yields a plain, byte-exact base value that carries **no** table:
+
+```c
+fn f(const it: &a) {
+    let copy: a = it;   // prefix extraction — a plain `a`, no view
+    copy.greet();       // binds to a::greet: the dynamic type is gone
+}
+```
+
+Data slicing is legal and explicit; behavioral slicing is impossible, because
+the table never enters the object. Copy semantics do not depend on whether the
+source was a view.
+
+**Destructors are not dispatched (yet).** The table holds no destructor slot:
+base-view destruction stays static/manual, consistent with the
+constructor/destructor exemption from the [`@override`](#override-a-method)
+marker. Dynamic destruction is a later stage.
+
+Across an [interface stub](#interface-files): a `.mci`'s fatness is pinned to the
+closure it was emitted from, so a base extended only in a *consumer* does not
+retroactively fatten a reference the stub already declared thin — the
+separately compiled object keeps the ABI it was built with. A prototype and
+its definition that disagree on a reference's fatness (they can only diverge
+across this boundary) are rejected as a signature mismatch, never silently
+miscompiled.
+
+**A reference return carries the view.** A `-> &T` return of a fat base is
+the same two-word `{object, table}` view a fat parameter is, so a returned
+reference keeps its dispatch table across the hop: a function that forwards a
+view parameter (`fn relay(x: &a) -> &a { return x; }`) hands back the
+*runtime* type's table, `relay(obj).kind()` dispatches the derived override,
+and re-lending or re-returning the result forwards the same view. **The
+return position upcasts like an argument**: a lvalue of a declared
+*descendant* of the return type forms the view at the `return` site
+(`fn first(x: &b, y: &b) -> &a { return x; }`), reinterpreting the derived
+storage as the base prefix and pairing it with the **derived** type's table —
+so the caller's dispatch on the result reaches the runtime type. Declared
+means a named base family: an intrusive
+[bare-parameter base](#structs) (`struct entry<T> extends T`) never
+upcasts implicitly, in the argument or the return position — it has no
+vtable chain to put in the view's table word. Any other
+returned lvalue is an object of exactly its evaluated static type, so it
+carries that type's own table. The lvalue surfaces
+are unchanged: assignment and projection through the result consume the
+object pointer exactly as a thin reference return's. **Binding the result to
+a local does not preserve the view**: references are not storable types, so
+`let r = relay(obj);` is copy-on-read — prefix extraction into a plain base
+value carrying no table, and `r.kind()` binds statically — exactly as a
+`let` from a view parameter. The view survives only while the result stays
+an expression: chain, re-lend, or re-return it.
+
+**Constructs a single slot cannot represent are rejected, not miscompiled.**
+Three cases are clean compile errors for now, each liftable in a later stage:
+a fat reference — a `&A` parameter or a `-> &A` return — may **not** appear in
+a [function-pointer type](#function-pointers), spelled or inferred from a
+function value (its width can differ across closures); a **method-owned
+generic override** (one declaring *its own* type parameter, as opposed to
+merely the struct's) may **not** be dynamically dispatched through a base view
+— no single slot can stand in for every instantiation of that parameter —
+though it remains a legal *static* override when called on a concrete
+receiver; and on a generic struct, an overload whose **non-receiver
+parameters spell the struct's own type parameters**
+(`get(self: &cell<T>, k: T)`) may **not** be overridden at all — the shared
+slot is keyed on the overload's resolved parameter pattern, which such a
+spelling does not have before bodies, so the base's and the override's keys
+could never agree — spell resolvable parameter types, or rename the method
+(the un-overridden overload itself stays callable, as an honest direct
+call). A **struct-generic** override — one whose only type parameters are
+its struct's (`gb<T>::m` over `ga<T>::m`) and whose non-receiver parameters
+resolve — dispatches normally: each concrete struct instantiation has its
+own table with concrete slot types.
+
+See [examples/types/polymorphic_views.mc](../examples/types/polymorphic_views.mc)
+and [method_inheritance.mc](../examples/types/method_inheritance.mc).
 
 ### @noreturn functions
 
@@ -5014,7 +5314,13 @@ same keyword, different position, no overlap — and the two compose as
 type-parameter base does **not** participate in
 [method inheritance](#inherited-methods): the payload is only known per
 instantiation, so there is no declared base family at the declaration, and a
-payload's methods are reached through the explicit upcast instead.
+payload's methods are reached through the explicit upcast instead. For the
+same reason it does not participate in the **implicit reference upcast**
+either — an intrusive instance never converts to a payload-typed reference
+(a `&payload` argument, [return](#reference-returns), or
+[overload view](#polymorphic-base-views)); it embeds a layout prefix, it
+does not subtype. Deref the explicit pointer upcast to lend the payload —
+`g(*(&e as my*))` — which forms the payload's own honest view.
 
 A struct extends a single base — named as a struct (optionally generic) or a
 bare type parameter that must be bound to a struct; a pointer, array, or
@@ -6088,10 +6394,16 @@ linkable symbol:
 
 - A concrete function becomes a [bodyless `fn` prototype](#bodyless-fn-prototypes)
   — its body lives in the object, reached by the symbol the bare name
-  resolves to and called with the mcc convention, so `const`/`&` parameter
-  markers are re-emitted and the hidden-reference passing they imply carries
-  over. (A real `@extern` declaration in the source stays verbatim — it keeps
-  meaning "C calling convention".)
+  resolves to and called with the mcc convention, so `const`/`&`/`own`
+  parameter markers are re-emitted and the passing and ownership contracts
+  they imply carry over. A method's [`@override`](#override-a-method) marker
+  is re-emitted too: it declares the dispatch relationship, so a consumer's
+  closure keeps the family and a call through a base view still [dispatches
+  the runtime override](#polymorphic-base-views) — a prototype `@override`
+  is exactly this interface spelling (elsewhere a bodyless `@override` is
+  rejected, since a Mode-1 replacement needs a body). (A real `@extern`
+  declaration in the source stays verbatim — it keeps meaning "C calling
+  convention".)
 - Types, constants, and generic/`@inline` functions are emitted **in full**:
   the consumer needs their layout, value, or body to type-check and to
   re-instantiate or re-inline them (as C++ keeps templates and `inline` in

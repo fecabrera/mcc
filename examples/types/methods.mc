@@ -12,9 +12,9 @@ import "std/io";
 // (`rect::area(r)`) forms the hidden reference automatically. The `.method()`
 // call sugar has shipped -- `r.area()` desugars to exactly the calls written
 // here (see method_calls.mc) -- and a method named `constructor` makes its type
-// callable (`rect(2, 3)`, see constructors.mc); dynamic dispatch is still to
-// come. This file sticks to the explicit qualified form, the one every dot call
-// desugars into.
+// callable (`rect(2, 3)`, see constructors.mc); dynamic dispatch through base
+// views has shipped too (see polymorphic_views.mc). This file sticks to the
+// explicit qualified form, the one every dot call desugars into.
 
 struct rect {
     w: int32;

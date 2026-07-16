@@ -64,9 +64,16 @@ fn pointf::constructor<U>(self: &pointf, x: U, y: U) {
     self.y = y as float64;
 }
 
-// A derived SAME-SHAPE member shadows the inherited one: override
-// semantics, no marker keyword (the hop beats specificity).
-fn pointf::describe(const self: &pointf) {
+// A derived SAME-SHAPE member shadows the inherited one, so it is an
+// OVERRIDE and must carry `@override`: a derived method whose signature
+// pattern matches an inherited base member (here point<T>::describe rebased
+// to pointf) hides it at resolution (the hop beats specificity), and the
+// marker makes that intent explicit. Dropping it is a compile error
+// ("shadows the inherited base member ... and must be marked @override"),
+// and conversely marking a member that shadows nothing is also an error
+// ("overrides no inherited base member"). A different signature -- like the
+// converting constructor above -- merely OVERLOADS and takes no marker.
+@override fn pointf::describe(const self: &pointf) {
     println("  [derived] pointf::describe");
 }
 
@@ -157,8 +164,13 @@ fn main() -> int32 {
 // t.sum() both call the same point::sum<float64> symbol through a receiver
 // cast.
 //
-// See also: extends.mc and generic_extends.mc for the prefix layout and
-// upcast rules the receiver position reuses; constructors.mc for the
-// diagonal/converting ranking inside one type; method_calls.mc for the dot
-// sugar these calls ride; memory/intrusive_list.mc for the
-// non-participating bare `extends T`.
+// This file resolves inherited families STATICALLY, on the derived type.
+// polymorphic_views.mc is the dynamic-dispatch sequel: the same `@override`
+// that shadows an inherited member here becomes the table slot a base-typed
+// reference routes through at runtime.
+//
+// See also: polymorphic_views.mc for dynamic dispatch through base views;
+// extends.mc and generic_extends.mc for the prefix layout and upcast rules
+// the receiver position reuses; constructors.mc for the diagonal/converting
+// ranking inside one type; method_calls.mc for the dot sugar these calls ride;
+// memory/intrusive_list.mc for the non-participating bare `extends T`.

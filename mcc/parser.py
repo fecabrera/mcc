@@ -2107,7 +2107,13 @@ class Parser:
                     "define it)",
                     line,
                 )
-            if override:
+            # A method-qualified @override proto is how an interface stub
+            # spells a base-chain (Mode-2) override: the marker carries the
+            # dispatch relationship (the importer's closure keeps the vtable
+            # family), not a replacement body. Codegen validates it shadows an
+            # inherited member. A FREE-function @override stays rejected: its
+            # only meaning is Mode-1 replacement, which needs a body.
+            if override and "::" not in name:
                 raise LangError(
                     "an @override function cannot be a bodyless prototype "
                     "(there is no body to replace the existing overload with)",
@@ -2122,6 +2128,7 @@ class Parser:
                 line,
                 private=private,
                 proto=True,
+                override=override,
                 variadic=variadic,
                 const_params=const_params,
                 constref_params=constref_params,
@@ -2129,6 +2136,7 @@ class Parser:
                 noalias_params=noalias_params,
                 nonnull_params=nonnull_params,
                 format_params=format_params,
+                own_params=own_params,
                 noreturn=noreturn,
                 mut_return=mut_return,
                 own_return=own_return,

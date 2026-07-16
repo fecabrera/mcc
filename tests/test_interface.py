@@ -1037,3 +1037,44 @@ def test_singleton_mci_joins_a_standing_set(tmp_path):
     assert 'call i32 @"pick"(' in ir
     assert 'call i32 @"pick(bool)"(' in ir
     assert 'call i32 @"pick(char*)"(' in ir
+
+
+def test_own_parameter_survives_the_stub_round_trip(tmp_path):
+    # The stub spells `own v: s` and the RE-PARSE must keep the marker: an
+    # own parameter is a move-in contract (the callee drops the value), so a
+    # consumer compiled against the stub owes the same discipline as one
+    # compiled against the source. (Before the fix the prototype parse
+    # dropped own_params, so a bare owned local passed silently -- the caller
+    # kept its scheduled destructor while the callee dropped its copy too, a
+    # double destruction across the interface boundary.)
+    lib = tmp_path / "lib.mc"
+    lib.write_text(
+        "struct s { n: int32; }\n"
+        "fn s::destructor(self: &s) {}\n"
+        "fn eat(own v: s) -> int32 { return v.n; }\n"
+    )
+    out = tmp_path / "lib.mci"
+    assert emit_interface(lib, (tmp_path,), None, {}, out) == 0
+    assert "fn eat(own v: s) -> int32;" in out.read_text()
+    lib.unlink()  # force the import to resolve through the stub
+    bad = tmp_path / "bad.mc"
+    bad.write_text(
+        'import "lib";\n'
+        "fn main() -> int32 {\n"
+        "    let x: s = { n = 7 };\n"
+        "    return eat(x);\n"  # a bare owned local: not relinquished
+        "}\n"
+    )
+    with pytest.raises(
+        LangError,
+        match=r"an own parameter takes ownership of its argument",
+    ):
+        compile_to_ir(bad, (tmp_path,))
+    ok = tmp_path / "ok.mc"
+    ok.write_text(
+        'import "lib";\n'
+        "fn main() -> int32 {\n"
+        "    return eat({ n = 7 });\n"  # a fresh value the callee adopts
+        "}\n"
+    )
+    assert compile_to_ir(ok, (tmp_path,)) is not None

@@ -415,6 +415,7 @@ class GenContext:
     locals: dict = dataclass_field(metadata={"fork": dict})
     ret_type: LangType = dataclass_field(metadata={})
     ret_mut: bool = dataclass_field(metadata={})
+    ret_fat: bool = dataclass_field(metadata={})
     ret_own: bool = dataclass_field(metadata={})
     formation_params: dict = dataclass_field(metadata={"fork": dict})
     loops: list = dataclass_field(metadata={"fork": list})
@@ -431,6 +432,7 @@ class GenContext:
     const_locals: set = dataclass_field(metadata={"fork": set})
     mut_locals: set = dataclass_field(metadata={"fork": set})
     nonnull_locals: set = dataclass_field(metadata={"fork": set})
+    param_tables: dict = dataclass_field(metadata={"fork": dict})
     narrowed_nonnull: set = dataclass_field(metadata={"fork": set})
     narrowed_paths: set = dataclass_field(metadata={"fork": set})
     addr_taken: set = dataclass_field(metadata={"fork": set})
@@ -647,6 +649,14 @@ class CodeGen:
         # argument must be the caller's own storage (never a spilled
         # temporary), so writes through the reference reach the caller.
         self.mut_ref: dict[str, frozenset[int]] = {}
+        # symbol -> the subset of hidden_ref indices that are FAT references
+        # (SIE-101 Stage 2): the parameter's base struct is extended-in-closure,
+        # so `&A` is passed as a two-word ``{A*, table*}`` value carrying a
+        # dispatch table (the table word is null until Stage 2's dispatch
+        # wiring fills it). Both the declaration (:meth:`param_irs`) and the
+        # call site (:meth:`emit_call`) key on this so the ABI stays in
+        # lockstep. A property of the base type, computed once per declaration.
+        self.fat_ref: dict[str, frozenset[int]] = {}
         # symbol -> indices of @nonnull pointer parameters: every call site
         # must prove the argument non-null (a checked refinement, unlike the
         # unchecked @noalias promise).
@@ -674,6 +684,18 @@ class CodeGen:
         # the same four registration sites as mut_ref: @static, overload-set
         # member, plain concrete, and generic instance.
         self.mut_ret: set[str] = set()
+        # The subset of mut_ret whose returned reference is FAT (SIE-101: the
+        # referenced base is extended in the declaring file's closure): the
+        # LLVM return is the two-word {object*, table*} view, and a call
+        # result unpacks it -- lvalue = element 0, dispatch table = element 1.
+        # Fed by the same four registration sites as mut_ret.
+        self.fat_ret: set[str] = set()
+        # The dispatch-table word of the most recent fat `-> &T` call result
+        # (set by both call paths' result builders). gen_mut_return consults
+        # it -- only when the returned lvalue IS a call's result, judged by
+        # the return expression's shape -- so `return relay(x);` forwards the
+        # inner view's runtime table instead of downgrading to the static one.
+        self.last_result_table: "ir.Value | None" = None
         # Symbols declared `-> own T`: a call hands the caller the cleanup
         # obligation (no ABI change -- pure policy). Fed by the same four
         # registration sites as mut_ret, and spelled into a function
@@ -803,6 +825,68 @@ class CodeGen:
         # call boundary.
         self.inherited_sets: dict[tuple[str | None, str], list[Func]] = {}
         self.inherited_origins: dict[int, _InheritedOrigin] = {}
+        # SIE-101 Stage 2 (fat base views): a base struct name -> the set of
+        # source files that declare a struct `extends`-ing it. A reference
+        # `&A` / `const &A` is a two-word fat pointer (carrying a dispatch
+        # table) iff A is extended somewhere the forming site can see -- keyed
+        # per import closure exactly like the open-overload-set gating (an
+        # `.mci` stub sees only its own closure; a `.mc` site sees the whole
+        # merged program). Populated by :meth:`compute_fat_bases`.
+        self.extended_by: dict[str, set[str | None]] = {}
+        # SIE-101 Stage 2 dispatch families: (defining-base name, method name)
+        # pairs where the family is overridden by SOME descendant somewhere in
+        # the program -- so it earns a fixed vtable slot at its defining base,
+        # present (at the same index) in that base's table and every
+        # descendant's, for prefix compatibility. A global property of the
+        # family, not of any one concrete chain. Populated by
+        # :meth:`compute_dispatch_families`; read by :meth:`dispatch_slots`.
+        self.dispatch_families: set[tuple[str, str]] = set()
+        # SIE-101 Stage 2 (overload-aware slots): the same fact refined to a
+        # single OVERLOAD -- (introducer, method, receiver-stripped pattern).
+        # Two overloads of one method name earn DISTINCT slots, so a call
+        # dispatches through the slot of the specific overload resolution
+        # picked, never a wrong-arity sibling. ``dispatch_families`` stays the
+        # family-granular projection (any overload overridden); this is the
+        # per-overload one the slot model and the dispatch site key on.
+        self.dispatch_overloads: set[tuple[str, str, tuple]] = set()
+        # SIE-101 Stage 2: (introducer, method) families whose override is a
+        # method-owned GENERIC member. A generic method cannot occupy a single
+        # vtable slot, so it earns none (kept out of the two sets above), yet it
+        # is a legal STATIC override (shadowing on a concrete receiver). This
+        # records the fact so :meth:`dispatch_indirect` can reject a base-view
+        # (dynamic) call to one cleanly -- instead of slicing to the base member
+        # -- rather than crash slot construction. Populated with the two above.
+        self.generic_override_families: set[tuple[str, str]] = set()
+        # SIE-186: (introducer, method, pattern) slots where some override
+        # declares a COVARIANT return -- a reference to a declared `extends`
+        # descendant of the base member's return. The slot's return ABI stays
+        # the base's two-word fat view; a hop whose spelling is a THIN leaf
+        # reference is adapted at the boundaries (the slot thunk widens the
+        # winner's thin result into the view, the dispatch site narrows the
+        # view back to the resolved spelling). Populated by
+        # :meth:`validate_dispatch_overrides`; read by
+        # :meth:`build_dispatch_thunk` and :meth:`dispatch_indirect`.
+        self.covariant_ret_slots: set[tuple[str, str, tuple]] = set()
+        # SIE-101 Stage 2 emitted vtables: concrete type (mangled) name -> the
+        # i8* constant pointing at its dispatch table, built on demand at the
+        # first fat-view formation of that type (:meth:`vtable_for`).
+        self.vtables: dict[str, ir.Constant] = {}
+        # Per-function (reset in gen_function): a fat reference parameter's
+        # dispatch-table word, keyed by name, for re-dispatch on it. Declared
+        # here too so GenContext.capture always finds it.
+        self.param_tables: dict[str, ir.Value] = {}
+        # Per-candidate (set by resolve_bindings, read by the viable-entry
+        # builders): the extends hops each reference position upcast through
+        # for the derived->base view, 0 where no view formed. Candidate
+        # selection compares these per position (:meth:`view_dominance`).
+        self.view_dists: list[int] = []
+        # @override definitions that reconcile_overrides could not resolve as a
+        # cross-module (Mode-1) replacement -- `others` was empty. Their verdict
+        # is deferred to check_method_overrides, which accepts each as a Mode-2
+        # method override (it shadows an inherited base member) or rejects it as
+        # overriding nothing. Runs after every family is registered, so the
+        # base chain and its members are known.
+        self.deferred_overrides: list[Func] = []
         self.globals: dict[str, tuple[ir.GlobalVariable, LangType, bool]] = {}
         # @static globals are file-scoped storage, keyed by (source, name) so
         # other files may reuse the name -- like @static functions.
@@ -883,6 +967,10 @@ class CodeGen:
         # `return` statements hand back an address under the formation rule
         # instead of a value. Set per body by gen_function, like ret_type.
         self.ret_mut: bool = False
+        # Whether the mut return is a FAT reference (SIE-101: the returned
+        # base is extended in this closure): each `return` builds the
+        # two-word {address, table} view. Set per body by gen_function.
+        self.ret_fat: bool = False
         # Whether it returns own (`-> own T`): its `return` statements
         # transfer the cleanup obligation under the own formation rule
         # (see the Return arm). Set per body by gen_function, like ret_mut.
@@ -1380,11 +1468,40 @@ class CodeGen:
                 func.line,
             )
 
+    def returns_fat_view(self, func: Func, ret: LangType) -> bool:
+        """Whether ``func``'s ``-> &T`` return is a two-word fat view.
+
+        Mirrors :meth:`fat_ref_indices` on the return side: a reference return
+        of a struct whose base is :meth:`is_fat_base` (extended somewhere
+        ``func``'s file can see) carries the ``{object*, table*}`` view, so the
+        returned reference keeps its dispatch table across the hop. Like a fat
+        parameter, the widening is a pure function of the signature and the
+        import closure -- never of method bodies -- so an empty-table fat base
+        (an extended-for-layout ``slice`` with no overrides) still returns two
+        words, its table word null, and adding the first override to a
+        hierarchy never changes a declared return's width.
+
+        Args:
+            func: The declared function.
+            ret: Its resolved return type.
+
+        Returns:
+            ``True`` when the return is a fat reference.
+        """
+        return (
+            func.mut_return
+            and is_struct(ret)
+            and self.is_fat_base(ret.template or ret.name, func.source)
+        )
+
     def ret_ir(self, func: Func, ret: LangType) -> ir.Type:
         """The LLVM return type for a declaration.
 
         A ``-> mut T`` function returns a pointer to the caller-reachable
-        storage it formed; everything else returns its value.
+        storage it formed -- widened to the two-word ``{object*, table*}``
+        view when the reference is fat (:meth:`returns_fat_view`), so the
+        dispatch table travels with the returned reference; everything else
+        returns its value.
 
         Args:
             func: The declared function.
@@ -1393,7 +1510,11 @@ class CodeGen:
         Returns:
             The IR return type.
         """
-        return ret.ir.as_pointer() if func.mut_return else ret.ir
+        if not func.mut_return:
+            return ret.ir
+        if self.returns_fat_view(func, ret):
+            return self.fat_ref_ir(ret.ir)
+        return ret.ir.as_pointer()
 
     def mark_noreturn(self, fn: ir.Function, func: Func):
         """Apply ``@noreturn`` by attaching LLVM's ``noreturn`` attribute.
@@ -1528,6 +1649,1316 @@ class CodeGen:
                     seen.add(target)
                     work.append(target)
         return seen
+
+    def compute_fat_bases(self):
+        """Record the ``extends`` edges that make a base type a fat reference.
+
+        Fills :attr:`extended_by`: a base struct's (template) name maps to the
+        set of source files that declare a struct extending it. A struct that
+        ``extends`` a bare type parameter (``extends T`` -- intrusive reuse,
+        no inheritance) or an unresolvable base contributes no edge, mirroring
+        :meth:`struct_base_ref`, which returns ``None`` for those. Static
+        (file-scoped) structs count: their extension still makes the base fat
+        within their own file's closure.
+
+        Runs once every struct and alias is registered, so ``struct_base_ref``
+        can chase alias qualifiers. Additive: only :meth:`is_fat_base` reads
+        the table (SIE-101 Stage 2 gating).
+        """
+        for decl in self.program.structs:
+            base = self.struct_base_ref(decl)
+            if base is None:
+                continue
+            self.extended_by.setdefault(base.name, set()).add(decl.source)
+
+    def is_fat_base(self, name: str, source: "str | None") -> bool:
+        """Whether ``&name`` is a two-word fat reference viewed from ``source``.
+
+        A reference to struct ``name`` carries a dispatch-table word iff some
+        struct ``extends`` it where the forming site can see the extension. The
+        closure rule mirrors the open-overload-set gate
+        (:meth:`import_closure`): a source compiled as an ``.mci`` interface
+        stub sees only its own import closure (its ABI is pinned to what it saw
+        when compiled), while an ordinary ``.mc`` site sees the whole merged
+        program. Fatness is a property of the base TYPE -- every ``&name``
+        reference is fat or thin uniformly, independent of which method
+        families (if any) are actually overridden -- so a type's width stays
+        ABI-stable when the first override is later added to its hierarchy.
+
+        Args:
+            name: The base struct's template name (e.g. ``"point"``), as an
+                ``extends`` clause spells its head.
+            source: The file forming (or receiving) the reference.
+
+        Returns:
+            ``True`` when ``&name`` is the two-word fat form.
+        """
+        sources = self.extended_by.get(name)
+        if not sources:
+            return False
+        if source is not None and source.endswith(".mci"):
+            return not sources.isdisjoint(self.import_closure(source))
+        return True
+
+    def declared_family_methods(self, type_name: str) -> set[str]:
+        """The method-family names a struct (template) declares members of.
+
+        A family is keyed ``Type::method`` in the template / overload-set /
+        lone-concrete registries; this returns the ``method`` parts declared
+        directly on ``type_name`` (the base's own members, not inherited).
+        ``@static`` families live in separate registries and never dispatch,
+        so they are excluded by construction.
+
+        Args:
+            type_name: A struct's template name (e.g. ``"point"``).
+
+        Returns:
+            The set of method names declared on it.
+        """
+        prefix = type_name + "::"
+        names: set[str] = set()
+        for registry in (self.templates, self.overloads, self.concrete_decls):
+            for key in registry:
+                if key.startswith(prefix):
+                    names.add(key[len(prefix):])
+        return names
+
+    def family_introducer(self, type_name: str, method: str) -> "str | None":
+        """The root-most type in ``type_name``'s chain that declares ``method``.
+
+        A family's vtable slot is fixed at the type that *introduces* it -- the
+        highest ancestor declaring a member -- so every type below shares that
+        index. Walks ``type_name`` and its ``extends`` chain, returning the
+        base furthest from ``type_name`` that declares the family.
+
+        Args:
+            type_name: The concrete/derived struct's template name.
+            method: The family's method name.
+
+        Returns:
+            The introducing base's name, or ``None`` if none in the chain
+            declares it (an inherited-only spelling that never resolves here).
+        """
+        chain = [type_name] + [
+            base for base, _a, _h, _s in self.base_chain(type_name)
+        ]
+        introducer: "str | None" = None
+        for name in chain:
+            if method in self.declared_family_methods(name):
+                introducer = name  # keep walking up; the last (root-most) wins
+        return introducer
+
+    def dispatch_pattern(self, func: Func) -> tuple:
+        """A method overload's receiver-stripped slot key.
+
+        The tuple of the member's NON-receiver parameter types (the receiver,
+        ``params[0]``, is dropped -- its type is the ``&base`` at each hop and
+        so differs down the chain, while the overload discriminator that must
+        stay constant is the rest of the signature). This is the identity that
+        gives sibling overloads of one method name distinct vtable slots and
+        maps an ``@override`` to the specific base overload it overrides.
+
+        Args:
+            func: The method (its name contains ``::``).
+
+        Returns:
+            A hashable tuple of the non-receiver parameter type spellings; for
+            a generic member whose non-receiver types cannot resolve here, the
+            order-independent template base as an opaque fallback key.
+        """
+        resolved = self.dispatch_pattern_resolved(func)
+        if resolved is not None:
+            return resolved
+        return ("t", self.template_base(func))
+
+    def dispatch_pattern_resolved(self, func: Func) -> "tuple | None":
+        """:meth:`dispatch_pattern`'s resolved form, or ``None`` on fallback.
+
+        ``None`` when a non-receiver parameter type does not resolve at this
+        point (a struct-generic member spelling the struct's own parameters,
+        pre-body) -- the case :meth:`dispatch_pattern` papers over with its
+        opaque template-base key. Exposed separately so
+        :meth:`validate_dispatch_overrides` can refuse to key a covariant
+        slot on the fallback (whose value diverges between the override and
+        the base member, making the registration a dead key).
+        """
+        # This runs during call emission (slot lookup / winner selection), so
+        # it must leave the caller's source context untouched: resolve the
+        # member's parameter types under ITS source, then restore.
+        saved_source = self.current_source
+        self.current_source = func.source
+        try:
+            types = [self.lang_type(t, func.line) for _, t in func.params[1:]]
+            return tuple(str(strip_const(t)) for t in types)
+        except LangError:
+            return None
+        finally:
+            self.current_source = saved_source
+
+    def family_members(self, type_name: str, method: str) -> list:
+        """The members of ``type_name::method`` declared directly on the type.
+
+        The same union :meth:`slot_winner` collects -- template instances,
+        overload-set members, and lone concrete decls -- so slot assignment,
+        winner selection, and the overload patterns all read one source.
+        """
+        family = f"{type_name}::{method}"
+        members = list(self.templates.get(family, ()))
+        if family in self.overloads:
+            members += self.overloads[family]
+        else:
+            members += list(self.concrete_decls.get(family, {}).values())
+        return members
+
+    def overload_introducer(
+        self, type_name: str, method: str, pattern: tuple
+    ) -> "str | None":
+        """The root-most type in ``type_name``'s chain declaring this overload.
+
+        Like :meth:`family_introducer`, but for a single overload identified by
+        its :meth:`dispatch_pattern` -- so two overloads of one method name can
+        be introduced at (and slotted from) different bases.
+        """
+        chain = [type_name] + [
+            base for base, _a, _h, _s in self.base_chain(type_name)
+        ]
+        introducer: "str | None" = None
+        for name in chain:
+            for member in self.family_members(name, method):
+                if self.dispatch_pattern(member) == pattern:
+                    introducer = name  # keep walking up; root-most wins
+                    break
+        return introducer
+
+    def override_targets(self, func: Func) -> list[Func]:
+        """The inherited base-chain member(s) an ``@override`` overrides.
+
+        Each rebased :meth:`inherited_candidates` clone whose
+        :meth:`override_pattern` equals ``func``'s -- every ancestor hop that
+        declares this overload. A base view may be typed at any of them and
+        indexes the same shared slot, so ``func`` must stay ABI-compatible with
+        all of them (:meth:`validate_dispatch_overrides`).
+
+        Args:
+            func: A derived ``@override`` member (its name contains ``::``).
+
+        Returns:
+            The matching clones (possibly empty), nearest hop first.
+        """
+        self.current_source = func.source
+        pat = self.override_pattern(func)
+        return [
+            clone
+            for clone in self.inherited_candidates(func.name)
+            if self.override_pattern(clone) == pat
+        ]
+
+    def return_abi(self, func: Func) -> tuple:
+        """A member's return convention as a comparable tuple.
+
+        ``(own?, reference?, return-type key)`` -- the return half of a
+        member's ABI. Two members share a dispatch slot only if these agree,
+        or differ by the one legal relaxation -- a covariant reference return
+        (:meth:`covariant_return_ok`): the slot's indirect call is typed with
+        the base member's return type, so any other mismatching override
+        would reinterpret the returned bytes. The type
+        key is the resolved-type spelling where it resolves; for a
+        struct-generic member whose return names the struct parameter (``-> T``,
+        unbound at this pre-body pass) it falls back to the ``TypeRef``
+        spelling with the member's struct parameters alpha-renamed to their
+        qualifier position (:meth:`generic_ret_spelling`), which compares
+        consistently because both the override and its rebased base clone
+        spell the return over the derived struct's parameters -- whatever
+        each happens to NAME them (`fn b<X>::me` vs the declaration's `T`).
+        """
+        self.current_source = func.source
+        try:
+            key = str(self.lang_type(func.ret_type, func.line))
+        except LangError:
+            key = ("<unresolved>", str(self.generic_ret_spelling(func)))
+        return (func.own_return, func.mut_return, key)
+
+    def generic_ret_spelling(self, func: Func) -> TypeRef:
+        """A member's return spelling, alpha-renamed for cross-hop comparison.
+
+        The struct-generic parameter names in a return spelling are the
+        member's own choice (the qualifier's, or the declaration's for a
+        rebased clone), so two hops of one hierarchy may spell one return
+        differently. Renaming each struct parameter to its qualifier
+        POSITION (``$0``, ``$1``, ...) -- the identity the ``extends``
+        composition preserves -- makes the spellings of the override and its
+        rebased base clone directly comparable. A concrete (specialized)
+        qualifier position binds no name and passes through unchanged. A
+        fresh position is judged by ``type_params`` MEMBERSHIP -- the
+        registration-time fact -- not by re-probing
+        :meth:`struct_arg_is_param`, which reads whatever type bindings
+        happen to be live and would misclassify under a caller's
+        instantiation context (the :meth:`slot_winner` hazard).
+        """
+        qargs = func.qualifier_args or []
+        binding = {
+            qa.name: TypeRef(f"${i}")
+            for i, qa in enumerate(qargs)
+            if qa.name in func.type_params
+        }
+        if not binding:
+            return func.ret_type
+        return self.subst_struct_args(func.ret_type, binding)
+
+    def ret_desc(self, func: Func) -> str:
+        """A member's return type as diagnostics render it.
+
+        The resolved spelling where it resolves; the SOURCE spelling for a
+        struct-generic return that does not resolve pre-body -- never
+        :meth:`return_abi`'s internal fallback key.
+        """
+        self.current_source = func.source
+        try:
+            return str(self.lang_type(func.ret_type, func.line))
+        except LangError:
+            return str(func.ret_type)
+
+    def covariant_return_ok(self, base: Func, over: Func) -> bool:
+        """Whether ``over``'s return covariantly narrows ``base``'s (SIE-186).
+
+        Spelling-level covariance: an ``@override`` may declare a return that
+        is a reference to a declared ``extends`` descendant of the base
+        member's reference return. The narrowing lives only in the checker --
+        through the shared slot the override still returns the base-shaped
+        fat view (the slot thunk widens a thin leaf result, see
+        :meth:`build_dispatch_thunk`) -- so the relaxation is ABI-safe.
+        Only reference returns participate (a by-value return of a descendant
+        would slice through the slot) and the ``own`` marker must agree. A
+        spelling that resolves to a concrete struct here is judged on the
+        resolved types; a struct-generic return that does not resolve at
+        this pre-body pass (``-> &b<T>``, ``T`` unbound) is judged
+        spelling-structurally at the template level instead
+        (:meth:`covariant_return_template_ok`, SIE-189).
+
+        Args:
+            base: The base member's rebased clone.
+            over: The ``@override`` candidate.
+
+        Returns:
+            ``True`` when the differing return conventions are the legal
+            covariant pair.
+        """
+        if not (base.mut_return and over.mut_return):
+            return False
+        if base.own_return != over.own_return:
+            return False
+        saved = self.current_source
+        try:
+            self.current_source = base.source
+            base_ret = self.lang_type(base.ret_type, base.line)
+            self.current_source = over.source
+            over_ret = self.lang_type(over.ret_type, over.line)
+        except LangError:
+            return self.covariant_return_template_ok(base, over)
+        finally:
+            self.current_source = saved
+        return self.receiver_upcast_target(over_ret, base_ret) is not None
+
+    def covariant_return_template_ok(self, base: Func, over: Func) -> bool:
+        """:meth:`covariant_return_ok` for struct-generic spellings (SIE-189).
+
+        A return that spells the struct's own type parameters resolves at no
+        pre-body pass, but covariance is still decidable from the
+        declarations alone: the override and its rebased base clone both
+        spell their returns over the derived struct's parameters
+        (alpha-renamed to qualifier position, :meth:`generic_ret_spelling`,
+        so each hop's private NAMES drop out), and walking the override
+        return's declared ``extends`` chain -- substituting the spelled
+        arguments hop by hop, exactly as :meth:`base_chain` composes -- lands
+        on the base's spelling precisely when the resolved returns are
+        covariant at EVERY instantiation. Spellings are compared by
+        DECLARATION, never by name: each hop's head resolves in the file
+        that spelled it (:meth:`template_walk_head`) and each concrete
+        argument canonicalizes there (:meth:`canon_template_arg`), so two
+        same-named file-scoped ``@static`` types from different files never
+        conflate. The walk mirrors :meth:`receiver_upcast_target`'s
+        refusals: only plain struct references participate (no pointers,
+        arrays, or function types), and an intrusive ``extends T`` edge
+        ends the lineage (:meth:`struct_base_ref` returns ``None`` there).
+        Anything that does not match conservatively keeps the same-spelling
+        requirement.
+
+        Args:
+            base: The base member's rebased clone.
+            over: The ``@override`` candidate.
+
+        Returns:
+            ``True`` when every instantiation's returns are the legal
+            covariant pair.
+        """
+
+        def plain(ref: TypeRef) -> bool:
+            return ref.params is None and not ref.stars and not ref.dims
+
+        def key(head) -> "str | int":
+            return head if isinstance(head, str) else id(head)
+
+        target = self.generic_ret_spelling(base)
+        current = self.generic_ret_spelling(over)
+        if not (plain(target) and plain(current)):
+            return False
+        target_head = self.template_walk_head(target.name, base.source)
+        target_args = self.canon_template_args(target.args, base.source)
+        head = self.template_walk_head(current.name, over.source)
+        args = self.canon_template_args(current.args, over.source)
+        if target_head is None or target_args is None or args is None:
+            return False
+        target_key = [str(a) for a in target_args]
+        seen = {key(head)}
+        while True:
+            if head is None or isinstance(head, str):
+                return False  # a builtin/unknown head: the chain ends
+            decl = head
+            if len(decl.type_params) != len(args):
+                return False  # arity mismatch; instantiation reports it
+            ref = self.struct_base_ref(decl)
+            if ref is None or not plain(ref):
+                return False  # a root, or an intrusive `extends T` edge
+            # The hop's spelling belongs to the DECLARING file: mark its
+            # parameters off (``$h<i>``, distinct from the ``$<i>``
+            # placeholders riding in `args`), canonicalize every concrete
+            # name it spells under decl.source, then splice this hop's
+            # already-canonical arguments into the marks.
+            marks = {
+                p: TypeRef(f"$h{i}") for i, p in enumerate(decl.type_params)
+            }
+            hop_args = self.canon_template_args(
+                self.subst_struct_args(ref, marks).args, decl.source
+            )
+            if hop_args is None:
+                return False
+            binding = {f"$h{i}": a for i, a in enumerate(args)}
+            args = [self.subst_struct_args(a, binding) for a in hop_args]
+            head = self.template_walk_head(ref.name, decl.source)
+            if key(head) == key(target_head) and (
+                [str(a) for a in args] == target_key
+            ):
+                return True
+            if key(head) in seen:
+                return False  # cyclic extends; instantiation reports it
+            seen.add(key(head))
+
+    def template_walk_head(self, name: str, source: "str | None"):
+        """The declaration (or builtin) a template-walk head names.
+
+        Resolution happens under the file that SPELLED the name -- a
+        file-scoped ``@static`` struct there shadows a global template,
+        exactly as :meth:`lang_type` resolves -- and the returned
+        declaration object is the head's program-wide identity, so
+        same-named types from different files compare unequal.
+
+        Args:
+            name: The head's spelled name.
+            source: The file the spelling belongs to.
+
+        Returns:
+            The ``StructDecl``/``UnionDecl``, the name itself for a builtin
+            head, or ``None`` for an unknown (alias/unresolvable) one.
+        """
+        decl = self.static_structs.get((source, name))
+        if decl is not None:
+            return decl
+        decl = self.struct_templates.get(name)
+        if decl is not None:
+            return decl
+        if name in TYPES or name in RESERVED_TYPE_NAMES:
+            return name
+        return None
+
+    def canon_template_args(
+        self, args: "list[TypeRef]", source: "str | None"
+    ) -> "list[TypeRef] | None":
+        """:meth:`canon_template_arg` over an argument list, or ``None``."""
+        out = []
+        for arg in args:
+            canon = self.canon_template_arg(arg, source)
+            if canon is None:
+                return None
+            out.append(canon)
+        return out
+
+    def canon_template_arg(
+        self, ref: TypeRef, source: "str | None"
+    ) -> "TypeRef | None":
+        """A template-walk argument spelling as a program-wide identity.
+
+        A fully concrete spelling resolves under its declaring file
+        (:meth:`resolve_ref_at` -- so aliases chase and a file-scoped
+        ``@static`` type canonicalizes to its unique instantiation name); a
+        ``$``-placeholder passes through to compare positionally; a spelling
+        structured OVER a placeholder (``slice<$0>``) keeps its shape with
+        the head name replaced by its unique identity (the ``@static``
+        mangled base where file-scoped). ``None`` -- an unresolvable name,
+        or a placeholder under an alias or function-type head -- keeps the
+        conservative same-spelling requirement.
+
+        Args:
+            ref: The argument spelling.
+            source: The file the spelling belongs to.
+
+        Returns:
+            The canonicalized spelling, or ``None``.
+        """
+        if "$" not in str(ref):
+            resolved = self.resolve_ref_at(ref, source)
+            return None if resolved is None else TypeRef(str(resolved))
+        if ref.name.startswith("$"):
+            return ref if not ref.args else None
+        if ref.params is not None:
+            return None  # a fn(...) type over a placeholder: conservative
+        head = self.template_walk_head(ref.name, source)
+        if head is None:
+            return None
+        token = (
+            head
+            if isinstance(head, str)
+            else self.symbol_bases.get((head.source, head.name), head.name)
+        )
+        args = self.canon_template_args(ref.args, source)
+        if args is None:
+            return None
+        return dataclasses_replace(ref, name=token, args=args)
+
+    def check_covariant_member_width(self, func: Func, member: Func):
+        """Reject a covariant-slot member whose pinned thin return the
+        program outgrew (SIE-186).
+
+        A covariant slot hands the base-shaped fat view back through every
+        hop; a member whose own return spelling is THIN is adapted at the
+        slot boundaries -- the thunk widens its result with the referent
+        type's static table, the dispatch site drops the table word -- which
+        is sound only while nothing in the program extends the return type
+        (then the referent really is its spelling). A member compiled into
+        an ``.mci`` stub pins its return width to the stub's import closure
+        (:meth:`is_fat_base`), so a consumer that extends the type holds
+        objects the member's one-word return cannot describe: the widened
+        view would carry a stale static table, the narrowed result would
+        drop the runtime one -- a silent mis-dispatch either way. Like
+        every pinned-width disagreement across the interface boundary
+        (:meth:`pair_prototype`), it is a hard error.
+
+        Args:
+            func: The ``@override`` under validation (the error site).
+            member: A member sharing its slot (possibly ``func`` itself).
+
+        Raises:
+            LangError: When ``member``'s return is pinned thin but its type
+                is extended somewhere in the merged program.
+        """
+        if not member.mut_return:
+            return
+        saved = self.current_source
+        name: "str | None" = None
+        try:
+            self.current_source = member.source
+            ret = strip_const(self.lang_type(member.ret_type, member.line))
+            if is_struct(ret):
+                name = ret.template or ret.name
+        except LangError:
+            # A struct-generic spelling (SIE-189): the referent's TEMPLATE is
+            # decidable from the spelling alone, and width pinning is a
+            # template-level fact (`extends` targets the template).
+            ref = member.ret_type
+            if (
+                ref.params is None
+                and not ref.stars
+                and not ref.dims
+                and self.lookup_struct_decl(ref.name) is not None
+            ):
+                name = ref.name
+        finally:
+            self.current_source = saved
+        if name is None:
+            return
+        if self.is_fat_base(name, member.source) or not self.is_fat_base(
+            name, None
+        ):
+            return
+        # A base target is a rebased clone carrying the derived name, so
+        # point at it by role, not by name.
+        member_desc = "it" if member is func else "the base member it overrides"
+        raise LangError(
+            f"@override method {func.name!r} occupies a covariant dispatch "
+            f"slot, but {member_desc} returns a thin &{name} -- no "
+            f"extension of {name!r} is visible in its interface's import "
+            f"closure, while this program extends {name!r}; the one-word "
+            "return cannot carry the runtime type across the interface "
+            "boundary (recompile the interface with the extension in its "
+            "closure)",
+            func.line,
+        )
+
+    def method_type_params(self, func: Func) -> list[str]:
+        """A method's OWN type parameters -- those beyond its struct's.
+
+        A method on a generic struct carries the struct's type parameters in
+        :attr:`Func.type_params` (prepended at registration so it monomorphizes
+        per struct instance); its method-owned parameters are what remain. The
+        prepended names come from the method's pre-``::`` qualifier, which is
+        POSITIONAL: ``fn a<X>::m`` on ``struct a<T>`` names the struct
+        parameter ``X``, not ``T``. So classify against the fresh qualifier
+        arguments (:attr:`Func.qualifier_args`), not by name equality against
+        the struct declaration's parameter list -- a renamed qualifier
+        parameter would otherwise be misread as method-owned and a valid
+        struct-generic override rejected. For a free function or a method on a
+        non-generic struct (no qualifier annotation) ``qualifier_args`` is
+        ``None`` and every entry is method-owned, as it should be. The
+        distinction gates dynamic dispatch: a method-owned generic cannot
+        occupy a single slot (one per instantiation would be needed), while a
+        struct-generic method dispatches fine (each concrete struct instance
+        has its own table with concrete slot types).
+        """
+        qargs = func.qualifier_args
+        if not qargs:
+            return list(func.type_params)
+        # The struct-generic parameters are the fresh names among the qualifier
+        # arguments -- the exact set prepended to ``type_params`` at
+        # registration (concrete arguments bind and drop out). A registration
+        # shadow check guarantees these are disjoint from the method's own, so
+        # filtering by membership recovers the method-owned tail.
+        struct_params = {
+            a.name for a in qargs if self.struct_arg_is_param(a, func.line)
+        }
+        return [t for t in func.type_params if t not in struct_params]
+
+    def param_pass_kind(self, func: Func, i: int) -> str:
+        """Parameter ``i``'s passing convention: how it is handed to the callee.
+
+        One of ``value`` (a by-value copy), ``constref`` (a read-only
+        ``const &T`` view), ``mutref`` (a writable ``&T`` reference), or ``own``
+        (a by-value owning move). This is the ABI/ownership-relevant half of a
+        parameter that its bare type does not capture -- the markers live in the
+        per-kind name sets, not on the stored ``TypeRef``.
+        """
+        name = func.params[i][0]
+        if name in func.own_params:
+            return "own"
+        if name in func.constref_params:
+            return "constref"
+        if name in func.mut_params:
+            return "mutref"
+        return "value"
+
+    def param_abi_mismatch(
+        self, base: Func, over: Func, i: int
+    ) -> "str | None":
+        """A description of an ABI mismatch at parameter ``i``, or ``None``.
+
+        A dispatch override shares its base member's slot, so every parameter --
+        the receiver included -- must be passed the same way, or the slot's
+        indirect call and the stored thunk disagree on the argument's ABI
+        (undefined behavior). The one safe relaxation is narrowing a writable
+        base reference to a read-only one in the override (same pointer ABI, and
+        the override merely promises to mutate less). A parameter the override
+        newly marks ``@nonnull`` (a guarantee the base does not make) or
+        ``@noalias`` (the override body would assume non-aliasing that a call
+        through the base signature, which permits aliasing, does not honor) is
+        also rejected: both let the override assume a promise the base -- and so
+        a base-view caller -- never makes.
+        """
+        passing = {
+            "value": "by value",
+            "constref": "by a read-only 'const &' reference",
+            "mutref": "by a writable '&' reference",
+            "own": "by an owning 'own' value",
+        }
+        bk = self.param_pass_kind(base, i)
+        ok = self.param_pass_kind(over, i)
+        if bk != ok and not (bk == "mutref" and ok == "constref"):
+            if i == 0 and bk == "constref" and ok == "mutref":
+                return (
+                    "takes a writable 'self: &T' receiver but the base member "
+                    "it overrides takes a read-only 'const self: &T' receiver; "
+                    "a call dispatched through a 'const &base' view would "
+                    "mutate through it"
+                )
+            slot = (
+                "its receiver"
+                if i == 0
+                else f"parameter {over.params[i][0]!r}"
+            )
+            return (
+                f"passes {slot} {passing[ok]} where the base member it "
+                f"overrides passes it {passing[bk]}; they share one dispatch "
+                "slot, so the argument ABI must match"
+            )
+        bname, oname = base.params[i][0], over.params[i][0]
+        if oname in over.nonnull_params and bname not in base.nonnull_params:
+            return (
+                f"marks parameter {oname!r} @nonnull where the base member it "
+                "overrides accepts null"
+            )
+        if oname in over.noalias_params and bname not in base.noalias_params:
+            return (
+                f"marks parameter {oname!r} @noalias where the base member it "
+                "overrides permits aliasing; a call dispatched through the "
+                "base signature may pass aliasing pointers"
+            )
+        return None
+
+    def validate_dispatch_overrides(self):
+        """Reject overrides that would corrupt dynamic dispatch (SIE-101 S2).
+
+        A base-chain ``@override`` shares its base member's vtable slot, so the
+        two must be ABI-compatible where the slot is concerned:
+
+          * **return convention** -- identical own/reference/type, with one
+            relaxation: a reference return may covariantly narrow to a
+            reference to a declared ``extends`` descendant of the base's
+            return (SIE-186, :meth:`covariant_return_ok`). The narrowing is
+            spelling-level only -- the slot's return ABI stays the base's --
+            so any other difference (``int32`` base, ``float64`` override; a
+            by-value descendant, which would slice) would reinterpret the
+            returned bytes as garbage and is rejected.
+          * **every parameter's passing convention** (the receiver and each
+            other argument) -- by-value vs by-reference, ``const`` vs writable,
+            ``own``, ``@nonnull``, ``@noalias``. The slot's indirect call and
+            the stored thunk must agree on each argument's ABI, or the call is
+            undefined behavior; and an override may not widen a read-only
+            ``const`` reference to a writable one (mutation through a ``const``
+            promise) nor add ``@noalias`` where the base permits aliasing (the
+            body would assume non-aliasing a base-view caller need not honor).
+            The one safe relaxation is narrowing a writable base reference to a
+            read-only override one. See :meth:`param_abi_mismatch`.
+
+        A method-owned generic override (one that declares its *own* type
+        parameter, distinct from the struct's) is left to the dispatch site: it
+        is a legal static shadow, so it is not rejected here -- only a dynamic
+        (base-view) call to one is an error (:meth:`gen_generic_call`). A
+        struct-generic override (only the struct's parameters) IS validated
+        and dispatches like any concrete one -- provided its non-receiver
+        parameters resolve before bodies: an overload spelling the struct's
+        own parameters there (``get(self: &cell<T>, k: T)``) can key no
+        shared slot and its override is rejected (SIE-190). Runs after
+        :meth:`check_method_overrides` (so only genuine base-chain overrides
+        reach here) and before :meth:`compute_dispatch_families`.
+
+        Raises:
+            LangError: On an incompatible dispatch override.
+        """
+        for func in self.program.functions:
+            if not func.override or "::" not in func.name:
+                continue
+            method = func.name.split("::", 1)[1]
+            if method in ("constructor", "destructor"):
+                continue
+            self.current_source = func.source
+            if not self.overrides_inherited(func):
+                continue  # a Mode-1 open-set override, not a base-chain one
+            if self.method_type_params(func):
+                continue  # a method-owned generic: judged at the call site
+            over_abi = self.return_abi(func)
+            covariant = False
+            targets = self.override_targets(func)
+            for base in targets:
+                if self.return_abi(base) != over_abi:
+                    if not self.covariant_return_ok(base, func):
+                        # Render SOURCE spellings, never return_abi's internal
+                        # fallback key (an unresolved struct-generic return
+                        # would otherwise print as a raw tuple). Attribute
+                        # the error to the override's own file explicitly:
+                        # ret_desc(base) leaves current_source at the base
+                        # clone's file, which generate() would otherwise
+                        # stamp onto the error.
+                        raise LangError(
+                            f"@override method {func.name!r} returns "
+                            f"{self.ret_desc(func)} but the base member "
+                            f"it overrides returns {self.ret_desc(base)};"
+                            " an override must return the same type, or a "
+                            "reference to a declared descendant of the base's"
+                            " reference return (they share one dispatch slot)",
+                            func.line,
+                            source=func.source,
+                        )
+                    covariant = True
+                # override_pattern matched every parameter (it spells them all),
+                # so the base clone and the override have equal arity here.
+                for i in range(len(func.params)):
+                    mismatch = self.param_abi_mismatch(base, func, i)
+                    if mismatch is not None:
+                        raise LangError(
+                            f"@override method {func.name!r} {mismatch}",
+                            func.line,
+                            source=func.source,
+                        )
+            # The shared slot is keyed on the overload's RESOLVED
+            # non-receiver pattern. A member whose non-receiver parameters
+            # spell the struct's own type parameters (`get(self: &cell<T>,
+            # k: T)`) resolves to no key before bodies, and the fallback key
+            # embeds each member's own template base -- it DIVERGES between
+            # the override and the base member, so the two would take
+            # separate slots and a call through a base view would silently
+            # bind the BASE member: a behavioral slice with no diagnostic
+            # (SIE-190). Reject the override outright; the base overload
+            # itself stays callable (it simply has no override, so its
+            # calls are honest direct calls).
+            pattern = self.dispatch_pattern_resolved(func)
+            if pattern is None:
+                if covariant:
+                    # The scoped message: the covariant registration is what
+                    # the dead key would silently break first (SIE-186).
+                    raise LangError(
+                        f"@override method {func.name!r} declares a covariant"
+                        " return, but its non-receiver parameters spell the "
+                        "struct's own type parameters and do not resolve "
+                        "before bodies, so the shared dispatch slot cannot "
+                        "carry the covariance; spell the base member's "
+                        "return type instead",
+                        func.line,
+                        source=func.source,
+                    )
+                raise LangError(
+                    f"@override method {func.name!r} overrides an overload "
+                    "whose non-receiver parameters spell the struct's own "
+                    "type parameters, which do not resolve before bodies, "
+                    "so the shared dispatch slot cannot be keyed and a call "
+                    "through a base view would silently bind the base "
+                    "member; spell resolvable parameter types, or rename "
+                    "the method",
+                    func.line,
+                    source=func.source,
+                )
+            if covariant:
+                # SIE-186: remember the slot, so the thunk builder and the
+                # dispatch site adapt a thin covariant spelling to the slot's
+                # base-shaped fat return. The key must be the RESOLVED
+                # pattern (guaranteed above).
+                introducer = self.overload_introducer(
+                    func.name.split("::", 1)[0], method, pattern
+                )
+                if introducer is None:
+                    raise LangError(
+                        f"@override method {func.name!r} declares a covariant"
+                        " return but no base in its chain introduces the "
+                        "overload's dispatch slot; the compiler cannot key "
+                        "the covariant adaptation",
+                        func.line,
+                    )
+                self.covariant_ret_slots.add((introducer, method, pattern))
+                # ... and that adaptation is only sound while each member's
+                # pinned return width agrees with the whole program's view
+                # of its return type: an .mci-pinned THIN return whose type
+                # this program extends cannot carry the runtime type.
+                self.check_covariant_member_width(func, func)
+                for base in targets:
+                    self.check_covariant_member_width(func, base)
+
+    def compute_dispatch_families(self):
+        """Record which overloads earn a vtable slot (SIE-101 Stage 2).
+
+        An overload is a *dispatch overload* -- gets a table slot -- exactly
+        when a derived struct method overrides an inherited base member of it
+        (the Stage-1 ``@override`` criterion, :meth:`overrides_inherited`). The
+        slot is keyed on the overload's *introducer* (its root-most declaring
+        base) and its receiver-stripped :meth:`dispatch_pattern`, so a base and
+        all its descendants agree on the index AND sibling overloads of one
+        method name never collide. Constructors and destructors are excluded:
+        special members sit outside dispatch (the destructor slot is deferred).
+
+        Populates the per-overload :attr:`dispatch_overloads` and its
+        family-granular projection :attr:`dispatch_families`. A method-owned
+        generic override earns no slot (one slot cannot represent every
+        instantiation of its type parameter); it is recorded in
+        :attr:`generic_override_families` so a dynamic call to it is rejected
+        at the dispatch site rather than silently sliced. Runs once every
+        family and override is registered (after :meth:`check_method_overrides`).
+        """
+        for func in self.program.functions:
+            if not func.override or "::" not in func.name:
+                continue
+            qualifier, method = func.name.split("::", 1)
+            if method in ("constructor", "destructor"):
+                continue
+            self.current_source = func.source
+            if not self.overrides_inherited(func):
+                continue  # a Mode-1 open-set override, not a base-chain one
+            if self.method_type_params(func):
+                # A method-OWNED generic override (its own type parameter, not
+                # just the struct's): no slot -- one slot cannot cover every
+                # instantiation -- but remember the family so a base-view
+                # dispatch to it errors cleanly (its slot would have crashed
+                # construction, see gen_generic_call). A struct-generic override
+                # (only the struct's parameters) dispatches like a concrete one
+                # and falls through to earn a slot below.
+                introducer = self.family_introducer(qualifier, method)
+                if introducer is not None:
+                    self.generic_override_families.add((introducer, method))
+                continue
+            pattern = self.dispatch_pattern(func)
+            introducer = self.overload_introducer(qualifier, method, pattern)
+            if introducer is not None:
+                self.dispatch_families.add((introducer, method))
+                self.dispatch_overloads.add((introducer, method, pattern))
+                if (introducer, method, pattern) in self.covariant_ret_slots:
+                    # SIE-186: an exact-spelling override sharing a covariant
+                    # slot (validated without the covariant flag) still has
+                    # its pinned return width checked against the program.
+                    self.check_covariant_member_width(func, func)
+
+    def dispatch_slot_specs(
+        self, concrete_name: str
+    ) -> list[tuple[str, tuple, str]]:
+        """The ordered vtable slots for a concrete type, one per overload.
+
+        Walks ``concrete_name``'s chain root-first and, for each overload
+        introduced along it that is a :attr:`dispatch_overloads` member,
+        assigns the next slot. The order is stable (root-most introducer
+        first, then method name, then pattern), so a base's slot list is a
+        prefix of every descendant's -- the prefix-compatibility a fat view of
+        the base relies on when it indexes a derived object's table. Sibling
+        overloads of one method name occupy separate slots, keyed by their
+        receiver-stripped :meth:`dispatch_pattern`.
+
+        Args:
+            concrete_name: The concrete struct's template name.
+
+        Returns:
+            ``[(method_name, pattern, introducing_base)]`` in slot-index order.
+        """
+        chain = [concrete_name] + [
+            base for base, _a, _h, _s in self.base_chain(concrete_name)
+        ]
+        chain.reverse()  # root first, so lower indices sit at the base
+        introduced: set[tuple[str, tuple]] = set()
+        specs: list[tuple[str, tuple, str]] = []
+        for type_name in chain:
+            entries: set[tuple[str, tuple]] = set()
+            for method in self.declared_family_methods(type_name):
+                if method in ("constructor", "destructor"):
+                    continue
+                for member in self.family_members(type_name, method):
+                    entries.add((method, self.dispatch_pattern(member)))
+            for method, pattern in sorted(entries):
+                if (method, pattern) in introduced:
+                    continue
+                introduced.add((method, pattern))
+                if (type_name, method, pattern) in self.dispatch_overloads:
+                    specs.append((method, pattern, type_name))
+        return specs
+
+    def dispatch_slots(self, concrete_name: str) -> list[tuple[str, str]]:
+        """The vtable slots of a concrete type as ``(method, introducer)``.
+
+        The pattern-blind projection of :meth:`dispatch_slot_specs` -- one
+        entry per slot, in slot-index order (so two overrides of one method
+        name appear twice). Kept for callers that only need slot presence and
+        count (the fat/empty-table checks and interface parity).
+        """
+        return [(method, intro) for method, _pat, intro in
+                self.dispatch_slot_specs(concrete_name)]
+
+    def is_dispatch_family(
+        self, type_name: str, method: str, pattern: "tuple | None" = None
+    ) -> bool:
+        """Whether ``type_name::method`` dispatches through a slot.
+
+        With ``pattern`` given, tests the specific overload: True iff that
+        overload's introducer/method/pattern triple is a
+        :attr:`dispatch_overloads` member. Without it, tests the family:
+        True iff ANY overload of the method name is overridden in the
+        hierarchy (the :attr:`dispatch_families` projection).
+        """
+        if pattern is not None:
+            introducer = self.overload_introducer(type_name, method, pattern)
+            return introducer is not None and (
+                introducer, method, pattern
+            ) in self.dispatch_overloads
+        introducer = self.family_introducer(type_name, method)
+        return introducer is not None and (
+            introducer, method
+        ) in self.dispatch_families
+
+    def dispatch_slot_index(
+        self, type_name: str, method: str, pattern: "tuple | None" = None
+    ) -> "int | None":
+        """The fixed vtable slot index of an overload for a type's hierarchy.
+
+        With ``pattern`` given, the slot of that specific overload; without it,
+        the first slot of the method name (an unambiguous single-overload
+        family).
+        """
+        for idx, (m, pat, _intro) in enumerate(
+            self.dispatch_slot_specs(type_name)
+        ):
+            if m == method and (pattern is None or pat == pattern):
+                return idx
+        return None
+
+    def slot_winner(self, concrete: LangType, method: str, pattern: tuple):
+        """The nearest-hop implementation of a dispatch overload for a type.
+
+        Walks ``concrete``'s ``extends`` chain (nearest first, using the
+        resolved per-instantiation :attr:`LangType.base` links) to the first
+        type that declares an overload of ``method`` whose
+        :meth:`dispatch_pattern` equals ``pattern``, and returns that member's
+        monomorphic LLVM function -- instantiating a generic base member at the
+        chain's instantiation arguments when needed. A hop that declares the
+        method but not this overload is skipped (its own overrides do not fill
+        another overload's slot).
+
+        Args:
+            concrete: The runtime concrete type whose table slot to fill.
+            method: The family's method name.
+            pattern: The overload's receiver-stripped pattern.
+
+        Returns:
+            ``(ir.Function, symbol)`` for the winning implementation.
+        """
+        current: "LangType | None" = strip_const(concrete)
+        while current is not None:
+            owner = current.template or current.name
+            member = next(
+                (
+                    m
+                    for m in self.family_members(owner, method)
+                    if self.dispatch_pattern(m) == pattern
+                ),
+                None,
+            )
+            if member is not None:
+                if not member.type_params:
+                    symbol = self.overload_symbols.get(id(member), member.name)
+                    return self.funcs[symbol], symbol
+                # A generic base member: instantiate at this hop's arguments.
+                # Key the bindings by the MEMBER's own struct-generic parameter
+                # names, which come from its (positional) qualifier and need not
+                # reuse the declaration's names -- `fn ga<X>::kind` binds `X`,
+                # not the declaration's `T`. A generic member always carries
+                # such a qualifier (`qualifier_args` is set); its arguments
+                # align position-for-position with the declaration's parameter
+                # list and thus with this hop's `current.args`, and a concrete
+                # (specialized) position carries no fresh name -- it was already
+                # substituted into the signature, so it binds nothing. A fresh
+                # position is one whose name the registration classified as a
+                # type parameter -- judged by ``type_params`` MEMBERSHIP, not
+                # by re-probing ``struct_arg_is_param``: this runs mid-body of
+                # whatever function forced the table, whose live type bindings
+                # would resolve the member's own parameter name and misread a
+                # fresh position as concrete (dropping the binding).
+                bindings = {
+                    qa.name: arg
+                    for qa, arg in zip(member.qualifier_args, current.args)
+                    if qa.name in member.type_params
+                }
+                fn, _ret, _params = self.instantiate(member, bindings, member.line)
+                return fn, fn.name
+            current = current.base
+        raise LangError(
+            f"no implementation of {method!r} for {concrete}", 0
+        )
+
+    def covariant_slot_ret_ir(
+        self, type_name: str, method: str, pattern: tuple, symbol: str,
+        fn_ty: ir.FunctionType,
+    ) -> "ir.Type | None":
+        """The slot-shaped fat return for a THIN covariant hop, or ``None``.
+
+        The one predicate both slot boundaries share (SIE-186): the thunk
+        builder widens a thin winner's result into the base-shaped fat view,
+        and the dispatch site types its indirect call with the same widened
+        shape (then narrows back). ``None`` means the hop needs no
+        adaptation -- the slot is not covariant, or the hop's own return is
+        already fat (every fat view is the same two-word layout, so the
+        slot's callers read it as the base's shape through the
+        function-pointer bitcast they already perform). Cheap-first: the
+        introducer chain walk runs only when a covariant slot exists at all
+        and the hop's return is thin.
+
+        Args:
+            type_name: The dispatching type (template name or qualifier).
+            method: The family's method name.
+            pattern: The overload's receiver-stripped slot key.
+            symbol: The hop's mangled symbol (its :attr:`fat_ret` identity).
+            fn_ty: The hop's IR function type (the thin return to widen).
+
+        Returns:
+            The fat ``{leaf*, i8*}`` return IR, or ``None``.
+        """
+        if not self.covariant_ret_slots or symbol in self.fat_ret:
+            return None
+        introducer = self.overload_introducer(type_name, method, pattern)
+        if (introducer, method, pattern) not in self.covariant_ret_slots:
+            return None
+        return self.fat_ref_ir(fn_ty.return_type.pointee)
+
+    def build_dispatch_thunk(
+        self, concrete: LangType, method: str, pattern: tuple
+    ) -> ir.Function:
+        """Emit (once) the thin->fat thunk for one vtable slot.
+
+        The thunk has the uniform slot ABI -- a fat ``{concrete*, i8*}``
+        receiver plus the family's other parameters -- and adapts it to the
+        winning implementation's own receiver ABI: it extracts the object
+        pointer, bitcasts it to the winner's receiver type, and calls the
+        winner, re-pairing the object with the dispatched-through table when
+        the winner's own receiver is fat (so a re-dispatch inside it reaches
+        the same dynamic type) or passing the bare pointer to a thin leaf.
+
+        The RETURN adapts too (SIE-186): a covariant slot's return ABI is
+        the base member's two-word fat view, so a winner whose covariant
+        spelling is a THIN leaf reference (its ``-> &leaf`` return is
+        one word because nothing extends the leaf in its closure) has its
+        result widened here -- paired with the leaf type's own static table
+        (a thin reference's referent is exactly its spelling). A winner
+        whose return is already fat passes through unchanged: every fat
+        view is the same two-word layout, so the slot's callers read it
+        as the base's shape via the function-pointer bitcast they already
+        perform.
+
+        Args:
+            concrete: The runtime concrete type owning this table.
+            method: The family's method name.
+            pattern: The overload's receiver-stripped pattern (the slot key).
+
+        Returns:
+            The thunk function.
+        """
+        winner, symbol = self.slot_winner(concrete, method, pattern)
+        # The pattern is part of the thunk symbol: sibling overloads of one
+        # method name have distinct slots and so distinct thunks. Built
+        # exactly once per (concrete, method, pattern): the only caller is
+        # vtable_for's entries loop, which runs once per type (the table is
+        # cached before the loop, so the mid-body recursion through
+        # dispatch_table_of self-hits that cache), and a slot appears once
+        # in the specs -- llvmlite would refuse the duplicate name loudly if
+        # the invariant ever broke.
+        suffix = f"({','.join(map(str, pattern))})" if pattern else ""
+        mangled = f"{concrete.name}::{method}{suffix}.vthunk"
+        winner_arg_irs = list(winner.function_type.args)
+        other_irs = winner_arg_irs[1:]
+        fat_recv_ir = self.fat_ref_ir(concrete.ir)
+        # SIE-186: a covariant slot returns the base-shaped fat view, so a
+        # winner spelling a THIN leaf reference is widened on the way out.
+        ret_ir = self.covariant_slot_ret_ir(
+            concrete.template or concrete.name, method, pattern, symbol,
+            winner.function_type,
+        )
+        widen_ret = ret_ir is not None
+        if not widen_ret:
+            ret_ir = winner.function_type.return_type
+        thunk_ty = ir.FunctionType(ret_ir, [fat_recv_ir, *other_irs])
+        thunk = ir.Function(self.module, thunk_ty, name=mangled)
+        thunk.linkage = "linkonce_odr"
+        saved_builder = self.builder
+        try:
+            self.builder = ir.IRBuilder(thunk.append_basic_block("entry"))
+            fatself = thunk.args[0]
+            obj = self.builder.extract_value(fatself, 0)  # concrete*
+            table = self.builder.extract_value(fatself, 1)  # i8*
+            winner_recv_ir = winner_arg_irs[0]
+            winner_fat = self.fat_ref.get(symbol, frozenset())
+            if 0 in winner_fat:
+                # The winner's own receiver is a fat {W*, i8*}: rebuild it,
+                # threading the dispatched-through table so re-dispatch inside
+                # the winner reaches the dynamic type.
+                w_ptr_ir = winner_recv_ir.elements[0]
+                obj_w = self.builder.bitcast(obj, w_ptr_ir)
+                recv = self.builder.insert_value(
+                    ir.Constant(winner_recv_ir, ir.Undefined), obj_w, 0
+                )
+                recv = self.builder.insert_value(recv, table, 1)
+            else:
+                recv = self.builder.bitcast(obj, winner_recv_ir)  # thin W*
+            result = self.builder.call(winner, [recv, *list(thunk.args)[1:]])
+            if widen_ret:
+                # The winner returned a thin leaf pointer: pair it with the
+                # leaf's own static table (nothing extends the leaf anywhere
+                # in the program -- :meth:`check_covariant_member_width`
+                # rejects a pinned-thin member the program outgrew -- so the
+                # referent IS its spelling; a type with no dispatch slots
+                # carries a null word, as everywhere).
+                leaf_ret, _, _ = self.signatures[symbol]
+                result = self.wrap_fat_view(
+                    result, self.dispatch_table_of(None, leaf_ret)
+                )
+            if isinstance(thunk_ty.return_type, ir.VoidType):
+                self.builder.ret_void()
+            else:
+                self.builder.ret(result)
+        finally:
+            self.builder = saved_builder
+        return thunk
+
+    def vtable_for(self, concrete: LangType) -> ir.Constant:
+        """The dispatch table for a concrete type, built and cached on demand.
+
+        A ``linkonce_odr`` array of thin->fat thunk pointers, one per
+        :meth:`dispatch_slots` entry, prefix-compatible with every base's
+        table. Returns an ``i8*`` constant pointing at it (bitcast at the
+        indexing site). Only called for a type that has at least one slot.
+
+        Args:
+            concrete: The runtime concrete type.
+
+        Returns:
+            An ``i8*`` constant addressing the table.
+        """
+        concrete = strip_const(concrete)
+        mangled = concrete.name
+        cached = self.vtables.get(mangled)
+        if cached is not None:
+            return cached
+        i8ptr = ir.IntType(8).as_pointer()
+        specs = self.dispatch_slot_specs(concrete.template or concrete.name)
+        # Create and cache the global BEFORE building the thunks: a thunk
+        # that widens a covariant thin return (SIE-186) asks for this very
+        # table (the leaf's own), and the early cache turns that recursion
+        # into a plain hit instead of a duplicate global.
+        arr_ty = ir.ArrayType(i8ptr, len(specs))
+        glob = ir.GlobalVariable(self.module, arr_ty, name=f"{mangled}.vtable")
+        glob.linkage = "linkonce_odr"
+        glob.global_constant = True
+        # Placeholder initializer: linkonce_odr demands a definition, so an
+        # error escaping the thunk builds below must not leave a bare
+        # declaration behind in the module.
+        glob.initializer = ir.Constant(arr_ty, ir.Undefined)
+        table = glob.bitcast(i8ptr)
+        self.vtables[mangled] = table
+        try:
+            entries = [
+                self.build_dispatch_thunk(concrete, method, pattern).bitcast(
+                    i8ptr
+                )
+                for method, pattern, _introducer in specs
+            ]
+        except Exception:
+            # Do not memoize a half-built table: a caller that survives the
+            # error must rebuild, not reuse the undef placeholder.
+            self.vtables.pop(mangled, None)
+            raise
+        glob.initializer = ir.Constant(arr_ty, entries)
+        return table
+
+    def dispatch_indirect(
+        self, expr, args: list, callee: ir.Function, pattern: tuple = ()
+    ):
+        """Dispatch a method-family call through a fat view's table, or ``None``.
+
+        Fires only when the call is a receiver-method call
+        (``Qualifier::method``), the receiver argument is a fat VIEW parameter
+        (a bare reference parameter, so its runtime type is unknown), and the
+        specific overload resolution picked is overridden
+        (:meth:`is_dispatch_family` for ``pattern``). It loads the receiver's
+        table (already threaded onto its fat value / in :attr:`param_tables`),
+        indexes that overload's fixed slot, and calls the thunk there
+        indirectly. Any other receiver -- an object of statically known type,
+        or a resolved overload no descendant overrides -- returns ``None`` so
+        the caller devirtualizes to the static direct call.
+
+        Args:
+            expr: The ``Call`` node.
+            args: The already fat-widened argument values.
+            callee: The statically-resolved callee (for its return type).
+            pattern: The resolved overload's receiver-stripped pattern, so the
+                slot of the exact overload (not a wrong-arity sibling) is used.
+
+        Returns:
+            The call result, or ``None`` to fall back to the direct call.
+        """
+        if "::" not in expr.name or not expr.args:
+            return None
+        qualifier, method = expr.name.split("::", 1)
+        recv = expr.args[0]
+        if not (isinstance(recv, Var) and recv.name in self.param_tables):
+            return None  # a statically-known object -> devirtualize (direct)
+        if not self.is_dispatch_family(qualifier, method, pattern):
+            # This overload is not overridden -> a plain direct call. (A
+            # base-view call that resolves to a method-owned generic override is
+            # rejected earlier, at the resolved-member-precise gate in
+            # gen_generic_call -- never here, where the coarse family key would
+            # also catch a non-generic sibling overload.)
+            return None
+        slot_idx = self.dispatch_slot_index(qualifier, method, pattern)
+        if slot_idx is None:
+            return None
+        i8ptr = ir.IntType(8).as_pointer()
+        table = self.param_tables[recv.name]
+        # SIE-186: a covariant slot's return ABI is the base's two-word fat
+        # view. When the statically-resolved hop spells a THIN leaf reference
+        # (its own return is one word), the indirect call must still be typed
+        # two words wide -- the thunk in the slot returns the view -- and the
+        # result narrows back to the resolved spelling: the object pointer is
+        # the view's first word, and the table drops (nothing extends the
+        # leaf anywhere in the program, per check_covariant_member_width, so
+        # its referent is exactly its spelling).
+        ret_ir = self.covariant_slot_ret_ir(
+            qualifier, method, pattern, callee.name, callee.function_type
+        )
+        narrow_ret = ret_ir is not None
+        if not narrow_ret:
+            ret_ir = callee.function_type.return_type
+        # The slot's function type: the fat receiver (as widened at this site)
+        # plus the other argument types, returning the callee's return type
+        # (widened to the slot's view shape for a thin covariant spelling).
+        # Layout-compatible with the concrete thunk stored in the slot.
+        slot_ty = ir.FunctionType(ret_ir, [a.type for a in args])
+        slots = self.builder.bitcast(table, i8ptr.as_pointer())
+        entry = self.builder.gep(slots, [ir.Constant(ir.IntType(32), slot_idx)])
+        raw_fn = self.builder.load(entry)
+        fnptr = self.builder.bitcast(raw_fn, slot_ty.as_pointer())
+        raw = self.emit_call(fnptr, args)
+        if narrow_ret:
+            raw = self.builder.extract_value(raw, 0)
+        return raw
+
+    def dispatch_table_of(
+        self, expr, concrete: "LangType | None",
+        static: "LangType | None" = None,
+        table: "ir.Value | None" = None,
+    ):
+        """The dispatch-table ``i8*`` for a fat-reference argument's source.
+
+        A bare fat-view parameter propagates its own table (from
+        :attr:`param_tables`), so a re-dispatch reaches the runtime type. Any
+        other source is an object of statically-known type, whose table is its
+        (on-demand) :meth:`vtable_for`; a type with no dispatch slots (or an
+        undeterminable one) carries a null table -- it can never be dispatched
+        through.
+
+        The static type comes from ``static`` -- the type the marshalling
+        just EVALUATED the argument to, the authoritative source: a derived
+        rvalue of any shape (an overloaded call's result, a method call's, a
+        ternary's) keeps its own table rather than slicing to the declared
+        base's, and an ``as`` upcast correctly carries the BASE table (the
+        cast built a genuine base value). Re-probing the AST instead would
+        re-derive, more weakly, a fact the marshalling already holds.
+
+        Args:
+            expr: The argument expression (for the fat-view propagation
+                check only -- the type is never probed from it).
+            concrete: The declared parameter (base) type, a fallback when no
+                evaluated type is supplied.
+            static: The argument's evaluated static type, from the
+                marshalling (see :meth:`marshal_args`'s ``fat_static``).
+            table: A RUNTIME table word carried by the argument's source (a
+                fat ``-> &T`` call result re-lent as this argument, see
+                :attr:`TypedValue.table`). Wins over the static derivation:
+                the forwarded view's dynamic type is what the callee must
+                re-dispatch to.
+
+        Returns:
+            An ``i8*`` value for the table word.
+        """
+        i8ptr = ir.IntType(8).as_pointer()
+        if isinstance(expr, Var) and expr.name in self.param_tables:
+            return self.param_tables[expr.name]
+        if table is not None:
+            return table
+        if static is None:
+            static = concrete
+        if static is None:
+            return ir.Constant(i8ptr, None)
+        static = strip_const(static)
+        if not is_struct(static) or not self.dispatch_slots(
+            static.template or static.name
+        ):
+            return ir.Constant(i8ptr, None)
+        return self.vtable_for(static)
 
     def template_base(self, func: Func, groups: bool = True) -> str:
         """Spell a generic template's order-independent symbol base.
@@ -2523,16 +3954,24 @@ class CodeGen:
         scan_stmts(func.body, {name: "param" for name, _ in func.params})
         return writes, calls
 
-    def param_irs(self, params, hidden: frozenset[int] = frozenset()) -> list:
+    def param_irs(
+        self,
+        params,
+        hidden: frozenset[int] = frozenset(),
+        fat: frozenset[int] = frozenset(),
+    ) -> list:
         """Map a function's parameter types to their LLVM argument types.
 
         A ``va_list`` lowers to the form it is passed in (a pointer on every
         ABI), not its storage layout. A hidden-reference parameter (a ``const``
-        struct) lowers to a pointer to its storage rather than the value.
+        struct) lowers to a pointer to its storage rather than the value. A
+        FAT hidden reference (``fat`` -- SIE-101 Stage 2, its base extended in
+        closure) lowers to the two-word ``{A*, table*}`` form instead.
 
         Args:
             params: The parameter ``LangType``s.
             hidden: Indices of parameters passed by hidden reference.
+            fat: The subset of ``hidden`` passed as two-word fat references.
 
         Returns:
             The LLVM types to use for the parameters.
@@ -2541,10 +3980,94 @@ class CodeGen:
         for i, p in enumerate(params):
             if is_valist(p):
                 out.append(self.va_list_passed_ir)
+            elif i in fat:
+                out.append(self.fat_ref_ir(p.ir))
             elif i in hidden:
                 out.append(p.ir.as_pointer())
             else:
                 out.append(p.ir)
+        return out
+
+    @staticmethod
+    def fat_ref_ir(pointee_ir: ir.Type) -> ir.Type:
+        """The LLVM type of a two-word fat reference to ``pointee_ir``.
+
+        A fat ``&A`` (SIE-101 Stage 2) is ``{A*, i8*}``: the object pointer
+        plus an opaque dispatch-table pointer (bitcast to the concrete table
+        type at the indexing site). The table word is present but null until
+        Stage 2's dispatch wiring fills it.
+        """
+        return ir.LiteralStructType(
+            [pointee_ir.as_pointer(), ir.IntType(8).as_pointer()]
+        )
+
+    def fat_ref_indices(self, func: Func, params: list) -> frozenset[int]:
+        """The hidden-reference parameters that are FAT (SIE-101 Stage 2).
+
+        A hidden ``&A`` / ``const &A`` parameter is fat -- a two-word
+        ``{A*, table*}`` value -- when its base struct is
+        :meth:`is_fat_base` (extended somewhere ``func``'s file can see). A
+        scalar reference (``&int32``) or a reference to an un-extended struct
+        stays a one-word pointer, so every stdlib container over an
+        un-extended type keeps its zero-cost thin ABI.
+
+        Args:
+            func: The function whose parameters to classify.
+            params: The resolved parameter ``LangType``s, in order.
+
+        Returns:
+            The subset of :meth:`hidden_ref_indices` that are fat.
+        """
+        return frozenset(
+            i
+            for i in self.hidden_ref_indices(func, params)
+            if is_struct(params[i])
+            and self.is_fat_base(
+                params[i].template or params[i].name, func.source
+            )
+        )
+
+    def wrap_fat_args(
+        self, args: list, fat: frozenset[int], tables: "dict[int, ir.Value] | None" = None
+    ) -> list:
+        """Widen a call's fat-reference arguments to the ``{ptr, table}`` form.
+
+        Each ``fat`` index currently holds the plain object pointer the
+        hidden-reference marshalling produced (already upcast to the base for a
+        receiver). Wrap it into the two-word fat value the callee's parameter
+        ABI expects. The table word comes from ``tables`` (the object's
+        dispatch table, from :meth:`dispatch_table_of`) when supplied, else is
+        null -- a null table is inert (a call that never dispatches through the
+        reference is behaviorally identical to a thin one). Idempotent: an
+        argument already in fat two-word form (a pre-wrapped call site) is left
+        untouched, so a second pass through :meth:`emit_call` does not
+        double-wrap it.
+
+        Args:
+            args: The marshalled LLVM argument values (positional).
+            fat: The callee's fat-reference parameter indices.
+            tables: Optional ``{index: table i8*}`` for the fat positions.
+
+        Returns:
+            A new argument list with the fat positions widened; the input list
+            is returned unchanged when ``fat`` is empty.
+        """
+        if not fat:
+            return args
+        i8ptr = ir.IntType(8).as_pointer()
+        out = list(args)
+        for i in fat:
+            if i >= len(out):
+                continue  # a fat index past the fixed args (defensive)
+            ptr = out[i]
+            if isinstance(ptr.type, ir.LiteralStructType):
+                continue  # already widened (a pre-wrapped call site)
+            table = (tables or {}).get(i) or ir.Constant(i8ptr, None)
+            fat_ty = ir.LiteralStructType([ptr.type, i8ptr])
+            value = self.builder.insert_value(
+                ir.Constant(fat_ty, ir.Undefined), ptr, 0
+            )
+            out[i] = self.builder.insert_value(value, table, 1)
         return out
 
     def declare_extern_abi(
@@ -2739,6 +4262,18 @@ class CodeGen:
         if (
             self.signatures[symbol] != (ret, params, func.variadic)
             or self.hidden_ref[symbol] != self.hidden_ref_indices(func, params)
+            # SIE-101 Stage 2: a prototype and its definition must agree on
+            # which references are FAT. They can disagree only across the .mci
+            # boundary -- a stub's fatness is pinned to its own import closure,
+            # so a stub compiled without seeing a base's extension declares a
+            # thin `&A` while a definition that does see it declares a fat one.
+            # Those are genuinely different ABIs (a one- vs two-word argument),
+            # so the mismatch is the "does not match its prototype" error, not
+            # a silently miscompiled body.
+            or self.fat_ref[symbol] != self.fat_ref_indices(func, params)
+            # ... and on whether the RETURN is fat, for the same reason: a
+            # one- vs two-word return is a genuinely different ABI.
+            or (symbol in self.fat_ret) != self.returns_fat_view(func, ret)
             or self.mut_ref[symbol] != self.mut_indices(func)
             or self.nonnull_ref[symbol] != self.nonnull_indices(func)
             or self.own_ref[symbol] != self.own_indices(func)
@@ -3280,6 +4815,23 @@ class CodeGen:
             params = tuple(self.lang_type(p, line) for p in ref.params)
             nonnull = frozenset(i for i, p in enumerate(ref.params) if p.nonnull)
             mutref = frozenset(i for i, p in enumerate(ref.params) if p.mut)
+            # SIE-101 Stage 2: a fat reference (`&A` whose base is
+            # extended-in-closure) is two words, and its width can differ
+            # across import closures, so it may not ride in a function-pointer
+            # type yet -- the value ABI would be ambiguous. Reject it with a
+            # clear error (liftable in a later stage). A scalar `&int32` or a
+            # reference to an un-extended struct is thin and stays legal.
+            for i in sorted(mutref):
+                pi = params[i]
+                if is_struct(pi) and self.is_fat_base(
+                    pi.template or pi.name, self.current_source
+                ):
+                    raise LangError(
+                        f"a fat reference type (&{pi.name}, whose base is "
+                        "extended) may not appear in a function-pointer type "
+                        "yet; pass the object by pointer instead",
+                        line,
+                    )
             own = frozenset(
                 i for i, p in enumerate(ref.params) if getattr(p, "own", False)
             )
@@ -3302,6 +4854,20 @@ class CodeGen:
                     raise LangError(
                         "a return cannot be both a reference and const "
                         "(a reference return must be writable)",
+                        line,
+                    )
+                # SIE-101: a fat `-> &A` return is two words, and its width
+                # can differ across import closures, so it may not ride in a
+                # function-pointer type -- the same ambiguity the fat
+                # PARAMETER rejection above closes. Per use, like the rest.
+                if is_struct(ret) and self.is_fat_base(
+                    ret.template or ret.name, self.current_source
+                ):
+                    raise LangError(
+                        f"a fat reference return type (-> &{ret.name}, whose "
+                        "base is extended) may not appear in a "
+                        "function-pointer type yet; return the object by "
+                        "pointer instead",
                         line,
                     )
             if ownret:
@@ -4170,8 +5736,13 @@ class CodeGen:
         # :meth:`nominal_subtype`). `base_type` is concrete here even for a bare
         # parameter (`struct entry<T> extends T`) or a generic base
         # (`extends pair<K, V>`), since it resolved against this instance's
-        # bindings above; `None` when the struct extends nothing.
+        # bindings above; `None` when the struct extends nothing. A
+        # bare-parameter edge is marked intrusive: it embeds the payload as a
+        # layout prefix (the explicit casts work), but it is not a declared
+        # base family, so the implicit reference upcast never crosses it.
         object.__setattr__(struct_type, "base", base_type)
+        if base_type is not None and decl.base.name in decl.type_params:
+            object.__setattr__(struct_type, "intrusive", True)
         if decl.union:
             # A union's members all share the storage at offset 0. Body the
             # identified type as the most-aligned member plus explicit pad
@@ -4239,7 +5810,9 @@ class CodeGen:
             identified.set_body(*(ftype.ir for _, ftype in fields))
         object.__setattr__(struct_type, "elem_indices", tuple(indices))
 
-    def nominal_subtype(self, base: LangType, derived: LangType) -> bool:
+    def nominal_subtype(
+        self, base: LangType, derived: LangType, through_intrusive: bool = True
+    ) -> bool:
         """Whether ``derived`` *is* ``base`` or reaches it up its ``extends`` chain.
 
         The nominal struct subtype relation. A struct participates only when it
@@ -4252,6 +5825,18 @@ class CodeGen:
         compare equal. The chain ends at ``None`` (a root struct, e.g.
         ``slice<T>``). A union never participates: its members share offset 0,
         so a shared brand would not mean a shared layout.
+
+        ``through_intrusive`` selects which relation this is. The explicit
+        surfaces (the ``as`` upcast, the slice borrow, generic bounds) pass
+        the default ``True``: a bare-parameter base (``struct entry<T>
+        extends T`` -- intrusive reuse) embeds its payload as an honest
+        layout prefix, so the chain crosses it. The IMPLICIT reference
+        upcast (:meth:`receiver_upcast_target`) passes ``False``: an
+        intrusive edge is not a declared base family (no method inheritance,
+        no vtable chain -- :meth:`struct_base_ref` returns ``None`` for it),
+        so a view formed across it would carry no honest dispatch table;
+        the walk stops at the edge and the conversion is rejected in favor
+        of the explicit casts.
 
         ``const`` is stripped on both sides so a value read out of a ``const``
         lvalue still upcasts, and to mirror the borrow site, which strips
@@ -4271,9 +5856,12 @@ class CodeGen:
         target = strip_const(base)
         current: "LangType | None" = strip_const(derived)
         while current is not None:
-            if strip_const(current) == target:
+            hop = strip_const(current)
+            if hop == target:
                 return True
-            current = current.base
+            if not through_intrusive and hop.intrusive:
+                return False  # `extends T` embeds; it does not subtype here
+            current = hop.base
         return False
 
     def field_type(
@@ -4392,23 +5980,11 @@ class CodeGen:
         if not any(func.override for func in self.program.functions):
             return
 
-        def pattern(func: Func):
-            # Concrete -> the mangle's parameter list; template -> the
-            # order-independent base (the same identities the duplicate
-            # checks compare). @static/@extern/@removed never join a
-            # cross-module set, so they are excluded before this is called.
-            if func.type_params:
-                return ("t", self.template_base(func))
-            self.current_source = func.source
-            return ("c", ", ".join(
-                str(self.lang_type(t, func.line)) for _, t in func.params
-            ))
-
         losers: set[int] = set()
         for func in self.program.functions:
             if not func.override:
                 continue
-            pat = pattern(func)
+            pat = self.override_pattern(func)
             others = [
                 f
                 for f in self.program.functions
@@ -4417,7 +5993,7 @@ class CodeGen:
                 and not f.extern
                 and not f.static
                 and f.removed_msg is None
-                and pattern(f) == pat
+                and self.override_pattern(f) == pat
             ]
             twin = next((f for f in others if f.override), None)
             if twin is not None:
@@ -4457,16 +6033,135 @@ class CodeGen:
                         "defines the symbol)",
                         func.line,
                     )
-                raise LangError(
-                    f"@override function {func.name!r} matches no existing "
-                    "overload to replace",
-                    func.line,
-                )
+                # No cross-module target of this pattern. A Mode-2 method
+                # override always lands here (the base and derived members
+                # have different qualified names, so `others` is empty), as
+                # does a genuine no-target typo. Defer the verdict to
+                # check_method_overrides, which runs once every family and base
+                # chain is known.
+                self.deferred_overrides.append(func)
+                continue
             losers.update(id(f) for f in targets)
         if losers:
             self.program.functions = [
                 f for f in self.program.functions if id(f) not in losers
             ]
+
+    def override_pattern(self, func: Func):
+        """The overload identity an ``@override`` matches against.
+
+        Concrete member -> ``("c", resolved-param-type list)`` (the mangle's
+        parameter spelling); template member -> ``("t", template_base)`` (the
+        order-independent base the duplicate checks compare).
+        ``@static``/``@extern``/``@removed`` members never join a cross-module
+        set, so they are excluded before this is called.
+
+        Both :meth:`reconcile_overrides` (Mode 1, cross-module open sets) and
+        :meth:`check_method_overrides` (Mode 2, a derived method shadowing an
+        inherited base member) key on this, so an override and its target are
+        the same member iff their patterns are equal.
+
+        Args:
+            func: The function (or rebased inherited clone) to spell.
+
+        Returns:
+            A hashable pattern tuple.
+        """
+        if func.type_params:
+            return ("t", self.template_base(func))
+        self.current_source = func.source
+        return (
+            "c",
+            ", ".join(str(self.lang_type(t, func.line)) for _, t in func.params),
+        )
+
+    def overrides_inherited(self, func: Func) -> bool:
+        """Whether a derived method shadows an inherited base-chain member.
+
+        A derived member ``M`` of family ``S::method`` overrides an inherited
+        member iff ``M``'s pattern equals the pattern of one of the rebased
+        base-chain clones :meth:`inherited_candidates` returns -- each a base
+        member already respelled onto ``S`` with its receiver retyped to the
+        derived struct. Pattern equality is :meth:`override_pattern`'s notion,
+        the same one Mode-1 replacement uses.
+
+        Args:
+            func: A method (its name contains ``::``); its ``source`` names the
+                file whose base chain and members are in scope.
+
+        Returns:
+            ``True`` when some inherited clone has ``func``'s pattern.
+        """
+        if "::" not in func.name:
+            return False
+        self.current_source = func.source
+        clones = self.inherited_candidates(func.name)
+        if not clones:
+            return False
+        pat = self.override_pattern(func)
+        return any(self.override_pattern(clone) == pat for clone in clones)
+
+    def check_method_overrides(self):
+        """Enforce the ``@override`` marker on method overrides (Mode 2).
+
+        Once every family and base chain is registered, two conditions hold:
+
+          * an *unmarked* derived method whose pattern shadows an inherited
+            base member is an accidental shadow and must be marked
+            ``@override``;
+          * an ``@override`` definition that reconcile_overrides could not
+            resolve as a cross-module replacement (it was deferred) and that
+            shadows no inherited base member overrides nothing -- a typo.
+
+        A deferred ``@override`` with a ``::`` name that does shadow an
+        inherited member is the legitimate Mode-2 override and passes.
+
+        Constructors and destructors are exempt: a derived ``T::constructor`` /
+        ``T::destructor`` shadows the base's same-shape special member by
+        nature (base construction/cleanup chains manually), and neither is ever
+        dynamically dispatched, so the marker is neither required nor rejected
+        on one -- special members sit outside the override system (SIE-101
+        defers dynamic destruction).
+
+        Raises:
+            LangError: On an unmarked shadow or an override with no target.
+        """
+        for func in self.deferred_overrides:
+            if func.name.rsplit("::", 1)[-1] in ("constructor", "destructor"):
+                continue  # exempt: a redundant marker on one is inert
+            if "::" in func.name and self.overrides_inherited(func):
+                continue  # a legitimate Mode-2 method override
+            if "::" in func.name:
+                raise LangError(
+                    f"@override method {func.name!r} overrides no inherited "
+                    "base member",
+                    func.line,
+                    source=func.source,
+                )
+            raise LangError(
+                f"@override function {func.name!r} matches no existing overload "
+                "to replace",
+                func.line,
+                source=func.source,
+            )
+        for func in self.program.functions:
+            if (
+                func.override
+                or "::" not in func.name
+                or func.name.rsplit("::", 1)[-1] in ("constructor", "destructor")
+                or func.extern
+                or func.static
+                or func.proto
+                or func.removed_msg is not None
+            ):
+                continue
+            if self.overrides_inherited(func):
+                raise LangError(
+                    f"method {func.name!r} shadows the inherited base member of "
+                    "the same signature and must be marked @override",
+                    func.line,
+                    source=func.source,
+                )
 
     def struct_arg_is_param(self, ref: TypeRef, line: int) -> bool:
         """Whether a method's pre-``::`` struct argument is a fresh parameter.
@@ -5084,6 +6779,10 @@ class CodeGen:
                 continue
             self.current_source = func.source
             self.resolve_method_qualifier(func)
+        # Structs and aliases are fully registered, so the `extends` graph can
+        # be walked: record which base is extended, and from where, for the
+        # fat-reference gate (SIE-101 Stage 2).
+        self.compute_fat_bases()
         # Constants are folded before globals, so a global's type (or a later
         # const) may use one as an array size. They are evaluated in source
         # order, so a const may reference any declared earlier (as in C). The
@@ -5434,9 +7133,10 @@ class CodeGen:
                 self.check_noreturn_decl(func, ret)
                 self.check_mut_return_decl(func, ret)
                 hidden = self.hidden_ref_indices(func, params)
+                fat = self.fat_ref_indices(func, params)
                 fnty = ir.FunctionType(
                     self.ret_ir(func, ret),
-                    self.param_irs(params, hidden),
+                    self.param_irs(params, hidden, fat),
                     var_arg=func.variadic,
                 )
                 fn = ir.Function(self.module, fnty, name=symbol)
@@ -5450,6 +7150,7 @@ class CodeGen:
                 self.funcs[symbol] = fn
                 self.signatures[symbol] = (ret, params, func.variadic)
                 self.hidden_ref[symbol] = hidden
+                self.fat_ref[symbol] = fat
                 self.mut_ref[symbol] = self.mut_indices(func)
                 self.nonnull_ref[symbol] = self.nonnull_indices(func)
                 self.own_ref[symbol] = self.own_indices(func)
@@ -5457,6 +7158,8 @@ class CodeGen:
                     self.format_syms.add(symbol)
                 if func.mut_return:
                     self.mut_ret.add(symbol)
+                    if self.returns_fat_view(func, ret):
+                        self.fat_ret.add(symbol)
                 if func.own_return:
                     self.own_ret.add(symbol)
                 self.static_funcs[key] = symbol
@@ -5679,8 +7382,9 @@ class CodeGen:
                         )
                     raise err
                 hidden = self.hidden_ref_indices(func, params)
+                fat = self.fat_ref_indices(func, params)
                 fnty = ir.FunctionType(
-                    self.ret_ir(func, ret), self.param_irs(params, hidden)
+                    self.ret_ir(func, ret), self.param_irs(params, hidden, fat)
                 )
                 fn = ir.Function(self.module, fnty, name=symbol)
                 if not func.proto:
@@ -5697,11 +7401,14 @@ class CodeGen:
                 self.funcs[symbol] = fn
                 self.signatures[symbol] = (ret, params, False)
                 self.hidden_ref[symbol] = hidden
+                self.fat_ref[symbol] = fat
                 self.mut_ref[symbol] = self.mut_indices(func)
                 self.nonnull_ref[symbol] = self.nonnull_indices(func)
                 self.own_ref[symbol] = self.own_indices(func)
                 if func.mut_return:
                     self.mut_ret.add(symbol)
+                    if self.returns_fat_view(func, ret):
+                        self.fat_ret.add(symbol)
                 if func.own_return:
                     self.own_ret.add(symbol)
                 members = self.overloads.setdefault(func.name, [])
@@ -5786,9 +7493,10 @@ class CodeGen:
             self.check_noreturn_decl(func, ret)
             self.check_mut_return_decl(func, ret)
             hidden = self.hidden_ref_indices(func, params)
+            fat = self.fat_ref_indices(func, params)
             fnty = ir.FunctionType(
                 self.ret_ir(func, ret),
-                self.param_irs(params, hidden),
+                self.param_irs(params, hidden, fat),
                 var_arg=func.variadic,
             )
             fn = ir.Function(self.module, fnty, name=func.name)
@@ -5805,6 +7513,7 @@ class CodeGen:
             self.funcs[func.name] = fn
             self.signatures[func.name] = (ret, params, func.variadic)
             self.hidden_ref[func.name] = hidden
+            self.fat_ref[func.name] = fat
             self.mut_ref[func.name] = self.mut_indices(func)
             self.nonnull_ref[func.name] = self.nonnull_indices(func)
             self.own_ref[func.name] = self.own_indices(func)
@@ -5812,6 +7521,8 @@ class CodeGen:
                 self.format_syms.add(func.name)
             if func.mut_return:
                 self.mut_ret.add(func.name)
+                if self.returns_fat_view(func, ret):
+                    self.fat_ret.add(func.name)
             if func.own_return:
                 self.own_ret.add(func.name)
             if func.deprecated_msg is not None:
@@ -5854,6 +7565,20 @@ class CodeGen:
         # and const/enum references; before function bodies, so a failed layout
         # assertion aborts the build without wasting work on codegen.
         self.check_directives()
+        # Every family and base chain is registered: enforce the @override
+        # marker on method overrides (a derived method shadowing an inherited
+        # base member) and reject an @override that overrides nothing. Runs
+        # before bodies, so an unmarked shadow aborts without wasted codegen.
+        self.check_method_overrides()
+        # A base-chain override shares its base member's vtable slot: reject an
+        # override whose return convention or receiver mutability would corrupt
+        # dispatch through that slot, and reject a generic method override no
+        # single slot can represent (SIE-101 Stage 2). Before slot assignment.
+        self.validate_dispatch_overrides()
+        # Every override is known: record which families earn a dispatch-table
+        # slot (overridden somewhere in their hierarchy), keyed at the family's
+        # introducer for prefix-compatible slot indices (SIE-101 Stage 2).
+        self.compute_dispatch_families()
         # Every declaration is registered and @if arms are resolved: compute
         # the per-function write-effect bits the call-emission sites consult
         # (a call to a proven write-free callee preserves projection facts).
@@ -5981,6 +7706,9 @@ class CodeGen:
         """
         self.ret_type = ret
         self.ret_mut = func.mut_return
+        # SIE-101: whether the reference return is the two-word fat view, so
+        # each `return` builds {address, table} instead of a bare pointer.
+        self.ret_fat = self.returns_fat_view(func, ret)
         self.ret_own = func.own_return
         self.current_source = func.source
         self.current_variadic = func.variadic  # gates va_start
@@ -5998,6 +7726,12 @@ class CodeGen:
         self.drop_marks = []
         self.expr_depth = 0  # a body instantiated mid-expression starts fresh
         hidden = self.hidden_ref_indices(func, params)
+        fat = self.fat_ref_indices(func, params)
+        # SIE-101 Stage 2: a fat reference parameter's dispatch table, keyed by
+        # parameter name -- stashed here at the self-unpack below so a later
+        # dynamic-dispatch call on the reference (re-dispatch inside a method
+        # from a fat `self`) can index it. Reset per body.
+        self.param_tables = {}
         self.const_locals = set(func.const_params)
         self.mut_locals = set(func.mut_params)
         self.nonnull_locals = set(func.nonnull_params)
@@ -6015,6 +7749,19 @@ class CodeGen:
         collect_addr_taken(func.body, self.addr_taken)
         for i, ((pname, _), ptype, arg) in enumerate(zip(func.params, params, fn.args)):
             arg.name = pname
+            if i in fat:
+                # SIE-101 Stage 2: the value arrives as a two-word
+                # ``{ptr, table}`` fat reference. Unpack the object pointer
+                # (element 0) and bind the local straight to it -- field access
+                # and reads/writes go through it exactly as a thin hidden
+                # reference would -- and stash the table word (element 1) for a
+                # later dynamic dispatch on this reference.
+                obj = self.builder.extract_value(arg, 0, name=pname)
+                self.param_tables[pname] = self.builder.extract_value(
+                    arg, 1, name=f"{pname}$table"
+                )
+                self.locals[pname] = (obj, ptype)
+                continue
             if i in hidden:
                 # The value arrives as a pointer to the caller's storage; bind
                 # the local straight to it (no copy). For const the promise not
@@ -6087,6 +7834,12 @@ class CodeGen:
         outer_locals, outer_names = dict(self.locals), self.scope_names
         outer_narrowed = set(self.narrowed_nonnull)
         outer_paths = set(self.narrowed_paths)
+        # A `let` shadowing a fat reference parameter drops the shadowed name's
+        # dispatch table (bind_local), correctly making the inner local static.
+        # Snapshot so the outer parameter's table is restored on scope exit --
+        # otherwise a dynamic-dispatch call on it after the block would index a
+        # missing table and fall back to a static (base) call.
+        outer_tables = dict(self.param_tables)
         self.scope_names = set()
         self.defer_stack.append([])
         if on_enter is not None:
@@ -6124,6 +7877,10 @@ class CodeGen:
             # local (not in this block's names) stays moved past the block.
             self.moved_locals -= self.scope_names
             self.locals, self.scope_names = outer_locals, outer_names
+            # Restore any dispatch table a shadowing `let` dropped inside the
+            # block (see the snapshot above): the outer fat reference parameter
+            # dynamic-dispatches again past the block.
+            self.param_tables = outer_tables
             # Narrowed facts established inside the block (early-guard
             # narrowing, shadowed names) end with it; invalidations from
             # inside persist outward. Intersecting achieves both.
@@ -7471,6 +9228,11 @@ class CodeGen:
         # A shadowing let over a plain parameter is a local: it must not
         # keep qualifying as a mut-return formation root.
         self.formation_params.pop(name, None)
+        # A shadowing binding over a FAT reference parameter is fresh storage
+        # with no view: the shadowed parameter's dispatch table must not carry
+        # over, or a method call on the new local would index a table for a
+        # different (possibly larger) runtime type -- reading past the object.
+        self.param_tables.pop(name, None)
         # A fresh binding of the name is a new value, so a use-after-move
         # recorded for the prior binding no longer applies (a rebinding in a
         # sibling scope, or a shadowing let, starts un-moved).
@@ -10747,9 +12509,17 @@ class CodeGen:
         root must be caller-reachable -- see
         :meth:`check_mut_return_formation`), storage legality (reusing the
         ``mut``-argument rules: no ``const``, ``@volatile``, ``@packed``, or
-        ``@nonnull``-parameter storage), and the exact-type rule every
-        ``mut`` reference obeys (the caller writes through it, so nothing
-        can adapt or widen).
+        ``@nonnull``-parameter storage), and the type rule: the returned
+        lvalue must be exactly the declared return type, or (SIE-186) a
+        declared ``extends`` descendant of it -- the return-position
+        reference upcast, mirroring the argument side: the derived storage
+        reinterprets as the base prefix and the fat wrap below pairs it with
+        the DERIVED type's table, so the returned view keeps dispatching the
+        runtime type. A reference never slices, which is what makes the
+        upcast legal where a by-value ``-> T`` return still requires the
+        explicit ``as``. The upcast needs the fat return's table word to
+        carry the derived type, so a THIN reference return (possible only
+        under an ``.mci`` stub's pinned closure) rejects it.
 
         Args:
             stmt: The ``Return`` node (``stmt.value`` is not ``None``).
@@ -10762,18 +12532,125 @@ class CodeGen:
         # Address the lvalue before the defers run, so a defer cannot
         # redirect what is being returned (the same clobber rule as a value
         # return).
+        self.last_result_table = None  # armed by a fat call inside gen_addr
         addr, t, align, volatile = self.gen_addr(stmt.value, stmt.line)
         self.check_mut_storage(
             stmt.value, t, align, volatile, stmt.line, what="a reference return"
         )
         if t != self.ret_type:
-            raise LangError(
-                f"reference return: expected a {self.ret_type} lvalue, got {t}",
-                stmt.line,
+            target = self.receiver_upcast_target(t, self.ret_type)
+            if target is None:
+                raise LangError(
+                    f"reference return: expected a {self.ret_type} lvalue, "
+                    f"got {t}",
+                    stmt.line,
+                )
+            if not self.ret_fat:
+                # A THIN return has no table word to carry the derived type:
+                # an ordinary `.mc` upcast is always fat (the descendant's
+                # `extends` makes the base a fat one program-wide), but a
+                # body compiled under an `.mci` stub's pinned closure (a
+                # generic shipped in an interface) can spell a thin return
+                # whose type the consuming program extends -- upcasting
+                # through it would silently drop the runtime type.
+                raise LangError(
+                    f"reference return: a {t} lvalue upcasts to the "
+                    f"declared {self.ret_type} only through a fat "
+                    f"reference, and this return is thin -- no extension "
+                    f"of {self.ret_type} is visible in its declaring "
+                    "closure, so the one-word return cannot carry the "
+                    "runtime type",
+                    stmt.line,
+                )
+            # SIE-186: a derived lvalue returns as its declared base --
+            # reinterpret the storage as the predicate's own (const-stripped)
+            # base target; the wrap below pairs it with the derived table
+            # (``static=t``), so the view dispatches the runtime type.
+            addr = self.builder.bitcast(addr, target.ir.as_pointer())
+        if self.ret_fat:
+            # SIE-101: the return is a two-word {address, table} view. The
+            # table follows the argument-side sourcing: a bare forwarded view
+            # parameter propagates its runtime table, a returned CALL result
+            # forwards the inner view's (the channel gen_addr's call just
+            # armed -- consulted only when the returned lvalue IS a call's
+            # result, so a call that merely fed a subexpression, or an
+            # exact-typed field carved out of one, keeps the static table),
+            # and any other lvalue is an object of its EVALUATED static type
+            # (``static=t`` -- the return's own type, or the derived type an
+            # upcast just reinterpreted), whose table is its own vtable (null
+            # when that type has no dispatch slots).
+            addr = self.wrap_fat_view(
+                addr,
+                self.dispatch_table_of(
+                    stmt.value,
+                    self.ret_type,
+                    static=t,
+                    table=self.returned_call_table(stmt.value),
+                ),
             )
         self.run_defers_through(0)
         if not self.builder.block.is_terminated:
             self.builder.ret(addr)
+
+    def returned_call_table(self, expr) -> "ir.Value | None":
+        """The armed result-table channel, iff ``expr``'s lvalue IS a call result.
+
+        :meth:`gen_mut_return` clears :attr:`last_result_table`, lets
+        :meth:`gen_addr` evaluate the return expression (arming the channel at
+        every fat ``-> &T`` call result built inside), then forwards the
+        channel only when the returned lvalue is the LAST such call's own
+        storage: a plain call, a dot-call, or an ``@accessor``/``@property``
+        sugar that rewrites to one -- for those the producing call is by
+        construction the last one emitted. Any other shape (a field or element
+        carved out of a call result, a plain variable after an argument
+        evaluated some fat call) returns ``None``: its lvalue is exactly the
+        return's static type, whose own table is correct, and forwarding a
+        bystander call's table would attach the wrong dynamic type.
+        """
+        produced_by_call = (
+            isinstance(expr, (Call, CallExpr))
+            or (
+                isinstance(expr, Index)
+                and self.as_accessor_call(expr) is not None
+            )
+            or (
+                isinstance(expr, Member)
+                and self.as_property_call(expr) is not None
+            )
+        )
+        return self.last_result_table if produced_by_call else None
+
+    def wrap_fat_view(self, addr, table) -> ir.Value:
+        """Pack an object pointer and a table word into a fat view value."""
+        fat_ty = self.fat_ref_ir(addr.type.pointee)
+        value = self.builder.insert_value(
+            ir.Constant(fat_ty, ir.Undefined), addr, 0
+        )
+        return self.builder.insert_value(value, table, 1)
+
+    def fat_result(self, raw, ret: LangType) -> TypedValue:
+        """Unpack a fat ``-> &T`` call result into its ``TypedValue``.
+
+        The call returned the two-word ``{address, table}`` view: element 0
+        is the vouched storage's address (the ``lvalue`` every assignment,
+        projection, and re-lend surface consumes, exactly as a thin mut
+        return's pointer), element 1 the dispatch table, carried on the
+        result (:attr:`TypedValue.table`) so a method call on it dispatches
+        the view's runtime type and a re-lend or re-return forwards it. Also
+        arms :attr:`last_result_table` for :meth:`gen_mut_return`'s
+        forwarded-call case.
+
+        Args:
+            raw: The call instruction's two-word result.
+            ret: The resolved return type (the referenced object's type).
+
+        Returns:
+            The unpacked result value.
+        """
+        ptr = self.builder.extract_value(raw, 0)
+        table = self.builder.extract_value(raw, 1)
+        self.last_result_table = table
+        return TypedValue(self.gen_load(ptr), ret, lvalue=ptr, table=table)
 
     def check_mut_return_formation(self, expr, line: int, crossed=False,
                                    top=True):
@@ -11605,6 +13482,12 @@ class CodeGen:
         hidden = f"0recv{self.hidden_seq}"
         self.hidden_seq += 1
         self.locals[hidden] = (slot, held)
+        # SIE-101: a fat `-> &T` receiver carries its dispatch table on the
+        # result. Register it for the hidden local, so the re-dispatched
+        # dot-call finds the view's runtime type exactly as it would for a
+        # fat parameter -- `relay(x).kind()` reaches the derived override.
+        if tv.lvalue is not None and tv.table is not None:
+            self.param_tables[hidden] = tv.table
         try:
             return self.gen_expr(
                 CallExpr(
@@ -11616,6 +13499,7 @@ class CodeGen:
             )
         finally:
             del self.locals[hidden]
+            self.param_tables.pop(hidden, None)
 
     def sizeof_operand(self, ref: TypeRef, line: int) -> LangType:
         """Resolve a ``sizeof`` operand to the type whose size is wanted.
@@ -15095,19 +16979,23 @@ class CodeGen:
     def receiver_view(
         self, pattern: TypeRef, actual: LangType, type_params: list[str]
     ) -> LangType:
-        """The base-chain view a method call's receiver unifies through.
+        """The base-chain view a reference argument unifies through.
 
-        The receiver position of a method-family call upcasts: when the
-        first parameter's pattern heads a struct that is a declared base of
-        the argument's ``extends`` lineage, inference and the shape filter
-        see the receiver AS that base instantiation -- so
+        When the parameter's pattern heads a struct that is a declared base
+        of the argument's ``extends`` lineage, inference and the shape filter
+        see the argument AS that base instantiation -- so
         ``point::magnitude(p)`` with a ``pointf`` receiver binds
-        ``T = float64``. Receiver position only; every other argument keeps
-        the explicit ``as`` upcast.
+        ``T = float64``. :meth:`resolve_bindings` routes a reference
+        position here only when its pattern names a TYPE PARAMETER (the
+        matched ancestor then pins the bindings, so the name-keyed walk is
+        emission-exact by construction); a concrete pattern resolves through
+        :meth:`concrete_view_target` instead. A by-value argument still
+        needs the explicit ``as``, so plain positions never route through
+        here.
 
         Args:
-            pattern: The candidate's first parameter pattern.
-            actual: The receiver argument's type.
+            pattern: The candidate's parameter pattern at the position.
+            actual: The argument's type.
             type_params: The candidate's type-parameter names.
 
         Returns:
@@ -15131,10 +17019,133 @@ class CodeGen:
             current = anc.base
         return actual
 
+    @staticmethod
+    def chain_hops(bare: LangType, target: LangType) -> int:
+        """How many ``extends`` hops up ``bare``'s lineage ``target`` sits.
+
+        ``target`` is a view target the resolve-time upcast just produced
+        (:meth:`receiver_view` or :meth:`concrete_view_target`), so it is an
+        ancestor of ``bare`` by construction. :meth:`resolve_bindings`
+        records this distance per viewed position; candidate selection then
+        prefers a candidate that is uniformly nearer (see
+        :meth:`view_dominance`).
+
+        Args:
+            bare: The argument's (const-stripped) type.
+            target: The base instantiation the position viewed to.
+
+        Returns:
+            The chain distance, at least ``1``.
+        """
+        tgt = strip_const(target)
+        hops, current = 0, bare.base
+        while current is not None:
+            hops += 1
+            anc = strip_const(current)
+            if anc == tgt:
+                return hops
+            current = anc.base
+        return hops
+
+    def concrete_view_target(
+        self,
+        func: Func,
+        ptype: TypeRef,
+        actual: LangType,
+        receiver: bool = False,
+    ) -> "LangType | None":
+        """The emission-parity view target for a CONCRETE reference pattern.
+
+        Resolves the candidate's parameter in the candidate's own context
+        (its source AND empty type bindings, like
+        :meth:`resolve_concrete_pattern` -- an enclosing generic body's live
+        binding must not capture a same-named concrete struct) and asks
+        :meth:`receiver_upcast_target` -- the exact predicate the marshal's
+        view formation uses -- so a candidate is viable through the
+        conversion iff emission can actually form it. A non-receiver
+        position additionally requires the resolved base to be
+        :meth:`is_fat_base` under ``func``'s source: emission only upcasts
+        the positions :meth:`fat_ref_indices` reports, so a thin ``.mci``
+        parameter must stay non-viable (the receiver position upcasts
+        thin or fat, and skips the gate). ``None`` when the pattern does not
+        resolve here (a lenient trial's mismatched candidate) or the
+        argument's lineage does not reach the resolved instance.
+
+        The resolution is guarded by a name pre-walk: the pattern's head
+        (generic aliases expanded, plain aliases chased) must appear among
+        the argument's ancestor family names before :meth:`lang_type` runs,
+        so a losing candidate's generic pattern never instantiates a struct
+        into the module for a call that cannot reach it.
+
+        Args:
+            func: The candidate (its source scopes the resolution).
+            ptype: The parameter's ``TypeRef`` pattern (names no type
+                parameter of ``func``).
+            actual: The argument's type.
+            receiver: Whether this is the method-family receiver position.
+
+        Returns:
+            The (const-stripped) base target, or ``None``.
+        """
+        if actual is CTOR_SELF or actual is NULLT:
+            return None
+        bare = strip_const(actual)
+        if not is_struct(bare) or bare.base is None:
+            return None
+        outer_bindings = self.type_bindings
+        outer_source = self.current_source
+        self.type_bindings = {}
+        self.current_source = func.source
+        try:
+            p = self.dealias_pattern(ptype, func.type_params)
+            if p.stars or p.dims or p.params is not None:
+                return None
+            # Chase plain (non-generic) aliases to the family name the
+            # `extends` chain spells, so an alias-spelled pattern views --
+            # and pre-walks -- exactly like the direct spelling.
+            name, seen = p.name, set()
+            while (
+                name not in seen
+                and (alias := self.lookup_alias(name)) is not None
+                and not alias.type_params
+            ):
+                seen.add(name)
+                t = alias.target
+                if t.stars or t.dims or t.params is not None:
+                    return None
+                name = t.name
+            current = bare.base
+            while current is not None:
+                anc = strip_const(current)
+                if anc.template == name or anc.name == name:
+                    break
+                current = anc.base
+            if current is None:
+                return None
+            if not receiver and not self.is_fat_base(name, func.source):
+                return None
+            try:
+                pi = self.lang_type(ptype, func.line)
+            except LangError:
+                return None
+        finally:
+            self.type_bindings = outer_bindings
+            self.current_source = outer_source
+        return self.receiver_upcast_target(actual, pi)
+
     def receiver_upcast_target(
         self, t: LangType, p: LangType
     ) -> "LangType | None":
         """The base type a method receiver upcasts to, or ``None``.
+
+        The IMPLICIT upcast predicate -- shared by the receiver position,
+        the ``&base`` argument view, pointer decay, the return-position
+        upcast, and override return covariance. It walks only the declared
+        base-family lineage: a bare-parameter base (``struct entry<T>
+        extends T``) is intrusive embedding with no method inheritance and
+        no vtable chain, so the walk never crosses it (a view formed across
+        the edge would carry no honest table) -- the payload is reached
+        through the explicit casts instead.
 
         Args:
             t: The receiver argument's type.
@@ -15148,7 +17159,9 @@ class CodeGen:
         bare = strip_const(t)
         if not is_struct(target) or not is_struct(bare) or target == bare:
             return None
-        return target if self.nominal_subtype(target, bare) else None
+        if self.nominal_subtype(target, bare, through_intrusive=False):
+            return target
+        return None
 
     def upcast_struct_value(self, tv: TypedValue, target: LangType) -> TypedValue:
         """Prefix-copy a derived struct value as one of its declared bases.
@@ -15907,6 +17920,19 @@ class CodeGen:
         # through the pointer are indirect and can no longer be attributed.
         self.warn_deprecated(name, self.deprecated_syms.get(symbol), line)
         ret, params, variadic = self.signatures[symbol]
+        # SIE-101: a fat reference (a `&A` parameter or `-> &A` return whose
+        # base is extended) is two words wide, and its width can differ
+        # across import closures, so it may not ride in a function-pointer
+        # type -- the same restriction lang_type enforces on a SPELLED fn
+        # type, applied to the inferred one (without it the value's calls
+        # would marshal one word against a two-word definition).
+        if self.fat_ref.get(symbol) or symbol in self.fat_ret:
+            raise LangError(
+                f"cannot take {name!r} as a function value: its signature "
+                "carries a fat reference (to an extended base), which may "
+                "not ride in a function-pointer type yet",
+                line,
+            )
         # The value's type spells the function's whole call contract --
         # @nonnull, mut, const-aggregate hidden references, `own` by-value
         # consuming parameters, and a mut return -- so a call through it runs
@@ -15965,6 +17991,15 @@ class CodeGen:
         Returns:
             The call instruction's result value.
         """
+        # SIE-101 Stage 2: widen any fat-reference argument to its two-word
+        # ``{ptr, table}`` form (with a null table word) to match the callee's
+        # parameter ABI. Keyed off the resolved callee's symbol, so it fires
+        # for direct/generic/protocol calls and never for a function-pointer or
+        # @asm callee (which carry no fat parameters).
+        if isinstance(callee, ir.Function):
+            fat = self.fat_ref.get(callee.name)
+            if fat:
+                args = self.wrap_fat_args(args, fat)
         result = self.builder.call(callee, args, arg_attrs=arg_attrs)
         if not preserves:
             self.narrowed_paths.clear()
@@ -16015,6 +18050,13 @@ class CodeGen:
         # returns (the terminated path discards the queue unemitted), so
         # snapshot the queue and warn on the growth below.
         drops_base = len(self.pending_drops)
+        fat = self.fat_ref.get(symbol, frozenset())
+        # Each fat argument's evaluated static type, filled by the marshal:
+        # the dispatch table word is sourced from what the argument actually
+        # evaluated to (a derived rvalue keeps its own table). fat_tables
+        # carries the RUNTIME table a re-lent fat call result forwarded.
+        fat_static: dict[int, LangType] = {}
+        fat_tables: dict[int, ir.Value] = {}
         args = self.marshal_args(
             expr.args,
             params,
@@ -16044,13 +18086,44 @@ class CodeGen:
             # never for an @extern (no mcc lineage crosses the C boundary,
             # and its aggregates marshal through the ABI plan above anyway).
             receiver_upcast="::" in expr.name and abi is None,
+            # SIE-101 Stage 2: a fat reference parameter accepts a derived
+            # argument by forming a base VIEW (the derived->base reference
+            # conversion), at any position -- the reference upcast never slices,
+            # unlike a by-value one.
+            fat=fat,
+            fat_static=fat_static,
+            fat_tables=fat_tables,
         )
-        raw = self.emit_call(
-            self.funcs[symbol],
-            args,
-            preserves=symbol in self.fact_safe_syms,
-            arg_attrs=arg_attrs or None,
-        )
+        # SIE-101 Stage 2: fill each fat-reference argument's dispatch table
+        # (its object's, or a propagated fat-view table) and, for a method-
+        # family call whose receiver is a fat VIEW of an overridden family,
+        # dispatch INDIRECTLY through the receiver's table slot instead of the
+        # statically-resolved direct call.
+        raw = None
+        if fat and abi is None:
+            tables = {
+                i: self.dispatch_table_of(
+                    expr.args[i], params[i], fat_static.get(i),
+                    fat_tables.get(i),
+                )
+                for i in fat
+                if i < len(expr.args)
+            }
+            args = self.wrap_fat_args(args, fat, tables)
+            # The resolved overload's receiver-stripped pattern: its non-
+            # receiver parameter types, matching the slot key so the exact
+            # overload's slot (never a wrong-arity sibling) is dispatched.
+            pattern = tuple(str(strip_const(p)) for p in params[1:])
+            raw = self.dispatch_indirect(
+                expr, args, self.funcs[symbol], pattern
+            )
+        if raw is None:
+            raw = self.emit_call(
+                self.funcs[symbol],
+                args,
+                preserves=symbol in self.fact_safe_syms,
+                arg_attrs=arg_attrs or None,
+            )
         for idx, align in byval_aligns.items():
             # `byval` carries an explicit alignment; set it on the call's
             # argument attribute so it renders `byval(T) align N` like the decl.
@@ -16062,6 +18135,11 @@ class CodeGen:
             result = TypedValue(
                 self.reconstruct_abi_return(raw, ret, abi.ret, sret_slot), ret
             )
+        elif symbol in self.fat_ret:
+            # A fat reference return arrives as the two-word {address, table}
+            # view: unpack it (see fat_result), so every lvalue surface keeps
+            # consuming a plain pointer and the table rides on the result.
+            result = self.fat_result(raw, ret)
         elif symbol in self.mut_ret:
             # A mut return arrives as a pointer to the vouched storage: load
             # eagerly for value contexts (folded away when unused) and carry
@@ -16376,6 +18454,9 @@ class CodeGen:
         abi: "ExternABI | None" = None,
         sret_slot=None,
         receiver_upcast: bool = False,
+        fat: frozenset[int] = frozenset(),
+        fat_static: "dict[int, LangType] | None" = None,
+        fat_tables: "dict[int, ir.Value] | None" = None,
     ) -> list:
         """Evaluate and coerce a call's arguments against the parameter types.
 
@@ -16428,6 +18509,17 @@ class CodeGen:
                 ``extends`` base of its type: a ``mut``/hidden reference
                 lends the storage's base prefix, a by-value receiver
                 prefix-copies. Never set for indirect or ``@extern`` calls.
+            fat_static: An optional out-dict filled with each fat argument's
+                EVALUATED static type (``{index: LangType}``) -- the derived
+                type when the argument's storage really is derived, so the
+                caller sources the dispatch table word from what the argument
+                evaluated to (see :meth:`dispatch_table_of`) rather than
+                slicing every rvalue to the declared base's table.
+            fat_tables: An optional out-dict filled with each fat argument's
+                forwarded RUNTIME table (``{index: i8*}``), when its source
+                carried one -- a fat ``-> &T`` call result re-lent as the
+                argument. Wins over ``fat_static``'s derivation at
+                :meth:`dispatch_table_of`.
 
         Returns:
             The marshalled LLVM argument values.
@@ -16505,12 +18597,15 @@ class CodeGen:
             if i in mut:
                 # Before the string-literal adaptation: a literal is not the
                 # caller's storage, so it must be rejected, not spilled.
-                args.append(
-                    self.mut_ref_arg(
-                        arg_expr, params[i], line, context,
-                        receiver=receiver_upcast and i == 0,
-                    )
+                ptr, src, table = self.mut_ref_arg(
+                    arg_expr, params[i], line, context,
+                    receiver=(receiver_upcast and i == 0) or i in fat,
                 )
+                if fat_static is not None and i in fat:
+                    fat_static[i] = src
+                if fat_tables is not None and i in fat and table is not None:
+                    fat_tables[i] = table
+                args.append(ptr)
                 continue
             if i < len(params) and (
                 self.struct_literal_adapts(arg_expr, params[i])
@@ -16524,18 +18619,24 @@ class CodeGen:
                 # reference (a `const` slice or struct) takes the value's
                 # address, so spill the adapted value to a temporary first.
                 tv = self.gen_adapted_literal(arg_expr, params[i], line)
+                if fat_static is not None and i in fat:
+                    # An adapted literal builds the parameter's type exactly.
+                    fat_static[i] = tv.type
                 if i in hidden:
                     args.append(self.spill_to_temp(tv, params[i], line, context))
                 else:
                     args.append(tv.value)
                 continue
             if i in hidden:
-                args.append(
-                    self.hidden_ref_arg(
-                        arg_expr, params[i], line, context,
-                        receiver=receiver_upcast and i == 0,
-                    )
+                ptr, src, table = self.hidden_ref_arg(
+                    arg_expr, params[i], line, context,
+                    receiver=(receiver_upcast and i == 0) or i in fat,
                 )
+                if fat_static is not None and i in fat:
+                    fat_static[i] = src
+                if fat_tables is not None and i in fat and table is not None:
+                    fat_tables[i] = table
+                args.append(ptr)
                 continue
             if i < len(params) and is_valist(params[i]):
                 # A va_list is handed over in its platform-specific passed form,
@@ -17258,6 +19359,41 @@ class CodeGen:
             return bare.pointee == ptype
         return strip_const(bare.pointee) == strip_const(ptype)
 
+    def decay_view_target(
+        self, arg_type: LangType, ptype: LangType, mut: bool
+    ) -> "LangType | None":
+        """The base a decayed pointee views into a fat reference slot, or ``None``.
+
+        SIE-187: decay composes with the derived->base view. A ``b*``
+        argument at a fat ``&a`` / ``const &a`` slot (where ``b extends a``)
+        is ``f(*p)``: the pointer sheds exactly one level (the same rule as
+        :meth:`decays_to`) and the pointee lends its base prefix
+        (:meth:`receiver_upcast_target`, the marshal's own view predicate).
+        A ``mut`` slot demands a mutable pointee -- the callee writes
+        through the view -- while a ``const`` slot also accepts a pointer
+        to a ``const`` pointee. The caller carries the fatness gate (only
+        a fat position, or the method receiver, composes) and the decay
+        null proof (:meth:`check_decay_arg`).
+
+        Args:
+            arg_type: The argument's type.
+            ptype: The (resolved) parameter type of the reference slot.
+            mut: ``True`` for a ``&`` slot, ``False`` for a ``const &`` one.
+
+        Returns:
+            The (const-stripped) base target the pointee views, or ``None``
+            when the argument is not a pointer whose pointee nominal-subtypes
+            the parameter.
+        """
+        if arg_type is NULLT:
+            return None
+        bare = strip_const(arg_type)
+        if bare.pointee is None:
+            return None
+        if mut and bare.pointee.const:
+            return None
+        return self.receiver_upcast_target(bare.pointee, ptype)
+
     def check_decay_arg(
         self, arg_expr, arg_type: LangType, kind: str, ptype: LangType,
         context: str, line: int, proven: "bool | None" = None,
@@ -17298,15 +19434,19 @@ class CodeGen:
     def hidden_ref_arg(
         self, arg_expr, ptype: LangType, line: int, context: str,
         receiver: bool = False,
-    ) -> ir.Value:
+    ) -> "tuple[ir.Value, LangType]":
         """Lower a hidden-reference (const struct) argument to a pointer.
 
         When the argument already has storage of the exact type, its address is
         shared directly -- no copy, which is the point of the optimization. A
         proven-non-null pointer to the parameter's type *decays*: the pointer
         value itself is forwarded as the hidden reference (see
-        :meth:`decays_to`). An rvalue (or a type that still needs coercion)
-        is materialized into a temporary whose address is passed instead.
+        :meth:`decays_to`); at a view-forming position (a fat parameter, or
+        the method receiver) a proven pointer to a pointee that
+        nominal-subtypes the parameter decays too, composing with the base
+        view (see :meth:`decay_view_target`). An rvalue (or a type that still
+        needs coercion) is materialized into a temporary whose address is
+        passed instead.
 
         Args:
             arg_expr: The argument expression.
@@ -17318,23 +19458,60 @@ class CodeGen:
                 lent viewed as the declared base prefix.
 
         Returns:
-            A pointer to the argument's storage.
+            ``(pointer, static type, table)``: a pointer to the argument's
+            storage; the static type the argument EVALUATED to -- the derived
+            type on an upcast path, a direct lend or a composed decay+view
+            alike (the referenced object really is derived, so a fat
+            argument's dispatch table must be the derived one), ``ptype``
+            when the referenced object is exactly the parameter's type (a
+            share, an exact-pointee decay, a spilled coerced copy); and the
+            RUNTIME table word forwarded by the argument's source, when it
+            carried one (a fat ``-> &T`` call result re-lent here), else
+            ``None``.
         """
         if self.is_addressable_form(arg_expr):
             addr, t, align, volatile = self.gen_addr(arg_expr, line)
             if t.ir is ptype.ir:
-                return addr
+                return addr, t, None
             if receiver:
                 target = self.receiver_upcast_target(t, ptype)
                 if target is not None:
                     # A derived receiver borrows as the base prefix: the
                     # same no-copy storage share, viewed as the base.
-                    return self.builder.bitcast(addr, target.ir.as_pointer())
+                    return (
+                        self.builder.bitcast(addr, target.ir.as_pointer()),
+                        t,
+                        None,
+                    )
             if self.decays_to(t, ptype, mut=False):
                 self.check_decay_arg(
                     arg_expr, strip_const(t), "const", ptype, context, line
                 )
-                return self.gen_load(addr, align=align, volatile=volatile)
+                return (
+                    self.gen_load(addr, align=align, volatile=volatile),
+                    ptype,
+                    None,
+                )
+            if receiver:
+                target = self.decay_view_target(t, ptype, mut=False)
+                if target is not None:
+                    # SIE-187: decay composes with the view -- the pointer
+                    # sheds its level and the pointee lends its base prefix,
+                    # exactly as f(*p) would; the pointee's (derived) type
+                    # sources the dispatch table.
+                    self.check_decay_arg(
+                        arg_expr, strip_const(t), "const", ptype, context, line
+                    )
+                    return (
+                        self.builder.bitcast(
+                            self.gen_load(
+                                addr, align=align, volatile=volatile
+                            ),
+                            target.ir.as_pointer(),
+                        ),
+                        strip_const(t).pointee,
+                        None,
+                    )
             tv = TypedValue(self.gen_load(addr), t)
         else:
             tv = self.gen_expr(arg_expr)
@@ -17345,26 +19522,45 @@ class CodeGen:
                 # A mut-returning call's storage is shared as the hidden
                 # reference directly -- the same no-copy path an addressable
                 # argument takes (a const parameter promises not to write
-                # through it).
-                return tv.lvalue
+                # through it). A fat call result forwards its table with it.
+                return tv.lvalue, tv.type, tv.table
             if receiver and tv.lvalue is not None:
                 target = self.receiver_upcast_target(tv.type, ptype)
                 if target is not None:
-                    return self.builder.bitcast(
-                        tv.lvalue, target.ir.as_pointer()
+                    return (
+                        self.builder.bitcast(
+                            tv.lvalue, target.ir.as_pointer()
+                        ),
+                        tv.type,
+                        tv.table,
                     )
             if self.decays_to(tv.type, ptype, mut=False):
                 self.check_decay_arg(
                     arg_expr, tv.type, "const", ptype, context, line
                 )
-                return tv.value
+                return tv.value, ptype, None
+            if receiver:
+                target = self.decay_view_target(tv.type, ptype, mut=False)
+                if target is not None:
+                    # SIE-187: a decayed rvalue pointer composes with the
+                    # view the same way -- the pointee is real storage.
+                    self.check_decay_arg(
+                        arg_expr, tv.type, "const", ptype, context, line
+                    )
+                    return (
+                        self.builder.bitcast(
+                            tv.value, target.ir.as_pointer()
+                        ),
+                        strip_const(tv.type).pointee,
+                        None,
+                    )
         if receiver:
             target = self.receiver_upcast_target(tv.type, ptype)
             if target is not None:
                 # A derived rvalue receiver spills to its own temporary,
                 # lent viewed as the base prefix.
-                return self.upcast_hidden_ref(tv, target)
-        return self.spill_to_temp(tv, ptype, line, context)
+                return self.upcast_hidden_ref(tv, target), tv.type, None
+        return self.spill_to_temp(tv, ptype, line, context), ptype, None
 
     def check_mut_storage(
         self, arg_expr, t: LangType, align: int | None, volatile: bool,
@@ -17448,7 +19644,10 @@ class CodeGen:
         ``ptype`` -- the callee writes through the pointer, so no coercion
         (not even an adapting literal) is possible -- or a proven-non-null
         pointer to ``ptype``, which *decays*: the pointer value itself is
-        forwarded (see :meth:`decays_to`). A decayed pointer may be an
+        forwarded (see :meth:`decays_to`). At a view-forming position (a fat
+        parameter, or the method receiver) a proven pointer to a mutable
+        pointee that nominal-subtypes ``ptype`` also decays, composing with
+        the base view (see :meth:`decay_view_target`). A decayed pointer may be an
         rvalue (the pointee is real storage even when the pointer expression
         is a temporary), and :meth:`check_mut_storage` does not apply to it:
         the const/volatile/packed facts describe the pointer's own storage,
@@ -17468,11 +19667,17 @@ class CodeGen:
                 storage, viewed as the declared base).
 
         Returns:
-            A pointer to the argument's storage (or the decayed pointer).
+            ``(pointer, static type, table)``: a pointer to the argument's
+            storage (or the decayed pointer); the static type the argument
+            EVALUATED to -- the derived type on an upcast path, ``ptype``
+            otherwise; and the RUNTIME table a re-lent fat ``-> &T`` call
+            result forwarded, else ``None`` (see :meth:`hidden_ref_arg`).
 
         Raises:
             LangError: When the argument is not a writable lvalue of exactly
-                ``ptype`` and not a provably non-null pointer to ``ptype``.
+                ``ptype`` and not a provably non-null pointer to ``ptype``
+                (or, at a view-forming position, to a mutable derived type
+                of it).
         """
         if self.is_addressable_form(arg_expr):
             addr, t, align, volatile = self.gen_addr(arg_expr, line)
@@ -17480,44 +19685,95 @@ class CodeGen:
                 self.check_decay_arg(
                     arg_expr, strip_const(t), "reference", ptype, context, line
                 )
-                return self.gen_load(addr, align=align, volatile=volatile)
+                return (
+                    self.gen_load(addr, align=align, volatile=volatile),
+                    ptype,
+                    None,
+                )
+            if receiver:
+                target = self.decay_view_target(t, ptype, mut=True)
+                if target is not None:
+                    # SIE-187: decay composes with the view on the writable
+                    # path too (parity with hidden_ref_arg): the pointee
+                    # lends its base prefix, writes land in the derived
+                    # value's leading fields, and the pointee's type sources
+                    # the dispatch table. The pointer's own storage facts
+                    # stay irrelevant, as for any decay.
+                    self.check_decay_arg(
+                        arg_expr, strip_const(t), "reference", ptype, context,
+                        line,
+                    )
+                    return (
+                        self.builder.bitcast(
+                            self.gen_load(
+                                addr, align=align, volatile=volatile
+                            ),
+                            target.ir.as_pointer(),
+                        ),
+                        strip_const(t).pointee,
+                        None,
+                    )
             self.check_mut_storage(arg_expr, t, align, volatile, line)
             if t != ptype:
                 if receiver:
                     target = self.receiver_upcast_target(t, ptype)
                     if target is not None:
-                        return self.builder.bitcast(
-                            addr, target.ir.as_pointer()
+                        return (
+                            self.builder.bitcast(
+                                addr, target.ir.as_pointer()
+                            ),
+                            t,
+                            None,
                         )
                 raise LangError(
                     f"{context}: expected a {ptype} lvalue, got {t}", line
                 )
-            return addr
+            return addr, t, None
         if not isinstance(arg_expr, StrLit):
             tv = self.gen_expr(arg_expr)
             if self.decays_to(tv.type, ptype, mut=True):
                 self.check_decay_arg(
                     arg_expr, tv.type, "reference", ptype, context, line
                 )
-                return tv.value
+                return tv.value, ptype, None
+            if receiver:
+                target = self.decay_view_target(tv.type, ptype, mut=True)
+                if target is not None:
+                    # SIE-187: a decayed rvalue pointer composes with the
+                    # view on the writable path too.
+                    self.check_decay_arg(
+                        arg_expr, tv.type, "reference", ptype, context, line
+                    )
+                    return (
+                        self.builder.bitcast(
+                            tv.value, target.ir.as_pointer()
+                        ),
+                        strip_const(tv.type).pointee,
+                        None,
+                    )
             if tv.lvalue is not None:
                 # A mut-returning call re-lends: the callee's formation rule
                 # vouched for the storage (and rejected const/@volatile/
                 # @packed at the return site), so no caller-side storage
                 # re-check -- just the exact-type rule every mut reference
                 # obeys, plus the receiver upcast (the base prefix re-lends).
+                # A fat call result forwards its table with the storage.
                 if tv.type != ptype:
                     if receiver:
                         target = self.receiver_upcast_target(tv.type, ptype)
                         if target is not None:
-                            return self.builder.bitcast(
-                                tv.lvalue, target.ir.as_pointer()
+                            return (
+                                self.builder.bitcast(
+                                    tv.lvalue, target.ir.as_pointer()
+                                ),
+                                tv.type,
+                                tv.table,
                             )
                     raise LangError(
                         f"{context}: expected a {ptype} lvalue, got {tv.type}",
                         line,
                     )
-                return tv.lvalue
+                return tv.lvalue, tv.type, tv.table
         raise LangError(
             f"{context} is not assignable; a reference parameter needs a "
             "variable, field, element, or dereference",
@@ -17839,7 +20095,16 @@ class CodeGen:
                 arg_tvs.append(self.gen_expr(arg.value))
                 continue
             proofs.append(self.proves_nonnull(arg))
-            if i in maybe_mut and self.denotes_storage(arg):
+            if (
+                i in maybe_mut
+                # The receiver of a method call also forms its address up
+                # front: a hidden-reference receiver must SHARE the caller's
+                # storage (like the direct path), not spill a prefix copy that
+                # slices a derived object below the fat view -- so a dispatched
+                # derived override reads through the actual object. Formed here
+                # (once, no double-eval), used in the hidden-reference arm.
+                or (i == 0 and "::" in expr.name)
+            ) and self.denotes_storage(arg):
                 addr, t, align, volatile = self.gen_addr(arg, expr.line)
                 addrs[i] = (addr, t, align, volatile)
                 # Inference sees the stored value, loaded once through the
@@ -18000,7 +20265,12 @@ class CodeGen:
                 if unaddressed:
                     mut_failures.append(min(unaddressed))
                     continue
-                viable.append((self.call_rank(func, arg_tvs), func, bindings))
+                viable.append((
+                    self.call_rank(func, arg_tvs),
+                    self.view_dists,
+                    func,
+                    bindings,
+                ))
             if not viable:
                 # Two-tier viability: decay readings enter resolution only
                 # when no candidate matched the pointer type directly, so
@@ -18047,6 +20317,7 @@ class CodeGen:
                     expr.line,
                 )
             viable.sort(key=lambda entry: entry[0], reverse=True)
+            viable = self.view_dominance(viable, expr)
             if len(viable) > 1 and viable[0][0] == viable[1][0]:
                 # A rank tie is not yet an ambiguity: among the tied cohort,
                 # a candidate whose parameter pattern is strictly an instance
@@ -18055,7 +20326,7 @@ class CodeGen:
                 # :meth:`subsumption_winner`. Only a cohort with no such
                 # maximum stays ambiguous.
                 top = viable[0][0]
-                cohort = [f for key, f, _ in viable if key == top]
+                cohort = [f for key, _, f, _ in viable if key == top]
                 winner = self.subsumption_winner(cohort)
                 if winner is None:
                     # Open sets make cross-module ties possible, so cite the
@@ -18064,7 +20335,7 @@ class CodeGen:
                         f"call to {expr.name!r} is ambiguous between overloads",
                         expr.line,
                     )
-                    for rank_key, contender, _ in viable:
+                    for rank_key, _, contender, _ in viable:
                         if rank_key != top:
                             break
                         # An inherited contender's note points at the ORIGIN
@@ -18086,11 +20357,11 @@ class CodeGen:
                             )
                         )
                     raise err
-                _, func, bindings = next(
-                    entry for entry in viable if entry[1] is winner
+                _, _, func, bindings = next(
+                    entry for entry in viable if entry[2] is winner
                 )
             else:
-                _, func, bindings = viable[0]
+                _, _, func, bindings = viable[0]
         # The winner is known; a mixed overload set warns only when resolution
         # picks a deprecated candidate.
         self.warn_deprecated(expr.name, func.deprecated_msg, expr.line)
@@ -18177,7 +20448,27 @@ class CodeGen:
             addrs[0] = (slot, recv, None, False)
             arg_tvs[0] = self.value_at(slot, recv)
         mut_positions = self.mut_indices(func)
+        # SIE-101 Stage 2: the winner's fat-reference positions. A fat
+        # parameter accepts a derived argument by forming a base VIEW at ANY
+        # position (the derived->base reference conversion, in parity with the
+        # direct path's marshal), so the upcast gates below fire for a fat
+        # position of a receiver-less callee too -- not just a method
+        # receiver. fat_static records each fat argument's evaluated static
+        # type where the marshal knows the storage's TRUE (derived) type; the
+        # dispatch table is sourced from it (a derived rvalue keeps its own
+        # table). A position with no entry referenced an exactly-base object,
+        # and the declared parameter type serves as dispatch_table_of's
+        # fallback. fat_tables carries the RUNTIME table a re-lent fat call
+        # result forwarded (it wins over the static derivation).
+        fat = self.fat_ref.get(fn.name, frozenset())
+        fat_static: dict[int, LangType] = {}
+        fat_tables: dict[int, ir.Value] = {}
         decayed: set[int] = set()
+        # SIE-187: decayed positions whose pointee VIEWS the parameter (the
+        # decay+view composition): {position: (base target, pointee type)}.
+        # Emission bitcasts the forwarded pointer to the base prefix and
+        # sources the dispatch table from the pointee's (derived) type.
+        decay_views: dict[int, tuple[LangType, LangType]] = {}
         for i in sorted(mut_positions):
             context = f"argument {i + 1} of {expr.name!r}"
             p = params[i]
@@ -18193,11 +20484,24 @@ class CodeGen:
                     )
                     decayed.add(i)
                     continue
+                if (i == 0 and "::" in expr.name) or i in fat:
+                    target = self.decay_view_target(t, p, mut=True)
+                    if target is not None:
+                        # SIE-187: decay composes with the view (parity with
+                        # mut_ref_arg); the bitcast and the table sourcing
+                        # happen at emission, below.
+                        self.check_decay_arg(
+                            expr.args[i], strip_const(t), "reference", p,
+                            context, expr.line, proven=proofs[i],
+                        )
+                        decayed.add(i)
+                        decay_views[i] = (target, strip_const(t).pointee)
+                        continue
                 self.check_mut_storage(expr.args[i], t, align, volatile, expr.line)
                 if t != p:
                     target = (
                         self.receiver_upcast_target(t, p)
-                        if i == 0 and "::" in expr.name
+                        if (i == 0 and "::" in expr.name) or i in fat
                         else None
                     )
                     if target is None:
@@ -18230,6 +20534,20 @@ class CodeGen:
                 )
                 decayed.add(i)
                 continue
+            if not isinstance(expr.args[i], StrLit) and (
+                (i == 0 and "::" in expr.name) or i in fat
+            ):
+                target = self.decay_view_target(tv.type, p, mut=True)
+                if target is not None:
+                    # SIE-187: a decayed rvalue pointer composes with the
+                    # view on the writable path too.
+                    self.check_decay_arg(
+                        expr.args[i], tv.type, "reference", p, context,
+                        expr.line, proven=proofs[i],
+                    )
+                    decayed.add(i)
+                    decay_views[i] = (target, strip_const(tv.type).pointee)
+                    continue
             if tv.lvalue is not None:
                 # A mut-return re-lend: the callee's formation rule vouched
                 # for the storage, so only the exact-type rule applies (as
@@ -18238,7 +20556,7 @@ class CodeGen:
                 if tv.type != p:
                     target = (
                         self.receiver_upcast_target(tv.type, p)
-                        if i == 0 and "::" in expr.name
+                        if (i == 0 and "::" in expr.name) or i in fat
                         else None
                     )
                     if target is None:
@@ -18252,8 +20570,13 @@ class CodeGen:
                         ),
                         tv.type, None, False,
                     )
+                    if i in fat and tv.table is not None:
+                        # A re-lent fat call result forwards its table.
+                        fat_tables[i] = tv.table
                     continue
                 addrs[i] = (tv.lvalue, tv.type, None, False)
+                if i in fat and tv.table is not None:
+                    fat_tables[i] = tv.table
                 continue
             raise LangError(self.not_assignable(i, expr.name), expr.line)
         # The proof is syntactic, so it runs on the argument expressions even
@@ -18350,7 +20673,24 @@ class CodeGen:
                 # A decayed pointer is forwarded by value (it was already
                 # loaded, once, when the argument was evaluated); a direct
                 # lend passes the caller's storage address.
-                args.append(tv.value if i in decayed else addrs[i][0])
+                if i in decayed:
+                    val = tv.value
+                    if i in decay_views:
+                        # SIE-187: the decayed pointee lends its base
+                        # prefix; its (derived) type sources the table.
+                        target, pointee = decay_views[i]
+                        val = self.builder.bitcast(
+                            val, target.ir.as_pointer()
+                        )
+                        if i in fat:
+                            fat_static[i] = pointee
+                    args.append(val)
+                else:
+                    args.append(addrs[i][0])
+                    if i in fat:
+                        # The lent storage's true type (addrs kept the derived
+                        # one on an upcast lend) sources the dispatch table.
+                        fat_static[i] = addrs[i][1]
             elif (
                 self.struct_literal_adapts(arg_node, p)
                 and not isinstance(arg_node, TupleLit)
@@ -18388,15 +20728,69 @@ class CodeGen:
                         context, expr.line, proven=proofs[i],
                     )
                     args.append(tv.value)
+                elif (
+                    ((i == 0 and "::" in expr.name) or i in fat)
+                    and (
+                        target := self.decay_view_target(
+                            tv.type, p, mut=False
+                        )
+                    )
+                    is not None
+                ):
+                    # SIE-187: decay composes with the view (parity with
+                    # hidden_ref_arg): the pointee lends its base prefix
+                    # and its (derived) type sources the dispatch table.
+                    self.check_decay_arg(
+                        arg_node, strip_const(tv.type), "const", p,
+                        context, expr.line, proven=proofs[i],
+                    )
+                    args.append(
+                        self.builder.bitcast(tv.value, target.ir.as_pointer())
+                    )
+                    if i in fat:
+                        fat_static[i] = strip_const(tv.type).pointee
+                elif tv.lvalue is not None and tv.type.ir is p.ir:
+                    # A mut-returning call's storage is shared as the hidden
+                    # reference directly (parity with hidden_ref_arg's
+                    # no-copy share); a fat result forwards its table, so a
+                    # re-lent view keeps dispatching its runtime type.
+                    args.append(tv.lvalue)
+                    if i in fat and tv.table is not None:
+                        fat_tables[i] = tv.table
                 else:
                     target = (
                         self.receiver_upcast_target(tv.type, p)
-                        if i == 0 and "::" in expr.name
+                        if (i == 0 and "::" in expr.name) or i in fat
                         else None
                     )
-                    if target is not None:
-                        # A derived receiver borrows as the base prefix.
+                    if target is not None and tv.lvalue is not None:
+                        # A derived lvalue-carrying result lends its base
+                        # prefix in place, its table (a re-lent fat view's
+                        # runtime type) riding along.
+                        args.append(
+                            self.builder.bitcast(
+                                tv.lvalue, target.ir.as_pointer()
+                            )
+                        )
+                        if i in fat:
+                            fat_static[i] = tv.type
+                            if tv.table is not None:
+                                fat_tables[i] = tv.table
+                    elif target is not None:
+                        # A derived receiver borrows as the base prefix; its
+                        # true (derived) type sources the dispatch table.
                         args.append(self.upcast_hidden_ref(tv, target))
+                        if i in fat:
+                            fat_static[i] = tv.type
+                    elif i in addrs and addrs[i][1] == p:
+                        # A same-type receiver whose storage matches the
+                        # parameter shares the caller's address (formed up
+                        # front) rather than a spilled prefix copy -- the actual
+                        # object, so a dispatched derived override does not read
+                        # past a base-sized slice. A receiver whose type does
+                        # NOT match (a mispinned instantiation) falls through to
+                        # the spill, which raises the coercion diagnostic.
+                        args.append(addrs[i][0])
                     else:
                         args.append(
                             self.spill_to_temp(tv, p, expr.line, context)
@@ -18469,10 +20863,58 @@ class CodeGen:
                 )
             )
         effect_owner = inh.origin if inh is not None else func
-        raw = self.emit_call(
-            fn, args, preserves=self.effect_bits.get(id(effect_owner)) is False
-        )
-        if func.mut_return:
+        # SIE-101 Stage 2: a base-VIEW call resolving to a method-owned generic
+        # override cannot dispatch -- no single vtable slot covers every
+        # instantiation of its type parameter. Reject here, where the RESOLVED
+        # member is known generic (so a non-generic sibling of the same method
+        # name, resolving to its own concrete member, is unaffected -- the
+        # coarse family key alone would over-reject it). A concrete receiver
+        # devirtualizes and is fine; only a fat view (unknown runtime type) is
+        # the problem.
+        if "::" in expr.name and expr.args and self.method_type_params(func):
+            recv = expr.args[0]
+            if isinstance(recv, Var) and recv.name in self.param_tables:
+                qualifier, method = expr.name.split("::", 1)
+                introducer = self.family_introducer(qualifier, method)
+                if (introducer, method) in self.generic_override_families:
+                    raise LangError(
+                        f"cannot dispatch the generic method "
+                        f"'{qualifier}::{method}' through a base view: it "
+                        "declares its own type parameter, so no single vtable "
+                        "slot can represent it -- call it on a concrete "
+                        "receiver instead",
+                        expr.line,
+                    )
+        # On the overload/inherited path too (where a method call on an extended
+        # type resolves, its own member merging with inherited clones), fill
+        # each fat argument's dispatch table and, for a fat-view receiver of an
+        # overridden family, dispatch indirectly.
+        raw = None
+        if fat:
+            tables = {
+                i: self.dispatch_table_of(
+                    expr.args[i], params[i], fat_static.get(i),
+                    fat_tables.get(i),
+                )
+                for i in fat
+                if i < len(expr.args)
+            }
+            args = self.wrap_fat_args(args, fat, tables)
+            # The resolved overload's receiver-stripped pattern keys the exact
+            # slot -- so an overloaded method dispatches to the sibling the
+            # overload resolution actually picked, not a same-named other.
+            raw = self.dispatch_indirect(
+                expr, args, fn, self.dispatch_pattern(func)
+            )
+        if raw is None:
+            raw = self.emit_call(
+                fn, args, preserves=self.effect_bits.get(id(effect_owner)) is False
+            )
+        if func.mut_return and fn.name in self.fat_ret:
+            # A fat reference return: unpack the {address, table} view, as on
+            # the direct path.
+            result = self.fat_result(raw, ret)
+        elif func.mut_return:
             # As in gen_direct_call: the eager load serves value contexts,
             # the carried address serves the lvalue surfaces.
             result = TypedValue(self.gen_load(raw), ret, lvalue=raw)
@@ -18546,8 +20988,8 @@ class CodeGen:
                 ``None`` (see :meth:`gen_generic_call`).
 
         Returns:
-            ``(specificity, func, bindings)`` entries for the viable decay
-            readings (possibly empty).
+            ``(rank, view distances, func, bindings)`` entries for the
+            viable decay readings (possibly empty).
         """
         viable = []
         for func in candidates:
@@ -18578,10 +21020,27 @@ class CodeGen:
                     arg_tvs[i].type, params[i], mut=True
                 ) and not isinstance(expr.args[i], StrLit):
                     continue
+                if not isinstance(expr.args[i], StrLit) and (
+                    self.decay_view_target(
+                        arg_tvs[i].type, params[i], mut=True
+                    )
+                    is not None
+                ):
+                    # SIE-187: the decay+view reading is emittable too. The
+                    # fatness gate already ran inside resolve_bindings' view
+                    # upcast (concrete_view_target / is_fat_base): a thin
+                    # position never produced bindings, so this candidate's
+                    # viewed positions are exactly emission's.
+                    continue
                 ok = False
                 break
             if ok:
-                viable.append((self.call_rank(func, arg_tvs), func, bindings))
+                viable.append((
+                    self.call_rank(func, arg_tvs),
+                    self.view_dists,
+                    func,
+                    bindings,
+                ))
         return viable
 
     def fill_default_bindings(self, decl, bindings: dict[str, LangType], line: int):
@@ -18823,10 +21282,70 @@ class CodeGen:
         # A method-family call's receiver upcasts: inference and the shape
         # filter see it as the base instantiation the first parameter's
         # pattern names, when its declared `extends` lineage reaches one.
-        if "::" in expr.name and actuals and n_fixed >= 1:
-            actuals[0] = self.receiver_view(
-                func.params[0][1], actuals[0], func.type_params
-            )
+        # SIE-181/SIE-184: every REFERENCE position (`&T` / `const &T`, the
+        # positions marshalling forms a base view at) upcasts the same way,
+        # so resolution finally sees the derived->base view conversion it
+        # will emit: a derived argument satisfies a candidate's `&base`
+        # pattern (SIE-184's concrete-candidate viability) and a generic
+        # `&point<T>` pattern binds T through the derived argument's declared
+        # base instantiation (SIE-181's inference). A by-value position never
+        # upcasts here -- it still takes the explicit `as`. Exact matches
+        # keep winning: each viewed position's chain distance is recorded in
+        # `self.view_dists` -- computed HERE, on the same post-decay actuals
+        # the view applies to, so ranking can never disagree with viability
+        # -- and candidate selection prefers a uniformly nearer candidate
+        # (see view_dominance), below the tier and hop.
+        #
+        # Viability must be exactly emission's upcast, never looser. A
+        # pattern that names a TYPE PARAMETER routes through receiver_view's
+        # name-keyed chain walk -- the matched ancestor instance then PINS
+        # the bindings, so the instantiated parameter equals that ancestor
+        # and the marshal's upcast succeeds by construction. A CONCRETE
+        # pattern (receiver or not) instead resolves and asks
+        # receiver_upcast_target directly (the marshal's own predicate): the
+        # name walk alone would admit an ancestor of the right family but
+        # the wrong instance -- e.g. a list<char> argument reaching
+        # `&slice<const char>` through its slice<char> base -- which
+        # emission cannot form. And a NON-RECEIVER position carries
+        # emission's fatness gate (fat_ref_indices upcasts fat positions
+        # only), so a thin `.mci` parameter stays cleanly non-viable instead
+        # of failing coercion at the marshal.
+        dists = [0] * n_fixed
+        for i, (pname, ptype) in enumerate(func.params[:n_fixed]):
+            if i >= len(actuals):
+                break
+            is_receiver = i == 0 and "::" in expr.name
+            if not (
+                is_receiver
+                or pname in func.mut_params
+                or pname in func.constref_params
+            ):
+                continue
+            if self.names_type_param(ptype, func.type_params):
+                viewed = self.receiver_view(
+                    ptype, actuals[i], func.type_params
+                )
+                if viewed is actuals[i]:
+                    continue
+                bare = strip_const(viewed)
+                if not is_receiver and not self.is_fat_base(
+                    bare.template or bare.name, func.source
+                ):
+                    continue
+                dists[i] = self.chain_hops(strip_const(actuals[i]), viewed)
+                actuals[i] = viewed
+            else:
+                target = self.concrete_view_target(
+                    func, ptype, actuals[i], receiver=is_receiver
+                )
+                if target is not None:
+                    dists[i] = self.chain_hops(
+                        strip_const(actuals[i]), target
+                    )
+                    actuals[i] = (
+                        const_of(target) if actuals[i].const else target
+                    )
+        self.view_dists = dists
         try:
             if expr.type_args and len(expr.type_args) < len(func.type_params):
                 self.fill_default_bindings(func, bindings, expr.line)
@@ -18895,12 +21414,25 @@ class CodeGen:
                 expr.line,
             )
         if lenient:
-            for (_, ptype), tv, actual, arg in zip(
+            for i, ((_, ptype), tv, actual, arg) in enumerate(zip(
                 func.params[:n_fixed], arg_tvs, actuals, expr.args
-            ):
+            )):
                 if actual is CTOR_SELF:
                     # The receiver placeholder matches any receiver pattern;
                     # the winner's own first parameter types the slot.
+                    continue
+                if dists[i] and not self.names_type_param(
+                    ptype, func.type_params
+                ):
+                    # A concrete-pattern view: concrete_view_target already
+                    # resolved the parameter in the CANDIDATE's own context
+                    # and proved the argument's lineage reaches it -- the
+                    # viewed actual IS the resolved parameter type. The
+                    # shape filter's bare-name resolution runs in the
+                    # caller's context instead, where an enclosing generic
+                    # body's live binding may capture a same-named struct
+                    # (g<T>'s T = int32 hijacking a parameter struct named
+                    # T), so re-checking here would deny a formed view.
                     continue
                 if self.shape_matches(
                     ptype, actual, tv.adaptable, func.type_params, expr.line
@@ -19326,6 +21858,76 @@ class CodeGen:
         ]
         return winners[0] if len(winners) == 1 else None
 
+    def view_dominance(self, viable: list, expr: Call) -> list:
+        """Arbitrate rank-tied candidates by per-position view distance.
+
+        Among the candidates tied on the rank components above the view
+        distance -- ``(no-collect, tier, -hop)`` -- a candidate loses when
+        another is no farther at EVERY reference position and nearer at
+        some (the dominance rule, SIE-184): the dominated entries drop
+        before the specificity tie-breaks run. Surviving vectors that still
+        differ are incomparable -- nearer at one position, farther at
+        another -- and the call is ambiguous (an explicit ``as`` on an
+        argument picks a side); a total is never summed, so a candidate
+        exact at one position cannot be silently outvoted elsewhere. A call
+        with no viewed positions (every vector zero, the pre-SIE-184 world)
+        passes through untouched, so no pre-existing resolution moves.
+
+        Args:
+            viable: The non-empty ``(rank, view distances, func, bindings)``
+                entries, sorted by rank descending.
+            expr: The ``Call`` node, for diagnostics.
+
+        Returns:
+            ``viable`` unchanged, or the head cohort's undominated
+            survivors (which contain every possible winner).
+
+        Raises:
+            LangError: When the surviving distance vectors differ.
+        """
+        head = viable[0][0][:3]
+        cohort = [e for e in viable if e[0][:3] == head]
+        if len(cohort) < 2:
+            return viable
+        width = max(len(e[1]) for e in cohort)
+        padded = [tuple(e[1]) + (0,) * (width - len(e[1])) for e in cohort]
+        if len(set(padded)) == 1:
+            return viable
+
+        def dominates(x, y) -> bool:
+            return x != y and all(a <= b for a, b in zip(x, y))
+
+        keep = [
+            i
+            for i in range(len(cohort))
+            if not any(
+                dominates(padded[j], padded[i])
+                for j in range(len(cohort))
+                if j != i
+            )
+        ]
+        if len({padded[i] for i in keep}) > 1:
+            err = LangError(
+                f"call to {expr.name!r} is ambiguous between overloads: no "
+                "candidate is uniformly nearest through the derived->base "
+                "view",
+                expr.line,
+            )
+            for i in keep:
+                contender = cohort[i][2]
+                contender_inh = self.inherited_origins.get(id(contender))
+                label = (
+                    "candidate is here (inherited from "
+                    f"{contender_inh.base_label})"
+                    if contender_inh is not None
+                    else "candidate is here"
+                )
+                err.notes.append(
+                    Note(label, contender.line, contender.source)
+                )
+            raise err
+        return [cohort[i] for i in keep]
+
     def call_rank(
         self, func: Func, arg_tvs: list[TypedValue]
     ) -> tuple[int, int, int, int, int]:
@@ -19341,14 +21943,19 @@ class CodeGen:
         0 for a member declared on the receiver type itself -- sits below
         the tier and above specificity: a derived same-shape member shadows
         an inherited one, while a base member of a better tier (an inherited
-        exact/concrete match) still beats a derived generic. A collecting
-        match scores specificity over its fixed prefix only -- the trailing
-        ``slice<const any>`` pattern's own points must never arbitrate
-        against a competing prefix -- and more fixed parameters break the
-        remaining tie; equal fixed counts with a tying fixed-prefix
-        specificity stay the ambiguity error. Non-collecting matches all
-        share this call's arity, so their trailing count is inert and every
-        pre-collection ordering is preserved.
+        exact/concrete match) still beats a derived generic. Between the hop
+        and the specificity sits the VIEW-DISTANCE dominance rule (SIE-184),
+        which is not part of this key: candidates tied on ``(no-collect,
+        tier, -hop)`` are compared position by position on the ``extends``
+        hops their reference arguments upcast through (recorded by
+        :meth:`resolve_bindings`, applied by :meth:`view_dominance`). A
+        collecting match scores specificity over its fixed prefix only --
+        the trailing ``slice<const any>`` pattern's own points must never
+        arbitrate against a competing prefix -- and more fixed parameters
+        break the remaining tie; equal fixed counts with a tying
+        fixed-prefix specificity stay the ambiguity error. Non-collecting
+        matches all share this call's arity, so their trailing count is
+        inert and every pre-collection ordering is preserved.
 
         Args:
             func: The viable candidate.
@@ -19506,8 +22113,9 @@ class CodeGen:
             # parameter's type may only now have resolved.
             self.check_format_decl(func, params)
             hidden = self.hidden_ref_indices(func, params)
+            fat = self.fat_ref_indices(func, params)
             fnty = ir.FunctionType(
-                self.ret_ir(func, ret), self.param_irs(params, hidden)
+                self.ret_ir(func, ret), self.param_irs(params, hidden, fat)
             )
             fn = ir.Function(self.module, fnty, name=mangled)
             # A generic instance is emitted in every object that uses it, so it
@@ -19529,11 +22137,14 @@ class CodeGen:
             self.funcs[mangled] = fn
             self.signatures[mangled] = (ret, params, False)
             self.hidden_ref[mangled] = hidden
+            self.fat_ref[mangled] = fat
             self.mut_ref[mangled] = self.mut_indices(func)
             self.nonnull_ref[mangled] = self.nonnull_indices(func)
             self.own_ref[mangled] = self.own_indices(func)
             if func.mut_return:
                 self.mut_ret.add(mangled)
+                if self.returns_fat_view(func, ret):
+                    self.fat_ret.add(mangled)
             if func.own_return:
                 self.own_ret.add(mangled)
             self.instances[key] = mangled

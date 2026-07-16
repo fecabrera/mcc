@@ -13,10 +13,13 @@ instantiates the ORIGIN template -- one shared instance and symbol -- and the
 receiver coerces at the boundary: a ``&``/``const &`` receiver lends its base
 prefix in place. A by-value copy receiver is rejected by construction (it
 would slice the derived value), so every receiver is reference-shaped and the
-prefix is always lent, never copied. The upcast applies to the RECEIVER position of
-method-family calls only (explicit qualified calls included, so
-``point::constructor(self, ...)`` chains from a derived constructor);
-every other argument keeps the explicit ``as``.
+prefix is always lent, never copied. The derived->base reference upcast (a
+view, never a copy) applies to the receiver of a method-family call (explicit
+qualified calls included, so ``point::constructor(self, ...)`` chains from a
+derived constructor) and -- since SIE-101 Stage 2 -- to any **fat reference
+parameter** at any position (a ``&<extended base>`` argument forms a base
+view). A by-value argument still keeps the explicit ``as`` (that copy slices,
+so it is made explicit).
 """
 
 import pytest
@@ -200,7 +203,7 @@ def test_derived_same_shape_override_shadows_the_inherited_member(capfd):
         struct b { n: int32; }
         struct d extends b {}
         fn b::describe(const self: &b) -> int32 { return 1; }
-        fn d::describe(const self: &d) -> int32 { return 2; }
+        @override fn d::describe(const self: &d) -> int32 { return 2; }
         fn main() -> int32 {
             let v: d = { n = 0 };
             let w: b = { n = 0 };
@@ -247,7 +250,7 @@ def test_nearer_hop_shadows_the_farther_one_transitively(capfd):
         struct b extends c { m: int32; }
         struct a extends b { k: int32; }
         fn c::which(const self: &c) -> int32 { return 3; }
-        fn b::which(const self: &b) -> int32 { return 2; }
+        @override fn b::which(const self: &b) -> int32 { return 2; }
         fn c::deep(const self: &c) -> int32 { return self.n + 30; }
         fn main() -> int32 {
             let v: a = { n = 1, m = 2, k = 3 };
@@ -257,6 +260,208 @@ def test_nearer_hop_shadows_the_farther_one_transitively(capfd):
         """
     ) == 0
     assert capfd.readouterr().out == "2 31\n"
+
+
+# --- the @override marker on method overrides (SIE-101 stage 1) -----------------
+
+
+def test_unmarked_derived_shadow_requires_the_override_marker():
+    # A derived member whose signature pattern matches an inherited base
+    # member shadows it, so it must be marked @override; leaving it bare is
+    # the accidental-shadow error.
+    with pytest.raises(
+        LangError,
+        match=(
+            r"method 'd::describe' shadows the inherited base member of the "
+            r"same signature and must be marked @override"
+        ),
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            struct d extends b {}
+            fn b::describe(const self: &b) -> int32 { return 1; }
+            fn d::describe(const self: &d) -> int32 { return 2; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_unmarked_transitive_shadow_requires_the_override_marker():
+    # The shadow need not be of the immediate base: b::which shadows c::which
+    # two structs up the chain, and the marker is still required.
+    with pytest.raises(
+        LangError,
+        match=r"method 'b::which' shadows the inherited base member",
+    ):
+        compile_ir(
+            """
+            struct c { n: int32; }
+            struct b extends c { m: int32; }
+            fn c::which(const self: &c) -> int32 { return 3; }
+            fn b::which(const self: &b) -> int32 { return 2; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_override_on_a_method_that_shadows_nothing_is_an_error():
+    # A derived member with @override whose pattern matches no inherited base
+    # member overrides nothing -- a different shape merely OVERLOADS, so the
+    # marker is wrong.
+    with pytest.raises(
+        LangError,
+        match=(
+            r"@override method 'd::take' overrides no inherited base member"
+        ),
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            struct d extends b {}
+            fn b::take(const self: &b, x: int32) -> int32 { return 1; }
+            @override fn d::take(const self: &d, x: char*) -> int32 {
+                return 2;
+            }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_override_with_no_base_family_at_all_is_an_error():
+    # The base chain exposes no `note` family, so the @override targets
+    # nothing -- the overrides-nothing error, not a silent accept.
+    with pytest.raises(
+        LangError,
+        match=r"@override method 'd::note' overrides no inherited base member",
+    ):
+        compile_ir(
+            """
+            struct b { n: int32; }
+            struct d extends b {}
+            @override fn d::note(const self: &d) -> int32 { return 2; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+
+
+def test_marked_method_override_compiles_and_dispatches(capfd):
+    # The positive case: a properly marked override shadows the inherited
+    # member (the hop breaks the rank tie), and the base body is still
+    # reachable through the explicit qualified call.
+    assert run(
+        """
+        import "std/io";
+        struct b { n: int32; }
+        struct d extends b {}
+        fn b::describe(const self: &b) -> int32 { return 1; }
+        @override fn d::describe(const self: &d) -> int32 { return 2; }
+        fn main() -> int32 {
+            let v: d = { n = 0 };
+            println(f"{v.describe()} {b::describe(v)}");
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "2 1\n"
+
+
+def test_override_marker_not_required_on_a_differently_shaped_overload(capfd):
+    # A derived member with a DIFFERENT signature merely overloads the merged
+    # family (no name hiding), so it needs no marker and coexists with the
+    # inherited member.
+    assert run(
+        """
+        import "std/io";
+        struct b { n: int32; }
+        struct d extends b {}
+        fn b::describe(const self: &b) -> int32 { return 1; }
+        fn d::describe(const self: &d, x: int32) -> int32 { return x; }
+        fn main() -> int32 {
+            let v: d = { n = 0 };
+            println(f"{v.describe()} {v.describe(7)}");
+            return 0;
+        }
+        """
+    ) == 0
+    # The inherited no-arg member and the derived one-arg overload both reach v.
+    assert capfd.readouterr().out == "1 7\n"
+
+
+def test_derived_destructor_needs_no_override_marker(capfd):
+    # Destructors are exempt from the marker: a derived T::destructor shadows
+    # the base's same-shape destructor by nature, so leaving it unmarked is
+    # NOT the accidental-shadow error (base cleanup chains manually).
+    assert run(
+        """
+        import "std/io";
+        struct base { n: int32; }
+        struct derived extends base {}
+        fn base::constructor(self: &base, n: int32) { self.n = n; }
+        fn derived::constructor(self: &derived, n: int32) {
+            base::constructor(self, n);
+        }
+        fn base::destructor(self: &base) { println("~base"); }
+        fn derived::destructor(self: &derived) {
+            println("~derived");
+            base::destructor(self);
+        }
+        fn main() -> int32 {
+            let d = derived(0);
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "~derived\n~base\n"
+
+
+def test_same_signature_derived_constructor_needs_no_override_marker(capfd):
+    # Constructors are exempt too: a derived constructor with the SAME
+    # signature as the base's shadows it, but construction is never dispatched
+    # (you always build a concrete type), so no marker is required.
+    assert run(
+        """
+        import "std/io";
+        struct base { n: int32; }
+        struct derived extends base {}
+        fn base::constructor(self: &base, n: int32) { self.n = n; }
+        fn derived::constructor(self: &derived, n: int32) {
+            base::constructor(self, n);
+        }
+        fn main() -> int32 {
+            let d = derived(5);
+            println(f"{d.n}");
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "5\n"
+
+
+def test_redundant_override_on_a_destructor_is_tolerated(capfd):
+    # The marker is neither required nor rejected on a destructor: writing it
+    # is inert, not the overrides-nothing error.
+    assert run(
+        """
+        import "std/io";
+        struct base { n: int32; }
+        struct derived extends base {}
+        fn base::constructor(self: &base, n: int32) { self.n = n; }
+        fn derived::constructor(self: &derived, n: int32) {
+            base::constructor(self, n);
+        }
+        fn base::destructor(self: &base) { println("~base"); }
+        @override fn derived::destructor(self: &derived) {
+            println("~derived");
+            base::destructor(self);
+        }
+        fn main() -> int32 {
+            let d = derived(0);
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "~derived\n~base\n"
 
 
 # --- constructor chaining -------------------------------------------------------
@@ -549,22 +754,28 @@ def test_non_receiver_argument_upcasts_with_an_explicit_as(capfd):
     assert capfd.readouterr().out == "42\n"
 
 
-def test_free_functions_do_not_upcast_receivers():
-    # The relaxation is scoped to method-family calls: a FREE function with
-    # the same shape keeps the exact-type rule.
-    with pytest.raises(LangError, match=r"expected a b lvalue, got d"):
-        compile_ir(
-            """
-            struct b { n: int32; }
-            struct d extends b {}
-            fn poke(self: &b) { self.n = 1; }
-            fn main() -> int32 {
-                let v: d = { n = 0 };
-                poke(v);
-                return 0;
-            }
-            """
-        )
+def test_fat_reference_param_upcasts_a_derived_argument(capfd):
+    # SIE-101 Stage 2 broadens the derived->base reference conversion beyond
+    # the receiver: a fat reference parameter (`&b`, b extended) accepts a
+    # derived `d` argument at ANY position, forming a base VIEW that writes the
+    # shared prefix in place. The reference upcast never slices, so -- unlike a
+    # by-value argument, which still needs an explicit `as` -- it is implicit.
+    # (Before Stage 2 this was `expected a b lvalue, got d`.)
+    assert run(
+        """
+        import "std/io";
+        struct b { n: int32; }
+        struct d extends b {}
+        fn poke(self: &b) { self.n = 1; }
+        fn main() -> int32 {
+            let v: d = { n = 0 };
+            poke(v);                 // d upcasts to a &b view; writes v's prefix
+            println(f"{v.n}");
+            return 0;
+        }
+        """
+    ) == 0
+    assert capfd.readouterr().out == "1\n"
 
 
 # --- mut returns ----------------------------------------------------------------
@@ -692,7 +903,7 @@ def test_derived_call_shadows_the_would_be_base_ambiguity(capfd):
         struct d extends b {}
         fn b::pick<T>(const self: &b, x: T, y: int32) -> int32 { return 1; }
         fn b::pick<T>(const self: &b, x: int32, y: T) -> int32 { return 2; }
-        fn d::pick<T>(const self: &d, x: T, y: int32) -> int32 { return 3; }
+        @override fn d::pick<T>(const self: &d, x: T, y: int32) -> int32 { return 3; }
         fn main() -> int32 {
             let v: d = { n = 0 };
             let a: int32 = 1;

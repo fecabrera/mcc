@@ -103,7 +103,8 @@ fn main() -> int32 {
 // as at the bare qualified calls above -- see method_calls.mc), constructors
 // and destructors (`point<float64>(1.5, 2.5)`, see constructors.mc and
 // destructors.mc), and non-struct qualifiers (builtins and aliases, see
-// method_alias.mc). Only dynamic dispatch remains future work. Note the two
+// method_alias.mc), and dynamic dispatch through base views
+// (polymorphic_views.mc). Note the two
 // meanings of a written qualifier: at a CALL, `point<float64>::sum(pf)` pins
 // the receiver instantiation of the generic member (as above); in a
 // DECLARATION, `fn point<float64>::name` is a specialization with its own

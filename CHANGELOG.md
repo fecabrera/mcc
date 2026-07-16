@@ -209,6 +209,162 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Polymorphic base views — dynamic dispatch through base-typed references**
+  — stage 2 of [polymorphic base views](ROADMAP.md) (SIE-101) completes the
+  feature atop stage 1's `@override` marker. A method call through a
+  base-typed reference now dispatches to the runtime object's own override,
+  with **no `class` kind and no vtable pointer in the object**: the dispatch
+  table lives in the *reference*, so objects keep their exact byte layout and
+  value semantics. A reference `&A` / `const &A` becomes a two-word fat pointer
+  `{object, table}` exactly when `A` is `extends`-extended in the module's
+  import closure; an un-extended struct's references stay one word (zero cost,
+  so ordinary `const self: &T` container methods are unaffected). Fatness is a
+  property of the base **type**, independent of whether any family is
+  overridden, so adding the first override to a hierarchy never changes a
+  reference's width. Dispatch is emitted only for a method with an `@override`
+  chain (a fixed table slot at the overload's introducing base, prefix-compatible
+  down the chain — overloads of one method name take separate slots keyed by the
+  resolved signature, so a call dispatches the exact sibling picked); a
+  non-overridden method, and a receiver of statically known concrete type, stay
+  direct calls (**devirtualized**). Copying a value *out*
+  of a view is **prefix extraction** — a byte-exact base value carrying no
+  table, so behavioral slicing is impossible. **ABI implications (BREAKING):**
+  every `&A` to an extended base `A` is now a two-word argument (the stdlib
+  `slice`/`pair`/`set_entry` bases included — the ABI-stability tradeoff), and
+  the derived→base **reference** conversion is now **implicit at any parameter
+  position** (a `fn f(const a: &A)` accepts a derived argument by forming a
+  view — a reference upcast never slices; a *by-value* argument still needs an
+  explicit `as`). The conversion follows the **declared base family only**: an
+  intrusive bare-parameter base (`struct entry<T> extends T`) embeds a layout
+  prefix but has no vtable chain, so an intrusive instance never converts
+  implicitly at a reference position (argument, return, or decay) — the
+  payload is lent through the explicit pointer upcast (`*(&e as my*)`)
+  instead, whose view carries the payload's own honest table. **Overload resolution ranks the conversion** (SIE-184 /
+  SIE-181): a derived argument satisfies an overloaded candidate's `&base`
+  reference position — adding an unrelated overload no longer turns a working
+  call into "no overload of ..." — and a generic `&point<T>` reference
+  parameter infers `T` through the derived argument's declared base
+  instantiation. The conversion is ranked **per position** (the dominance
+  rule): a candidate wins on it only when no farther at *every* reference
+  position — an exact-typed candidate beats a view-conversion one, a nearer
+  base beats a farther one — while a mixed comparison (nearer here, farther
+  there) is an ambiguity error settled by an explicit `as`, never a silent
+  total; the distances arbitrate below the tier and the inheritance hop, so
+  no resolution among exactly-matching candidates changes. Viability through
+  the conversion is exactly emission's upcast — resolved in the candidate's
+  own context (aliases chased, an enclosing generic's same-named binding
+  never captures a parameter struct, a losing trial instantiates nothing)
+  and gated by the callee's own-closure fatness, so a thin `.mci` `&base`
+  parameter stays cleanly non-viable. A `.mci` stub's fatness is pinned to its own import closure,
+  and a prototype/definition that disagree on a reference's fatness across that
+  boundary are rejected as a signature mismatch. A stub re-emits a method's
+  `@override` marker on its prototype (a method-qualified `@override` proto is
+  legal for exactly this): the marker declares the dispatch relationship, so a
+  consumer compiled against the stub keeps the family and its base-view calls
+  still dispatch the runtime override across separately compiled objects. Because a dispatch override
+  shares its base member's single table slot, an override must stay
+  ABI-compatible with it: it must **return the same type** (the slot's indirect
+  call is typed with the base return type) — or, the return side's one
+  relaxation (SIE-186), declare a **covariant reference return**: a reference
+  to a declared `extends` descendant of the base member's reference return
+  (`-> &b` over the base's `-> &a`) — and on a **generic struct hierarchy
+  too** (SIE-189): `-> &b<T>` over `-> &a<T>` resolves at no pre-body pass,
+  so covariance is judged **at the template level**, walking the override
+  return's declared `extends` chain with the spelled type arguments
+  substituted hop by hop (alpha-renamed to qualifier position, so a renamed
+  qualifier parameter still compares; every spelled name resolved to its
+  **declaration** in the file that spelled it, so two same-named file-scoped
+  `@static` types from different files never conflate — and a concrete type
+  argument spelled through an alias compares resolved), granted exactly when
+  *every* instantiation narrows (`-> &b<int32>` over `-> &a<T>` stays
+  rejected) and adapted per concrete instantiation's slot — while a generic
+  return-ABI mismatch diagnostic now prints the **source spellings**
+  (`b<T>`), never the checker's internal unresolved tuple key, and the
+  override-compatibility errors attribute to the **override's own file**
+  (previously the base clone's file could stamp the message). The covariance is **spelling-level
+  only** — the slot's return ABI stays the base's fat view forever (a thin
+  leaf spelling widens at the slot boundary, so nothing reinterprets), while
+  a *static* call on a concrete receiver types the result as the override's
+  own narrower reference (derived fields reachable without a cast) and a
+  `.mci` stub re-emits the covariant spelling so importers keep the
+  narrowing; a *by-value* descendant return would slice through the slot and
+  stays rejected, a covariant slot member whose reference return was
+  **pinned thin by its interface's closure** is rejected in a program that
+  extends that return type (the one-word return cannot carry the runtime
+  type across the `.mci` boundary — recompile the interface with the
+  extension in its closure), and a covariant override whose non-receiver
+  parameters spell the struct's own type parameters is rejected (the
+  pre-body fallback slot key cannot carry the covariant marking) — and
+  pass **every parameter** — the
+  receiver and each argument — the same way (by value vs. by reference, `const`
+  vs. writable, `own`, `@nonnull`, `@noalias`), since the slot's indirect call
+  and the stored thunk must agree on each value's ABI. Widening a read-only
+  `const &T` to a writable `&T`, changing by-value to by-reference, adding
+  `@nonnull`, or adding `@noalias` where the base permits aliasing (the body
+  would assume non-aliasing a base-view caller need not honor) are all clean
+  compile errors; the one safe relaxation is *narrowing* a writable base
+  reference to a read-only override one. A **reference return** (`-> &T`) of a
+  fat base is the same two-word `{object, table}` view a fat parameter is
+  (SIE-183): a function forwarding a view parameter hands back the *runtime*
+  type's table, so `relay(obj).kind()` dispatches the derived override, and
+  re-lending or re-returning the result forwards the same view; and **the
+  return position upcasts like an argument** (SIE-186): a lvalue of a
+  declared *descendant* of the declared return forms the view at the
+  `return` site (`fn first(x: &b, y: &b) -> &a { return x; }`), the derived
+  storage reinterpreted as the base prefix and paired with the **derived**
+  type's table — a reference upcast never slices, while a by-value `-> T`
+  return of a derived value still requires the explicit `as`, and the upcast
+  requires the **fat** return's table word (a thin reference return, possible
+  only under an `.mci` stub's pinned closure, rejects it); any other
+  returned lvalue carries its own evaluated static type's table.
+  **Pointer decay composes with the view**
+  (SIE-187): a proven-non-null `derived*` argument at a fat `&base` /
+  `const &base` slot decays and views — deref-then-view, identical to passing
+  `*p`, the pointee's own table dispatching the override — with the decay
+  proof, the one-level rule, exact-match-first ranking (an exact `&derived`
+  overload still beats the viewed `&base`, a direct pointer overload still
+  beats any decay reading), and the thin-`.mci` fatness gate all inherited
+  unchanged, on the read-only and writable reference paths alike. Three
+  constructs a single slot cannot represent are rejected rather than
+  miscompiled, each liftable later: a fat reference — parameter or return —
+  may not ride in a function-pointer type, spelled or inferred from a function
+  value; a **method-owned generic override** (one declaring its own type
+  parameter, not merely the struct's) may not be *dynamically dispatched*
+  through a base view (it stays a legal static override on a concrete
+  receiver); and an overload whose **non-receiver parameters spell the
+  struct's own type parameters** (`get(self: &cell<T>, k: T)`) may not be
+  overridden at all (SIE-190) — such a spelling resolves to no slot key
+  before bodies, so the base's and the override's keys could never agree and
+  a call through a base view would silently have bound the base member; the
+  un-overridden overload itself stays an honest direct call. A
+  **struct-generic** override whose non-receiver parameters resolve
+  dispatches normally. The destructor table slot is deferred (base-view
+  destruction stays manual). See [docs/language.md](docs/language.md) and
+  [examples/types/polymorphic_views.mc](examples/types/polymorphic_views.mc).
+
+- **BREAKING: `@override` is now required on a method that shadows an
+  inherited base member** — stage 1 of the [polymorphic base views](ROADMAP.md)
+  (SIE-101) redesign gives the existing `@override` annotation a second mode.
+  Mode 1 (unchanged) replaces a same-pattern member of *another module's* open
+  overload set. Mode 2 (new) is a derived struct method (via `extends`) whose
+  signature pattern matches an inherited base-chain member it would shadow: the
+  marker is now **mandatory** on it. A derived member whose pattern equals one
+  of the rebased inherited candidates — the same pattern notion `@override`
+  already uses (concrete → resolved parameter types, template → template base)
+  — *overrides* that member and must carry `@override`; leaving it bare is a
+  compile error (`method 'd::describe' shadows the inherited base member of the
+  same signature and must be marked @override`). Conversely an `@override`
+  method that shadows no inherited base member (and has no Mode-1 target) is
+  the inverse error (`@override method 'd::note' overrides no inherited base
+  member`). A differently-shaped derived member merely *overloads* the merged
+  family and takes no marker, exactly as before. This defines what "an
+  override" **is** — the criterion stage 2's dynamic dispatch (fat base views)
+  will key on. Constructors and destructors are **exempt** — special members
+  shadow the base's by nature and are never dispatched, so the marker is
+  neither required nor rejected on one. **Migration:** add `@override` to any
+  derived (non-special) method that shadows an inherited member. See
+  [examples/types/method_inheritance.mc](examples/types/method_inheritance.mc).
+
 - **`own self: T` — the consuming (by-value move) receiver, and `own`
   by-value parameters** — Phase 2 of the [receiver-kind](ROADMAP.md) redesign
   adds a fourth receiver kind: a method whose receiver is `own self: T` takes
@@ -1096,6 +1252,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and [nonnull_callbacks.mc](examples/functions/nonnull_callbacks.mc).
 
 ### Fixed
+
+- **Building a generic hierarchy's dispatch table inside a generic body
+  crashed** (SIE-189 sibling hardening) — forming a fat view of one generic
+  hierarchy from within another generic member's body (`fn a<T>::get(self:
+  &a<T>) -> &x<T> { return self.store; }`, where `y<T> extends x<T>` is
+  overridden) built `y<int32>`'s table while the enclosing instantiation's
+  type bindings were live, and the slot-winner instantiation re-probed the
+  winning template's qualifier parameter against those bindings — `T`
+  resolved, the fresh position was misread as concrete, and the dropped
+  binding crashed codegen with a `KeyError`. The classification now reads
+  the registration-time fact (`type_params` membership), which no caller
+  context can distort.
 
 - **Positional placeholders did not desugar through a `.format` dot-call
   receiver** — a string-literal receiver reaches the marshal wrapped in

@@ -357,6 +357,13 @@ class InterfaceWriter:
         own = "own " if func.own_return else ""
         ret = "" if _is_void(func.ret_type) else f" -> {mut}{own}{func.ret_type}"
         head = "@private fn" if func.private else "fn"
+        # @override is re-emitted so the importer's closure keeps the dispatch
+        # family: without it a base-chain override re-parses as a plain
+        # member, no vtable slot forms, and a call through a base view in the
+        # importing program silently binds the BASE member -- a behavioral
+        # slice across the interface boundary.
+        if func.override:
+            head = f"@override {head}"
         # @noreturn is re-emitted so the importer's call sites diverge too
         # (and so the stub keeps pairing with its definition -- the pair
         # check rejects a @noreturn mismatch).
