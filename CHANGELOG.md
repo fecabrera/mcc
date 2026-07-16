@@ -234,7 +234,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the derived→base **reference** conversion is now **implicit at any parameter
   position** (a `fn f(const a: &A)` accepts a derived argument by forming a
   view — a reference upcast never slices; a *by-value* argument still needs an
-  explicit `as`). **Overload resolution ranks the conversion** (SIE-184 /
+  explicit `as`). The conversion follows the **declared base family only**: an
+  intrusive bare-parameter base (`struct entry<T> extends T`) embeds a layout
+  prefix but has no vtable chain, so an intrusive instance never converts
+  implicitly at a reference position (argument, return, or decay) — the
+  payload is lent through the explicit pointer upcast (`*(&e as my*)`)
+  instead, whose view carries the payload's own honest table. **Overload resolution ranks the conversion** (SIE-184 /
   SIE-181): a derived argument satisfies an overloaded candidate's `&base`
   reference position — adding an unrelated overload no longer turns a working
   call into "no overload of ..." — and a generic `&point<T>` reference

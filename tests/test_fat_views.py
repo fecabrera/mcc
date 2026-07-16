@@ -2171,6 +2171,79 @@ def test_return_position_upcast_never_downcasts_or_crosses_hierarchies():
         )
 
 
+def test_intrusive_extends_never_forms_an_implicit_view():
+    # `struct entry<T> extends T` is intrusive embedding, not a declared
+    # base family (no method inheritance, no vtable chain), so the implicit
+    # reference upcast never crosses the edge -- in the return position ...
+    with pytest.raises(
+        LangError,
+        match=r"reference return: expected a a lvalue, got entry<a>",
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            struct entry<T> extends T { extra: int32; }
+            fn f(x: &entry<a>) -> &a { return x; }
+            fn main() -> int32 { return 0; }
+            """
+        )
+    # ... and in the argument position (both previously formed a view whose
+    # table word was NULL -- entry has no decl-level chain -- so the caller's
+    # dispatch crashed at runtime).
+    with pytest.raises(
+        LangError, match=r"argument 1 of 'g': expected a a lvalue, got entry<a>"
+    ):
+        compile_ir(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            struct entry<T> extends T { extra: int32; }
+            fn g(x: &a) -> int32 { return x.kind(); }
+            fn main() -> int32 {
+                let e: entry<a> = { n = 5, extra = 0 };
+                return g(e);
+            }
+            """
+        )
+
+
+def test_intrusive_payload_reaches_a_view_through_the_explicit_upcast():
+    # The documented route stays sound: deref the explicit pointer upcast to
+    # lend the payload prefix. The formed `&a` view carries a's own honest
+    # table (an intrusive extender cannot override anything), so dispatch
+    # binds the payload's method, and writes land in the embedding object.
+    assert (
+        run(
+            """
+            struct a { n: int32; }
+            struct b extends a { m: int32; }
+            fn a::kind(const self: &a) -> int32 { return 1; }
+            @override fn b::kind(const self: &b) -> int32 { return 2; }
+            struct entry<T> extends T { extra: int32; }
+            fn g(x: &a) -> int32 { return x.kind(); }
+            fn touch(x: &a) { x.n = 42; }
+            fn main() -> int32 {
+                let e: entry<a> = { n = 5, extra = 9 };
+                let p = &e as a*;
+                if (g(*p) != 1) { return 10; }
+                touch(*p);
+                if (e.n != 42) { return 20; }
+                if (e.extra != 9) { return 30; }
+                let v = e as a;
+                if (v.n != 42) { return 40; }
+                return 0;
+            }
+            """
+        )
+        == 0
+    )
+
+
 def test_value_return_of_a_derived_still_requires_the_explicit_as():
     # The asymmetry stands: only a REFERENCE upcasts at the return site. A
     # by-value `-> a` return of a b still slices and must spell the `as`.

@@ -2419,7 +2419,11 @@ return position upcasts like an argument**: a lvalue of a declared
 *descendant* of the return type forms the view at the `return` site
 (`fn first(x: &b, y: &b) -> &a { return x; }`), reinterpreting the derived
 storage as the base prefix and pairing it with the **derived** type's table —
-so the caller's dispatch on the result reaches the runtime type. Any other
+so the caller's dispatch on the result reaches the runtime type. Declared
+means a named base family: an intrusive
+[bare-parameter base](#structs) (`struct entry<T> extends T`) never
+upcasts implicitly, in the argument or the return position — it has no
+vtable chain to put in the view's table word. Any other
 returned lvalue is an object of exactly its evaluated static type, so it
 carries that type's own table. The lvalue surfaces
 are unchanged: assignment and projection through the result consume the
@@ -5288,7 +5292,13 @@ same keyword, different position, no overlap — and the two compose as
 type-parameter base does **not** participate in
 [method inheritance](#inherited-methods): the payload is only known per
 instantiation, so there is no declared base family at the declaration, and a
-payload's methods are reached through the explicit upcast instead.
+payload's methods are reached through the explicit upcast instead. For the
+same reason it does not participate in the **implicit reference upcast**
+either — an intrusive instance never converts to a payload-typed reference
+(a `&payload` argument, [return](#reference-returns), or
+[overload view](#polymorphic-base-views)); it embeds a layout prefix, it
+does not subtype. Deref the explicit pointer upcast to lend the payload —
+`g(*(&e as my*))` — which forms the payload's own honest view.
 
 A struct extends a single base — named as a struct (optionally generic) or a
 bare type parameter that must be bound to a struct; a pointer, array, or

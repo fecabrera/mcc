@@ -5398,8 +5398,13 @@ class CodeGen:
         # :meth:`nominal_subtype`). `base_type` is concrete here even for a bare
         # parameter (`struct entry<T> extends T`) or a generic base
         # (`extends pair<K, V>`), since it resolved against this instance's
-        # bindings above; `None` when the struct extends nothing.
+        # bindings above; `None` when the struct extends nothing. A
+        # bare-parameter edge is marked intrusive: it embeds the payload as a
+        # layout prefix (the explicit casts work), but it is not a declared
+        # base family, so the implicit reference upcast never crosses it.
         object.__setattr__(struct_type, "base", base_type)
+        if base_type is not None and decl.base.name in decl.type_params:
+            object.__setattr__(struct_type, "intrusive", True)
         if decl.union:
             # A union's members all share the storage at offset 0. Body the
             # identified type as the most-aligned member plus explicit pad
@@ -5467,7 +5472,9 @@ class CodeGen:
             identified.set_body(*(ftype.ir for _, ftype in fields))
         object.__setattr__(struct_type, "elem_indices", tuple(indices))
 
-    def nominal_subtype(self, base: LangType, derived: LangType) -> bool:
+    def nominal_subtype(
+        self, base: LangType, derived: LangType, through_intrusive: bool = True
+    ) -> bool:
         """Whether ``derived`` *is* ``base`` or reaches it up its ``extends`` chain.
 
         The nominal struct subtype relation. A struct participates only when it
@@ -5480,6 +5487,18 @@ class CodeGen:
         compare equal. The chain ends at ``None`` (a root struct, e.g.
         ``slice<T>``). A union never participates: its members share offset 0,
         so a shared brand would not mean a shared layout.
+
+        ``through_intrusive`` selects which relation this is. The explicit
+        surfaces (the ``as`` upcast, the slice borrow, generic bounds) pass
+        the default ``True``: a bare-parameter base (``struct entry<T>
+        extends T`` -- intrusive reuse) embeds its payload as an honest
+        layout prefix, so the chain crosses it. The IMPLICIT reference
+        upcast (:meth:`receiver_upcast_target`) passes ``False``: an
+        intrusive edge is not a declared base family (no method inheritance,
+        no vtable chain -- :meth:`struct_base_ref` returns ``None`` for it),
+        so a view formed across it would carry no honest dispatch table;
+        the walk stops at the edge and the conversion is rejected in favor
+        of the explicit casts.
 
         ``const`` is stripped on both sides so a value read out of a ``const``
         lvalue still upcasts, and to mirror the borrow site, which strips
@@ -5499,9 +5518,12 @@ class CodeGen:
         target = strip_const(base)
         current: "LangType | None" = strip_const(derived)
         while current is not None:
-            if strip_const(current) == target:
+            hop = strip_const(current)
+            if hop == target:
                 return True
-            current = current.base
+            if not through_intrusive and hop.intrusive:
+                return False  # `extends T` embeds; it does not subtype here
+            current = hop.base
         return False
 
     def field_type(
@@ -16779,6 +16801,15 @@ class CodeGen:
     ) -> "LangType | None":
         """The base type a method receiver upcasts to, or ``None``.
 
+        The IMPLICIT upcast predicate -- shared by the receiver position,
+        the ``&base`` argument view, pointer decay, the return-position
+        upcast, and override return covariance. It walks only the declared
+        base-family lineage: a bare-parameter base (``struct entry<T>
+        extends T``) is intrusive embedding with no method inheritance and
+        no vtable chain, so the walk never crosses it (a view formed across
+        the edge would carry no honest table) -- the payload is reached
+        through the explicit casts instead.
+
         Args:
             t: The receiver argument's type.
             p: The resolved receiver parameter's type.
@@ -16791,7 +16822,9 @@ class CodeGen:
         bare = strip_const(t)
         if not is_struct(target) or not is_struct(bare) or target == bare:
             return None
-        return target if self.nominal_subtype(target, bare) else None
+        if self.nominal_subtype(target, bare, through_intrusive=False):
+            return target
+        return None
 
     def upcast_struct_value(self, tv: TypedValue, target: LangType) -> TypedValue:
         """Prefix-copy a derived struct value as one of its declared bases.
