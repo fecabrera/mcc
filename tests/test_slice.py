@@ -1,4 +1,5 @@
-"""lib/std/slice: the char-slice `format` entry point and slice `equals`.
+"""lib/std/slice: `constructor`, the char-slice `format` entry point, and
+slice `equals`.
 
 Pins the WIP surface of lib/std/slice.mc (and the string.mc members that
 pair with it), reached through `import "std/slice"` -- slice.mc imports
@@ -7,8 +8,13 @@ whole surface. (Importing `std/string` alone does NOT: `string::format`
 delegates to `slice::format`, which lives in slice.mc, so the char-slice
 formatter must be in scope.)
 
-Two families:
+Three families:
 
+- `fn slice<T>::constructor(self: &slice<T>, @nonnull data: T*, length: S)
+  where S: int64 | uint64 | int32 | uint32` -- builds a view from a raw
+  pointer and an integer length (stored as `uint64`). Constructor sugar
+  `slice<T>(data, length)` desugars to the family call; the head needs an
+  explicit element type because `slice` is generic with no defaults.
 - `fn slice::format(@format const self: slice<const char>, args...) -> own
   string` -- a format-string entry point: `"{}"` holes are filled from the
   variadic args through the `std/format` overload set, `{modifier}` carries
@@ -23,7 +29,246 @@ Two families:
 
 import pytest
 
-from helpers import run
+from mcc.errors import LangError
+from helpers import compile_ir, run
+
+
+# --- slice<T>::constructor: pointer + length view construction ----------------
+
+
+def test_slice_constructor_sugar_sets_data_and_length():
+    assert run(
+        """
+        import "std/slice";
+        fn main() -> int32 {
+            let xs: int32[3];
+            xs[0] = 10; xs[1] = 20; xs[2] = 30;
+            let s = slice<int32>(&xs[0], 3);
+            return (s.length as int32) + s[0] + s[2];   // 3 + 10 + 30
+        }
+        """
+    ) == 43
+
+
+def test_slice_constructor_explicit_family_call():
+    assert run(
+        """
+        import "std/slice";
+        fn main() -> int32 {
+            let xs: int32[3];
+            xs[0] = 10; xs[1] = 20; xs[2] = 30;
+            let s: slice<int32>;
+            slice::constructor(s, &xs[0], 3);
+            return (s.length as int32) + s[0] + s[2];
+        }
+        """
+    ) == 43
+
+
+def test_slice_constructor_write_through_hits_storage():
+    assert run(
+        """
+        import "std/slice";
+        fn main() -> int32 {
+            let xs: int32[2];
+            xs[0] = 1; xs[1] = 2;
+            let s = slice<int32>(&xs[0], 2);
+            s[1] = 99;
+            return xs[1];
+        }
+        """
+    ) == 99
+
+
+def test_slice_constructor_for_in_iterates():
+    assert run(
+        """
+        import "std/slice";
+        fn main() -> int32 {
+            let xs: int32[4] = [1, 2, 3, 4];
+            let s = slice<int32>(&xs[0], 4);
+            let total: int32 = 0;
+            for v in s { total += v; }
+            return total;
+        }
+        """
+    ) == 10
+
+
+def test_slice_constructor_empty_length_iterates_zero_times():
+    assert run(
+        """
+        import "std/slice";
+        fn main() -> int32 {
+            let xs: int32[1] = [0];
+            let s = slice<int32>(&xs[0], 0);
+            let count: int32 = 0;
+            for v in s { count += 1; }
+            return count;
+        }
+        """
+    ) == 0
+
+
+def test_slice_constructor_accepts_each_integer_length_type():
+    # S is a type group: int32, uint32, int64, and uint64 all reach the
+    # family and are stored as uint64 in the view.
+    assert run(
+        """
+        import "std/slice";
+        fn main() -> int32 {
+            let xs: int32[1] = [7];
+            let a = slice<int32>(&xs[0], 1 as int32);
+            let b = slice<int32>(&xs[0], 1 as uint32);
+            let c = slice<int32>(&xs[0], 1 as int64);
+            let d = slice<int32>(&xs[0], 1 as uint64);
+            return a[0] + b[0] + c[0] + d[0];   // 28
+        }
+        """
+    ) == 28
+
+
+def test_slice_constructor_sub_slice_composes():
+    assert run(
+        """
+        import "std/slice";
+        fn main() -> int32 {
+            let xs: int32[4] = [10, 20, 30, 40];
+            let s = slice<int32>(&xs[0], 4);
+            let mid = s[1:3];
+            return mid[0] + (mid.length as int32);   // 20 + 2
+        }
+        """
+    ) == 22
+
+
+def test_slice_constructor_passes_as_a_function_argument():
+    assert run(
+        """
+        import "std/slice";
+        fn sum(xs: slice<int32>) -> int32 {
+            let total: int32 = 0;
+            for v in xs { total += v; }
+            return total;
+        }
+        fn main() -> int32 {
+            let xs: int32[3] = [4, 5, 6];
+            let s = slice<int32>(&xs[0], 3);
+            return sum(s);
+        }
+        """
+    ) == 15
+
+
+def test_slice_constructor_char_ptr_elements():
+    # The argv-shaped use case: a slice over char* elements views contiguous
+    # pointer storage and indexes through to the pointees.
+    assert run(
+        """
+        import "std/slice";
+        fn main() -> int32 {
+            let a = "a";
+            let b = "bb";
+            let argv: char*[2];
+            argv[0] = a;
+            argv[1] = b;
+            let args = slice<char*>(&argv[0], 2);
+            if (args.length != 2) { return 1; }
+            if (args[0][0] != 'a') { return 2; }
+            if (args[1][0] != 'b') { return 3; }
+            return 0;
+        }
+        """
+    ) == 0
+
+
+def test_slice_constructor_casts_length_to_uint64():
+    ir_text = compile_ir(
+        """
+        import "std/slice";
+        fn main() -> int32 {
+            let xs: int32[2];
+            let n: int32 = 2;
+            let s = slice<int32>(&xs[0], n);
+            return s.length as int32;
+        }
+        """
+    )
+    assert (
+        'define void @"slice::constructor<$0, $1: int64|uint64|int32|uint32>'
+        "(&slice<$0>, $0*, $1)<int32, int32>"
+    ) in ir_text
+    assert 'sext i32 %"length.2" to i64' in ir_text
+
+
+def test_slice_constructor_bare_head_needs_a_type_argument():
+    with pytest.raises(LangError, match=r"type 'slice' takes 1 type argument, got 0"):
+        compile_ir(
+            """
+            import "std/slice";
+            fn main() -> int32 {
+                let xs: int32[2];
+                let s = slice(&xs[0], 2);
+                return 0;
+            }
+            """
+        )
+
+
+def test_slice_constructor_rejects_non_integer_length():
+    with pytest.raises(
+        LangError,
+        match=r"float64 is not in the type group of 'slice::constructor' "
+        r"\(int64 \| uint64 \| int32 \| uint32\)",
+    ):
+        compile_ir(
+            """
+            import "std/slice";
+            fn main() -> int32 {
+                let xs: int32[2];
+                let s = slice<int32>(&xs[0], 2.0);
+                return 0;
+            }
+            """
+        )
+
+
+def test_slice_constructor_rejects_null_data():
+    with pytest.raises(
+        LangError,
+        match=r"cannot pass a possibly-null pointer as argument 2 of "
+        r"'slice::constructor': the parameter is @nonnull",
+    ):
+        compile_ir(
+            """
+            import "std/slice";
+            fn main() -> int32 {
+                let p: int32* = null;
+                let s = slice<int32>(p, 0);
+                return 0;
+            }
+            """
+        )
+
+
+def test_slice_constructor_const_element_rejects_mutable_pointer():
+    # T binds from both the receiver slot and the data pointer; a mutable
+    # int32* cannot instantiate slice<const int32> through the sugar head.
+    with pytest.raises(
+        LangError,
+        match=r"conflicting types for type parameter T in call to "
+        r"'slice::constructor': const int32 vs int32",
+    ):
+        compile_ir(
+            """
+            import "std/slice";
+            fn main() -> int32 {
+                let xs: int32[3] = [1, 2, 3];
+                let s = slice<const int32>(&xs[0], 3);
+                return 0;
+            }
+            """
+        )
 
 
 # --- slice::format: the char-slice format entry point ---------------------------

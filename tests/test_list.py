@@ -1,7 +1,7 @@
 """lib/std/list.mc: the growable random-access sequence, over mut/const
 receivers (stage 4 of the libmc receiver migration)."""
 
-from helpers import run
+from helpers import compile_ir, run
 
 
 def test_direct_receiver_with_growth():
@@ -158,6 +158,28 @@ def test_init_overloads_build_owned_copies():
         }
         """
     ) == 8
+
+
+def test_pointer_length_ctor_wins_over_inherited_slice_constructor():
+    # list<T> extends slice<T>, so slice::constructor is inherited into the
+    # merged family. (p, n) sugar must reach list's copying ctor (same tier,
+    # nearer hop), not the inherited slice view -- which would leave capacity
+    # unset and dealloc a foreign pointer at scope end.
+    ir_text = compile_ir(
+        """
+        import "std/list";
+        fn main() -> int32 {
+            let seed: int32[3];
+            let a = list<int32>(&seed[0], 3);
+            return a.length as int32;
+        }
+        """
+    )
+    assert (
+        'call void @"list::constructor<$0, $1: int64|uint64|int32|uint32>'
+        "(&list<$0>, $0*, $1)<int32, int32>"
+    ) in ir_text
+    assert "slice::constructor" not in ir_text.split('define i32 @"main"')[1]
 
 
 def test_append_and_init_copy_through_const_source():

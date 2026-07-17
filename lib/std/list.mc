@@ -52,9 +52,10 @@ fn list<T>::constructor(self: &list<T>, const src: slice<T>) {
  * @param arr:  source array to copy from
  * @param n:    number of elements to copy from arr
  */
-fn list<T>::constructor(self: &list<T>, @nonnull arr: T*, n: uint64) {
-    list<T>::constructor(self, n);
-    self.append(arr, n);
+fn list<T>::constructor<S: int64 | uint64 | int32 | uint32>(self: &list<T>, @nonnull arr: T*, n: S) {
+    let count = n as uint64;
+    list<T>::constructor(self, count);
+    self.append(arr, count);
 }
 
 /**

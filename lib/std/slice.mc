@@ -2,6 +2,18 @@ import "std/string";
 import "std/format";
 
 /**
+ * Constructs a new slice.
+ *
+ * @param self: slice to construct
+ * @param data: data to construct the slice from
+ * @param length: length of the slice
+ */
+fn slice<T>::constructor<S: int64 | uint64 | int32 | uint32>(self: &slice<T>, @nonnull data: T*, length: S) {
+    self.data = data;
+    self.length = length as uint64;
+}
+
+/**
  * Formats a slice of characters into a string using the format string. The
  * format string is a slice of characters that contains format specifiers for
  * the arguments. The format specifiers are replaced with the arguments when
