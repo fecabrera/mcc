@@ -49,17 +49,21 @@ from mcc.errors import LangError, Note
 # tuple shape targets exactly that: a quoted, word/path-like first element
 # followed by one quoted second element and the closing paren. The open
 # paren must NOT follow an identifier or quote (that spelling is a call,
-# e.g. "foo('a', 'b')"), the first element must look like a source/name
-# (so a user-level tuple of punctuation literals like (',', ' ') passes),
-# and longer tuples like ('r', 'w', 'a') don't match — table keys are
-# pairs. current_source can be None for string-compiled programs, so a
-# leak can also render as "(None, 'point')" — its own shape below.
+# e.g. "foo('a', 'b')"), and the first element must look like a *file* —
+# a resolved current_source always carries at least one of `< > / \ .`
+# (a path separator, an extension dot, or the "<...>" placeholder shape) —
+# so a user-level pair of plain words like "expected ('a', 'b')" or of
+# punctuation literals like (',', ' ') passes, and longer tuples like
+# ('r', 'w', 'a') don't match — table keys are pairs. current_source can
+# be None for string-compiled programs, so a leak can also render as
+# "(None, 'point')" — its own shape below.
 INTERNAL_KEY_SHAPES = [
     ("'<unresolved>' placeholder", re.compile(r"<unresolved>")),
     (
         "table-key tuple repr",
         re.compile(
-            r"(?<![\w'\"])\((['\"])[\w<>./\\ :-]+\1,\s*(['\"])[^'\"]*\2\)"
+            r"(?<![\w'\"])\((['\"])[\w<>./\\ :-]*[<>/\\.][\w<>./\\ :-]*\1,"
+            r"\s*(['\"])[^'\"]*\2\)"
         ),
     ),
     ("None-keyed table tuple", re.compile(r"\(None,")),
@@ -91,24 +95,22 @@ def recording_diagnostics():
     from a ``finally`` where it would mask the real diagnosis.
     """
     recorded = []
-    original_error_init = LangError.__init__
-    original_note_init = Note.__init__
+    originals = {cls: cls.__init__ for cls in (LangError, Note)}
 
-    def wrapped_error_init(self, *args, **kwargs):
-        original_error_init(self, *args, **kwargs)
-        recorded.append(self.message)
+    def recording(original):
+        def wrapped(self, *args, **kwargs):
+            original(self, *args, **kwargs)
+            recorded.append(self.message)
 
-    def wrapped_note_init(self, *args, **kwargs):
-        original_note_init(self, *args, **kwargs)
-        recorded.append(self.message)
+        return wrapped
 
-    LangError.__init__ = wrapped_error_init
-    Note.__init__ = wrapped_note_init
+    for cls, original in originals.items():
+        cls.__init__ = recording(original)
     try:
         yield recorded
     finally:
-        LangError.__init__ = original_error_init
-        Note.__init__ = original_note_init
+        for cls, original in originals.items():
+            cls.__init__ = original
     for message in recorded:
         assert_no_internal_keys(message)
 
@@ -309,6 +311,10 @@ def test_internal_key_shapes_catch_the_sie189_leak():
     )
     with pytest.raises(AssertionError):
         assert_no_internal_keys(leaked)
+    # A file-keyed table tuple — the (current_source, name) pair rendered
+    # with a real resolved path — is the canonical leak shape.
+    with pytest.raises(AssertionError):
+        assert_no_internal_keys("no such struct ('/w/lib.mc', 'point')")
     # A None-keyed table tuple — (current_source, name) with current_source
     # None — is the same leak class in a different costume.
     with pytest.raises(AssertionError):
@@ -319,7 +325,10 @@ def test_internal_key_shapes_catch_the_sie189_leak():
     assert_no_internal_keys("expected (int32, char), got (int32, int32)")
     assert_no_internal_keys("call to foo('a', 'b') is ambiguous")
     # Quoted-literal tuples a diagnostic may legitimately render: table keys
-    # are pairs with a word/path-like first element, so punctuation elements
-    # and longer tuples are user-level spellings, not leaks.
+    # are pairs whose first element is file-like (path chars, an extension
+    # dot, or a <placeholder>), so pairs of plain words, punctuation
+    # elements, and longer tuples are user-level spellings, not leaks.
+    assert_no_internal_keys("expected ('a', 'b')")
+    assert_no_internal_keys("candidates ('int32', 'char')")
     assert_no_internal_keys("expected (',', ' ')")
     assert_no_internal_keys("expected one of ('r', 'w', 'a')")
