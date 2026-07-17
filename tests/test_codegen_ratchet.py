@@ -128,13 +128,6 @@ def _current_source_assignment_census(trees):
             if isinstance(node, ast.Assign):
                 targets = node.targets
             elif isinstance(
-<<<<<<< Updated upstream
-                node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr)
-            ):
-                targets = [node.target]
-            elif isinstance(node, (ast.For, ast.AsyncFor)):
-                targets = [node.target]
-=======
                 node,
                 (
                     ast.AugAssign,
@@ -145,7 +138,6 @@ def _current_source_assignment_census(trees):
                 ),
             ):
                 targets = [node.target]
->>>>>>> Stashed changes
             elif isinstance(node, ast.withitem):
                 if node.optional_vars is None:
                     continue
@@ -203,13 +195,10 @@ def _langerror_alias_names(tree):
     whole tree per iteration.
     """
     names = {"LangError"}
-<<<<<<< Updated upstream
-=======
     # Each entry is (value, targets): plain ``Err = LangError`` and the
     # annotated spelling ``Err: type = LangError`` (an AnnAssign, whose
     # single target is normalized into a one-element list) both rebind an
     # alias and must be chased.
->>>>>>> Stashed changes
     assigns, classes = [], []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -219,31 +208,19 @@ def _langerror_alias_names(tree):
                 if alias.name == "LangError"
             }
         elif isinstance(node, ast.Assign):
-<<<<<<< Updated upstream
-            assigns.append(node)
-=======
             assigns.append((node.value, node.targets))
         elif isinstance(node, ast.AnnAssign) and node.value is not None:
             assigns.append((node.value, [node.target]))
->>>>>>> Stashed changes
         elif isinstance(node, ast.ClassDef):
             classes.append(node)
     changed = True
     while changed:
         changed = False
-<<<<<<< Updated upstream
-        for node in assigns:
-            if _names_langerror(node.value, names):
-                found = {
-                    target.id
-                    for target in _flatten_targets(node.targets)
-=======
         for value, targets in assigns:
             if _names_langerror(value, names):
                 found = {
                     target.id
                     for target in _flatten_targets(targets)
->>>>>>> Stashed changes
                     if isinstance(target, ast.Name)
                 }
                 if not found <= names:
