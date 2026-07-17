@@ -13,9 +13,18 @@ Runtime enforcement of the two rules pinned by ``tests/test_codegen_ratchet.py``
 
 2. **No internal keys in messages.** No user-facing message contains a
    compiler-internal key shape — the ``("<unresolved>", 'b<T>')`` tuple-repr
-   leak of SIE-189. Every ``LangError`` constructed while the corpus
-   compiles (including speculative ones that are caught and swallowed) is
-   shape-checked, not just the one that escapes.
+   leak of SIE-189. Every ``LangError`` message and every ``Note`` message
+   (instantiation frames on any error, escaping or swallowed, and the
+   warnings channel — both are ``Note`` constructions) recorded while the
+   corpus compiles is shape-checked automatically when the recorder exits,
+   not just the error that escapes. The corpus drives the override/
+   covariance validation path (``validate_dispatch_overrides``) that
+   produced the historical SIE-189 leak, so a reintroduction at the
+   original site fails here, not just in the regex self-test.
+
+The corpus asserts attribution (``err.source``/``err.line``) plus a minimal
+stable token of each message — enough to prove the intended diagnostic
+fired, without pinning wording owned by the per-diagnostic codegen tests.
 """
 
 import re
@@ -25,14 +34,19 @@ from pathlib import Path
 import pytest
 
 from mcc.driver import compile_to_ir
-from mcc.errors import LangError
+from mcc.errors import LangError, Note
 
 # Message shapes that mean an internal key leaked into user-facing text:
-# the "<unresolved>" struct-key placeholder, and the repr of a tuple key
-# (an opening paren immediately followed by a quoted string and a comma).
+# the "<unresolved>" struct-key placeholder, and the repr of a tuple key.
+# The tuple shape requires the open paren NOT to follow an identifier or
+# quote (that spelling is a call, e.g. "foo('a', 'b')"), and also matches
+# table keys whose first element is None — codegen tables are keyed
+# (current_source, name) and current_source can be None for string-compiled
+# programs, so a leak can render as "(None, 'point')".
 INTERNAL_KEY_SHAPES = [
     ("'<unresolved>' placeholder", re.compile(r"<unresolved>")),
-    ("bare tuple repr", re.compile(r"\((['\"])[^'\"]*\1,")),
+    ("bare tuple repr", re.compile(r"(?<![\w'\"])\((['\"])[^'\"]*\1,")),
+    ("None-keyed table tuple", re.compile(r"\(None,")),
 ]
 
 
@@ -46,20 +60,38 @@ def assert_no_internal_keys(message: str):
 
 
 @contextmanager
-def recording_lang_errors():
-    """Record every LangError constructed inside the block, even swallowed ones."""
+def recording_diagnostics():
+    """Record every diagnostic message constructed inside the block.
+
+    Wraps ``LangError.__init__`` and ``Note.__init__`` (notes cover both
+    instantiation frames and the warnings channel), recording each message
+    after delegating — signature-agnostic, so the shims survive signature
+    evolution in ``mcc.errors``. On exit, every recorded message is
+    shape-checked against :data:`INTERNAL_KEY_SHAPES`; a test using this
+    recorder cannot forget rule 2. Messages on speculative errors that
+    codegen catches and swallows are recorded (and checked) too.
+    """
     recorded = []
-    original = LangError.__init__
+    original_error_init = LangError.__init__
+    original_note_init = Note.__init__
 
-    def wrapped(self, message, line, source=None):
-        recorded.append(message)
-        original(self, message, line, source)
+    def wrapped_error_init(self, *args, **kwargs):
+        original_error_init(self, *args, **kwargs)
+        recorded.append(self.message)
 
-    LangError.__init__ = wrapped
+    def wrapped_note_init(self, *args, **kwargs):
+        original_note_init(self, *args, **kwargs)
+        recorded.append(self.message)
+
+    LangError.__init__ = wrapped_error_init
+    Note.__init__ = wrapped_note_init
     try:
         yield recorded
     finally:
-        LangError.__init__ = original
+        LangError.__init__ = original_error_init
+        Note.__init__ = original_note_init
+        for message in recorded:
+            assert_no_internal_keys(message)
 
 
 LIB = """
@@ -79,10 +111,21 @@ fn broken() -> int32 {
 }
 """
 
+# A base with a dispatchable method, for the override/covariance corpus
+# case — the diagnostic family (validate_dispatch_overrides) that produced
+# the SIE-189 internal-key leak.
+VIEWS_LIB = """
+struct base { n: int32; }
+
+fn base::val(const self: &base) -> int32 { return 7; }
+"""
+
 # Each corpus case: the files to write, the file the error must be
-# attributed to, and the expected message/line — representative of the
-# codegen diagnostics a user actually hits, compiled from real files so
-# attribution is observable.
+# attributed to, and the expected message token/line — representative of
+# the codegen diagnostics a user actually hits, compiled from real files so
+# attribution is observable. Message regexes are minimal stable tokens
+# (identifier + diagnostic kind); exact wording belongs to the
+# per-diagnostic codegen tests.
 CORPUS = {
     "single_file_type_error": (
         {"main.mc": "fn main() -> int32 { let s: int32* = 5; return 0; }"},
@@ -93,7 +136,7 @@ CORPUS = {
     "single_file_unknown_call": (
         {"main.mc": "fn main() -> int32 { return no_such_fn(); }"},
         "main.mc",
-        r"undefined function 'no_such_fn' \(missing import\?\)",
+        r"undefined function 'no_such_fn'",
         1,
     ),
     # Stale-current_source direction 1: the error is inside an imported
@@ -132,15 +175,34 @@ CORPUS = {
         2,
     ),
     # A stdlib-heavy compile: merging std/io pushes current_source through
-    # many files before the error in the one-line entry file.
+    # many files before the error in the one-line entry file. The token
+    # deliberately omits the bound's spelling — that belongs to std/io.
     "stdlib_bound_violation": (
         {
             "main.mc": 'import "std/io";\n'
             "fn main() -> int32 { println(main); return 0; }",
         },
         "main.mc",
-        r"does not satisfy the bound slice<const char> of 'println'",
+        r"does not satisfy the bound .+ of 'println'",
         2,
+    ),
+    # The SIE-189 diagnostic family: an @override return mismatch, validated
+    # in validate_dispatch_overrides, whose messages render return types via
+    # ret_desc — the exact surface that historically leaked the raw
+    # ("<unresolved>", ...) table key. The base lives in views.mc; the error
+    # must be attributed to the override's file, main.mc.
+    "override_return_mismatch_cross_file": (
+        {
+            "views.mc": VIEWS_LIB,
+            "main.mc": 'import "views";\n'
+            "struct derived extends base { m: int32; }\n"
+            "@override fn derived::val(const self: &derived) -> float64 "
+            "{ return 3.0; }\n"
+            "fn main() -> int32 { return 0; }",
+        },
+        "main.mc",
+        r"@override method 'derived::val' returns float64",
+        3,
     ),
 }
 
@@ -150,7 +212,7 @@ def test_escaping_error_is_attributed_to_its_file(case, tmp_path):
     files, expected_file, message_re, expected_line = CORPUS[case]
     for name, text in files.items():
         (tmp_path / name).write_text(text)
-    with recording_lang_errors() as recorded:
+    with recording_diagnostics():
         with pytest.raises(LangError, match=message_re) as excinfo:
             compile_to_ir(tmp_path / "main.mc")
     err = excinfo.value
@@ -164,10 +226,6 @@ def test_escaping_error_is_attributed_to_its_file(case, tmp_path):
         f"current_source; pass source= explicitly."
     )
     assert err.line == expected_line
-    for message in recorded:
-        assert_no_internal_keys(message)
-    for note in err.notes:
-        assert_no_internal_keys(note.message)
 
 
 def test_monomorphization_error_attributes_template_and_instantiation(tmp_path):
@@ -179,7 +237,7 @@ def test_monomorphization_error_attributes_template_and_instantiation(tmp_path):
     main.write_text(
         'import "lib";\nfn main() -> int32 { return get_count(3 as int32); }'
     )
-    with recording_lang_errors() as recorded:
+    with recording_diagnostics():
         with pytest.raises(LangError, match="int32 is not a struct") as excinfo:
             compile_to_ir(main)
     err = excinfo.value
@@ -187,11 +245,11 @@ def test_monomorphization_error_attributes_template_and_instantiation(tmp_path):
     assert err.line == 8  # `return v.count;` inside the template body
     assert err.notes, "monomorphization errors carry instantiation notes"
     note = err.notes[0]
-    assert note.message == "in instantiation of get_count<int32>"
+    # Token, not wording: the note must name the instantiation; its exact
+    # phrasing belongs to the codegen tests that own the message.
+    assert "get_count<int32>" in note.message
     assert note.source is not None and Path(note.source) == main
     assert note.line == 2
-    for message in recorded:
-        assert_no_internal_keys(message)
 
 
 def test_internal_key_shapes_catch_the_sie189_leak():
@@ -202,7 +260,12 @@ def test_internal_key_shapes_catch_the_sie189_leak():
     )
     with pytest.raises(AssertionError):
         assert_no_internal_keys(leaked)
-    # And they pass ordinary diagnostics, including quoted names and tuples
-    # spelled at the user level.
+    # A None-keyed table tuple — (current_source, name) with current_source
+    # None — is the same leak class in a different costume.
+    with pytest.raises(AssertionError):
+        assert_no_internal_keys("no such struct (None, 'point')")
+    # And they pass ordinary diagnostics: quoted names, tuples spelled at
+    # the user level, and quoted arguments in a call spelling.
     assert_no_internal_keys("function 'secret' is private to lib.mc")
     assert_no_internal_keys("expected (int32, char), got (int32, int32)")
+    assert_no_internal_keys("call to foo('a', 'b') is ambiguous")
