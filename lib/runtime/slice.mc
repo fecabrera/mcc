@@ -1,5 +1,4 @@
 import "std/string";
-import "std/format";
 
 /**
  * Constructs a new slice.

@@ -2,7 +2,7 @@
 slice `equals`.
 
 Pins the WIP surface of lib/std/slice.mc (and the string.mc members that
-pair with it), reached through `import "std/slice"` -- slice.mc imports
+pair with it), reached through `import "runtime/slice"` -- slice.mc imports
 string.mc and declares `slice::format`, so that one import brings up the
 whole surface. (Importing `std/string` alone does NOT: `string::format`
 delegates to `slice::format`, which lives in slice.mc, so the char-slice
@@ -39,7 +39,7 @@ from helpers import compile_ir, run
 def test_slice_constructor_sugar_sets_data_and_length():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let xs: int32[3];
             xs[0] = 10; xs[1] = 20; xs[2] = 30;
@@ -53,7 +53,7 @@ def test_slice_constructor_sugar_sets_data_and_length():
 def test_slice_constructor_explicit_family_call():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let xs: int32[3];
             xs[0] = 10; xs[1] = 20; xs[2] = 30;
@@ -68,7 +68,7 @@ def test_slice_constructor_explicit_family_call():
 def test_slice_constructor_write_through_hits_storage():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let xs: int32[2];
             xs[0] = 1; xs[1] = 2;
@@ -83,7 +83,7 @@ def test_slice_constructor_write_through_hits_storage():
 def test_slice_constructor_for_in_iterates():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let xs: int32[4] = [1, 2, 3, 4];
             let s = slice<int32>(&xs[0], 4);
@@ -98,7 +98,7 @@ def test_slice_constructor_for_in_iterates():
 def test_slice_constructor_empty_length_iterates_zero_times():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let xs: int32[1] = [0];
             let s = slice<int32>(&xs[0], 0);
@@ -115,7 +115,7 @@ def test_slice_constructor_accepts_each_integer_length_type():
     # family and are stored as uint64 in the view.
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let xs: int32[1] = [7];
             let a = slice<int32>(&xs[0], 1 as int32);
@@ -131,7 +131,7 @@ def test_slice_constructor_accepts_each_integer_length_type():
 def test_slice_constructor_sub_slice_composes():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let xs: int32[4] = [10, 20, 30, 40];
             let s = slice<int32>(&xs[0], 4);
@@ -145,7 +145,7 @@ def test_slice_constructor_sub_slice_composes():
 def test_slice_constructor_passes_as_a_function_argument():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn sum(xs: slice<int32>) -> int32 {
             let total: int32 = 0;
             for v in xs { total += v; }
@@ -165,7 +165,7 @@ def test_slice_constructor_char_ptr_elements():
     # pointer storage and indexes through to the pointees.
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let a = "a";
             let b = "bb";
@@ -185,7 +185,7 @@ def test_slice_constructor_char_ptr_elements():
 def test_slice_constructor_casts_length_to_uint64():
     ir_text = compile_ir(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let xs: int32[2];
             let n: int32 = 2;
@@ -205,7 +205,7 @@ def test_slice_constructor_bare_head_needs_a_type_argument():
     with pytest.raises(LangError, match=r"type 'slice' takes 1 type argument, got 0"):
         compile_ir(
             """
-            import "std/slice";
+            import "runtime/slice";
             fn main() -> int32 {
                 let xs: int32[2];
                 let s = slice(&xs[0], 2);
@@ -223,7 +223,7 @@ def test_slice_constructor_rejects_non_integer_length():
     ):
         compile_ir(
             """
-            import "std/slice";
+            import "runtime/slice";
             fn main() -> int32 {
                 let xs: int32[2];
                 let s = slice<int32>(&xs[0], 2.0);
@@ -241,7 +241,7 @@ def test_slice_constructor_rejects_null_data():
     ):
         compile_ir(
             """
-            import "std/slice";
+            import "runtime/slice";
             fn main() -> int32 {
                 let p: int32* = null;
                 let s = slice<int32>(p, 0);
@@ -261,7 +261,7 @@ def test_slice_constructor_const_element_rejects_mutable_pointer():
     ):
         compile_ir(
             """
-            import "std/slice";
+            import "runtime/slice";
             fn main() -> int32 {
                 let xs: int32[3] = [1, 2, 3];
                 let s = slice<const int32>(&xs[0], 3);
@@ -277,7 +277,7 @@ def test_format_passes_plain_text_through(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             writeln("hello".format());
             return 0;
@@ -291,7 +291,7 @@ def test_format_fills_a_hole_from_an_argument(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             writeln("n={}".format(42 as int32));
             return 0;
@@ -305,7 +305,7 @@ def test_format_fills_holes_in_order(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             writeln("{}+{}".format(1 as int32, 2 as int32));
             return 0;
@@ -321,7 +321,7 @@ def test_format_carries_a_modifier(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             writeln("{x}".format(255 as int32));
             return 0;
@@ -336,7 +336,7 @@ def test_format_escapes_doubled_braces(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             writeln("{{}}".format());
             return 0;
@@ -352,7 +352,7 @@ def test_format_skips_holes_past_the_argument_count(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             writeln("a{}b{}c".format(1 as int32));
             return 0;
@@ -366,7 +366,7 @@ def test_format_renders_a_string_argument(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             writeln("[{}]".format("hi"));
             return 0;
@@ -380,7 +380,7 @@ def test_format_renders_a_bool_argument(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             writeln("{}".format(true));
             return 0;
@@ -396,7 +396,7 @@ def test_string_literal_receiver_reaches_format(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let s = "{}{}".format("hello", "world");
             writeln(s);
@@ -412,7 +412,7 @@ def test_string_receiver_format_delegates(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let fmt = string("v={}");
             writeln(fmt.format(9 as int32));
@@ -427,7 +427,7 @@ def test_format_of_an_empty_string_is_empty(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             writeln("".format());
             return 0;
@@ -442,7 +442,7 @@ def test_format_ignores_arguments_with_no_holes(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             writeln("hi".format(1 as int32));
             return 0;
@@ -458,7 +458,7 @@ def test_format_results_are_independent_owned_strings(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let a = "{}".format(1 as int32);
             let b = "{}".format(2 as int32);
@@ -476,7 +476,7 @@ def test_format_results_are_independent_owned_strings(capfd):
 def test_slice_equals_true_for_equal_runs():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let a: int32[3] = [1, 2, 3];
             let b: int32[3] = [1, 2, 3];
@@ -489,7 +489,7 @@ def test_slice_equals_true_for_equal_runs():
 def test_slice_equals_false_on_a_differing_element():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let a: int32[3] = [1, 2, 3];
             let b: int32[3] = [1, 9, 3];
@@ -502,7 +502,7 @@ def test_slice_equals_false_on_a_differing_element():
 def test_slice_equals_false_on_differing_length():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let a: int32[3] = [1, 2, 3];
             let b: int32[2] = [1, 2];
@@ -516,7 +516,7 @@ def test_slice_equals_true_for_two_empty_slices():
     # Same length (zero) and no differing element: empty compares equal.
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let a: int32[1] = [0];
             let e = (a as slice<int32>)[0:0];
@@ -531,7 +531,7 @@ def test_slice_equals_true_for_two_empty_slices():
 def test_char_slice_equals_string_true():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let s = string("hi");
             return ("hi" as slice<const char>).equals(s) ? 0 : 1;
@@ -543,7 +543,7 @@ def test_char_slice_equals_string_true():
 def test_char_slice_equals_string_false():
     assert run(
         """
-        import "std/slice";
+        import "runtime/slice";
         fn main() -> int32 {
             let s = string("ho");
             return ("hi" as slice<const char>).equals(s) ? 1 : 0;

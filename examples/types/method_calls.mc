@@ -1,5 +1,5 @@
 import "std/io";
-import "std/char";
+import "runtime/char";
 
 // Dot calls: `recv.method(args)` is sugar for `Type::method(recv, args)`,
 // where `Type` is the receiver's type. The receiver passes VERBATIM as the

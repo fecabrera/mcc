@@ -272,7 +272,7 @@ def test_builtin_receiver_dispatches_the_family(capfd):
     assert run(
         """
         import "std/io";
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             println("{}{}".format('c'.upper(), 'D'.lower()));
             return 0;
@@ -285,7 +285,7 @@ def test_builtin_receiver_dispatches_the_family(capfd):
 def test_cast_receiver_probes_through_the_target():
     assert run(
         """
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             let code: int32 = 99;
             let up = (code as char).upper();
@@ -349,7 +349,7 @@ def test_chained_calls_evaluate_the_receiver_once(capfd):
     assert run(
         """
         import "std/io";
-        import "std/char";
+        import "runtime/char";
         struct wrap { c: char; }
         fn wrap::get(const self: &wrap) -> char { return self.c; }
         fn wrap::mk(c: char) -> wrap {
@@ -761,7 +761,7 @@ def test_string_literal_receiver_reaches_a_slice_format(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         import "std/string";
         fn main() -> int32 {
             let s = "{}{}".format("hello", "world");
@@ -778,7 +778,7 @@ def test_string_literal_receiver_matches_the_explicit_borrow():
     # two spellings produce identical IR for the same call.
     borrow = compile_ir(
         """
-        import "std/slice";
+        import "runtime/slice";
         import "std/string";
         fn use() -> void {
             let s = ("{}" as slice<const char>).format("x");
@@ -787,7 +787,7 @@ def test_string_literal_receiver_matches_the_explicit_borrow():
     )
     bare = compile_ir(
         """
-        import "std/slice";
+        import "runtime/slice";
         import "std/string";
         fn use() -> void {
             let s = "{}".format("x");
@@ -803,7 +803,7 @@ def test_string_literal_receiver_dispatches_a_user_slice_family(capfd):
     assert run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
         fn slice::first_byte(const self: &slice<const char>) -> char {
             return self[0];
         }
@@ -842,7 +842,7 @@ def test_named_char_array_receiver_is_not_adapted():
     with pytest.raises(LangError, match=re.escape("char[3] is not a struct")):
         compile_ir(
             """
-            import "std/slice";
+            import "runtime/slice";
             fn slice::size(const self: &slice<const char>) -> uint64 {
                 return self.length;
             }
@@ -861,7 +861,7 @@ def test_string_literal_receiver_without_a_slice_family_keeps_the_old_error():
     with pytest.raises(LangError, match=re.escape("char* is not a struct")):
         compile_ir(
             """
-            import "std/slice";
+            import "runtime/slice";
             fn main() -> int32 {
                 "hi".no_such_method();
                 return 0;
@@ -882,7 +882,7 @@ def test_string_literal_receiver_preserves_the_two_name_guard():
     ):
         compile_ir(
             """
-            import "std/slice";
+            import "runtime/slice";
             fn slice::constructor(self: &slice<const char>) { }
             fn main() -> int32 {
                 "hi".constructor();

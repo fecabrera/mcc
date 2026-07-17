@@ -1161,7 +1161,7 @@ def test_format_renders_adapted_literal(capfd):
     # receives an adapted literal like any other slice.
     run(
         """
-        import "std/format";
+        import "runtime/format";
         import "std/string";
         import "libc/stdio";
         fn main() -> int32 {
@@ -1346,7 +1346,7 @@ def test_format_renders_sub_slice(capfd):
     # receives a sub-slice like any other slice value.
     run(
         """
-        import "std/format";
+        import "runtime/format";
         import "std/string";
         import "libc/stdio";
         fn main() -> int32 {

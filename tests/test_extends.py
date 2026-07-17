@@ -330,20 +330,20 @@ def test_bare_param_upcast_inside_generic_function():
     ) == 8
 
 
-def test_intrusive_list_end_to_end():
+def test_intrusive_linked_list_end_to_end():
     assert run(
         'import "std/memory";\n'
         "struct item { value: int32; }\n"
         "struct entry<T> extends T { next: entry<T>*; }\n"
-        "struct list<T> { head: entry<T>*; }\n"
-        "fn push(l: struct list<struct item>*, v: int32) {\n"
+        "struct linked_list<T> { head: entry<T>*; }\n"
+        "fn push(l: struct linked_list<struct item>*, v: int32) {\n"
         "    let e = alloc<struct entry<struct item>>(1);\n"
         "    e->value = v;\n"
         "    e->next = l->head;\n"
         "    l->head = e;\n"
         "}\n"
         "fn main() -> int32 {\n"
-        "    let l: struct list<struct item>;\n"
+        "    let l: struct linked_list<struct item>;\n"
         "    l.head = null;\n"
         "    push(&l, 1); push(&l, 2); push(&l, 3);\n"
         "    let sum: int32 = 0;\n"

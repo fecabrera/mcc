@@ -28,9 +28,8 @@ from pathlib import Path
 import pytest
 
 from mcc.codegen import CodeGen
-from mcc.driver import STDLIB_DIR, merge_imports
 from mcc.errors import LangError
-from helpers import compile_ir, parse, run
+from helpers import _resolve, compile_ir, parse, run
 
 ROOT = Path(__file__).resolve().parents[1]
 IO = 'import "std/io";\n'
@@ -94,7 +93,7 @@ def test_a_panic_guard_narrows_the_pointer():
         fn main() -> int32 { let x = 7 as int32; return first(&x); }
         """
     )
-    cg = CodeGen(merge_imports(parse(src), STDLIB_DIR, (STDLIB_DIR,)), "test")
+    cg = CodeGen(_resolve(src), "test")
     cg.generate()
     assert not [w for w in cg.warnings if w.wclass == "unchecked-dereference"]
 

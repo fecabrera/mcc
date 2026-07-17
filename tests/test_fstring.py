@@ -710,7 +710,7 @@ def test_a_value_fstring_needs_the_renderer_imported():
     with pytest.raises(
         LangError,
         match=r"an f-string used as a value renders through 'slice::format'; "
-        r'import "std/slice" \(or "std/io", which pulls it in\) to build '
+        r'import "runtime/slice" \(or "std/io", which pulls it in\) to build '
         r"the string",
     ):
         compile_ir(

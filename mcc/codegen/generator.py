@@ -273,11 +273,11 @@ FSTRING_MISPLACED = (
 )
 
 # A string-valued f-string desugars to a `slice::format` call, so using one
-# as a value needs the family in the import graph (std/slice, which std/io
-# and std/string pull in transitively).
+# as a value needs the family in the import graph (runtime/slice, which the
+# implicit prelude and std/io pull in).
 FSTRING_NO_RENDERER = (
     "an f-string used as a value renders through 'slice::format'; import "
-    "\"std/slice\" (or \"std/io\", which pulls it in) to build the string"
+    "\"runtime/slice\" (or \"std/io\", which pulls it in) to build the string"
 )
 
 MOVE_MISPLACED = (

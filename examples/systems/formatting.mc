@@ -1,4 +1,4 @@
-import "std/format";
+import "runtime/format";
 import "std/string";
 import "std/io";
 import "libc/stdio";

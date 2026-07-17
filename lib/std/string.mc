@@ -1,5 +1,5 @@
 import "std/list";
-import "std/slice";
+import "runtime/slice";
 
 /**
  * A growable, heap-backed byte string.

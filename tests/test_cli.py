@@ -9,6 +9,11 @@ ROOT = Path(__file__).resolve().parents[1]
 # The libc variant: a minimal valid program with no std/va_list dependency, so
 # it compiles far enough to exercise target and codegen flags on any arch.
 HELLO = ROOT / "examples" / "basics" / "helloworld-libc.mc"
+# An import-free program: with `--nostdlib` it pulls in neither the stdlib
+# search path nor the implicit runtime prelude, so codegen stays tiny and a
+# target/arch-flag error surfaces on its own rather than behind a runtime
+# module's target limitation (e.g. libc/stdlib's by-value structs).
+MINIMAL_SRC = "fn main() -> int32 { return 0; }\n"
 
 
 def mcc(*args, **kwargs):
@@ -381,7 +386,10 @@ def test_general_regs_only_cross_compiles(tmp_path):
 
 
 def test_general_regs_only_rejects_unknown_arch(tmp_path):
-    result = mcc(HELLO, "--target", "sparc-unknown-none", "--general-regs-only")
+    src = tmp_path / "min.mc"
+    src.write_text(MINIMAL_SRC)
+    result = mcc(src, "--nostdlib", "--target", "sparc-unknown-none",
+                 "--general-regs-only")
     assert result.returncode == 1
     assert "mcc: error:" in result.stderr
     assert "general-regs-only" in result.stderr
@@ -411,10 +419,12 @@ def test_target_rejects_run():
     assert "--run" in result.stderr
 
 
-def test_target_bad_triple_is_clean_error():
-    result = mcc(HELLO, "--target", "not-a-triple")
+def test_target_bad_triple_is_clean_error(tmp_path):
+    src = tmp_path / "min.mc"
+    src.write_text(MINIMAL_SRC)
+    result = mcc(src, "--nostdlib", "--target", "not-a-triple")
     assert result.returncode == 1
-    assert "mcc: error:" in result.stderr
+    assert "mcc: error:" in result.stderr, result.stderr
     assert "Traceback" not in result.stderr
 
 
@@ -1024,7 +1034,7 @@ def test_extern_nonnull_is_off_by_default(tmp_path):
     # Relaxed: the possibly-null argument is silently accepted, no warning.
     src = tmp_path / "ext.mc"
     src.write_text(EXTERN_NN_SRC)
-    result = mcc(src, "--emit-llvm")
+    result = mcc(src, "--emit-llvm", "--nostdlib")
     assert result.returncode == 0
     assert result.stderr == ""
     assert "nonnull" not in result.stdout  # no hint on the extern declare
@@ -1033,7 +1043,7 @@ def test_extern_nonnull_is_off_by_default(tmp_path):
 def test_wextern_nonnull_warns(tmp_path):
     src = tmp_path / "ext.mc"
     src.write_text(EXTERN_NN_SRC)
-    result = mcc(src, "-Wextern-nonnull", "--emit-llvm")
+    result = mcc(src, "-Wextern-nonnull", "--emit-llvm", "--nostdlib")
     assert result.returncode == 0  # a warning, not an error: IR still emits
     assert result.stderr == (
         f"{src}: warning: line 5: {EXTERN_NN_WARNING} [-Wextern-nonnull]\n")
@@ -1180,8 +1190,8 @@ def test_interface_package_roundtrip(tmp_path):
         "const SCALE = 10;\n"
         "fn scaled(n: int32) -> int32 { return n * SCALE; }\n"
     )
-    assert mcc(lib, "-c", "-o", tmp_path / "mathlib.o").returncode == 0
-    assert mcc(lib, "--emit-interface").returncode == 0
+    assert mcc(lib, "-c", "-o", tmp_path / "mathlib.o", "--nostdlib").returncode == 0
+    assert mcc(lib, "--emit-interface", "--nostdlib").returncode == 0
     assert (tmp_path / "mathlib.mci").exists()
     lib.unlink()  # ship only the .o + .mci
 
@@ -1191,7 +1201,7 @@ def test_interface_package_roundtrip(tmp_path):
         "@extern fn printf(fmt: uint8*, ...) -> int32;\n"
         'fn main() -> int32 { printf("%d\\n", scaled(5)); return 0; }'
     )
-    assert mcc(consumer, "-c", "-I", tmp_path, "-o", tmp_path / "app.o").returncode == 0
+    assert mcc(consumer, "-c", "-I", tmp_path, "-o", tmp_path / "app.o", "--nostdlib").returncode == 0
     exe = tmp_path / "app"
     link = subprocess.run(
         ["cc", str(tmp_path / "app.o"), str(tmp_path / "mathlib.o"), "-o", str(exe)],
@@ -1213,8 +1223,8 @@ def test_interface_roundtrip_with_mut_and_const_struct(tmp_path):
         "fn total(const p: struct pair) -> int64 { return p.a + p.b; }\n"
         "fn bump(n: &int32) { n = n + 1; }\n"
     )
-    assert mcc(lib, "-c", "-o", tmp_path / "statlib.o").returncode == 0
-    assert mcc(lib, "--emit-interface").returncode == 0
+    assert mcc(lib, "-c", "-o", tmp_path / "statlib.o", "--nostdlib").returncode == 0
+    assert mcc(lib, "--emit-interface", "--nostdlib").returncode == 0
     stub = (tmp_path / "statlib.mci").read_text()
     assert "fn total(const p: pair) -> int64;" in stub
     assert "fn bump(n: &int32);" in stub
@@ -1232,7 +1242,7 @@ def test_interface_roundtrip_with_mut_and_const_struct(tmp_path):
         "    return 0;\n"
         "}"
     )
-    assert mcc(consumer, "-c", "-I", tmp_path, "-o", tmp_path / "app.o").returncode == 0
+    assert mcc(consumer, "-c", "-I", tmp_path, "-o", tmp_path / "app.o", "--nostdlib").returncode == 0
     exe = tmp_path / "app"
     link = subprocess.run(
         ["cc", str(tmp_path / "app.o"), str(tmp_path / "statlib.o"), "-o", str(exe)],
@@ -1269,7 +1279,7 @@ def test_uncalled_tombstone_builds_clean_under_werror(tmp_path):
         "fn copy_bytes<T>(dst: T*, src: T*, n: uint64);\n"
         "fn main() -> int32 { return 0; }\n"
     )
-    result = mcc(src, "-Werror", "--emit-llvm")
+    result = mcc(src, "-Werror", "--emit-llvm", "--nostdlib")
     assert result.returncode == 0
     assert result.stderr == ""
 

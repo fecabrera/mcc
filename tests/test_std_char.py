@@ -8,7 +8,7 @@ from helpers import run
 def test_is_alpha_letters_only():
     assert run(
         """
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             if (char::is_alpha('a') == false) return 1;
             if (char::is_alpha('Z') == false) return 2;
@@ -24,7 +24,7 @@ def test_is_alpha_letters_only():
 def test_is_alnum_letters_and_digits():
     assert run(
         """
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             if (char::is_alnum('m') == false) return 1;
             if (char::is_alnum('Q') == false) return 2;
@@ -40,7 +40,7 @@ def test_is_alnum_letters_and_digits():
 def test_is_digit_decimal_only():
     assert run(
         """
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             if (char::is_digit('0') == false) return 1;
             if (char::is_digit('9') == false) return 2;
@@ -55,7 +55,7 @@ def test_is_digit_decimal_only():
 def test_is_hex_covers_both_cases():
     assert run(
         """
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             if (char::is_hex('7') == false) return 1;
             if (char::is_hex('a') == false) return 2;
@@ -71,7 +71,7 @@ def test_is_hex_covers_both_cases():
 def test_is_space_whitespace_set():
     assert run(
         r"""
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             if (char::is_space(' ') == false) return 1;
             if (char::is_space('\t') == false) return 2;
@@ -88,7 +88,7 @@ def test_is_space_whitespace_set():
 def test_is_upper_is_lower_partition_letters():
     assert run(
         """
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             if (char::is_upper('A') == false) return 1;
             if (char::is_upper('a')) return 2;
@@ -106,7 +106,7 @@ def test_is_upper_is_lower_partition_letters():
 def test_upper_and_lower_convert_letters():
     assert run(
         """
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             if (char::upper('h') != 'H') return 1;
             if (char::lower('H') != 'h') return 2;
@@ -122,7 +122,7 @@ def test_upper_and_lower_convert_letters():
 def test_upper_and_lower_leave_non_letters_unchanged():
     assert run(
         """
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             if (char::upper('!') != '!') return 1;
             if (char::lower('!') != '!') return 2;
@@ -138,7 +138,7 @@ def test_methods_compose_over_a_string():
     # The motivating shape: classify/convert characters while scanning text.
     assert run(
         """
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             let letters: int32 = 0;
             let digits: int32 = 0;
@@ -158,7 +158,7 @@ def test_upper_maps_over_a_string(capfd):
     assert run(
         """
         import "std/io";
-        import "std/char";
+        import "runtime/char";
         fn main() -> int32 {
             for c in "mcc rocks!" as slice<char> {
                 print(f"{char::upper(c)}");

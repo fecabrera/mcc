@@ -190,7 +190,7 @@ its reference section in the [language reference](docs/language.md).
 - [x] [libc bindings](docs/language.md#reaching-libc) — `stdio`, `stdlib`, `string`, `ctype`,
       `math`, `limits`, `float`, `time`, `errno`
 - [x] [Char methods](docs/language.md#methods-on-type-aliases-and-builtin-types) — `char`
-      (`import "std/char";` registers the ctype family as methods on the
+      (`import "runtime/char";` registers the ctype family as methods on the
       builtin `char` type: `char::is_alpha`, `is_alnum`, `is_digit`,
       `is_hex`, `is_space`, `is_upper`, `is_lower`, and
       `char::upper`/`char::lower` with non-letters unchanged, all taking

@@ -52,6 +52,32 @@ def _find_stdlib() -> Path:
 
 
 STDLIB_DIR = _find_stdlib()  # the stdlib source root (holds std/ and libc/)
+RUNTIME_DIR = STDLIB_DIR / "runtime"  # implicitly imported unless --nostdlib
+
+
+def _prelude_imports(runtime_dir: Path) -> list[tuple[str, int]]:
+    """Every ``runtime/*.mc`` module, as synthetic imports for the entry file.
+
+    These are the runtime-support modules pulled into every compilation unless
+    ``--nostdlib`` is passed. Each resolves as ``runtime/<name>`` against the
+    stdlib search path -- exactly like a hand-written ``import "runtime/foo"``,
+    so the ``_visited`` de-dup makes an explicit import harmless. The synthetic
+    line number is ``0``.
+
+    Args:
+        runtime_dir: The ``runtime/`` directory under the stdlib source root.
+
+    Returns:
+        ``(import_path, 0)`` pairs, sorted for a stable declaration order; empty
+        when the directory does not exist.
+    """
+    if not runtime_dir.is_dir():
+        return []
+    stems = sorted(
+        p.relative_to(runtime_dir.parent).with_suffix("").as_posix()
+        for p in runtime_dir.rglob("*.mc")
+    )
+    return [(stem, 0) for stem in stems]
 
 
 def _stamp_conditionals(conditionals, source: str) -> None:
@@ -232,7 +258,8 @@ def merge_imports(program: Program, base_dir: Path,
 
 def load_program(path: Path, search_paths: tuple[Path, ...] = (),
                  facts: dict[str, int] | None = None,
-                 _visited: set[Path] | None = None) -> Program:
+                 _visited: set[Path] | None = None,
+                 prelude: tuple[tuple[str, int], ...] = ()) -> Program:
     """Parse a source file and recursively merge its import graph.
 
     A file already present in ``_visited`` resolves to an empty program, so a
@@ -245,6 +272,10 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
             host facts when ``None``.
         _visited: Set of already-loaded absolute paths, shared across the
             recursion; created when ``None``.
+        prelude: Synthetic ``(import_path, line)`` imports prepended to the
+            *entry* file's own imports -- the implicit runtime modules. Applied
+            only at the root call (when ``_visited`` is ``None``); the recursion
+            never re-injects them.
 
     Returns:
         The program parsed from ``path`` with all of its imports merged in.
@@ -254,6 +285,7 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
             ``source`` is filled in with this file when not already set.
     """
     resolved = path.resolve()
+    is_root = _visited is None
     visited = _visited if _visited is not None else set()
     if resolved in visited:
         return Program([], [], [], [], [], [])
@@ -265,6 +297,10 @@ def load_program(path: Path, search_paths: tuple[Path, ...] = (),
             err.source = str(resolved)
         raise
     _stamp_sources(program, str(resolved))
+    if is_root and prelude:
+        # The implicit runtime modules load before the entry file's own
+        # imports, so their declarations precede -- and are visible to -- it.
+        program.imports = list(prelude) + program.imports
     return merge_imports(program, resolved.parent, search_paths, facts, visited,
                          source=str(resolved))
 
@@ -274,7 +310,8 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
                   defines: dict[str, int] | None = None,
                   freestanding: bool = False,
                   warnings: list[Note] | None = None,
-                  error_classes: frozenset[str] = frozenset()) -> ir.Module:
+                  error_classes: frozenset[str] = frozenset(),
+                  prelude: bool = False) -> ir.Module:
     """Load a source file and lower it to an LLVM IR module.
 
     Args:
@@ -295,6 +332,10 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
             strict posture), forwarded to :class:`CodeGen` so posture-keyed
             codegen (e.g. the ``@extern`` ``@nonnull`` hint) settles before any
             warning is printed.
+        prelude: When true, implicitly import every ``runtime/*.mc`` module into
+            the entry file (see :func:`_prelude_imports`). The CLI sets this
+            unless ``--nostdlib`` is passed; it defaults off so direct callers
+            (e.g. tests) opt in explicitly.
 
     Returns:
         The generated, unverified LLVM IR module.
@@ -302,7 +343,9 @@ def compile_to_ir(path: Path, search_paths: tuple[Path, ...] | None = None,
     if search_paths is None:
         search_paths = (STDLIB_DIR,)
     facts = compute_target_facts(target, defines)
-    program = load_program(path, tuple(search_paths), facts)
+    prelude_imports = tuple(_prelude_imports(RUNTIME_DIR)) if prelude else ()
+    program = load_program(path, tuple(search_paths), facts,
+                           prelude=prelude_imports)
     cg = CodeGen(program, path.name, root_source=str(path.resolve()),
                  target=target, defines=defines, error_classes=error_classes)
     module = cg.generate()
@@ -702,7 +745,8 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
                    target: str | None, defines: dict[str, int],
                    output: Path | None, werror: bool = False,
                    wenabled: frozenset[str] = frozenset(),
-                   error_classes: frozenset[str] = frozenset()) -> int:
+                   error_classes: frozenset[str] = frozenset(),
+                   prelude: bool = False) -> int:
     """Write a ``.mci`` interface stub for ``source`` and return an exit status.
 
     Compiles the source the same way as a normal build (so ``@if`` is resolved
@@ -725,6 +769,9 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
             ``-Werror`` over the enabled classes plus any ``-Werror=<class>``),
             forwarded to :class:`CodeGen` for posture-keyed codegen and to
             :func:`_report_warnings` for selective promotion.
+        prelude: When true, implicitly import every ``runtime/*.mc`` module into
+            the source, matching a normal build; the CLI sets it unless
+            ``--nostdlib`` is passed.
 
     Returns:
         0 on success, 1 on a reported error.
@@ -734,7 +781,10 @@ def emit_interface(source: Path, search_paths: tuple[Path, ...],
     try:
         text = source.read_text()
         imports = Parser(tokenize(text)).parse_program().imports
-        program = load_program(source, search_paths, compute_target_facts(target, defines))
+        prelude_imports = tuple(_prelude_imports(RUNTIME_DIR)) if prelude else ()
+        program = load_program(source, search_paths,
+                               compute_target_facts(target, defines),
+                               prelude=prelude_imports)
         cg = CodeGen(program, source.name, root_source=str(source.resolve()),
                      target=target, defines=defines, error_classes=error_classes)
         cg.generate()
@@ -796,7 +846,8 @@ def main() -> int:
     cli.add_argument("-I", "--import-path", action="append", type=Path, default=[],
                      metavar="DIR", help="add a directory to the import search path (repeatable)")
     cli.add_argument("--nostdlib", action="store_true",
-                     help="do not add the standard lib/ directory to the import search path")
+                     help="do not add the standard lib/ directory to the import search "
+                          "path, nor implicitly import the runtime/ modules")
     cli.add_argument("--target", metavar="TRIPLE",
                      help="cross-compile for this LLVM target triple, emitting an object "
                           "file to link with that target's toolchain")
@@ -886,17 +937,20 @@ def main() -> int:
     error_classes = werror_classes | (wenabled if args.werror else frozenset())
 
     search_paths = list(args.import_path)
-    if not args.nostdlib:
+    use_prelude = not args.nostdlib
+    if use_prelude:
         search_paths.append(STDLIB_DIR)
 
     if args.emit_interface:
         return emit_interface(args.source, tuple(search_paths), args.target, defines,
-                              args.output, args.werror, wenabled, error_classes)
+                              args.output, args.werror, wenabled, error_classes,
+                              use_prelude)
 
     warnings: list[Note] = []
     try:
         module = compile_to_ir(args.source, search_paths, args.target, defines,
-                               args.freestanding, warnings, error_classes)
+                               args.freestanding, warnings, error_classes,
+                               use_prelude)
     except OSError as err:
         print(f"mcc: error: cannot read {args.source}: {err.strerror}", file=sys.stderr)
         return 1

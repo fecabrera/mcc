@@ -1361,9 +1361,11 @@ def noreturn_own_warnings(source: str) -> list[tuple[str, int]]:
 
 
 def noreturn_own_warnings_io(source: str) -> list[tuple[str, int]]:
-    """Like noreturn_own_warnings, with the stdlib import graph merged."""
-    from mcc.driver import STDLIB_DIR, merge_imports
-    cg = CodeGen(merge_imports(parse(source), STDLIB_DIR, (STDLIB_DIR,)), "t")
+    """Like noreturn_own_warnings, but resolved like a real stdlib build --
+    the import graph and the implicit runtime prelude merged in, so
+    f-string/panic formatting resolves through the runtime modules."""
+    from helpers import _resolve
+    cg = CodeGen(_resolve(source), "t")
     cg.generate()
     return [(w.message, w.line)
             for w in cg.warnings if w.wclass == NR_OWN]

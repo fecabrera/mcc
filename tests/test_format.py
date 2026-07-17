@@ -18,7 +18,7 @@ from helpers import compile_ir, run, run_path
 # Shared prelude: imports plus a printer that dumps a string's bytes between
 # pipes (the buffer is not NUL-terminated, so print exactly `length` bytes).
 PRELUDE = """
-import "std/format";
+import "runtime/format";
 import "std/string";
 import "libc/stdio";
 
@@ -461,7 +461,7 @@ def test_user_overload_joins_the_set_cross_module(tmp_path, capfd):
     # recursing back into the set for its fields.
     (tmp_path / "point.mc").write_text(
         """
-        import "std/format";
+        import "runtime/format";
         import "std/string";
 
         struct point { x: int32; y: int32; }
@@ -479,7 +479,7 @@ def test_user_overload_joins_the_set_cross_module(tmp_path, capfd):
     main.write_text(
         """
         import "point";
-        import "std/format";
+        import "runtime/format";
         import "std/string";
         import "libc/stdio";
 
@@ -546,7 +546,7 @@ def test_string_formats_through_a_placeholder(capfd):
     run(
         """
         import "std/io";
-        import "std/slice";
+        import "runtime/slice";
 
         fn main() -> int32 {
             let who = string("world");

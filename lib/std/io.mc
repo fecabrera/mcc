@@ -1,5 +1,5 @@
 import "std/string";
-import "std/format";
+import "runtime/format";
 
 // print/println write a string -- verbatim, no placeholder scanning, so
 // runtime text is always safe to print. Formatting is the producers' job:

@@ -807,7 +807,7 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   specialized* candidate now wins a former tie. See
   `examples/functions/overload_subsumption.mc`.
 - **`std/char` — character classification and case conversion** — a new
-  stdlib module (`import "std/char";`) registering the ctype family as
+  stdlib module (`import "runtime/char";`) registering the ctype family as
   methods on the builtin `char` type: `char::is_alpha`, `is_alnum`,
   `is_digit`, `is_hex`, `is_space`, `is_upper`, `is_lower` (predicates,
   `-> bool`) and `char::upper` / `char::lower` (conversions; a character

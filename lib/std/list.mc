@@ -1,5 +1,5 @@
 import "std/memory";
-import "std/slice";
+import "runtime/slice";
 
 @private
 const DEFAULT_LIST_CAPACITY = 2;

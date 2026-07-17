@@ -1,5 +1,5 @@
 import "std/io";
-import "std/char";
+import "runtime/char";
 
 // The std/char module: character classification and case conversion as
 // methods ON the builtin `char` type, thin @inline wrappers over libc's

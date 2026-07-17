@@ -1319,7 +1319,7 @@ errors like any other use of it. The rules:
   a concrete receiver type outranks a generic pattern).
 
 The standard library uses the builtin-qualifier form:
-[lib/std/char.mc](../lib/std/char.mc) (`import "std/char";`) registers the
+[lib/std/char.mc](../lib/std/char.mc) (`import "runtime/char";`) registers the
 ctype classification and case-conversion methods on `char` —
 `char::is_alpha`, `is_alnum`, `is_digit`, `is_hex`, `is_space`, `is_upper`,
 `is_lower`, and `char::upper` / `char::lower` (non-letters unchanged).
@@ -1438,7 +1438,7 @@ The rules:
   pointee still need `->`, and `->` stays fields-only: `q->m()` where `m`
   is not a field errors as before. A `S**` receiver is an error, as today.
 - **Builtin and alias receivers dispatch their canonical family.** With
-  `import "std/char";`, `'c'.upper()` is `char::upper('c')`; a
+  `import "runtime/char";`, `'c'.upper()` is `char::upper('c')`; a
   `slice<int32>` receiver dispatches `fn slice<T>::first`, an alias-typed
   receiver its target's family.
 - **A derived receiver reaches its base chain's families.** A struct that
@@ -6753,7 +6753,7 @@ fn digit_value(c: char) -> char {
 
 ## Formatting
 
-`import "std/format";` provides the **formatting protocol**: one
+`import "runtime/format";` provides the **formatting protocol**: one
 [overload set](#function-overloading),
 
 ```c
@@ -6816,7 +6816,7 @@ The baseline members cover the built-in types:
   name in angle brackets (`<uint8*>`) instead of a value.
 
 ```c
-import "std/format";
+import "runtime/format";
 import "std/string";
 
 let s = string();
@@ -6990,7 +6990,7 @@ return f"hello {name}!";           // transfers out of an `-> own string` fn
 ```
 
 The rendering needs `slice::format` in the import graph (`import
-"std/slice";` — `std/io` pulls it in transitively); without it the compile
+"runtime/slice";` — `std/io` pulls it in transitively); without it the compile
 error names the import. A hole's own temporaries (`f"{make()}"`) drop at
 statement end like any collected argument's, on both the splice and value
 paths. There is no implicit string-to-slice coercion, so a concrete

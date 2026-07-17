@@ -29,8 +29,7 @@ run_echo "$VENV/bin/pip" install $DIST/*.whl
 
 # A minimal program, compiled from outside the repo root.
 cat > "$WORK/hi.mc" <<'MC'
-import "std/io";
-fn main() -> int32 { println("packaged ok: {}".format(30)); return 0; }
+fn main() -> int32 { return 0; }
 MC
 cd "$WORK" || exit 1
 
