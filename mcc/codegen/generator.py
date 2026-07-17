@@ -800,7 +800,6 @@ class CodeGen:
             type_aliases=self.type_aliases,
             used_symbols=self.used_symbols,
         )
-        self.symbol_bases = self.decls.symbol_bases  # static name mangling
         # @extern declarations refer to symbols defined elsewhere; identical
         # redeclarations across files collapse onto the first one.
         self.extern_decls: set[str] = set()
@@ -5499,7 +5498,7 @@ class CodeGen:
         Raises:
             LangError: When ``@align`` is below the struct's natural alignment.
         """
-        mangled = self.symbol_bases.get((decl.source, decl.name), decl.name)
+        mangled = self.decls.symbol_bases.get((decl.source, decl.name), decl.name)
         if args:
             mangled += "<" + ", ".join(str(a) for a in args) + ">"
         if mangled in self.struct_types:
@@ -6594,7 +6593,7 @@ class CodeGen:
                 if key in self.static_structs:
                     raise LangError(f"type {decl.name!r} already defined", decl.line)
                 self.static_structs[key] = decl
-                self.symbol_bases[key] = self.static_base(decl.name, decl.source)
+                self.decls.symbol_bases[key] = self.static_base(decl.name, decl.source)
                 continue
             if decl.name in self.struct_templates:
                 raise LangError(f"type {decl.name!r} already defined", decl.line)
@@ -6962,7 +6961,7 @@ class CodeGen:
                     )
                 declared.add(key)
             if func.static:
-                self.symbol_bases[key] = self.static_base(func.name, func.source)
+                self.decls.symbol_bases[key] = self.static_base(func.name, func.source)
                 if func.type_params:
                     # A @static template is file-scoped and never joins an
                     # overload set, so no overlap check -- but its groups
@@ -6971,7 +6970,7 @@ class CodeGen:
                     self.check_bound_decl(func)
                     self.static_templates[key] = func
                     continue
-                symbol = self.symbol_bases[key]
+                symbol = self.decls.symbol_bases[key]
                 ret = self.lang_type(func.ret_type, func.line)
                 params = [self.lang_type(t, func.line) for _, t in func.params]
                 self.check_collecting_decl(func, params)
@@ -10398,8 +10397,7 @@ class CodeGen:
             name in self.type_bindings
             or name in TYPES
             or name in RESERVED_TYPE_NAMES
-            or (self.current_source, name) in self.static_structs
-            or name in self.struct_templates
+            or self.lookup_struct_decl(name) is not None
             or self.lookup_enum(name) is not None
             or self.lookup_alias(name) is not None
         )
@@ -21861,7 +21859,7 @@ class CodeGen:
             mangled = self.instances[key]
             ret, params, _ = self.signatures[mangled]
             return self.funcs[mangled], ret, params
-        base = self.template_bases.get(id(func)) or self.symbol_bases.get(
+        base = self.template_bases.get(id(func)) or self.decls.symbol_bases.get(
             (func.source, func.name), func.name
         )
         bindings_str = ", ".join(str(bindings[t]) for t in func.type_params)

@@ -157,10 +157,7 @@ class DeclIndex:
             The ``StructDecl``/``UnionDecl``, the name itself for a builtin
             head, or ``None`` for an unknown (alias/unresolvable) one.
         """
-        decl = self.static_structs.get((source, name))
-        if decl is not None:
-            return decl
-        decl = self.struct_templates.get(name)
+        decl = self.lookup_struct_decl(name, source)
         if decl is not None:
             return decl
         if name in TYPES or name in RESERVED_TYPE_NAMES:

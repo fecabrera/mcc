@@ -60,8 +60,9 @@ from mcc.errors import LangError, Note
 # ('r', 'w', 'a') don't match — table keys are pairs. current_source can
 # be None for string-compiled programs, so a leak can also render as
 # "(None, 'point')" — its own shape below, constrained to the same
-# quoted-second-element pair so a user call like "foo(None, 3)" is not a
-# false positive.
+# quoted-second-element pair and the same not-after-an-identifier guard,
+# so a user call like "foo(None, 3)" or "foo(None, 'a')" is not a false
+# positive.
 INTERNAL_KEY_SHAPES = [
     ("'<unresolved>' placeholder", re.compile(r"<unresolved>")),
     (
@@ -73,7 +74,7 @@ INTERNAL_KEY_SHAPES = [
     ),
     (
         "None-keyed table tuple",
-        re.compile(r"\(None,\s*(['\"])[^'\"]*\1\)"),
+        re.compile(r"(?<!\w)\(None,\s*(['\"])[^'\"]*\1\)"),
     ),
 ]
 
@@ -348,5 +349,12 @@ def test_internal_key_shapes_catch_the_sie189_leak():
     assert_no_internal_keys("expected one of ('r', 'w', 'a')")
     # A user call echoing the identifier None as its first argument is not a
     # None-keyed table leak: the table shape is a pair, so a bare "(None,"
-    # in a call spelling must pass.
+    # in a call spelling must pass — including with a quoted second
+    # argument, which only the not-after-an-identifier guard distinguishes
+    # from a real (None, 'point') table key.
     assert_no_internal_keys("call to foo(None, 3) is ambiguous")
+    assert_no_internal_keys("call to foo(None, 'a') is ambiguous")
+    # The quoted-interpolation costume of the None-keyed leak — the open
+    # paren sits after a quote, not an identifier — must still be caught.
+    with pytest.raises(AssertionError):
+        assert_no_internal_keys("no such struct '(None, 'point')'")
