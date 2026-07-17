@@ -9,7 +9,12 @@ Runtime enforcement of the two rules pinned by ``tests/test_codegen_ratchet.py``
    (the wrong-file attribution bugs from the SIE-101 review). The corpus
    below compiles multi-file programs in both stale-``current_source``
    directions: an error inside an imported module, and an error in the main
-   file after imports have been compiled.
+   file after imports have been compiled. Honesty note: today most raise
+   sites are sourceless and these cases pass via ``generate()``'s
+   ``current_source`` back-fill — the corpus pins the observable behavior,
+   whichever mechanism provides it. It cannot see a wrong ``source=`` at an
+   individual raise site that the back-fill would have gotten right; the
+   per-site pressure is the ratchet's job.
 
 2. **No internal keys in messages.** No user-facing message contains a
    compiler-internal key shape — the ``("<unresolved>", 'b<T>')`` tuple-repr
@@ -19,8 +24,10 @@ Runtime enforcement of the two rules pinned by ``tests/test_codegen_ratchet.py``
    corpus compiles is shape-checked automatically when the recorder exits,
    not just the error that escapes. The corpus drives the override/
    covariance validation path (``validate_dispatch_overrides``) that
-   produced the historical SIE-189 leak, so a reintroduction at the
-   original site fails here, not just in the regex self-test.
+   produced the historical SIE-189 leak on a GENERIC hierarchy — the only
+   shape whose return spellings hit ``return_abi``'s ``("<unresolved>",
+   ...)`` fallback key — so a reintroduction at the original site fails
+   here, not just in the regex self-test.
 
 The corpus asserts attribution (``err.source``/``err.line``) plus a minimal
 stable token of each message — enough to prove the intended diagnostic
@@ -32,20 +39,29 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from helpers import compile_files
 
-from mcc.driver import compile_to_ir
 from mcc.errors import LangError, Note
 
 # Message shapes that mean an internal key leaked into user-facing text:
 # the "<unresolved>" struct-key placeholder, and the repr of a tuple key.
-# The tuple shape requires the open paren NOT to follow an identifier or
-# quote (that spelling is a call, e.g. "foo('a', 'b')"), and also matches
-# table keys whose first element is None — codegen tables are keyed
-# (current_source, name) and current_source can be None for string-compiled
-# programs, so a leak can render as "(None, 'point')".
+# Codegen tables are keyed by the 2-tuple (current_source, name), so the
+# tuple shape targets exactly that: a quoted, word/path-like first element
+# followed by one quoted second element and the closing paren. The open
+# paren must NOT follow an identifier or quote (that spelling is a call,
+# e.g. "foo('a', 'b')"), the first element must look like a source/name
+# (so a user-level tuple of punctuation literals like (',', ' ') passes),
+# and longer tuples like ('r', 'w', 'a') don't match — table keys are
+# pairs. current_source can be None for string-compiled programs, so a
+# leak can also render as "(None, 'point')" — its own shape below.
 INTERNAL_KEY_SHAPES = [
     ("'<unresolved>' placeholder", re.compile(r"<unresolved>")),
-    ("bare tuple repr", re.compile(r"(?<![\w'\"])\((['\"])[^'\"]*\1,")),
+    (
+        "table-key tuple repr",
+        re.compile(
+            r"(?<![\w'\"])\((['\"])[\w<>./\\ :-]+\1,\s*(['\"])[^'\"]*\2\)"
+        ),
+    ),
     ("None-keyed table tuple", re.compile(r"\(None,")),
 ]
 
@@ -66,10 +82,13 @@ def recording_diagnostics():
     Wraps ``LangError.__init__`` and ``Note.__init__`` (notes cover both
     instantiation frames and the warnings channel), recording each message
     after delegating — signature-agnostic, so the shims survive signature
-    evolution in ``mcc.errors``. On exit, every recorded message is
+    evolution in ``mcc.errors``. On clean exit, every recorded message is
     shape-checked against :data:`INTERNAL_KEY_SHAPES`; a test using this
     recorder cannot forget rule 2. Messages on speculative errors that
-    codegen catches and swallows are recorded (and checked) too.
+    codegen catches and swallows are recorded (and checked) too. When the
+    block itself fails (say, an expected error never raised), that failure
+    propagates untouched — the shape sweep is skipped rather than raised
+    from a ``finally`` where it would mask the real diagnosis.
     """
     recorded = []
     original_error_init = LangError.__init__
@@ -90,8 +109,8 @@ def recording_diagnostics():
     finally:
         LangError.__init__ = original_error_init
         Note.__init__ = original_note_init
-        for message in recorded:
-            assert_no_internal_keys(message)
+    for message in recorded:
+        assert_no_internal_keys(message)
 
 
 LIB = """
@@ -118,6 +137,16 @@ VIEWS_LIB = """
 struct base { n: int32; }
 
 fn base::val(const self: &base) -> int32 { return 7; }
+"""
+
+# A GENERIC base hierarchy for the SIE-189 corpus case proper: the internal
+# ("<unresolved>", ...) fallback key exists only for struct-generic return
+# spellings that fail to resolve pre-body, so only a generic family can
+# re-leak it — the non-generic case above covers plain attribution only.
+GENERIC_VIEWS_LIB = """
+struct gbase<T> { v: T; }
+
+fn gbase<T>::get(const self: &gbase<T>) -> T { return self.v; }
 """
 
 # Each corpus case: the files to write, the file the error must be
@@ -204,26 +233,45 @@ CORPUS = {
         r"@override method 'derived::val' returns float64",
         3,
     ),
+    # The SIE-189 leak surface proper: a GENERIC hierarchy, where both
+    # return spellings resolve only per-instantiation, so ret_desc must
+    # render the source spellings — never return_abi's ("<unresolved>", ...)
+    # fallback key. A reintroduced leak trips the recorder's shape check on
+    # this case's message.
+    "generic_override_return_mismatch_cross_file": (
+        {
+            "gviews.mc": GENERIC_VIEWS_LIB,
+            "main.mc": 'import "gviews";\n'
+            "struct gderived<T> extends gbase<T> { w: T; }\n"
+            "@override fn gderived<T>::get(const self: &gderived<T>) "
+            "-> gderived<T> { return self; }\n"
+            "fn main() -> int32 { return 0; }",
+        },
+        "main.mc",
+        r"@override method 'gderived::get' returns gderived<T>",
+        3,
+    ),
 }
 
 
 @pytest.mark.parametrize("case", CORPUS)
 def test_escaping_error_is_attributed_to_its_file(case, tmp_path):
     files, expected_file, message_re, expected_line = CORPUS[case]
-    for name, text in files.items():
-        (tmp_path / name).write_text(text)
     with recording_diagnostics():
         with pytest.raises(LangError, match=message_re) as excinfo:
-            compile_to_ir(tmp_path / "main.mc")
+            compile_files(tmp_path, files)
     err = excinfo.value
     assert err.source is not None, (
         "a LangError escaping codegen for a file-compiled program must "
-        "carry its source file — pass source= at the raise site."
+        "carry its source file — either from source= at the raise site or "
+        "from the current_source back-fill at the codegen boundary."
     )
     assert Path(err.source) == tmp_path / expected_file, (
         f"error attributed to {err.source!r}, but the offending line lives "
-        f"in {expected_file} — the raise site inherited a stale "
-        f"current_source; pass source= explicitly."
+        f"in {expected_file} — either the ambient current_source machinery "
+        f"went stale or a raise site passed the wrong source. The durable "
+        f"fix is threading source= explicitly at the raise site, not "
+        f"another current_source save/restore."
     )
     assert err.line == expected_line
 
@@ -232,14 +280,15 @@ def test_monomorphization_error_attributes_template_and_instantiation(tmp_path):
     """A generic body error names the template's file; the instantiation
     note names the caller's file — both sides of the attribution must
     survive the monomorphization detour through another module."""
-    (tmp_path / "lib.mc").write_text(LIB)
     main = tmp_path / "main.mc"
-    main.write_text(
-        'import "lib";\nfn main() -> int32 { return get_count(3 as int32); }'
-    )
+    files = {
+        "lib.mc": LIB,
+        "main.mc": 'import "lib";\n'
+        "fn main() -> int32 { return get_count(3 as int32); }",
+    }
     with recording_diagnostics():
         with pytest.raises(LangError, match="int32 is not a struct") as excinfo:
-            compile_to_ir(main)
+            compile_files(tmp_path, files)
     err = excinfo.value
     assert err.source is not None and Path(err.source) == tmp_path / "lib.mc"
     assert err.line == 8  # `return v.count;` inside the template body
@@ -269,3 +318,8 @@ def test_internal_key_shapes_catch_the_sie189_leak():
     assert_no_internal_keys("function 'secret' is private to lib.mc")
     assert_no_internal_keys("expected (int32, char), got (int32, int32)")
     assert_no_internal_keys("call to foo('a', 'b') is ambiguous")
+    # Quoted-literal tuples a diagnostic may legitimately render: table keys
+    # are pairs with a word/path-like first element, so punctuation elements
+    # and longer tuples are user-level spellings, not leaks.
+    assert_no_internal_keys("expected (',', ' ')")
+    assert_no_internal_keys("expected one of ('r', 'w', 'a')")

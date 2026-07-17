@@ -31,9 +31,16 @@ instead of silently leaving the census.
 
 Known static limits, on purpose: a raise-helper that constructs the
 ``LangError`` inside a wrapper function hides its call sites from the
-census (don't add one — thread ``source=`` instead), and ``*args``/
+census (don't add one — thread ``source=`` instead); ``*args``/
 ``**kwargs`` splats are given the benefit of the doubt (counted compliant)
-so dynamic-but-compliant spellings can't fail the build.
+so dynamic-but-compliant spellings can't fail the build — except an
+explicit ``source=`` keyword, whose value is judged no matter what splats
+surround it; a local that merely aliases the ambient value
+(``saved = self.current_source`` threaded into ``source=saved``) is
+accepted as real, the census does not chase dataflow; and the census
+stops at ``mcc/codegen`` — code moved OUT of the package leaves it, so an
+extraction (SIE-193) must widen the census boundary along with the move,
+not just delete the orphaned pin.
 """
 
 import ast
@@ -86,21 +93,33 @@ def _flatten_targets(targets):
 def _current_source_assignment_census():
     """Writes to ``current_source``, counted per file.
 
-    Counts every plain/annotated/augmented assignment (through tuple
-    unpacks) whose target is ``<anything>.current_source`` — not just
-    ``self.`` — plus literal ``setattr(obj, "current_source", ...)`` calls
-    and bare ``current_source`` name bindings. The name binding matters:
-    a context-carrier dataclass field (``GenContext.current_source``) is an
-    ambient-mutation surface too — ``GenContext.restore`` writes it back
-    onto the generator via a dynamic ``setattr`` the walker cannot see, so
-    the field declaration itself is what gets pinned.
+    Counts every binding form (through tuple unpacks) whose target is
+    ``<anything>.current_source`` — not just ``self.`` — or a bare
+    ``current_source`` name: plain/annotated/augmented assignment, walrus,
+    ``for`` targets, ``with ... as``, comprehension targets, plus literal
+    ``setattr(obj, "current_source", ...)`` calls. The name binding
+    matters: a context-carrier dataclass field
+    (``GenContext.current_source``) is an ambient-mutation surface too —
+    ``GenContext.restore`` writes it back onto the generator via a dynamic
+    ``setattr`` the walker cannot see, so the field declaration itself is
+    what gets pinned.
     """
     files = []
     for name, tree in _codegen_trees():
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 targets = node.targets
-            elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            elif isinstance(
+                node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr)
+            ):
+                targets = [node.target]
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                targets = [node.target]
+            elif isinstance(node, ast.withitem):
+                if node.optional_vars is None:
+                    continue
+                targets = [node.optional_vars]
+            elif isinstance(node, ast.comprehension):
                 targets = [node.target]
             elif isinstance(node, ast.Call):
                 if (
@@ -126,14 +145,50 @@ def _current_source_assignment_census():
     return Counter(files)
 
 
+def _names_langerror(node, aliases):
+    """True when an expression names the LangError class (or an alias)."""
+    return (isinstance(node, ast.Name) and node.id in aliases) or (
+        isinstance(node, ast.Attribute) and node.attr == "LangError"
+    )
+
+
 def _langerror_alias_names(tree):
-    """Every name this module binds to the LangError class via imports."""
+    """Every name this module binds to the LangError class.
+
+    Imports (``from ... import LangError [as X]``), module-level rebindings
+    (``Err = LangError``), and subclasses (``class E(LangError)``) all
+    join the alias set — a subclass constructor raises the same footgun.
+    Iterated to a fixpoint so chains (``Err2 = Err``, ``class E2(E1)``)
+    stay covered regardless of definition order.
+    """
     names = {"LangError"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                if alias.name == "LangError":
-                    names.add(alias.asname or alias.name)
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                found = {
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "LangError"
+                }
+            elif isinstance(node, ast.Assign) and _names_langerror(
+                node.value, names
+            ):
+                found = {
+                    target.id
+                    for target in _flatten_targets(node.targets)
+                    if isinstance(target, ast.Name)
+                }
+            elif isinstance(node, ast.ClassDef) and any(
+                _names_langerror(base, names) for base in node.bases
+            ):
+                found = {node.name}
+            else:
+                continue
+            if not found <= names:
+                names |= found
+                changed = True
     return names
 
 
@@ -153,12 +208,15 @@ def _is_ambient_source_value(value):
 def _langerror_without_source_census():
     """``LangError(...)`` constructions lacking a real source, per file.
 
-    Matches bare, import-aliased (``LangError as Err``), and
-    attribute-qualified (``errors.LangError``) constructions. A third
-    positional argument or a ``source=`` keyword counts as carrying the
-    site — unless it is an ambient re-spelling (see
-    :func:`_is_ambient_source_value`). ``**kwargs`` splats count as
-    compliant (benefit of the doubt).
+    Matches bare, import-aliased (``LangError as Err``), rebound,
+    subclassed, and attribute-qualified (``errors.LangError``)
+    constructions. A third positional argument or a ``source=`` keyword
+    counts as carrying the site — unless it is an ambient re-spelling (see
+    :func:`_is_ambient_source_value`). Splats get the benefit of the doubt
+    wherever they appear (``LangError(*parts)``, a trailing ``**kwargs``)
+    — but an explicit ``source=`` keyword is judged on its value, so a
+    ``**kwargs`` next to ``source=<ambient>`` cannot launder the site back
+    to compliant.
     """
     files = []
     for name, tree in _codegen_trees():
@@ -166,23 +224,25 @@ def _langerror_without_source_census():
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            func = node.func
-            is_langerror = (
-                isinstance(func, ast.Name) and func.id in aliases
-            ) or (isinstance(func, ast.Attribute) and func.attr == "LangError")
-            if not is_langerror:
+            if not _names_langerror(node.func, aliases):
                 continue
-            compliant = False
             if len(node.args) >= 3:
                 arg = node.args[2]
                 compliant = isinstance(arg, ast.Starred) or (
                     not _is_ambient_source_value(arg)
                 )
-            for kw in node.keywords:
-                if kw.arg == "source":
-                    compliant = not _is_ambient_source_value(kw.value)
-                elif kw.arg is None:  # **splat: benefit of the doubt
-                    compliant = True
+            else:
+                # A *splat before the source slot may carry the source.
+                compliant = any(
+                    isinstance(arg, ast.Starred) for arg in node.args
+                )
+            source_kw = next(
+                (kw for kw in node.keywords if kw.arg == "source"), None
+            )
+            if source_kw is not None:
+                compliant = not _is_ambient_source_value(source_kw.value)
+            elif any(kw.arg is None for kw in node.keywords):
+                compliant = True  # **splat may carry source=
             if not compliant:
                 files.append(name)
     return Counter(files)
@@ -206,7 +266,9 @@ def _check_ratchet(census, pins, pins_name, fix_hint):
                 f"entry at 0) so the improvement can't regress. If the file "
                 f"was renamed or split, move its pin to the new relative "
                 f"path(s) instead — the census is recursive, so moved code "
-                f"stays counted."
+                f"stays counted. If the code moved OUTSIDE mcc/codegen, do "
+                f"NOT just delete the pin: widen the census (CODEGEN_DIR) "
+                f"to keep covering it, or the guardrail silently ends."
             )
     if problems:
         raise AssertionError(
