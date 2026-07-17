@@ -61,3 +61,20 @@ def run(source: str) -> int:
 def run_path(path: Path) -> int:
     """Like run(), but compiles from a file so `import` directives resolve."""
     return _execute(compile_to_ir(path))
+
+
+def compile_files(directory: Path, files: dict[str, str], entry: str = "main.mc"):
+    """Write a multi-file corpus into ``directory`` and compile its entry file.
+
+    A shared spelling for write-the-files-then-compile fixtures (imports
+    between sibling tmp files can't go through the string helpers above);
+    existing suites still hand-roll it — e.g. ``compile_file_ir`` in
+    ``test_directives.py`` — and should migrate as they're touched. File
+    names may contain subdirectories (``pkg/util.mc``), matching the paths
+    import resolution accepts. Returns the compiled module.
+    """
+    for name, text in files.items():
+        path = directory / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return compile_to_ir(directory / entry)
