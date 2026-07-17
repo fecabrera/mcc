@@ -48,25 +48,50 @@ from mcc.errors import LangError, Note
 # Codegen tables are keyed by the 2-tuple (current_source, name), so the
 # tuple shape targets exactly that: a quoted, word/path-like first element
 # followed by one quoted second element and the closing paren. The open
+<<<<<<< Updated upstream
 # paren must NOT follow an identifier or quote (that spelling is a call,
 # e.g. "foo('a', 'b')"), and the first element must look like a *file* —
+=======
+# paren must NOT follow an identifier (that spelling is a call, e.g.
+# "foo('a', 'b')") — but a preceding QUOTE must still match, because the
+# dominant codegen spelling interpolates into a quoted message
+# (f"no such struct '{key}'" renders "...'('/w/lib.mc', 'point')'"), and
+# that leak must be caught. The first element must look like a *file* —
+>>>>>>> Stashed changes
 # a resolved current_source always carries at least one of `< > / \ .`
 # (a path separator, an extension dot, or the "<...>" placeholder shape) —
 # so a user-level pair of plain words like "expected ('a', 'b')" or of
 # punctuation literals like (',', ' ') passes, and longer tuples like
 # ('r', 'w', 'a') don't match — table keys are pairs. current_source can
 # be None for string-compiled programs, so a leak can also render as
+<<<<<<< Updated upstream
 # "(None, 'point')" — its own shape below.
+=======
+# "(None, 'point')" — its own shape below, constrained to the same
+# quoted-second-element pair so a user call like "foo(None, 3)" is not a
+# false positive.
+>>>>>>> Stashed changes
 INTERNAL_KEY_SHAPES = [
     ("'<unresolved>' placeholder", re.compile(r"<unresolved>")),
     (
         "table-key tuple repr",
         re.compile(
+<<<<<<< Updated upstream
             r"(?<![\w'\"])\((['\"])[\w<>./\\ :-]*[<>/\\.][\w<>./\\ :-]*\1,"
             r"\s*(['\"])[^'\"]*\2\)"
         ),
     ),
     ("None-keyed table tuple", re.compile(r"\(None,")),
+=======
+            r"(?<!\w)\((['\"])[\w<>./\\ :-]*[<>/\\.][\w<>./\\ :-]*\1,"
+            r"\s*(['\"])[^'\"]*\2\)"
+        ),
+    ),
+    (
+        "None-keyed table tuple",
+        re.compile(r"\(None,\s*(['\"])[^'\"]*\1\)"),
+    ),
+>>>>>>> Stashed changes
 ]
 
 
@@ -315,6 +340,15 @@ def test_internal_key_shapes_catch_the_sie189_leak():
     # with a real resolved path — is the canonical leak shape.
     with pytest.raises(AssertionError):
         assert_no_internal_keys("no such struct ('/w/lib.mc', 'point')")
+<<<<<<< Updated upstream
+=======
+    # The same key interpolated into a quoted message — codegen's dominant
+    # spelling, f"no such struct '{key}'" — must still be caught: the
+    # opening paren sits right after a quote, which the shape must not
+    # treat as a call spelling.
+    with pytest.raises(AssertionError):
+        assert_no_internal_keys("no such struct '('/w/lib.mc', 'point')'")
+>>>>>>> Stashed changes
     # A None-keyed table tuple — (current_source, name) with current_source
     # None — is the same leak class in a different costume.
     with pytest.raises(AssertionError):
@@ -332,3 +366,10 @@ def test_internal_key_shapes_catch_the_sie189_leak():
     assert_no_internal_keys("candidates ('int32', 'char')")
     assert_no_internal_keys("expected (',', ' ')")
     assert_no_internal_keys("expected one of ('r', 'w', 'a')")
+<<<<<<< Updated upstream
+=======
+    # A user call echoing the identifier None as its first argument is not a
+    # None-keyed table leak: the table shape is a pair, so a bare "(None,"
+    # in a call spelling must pass.
+    assert_no_internal_keys("call to foo(None, 3) is ambiguous")
+>>>>>>> Stashed changes
